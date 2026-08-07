@@ -47,6 +47,13 @@ public sealed class MigrationBootstrapTests
     private static readonly TimeSpan PromptReturn = TimeSpan.FromSeconds(10);
 
     /// <summary>
+    /// How long a cancelled bootstrap gets to return. An honoured token returns on the next
+    /// thread-pool tick; the backoff it is cancelled out of is 9s. Five seconds sits far enough
+    /// from both that neither a loaded CI host nor an ignored token can be mistaken for the other.
+    /// </summary>
+    private static readonly TimeSpan CancelResponseWindow = TimeSpan.FromSeconds(5);
+
+    /// <summary>
     /// How long a genuine relational attempt is given to fail and log. Connection-refused is
     /// immediate, but building this DbContext's model on a cold run is not, so the deadline is
     /// generous — it bounds a hang, it does not measure anything.
@@ -150,23 +157,30 @@ public sealed class MigrationBootstrapTests
 
             var bootstrap = MigrationBootstrap.RunAsync(services, EmptyConfiguration(), cts.Token);
 
-            // Attempt 1 has failed and the loop is now inside Task.Delay(3s) — i.e. the state a
-            // host being torn down is overwhelmingly likely to catch it in.
-            var attempted = await WaitForLogAsync(log, "Migration attempt 1", AttemptDeadline);
+            // Cancel during the backoff before attempt 4, which is BackoffFor(3) = 9s, and not
+            // during the first one. The first is 3s, and the loop's entry-side cancellation check
+            // returns within that whether or not Task.Delay was given the token — so a test that
+            // cancels there and allows any window ≥3s passes with the token dropped. Verified: it
+            // did. Nine seconds is long enough that "returned because the token was honoured" and
+            // "returned because the delay simply ran out" cannot be confused.
+            var reachedDeepBackoff = await WaitForLogAsync(log, "Migration attempt 3", AttemptDeadline);
 
             var sw = Stopwatch.StartNew();
             cts.Cancel();
-            var finished = await Task.WhenAny(bootstrap, Task.Delay(PromptReturn));
+            var finished = await Task.WhenAny(bootstrap, Task.Delay(CancelResponseWindow));
             sw.Stop();
 
-            Assert.True(attempted, $"the loop never started, so this test proved nothing.\n\nLog:\n{log}");
+            Assert.True(
+                reachedDeepBackoff,
+                $"the loop never reached its third attempt, so this test proved nothing.\n\nLog:\n{log}");
 
             Assert.True(
                 ReferenceEquals(finished, bootstrap),
                 $"RunAsync ignored its CancellationToken: {sw.Elapsed.TotalSeconds:0.0}s after "
-                + "ApplicationStopping it is still in the backoff. It will keep running past the host "
-                + "it belongs to — past a disposed WebApplicationFactory in tests, and past shutdown in "
-                + $"production — and then write MigrationReadiness.\n\nLog:\n{log}");
+                + $"ApplicationStopping it is still inside the {MigrationBootstrap.BackoffFor(3).TotalSeconds:0}s "
+                + "backoff. It will keep running past the host it belongs to — past a disposed "
+                + "WebApplicationFactory in tests, and past shutdown in production — and then write "
+                + $"MigrationReadiness.\n\nLog:\n{log}");
 
             await bootstrap;
 
