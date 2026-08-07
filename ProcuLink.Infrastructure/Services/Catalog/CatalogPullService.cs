@@ -304,13 +304,21 @@ public class CatalogPullService : ICatalogPullService
         var isVendor = _vendorFetchers.ContainsKey(source.Protocol);
         var isFileChannel = source.Protocol is "sftp" or "ftp" or "ftps";
 
-        // Credentials: write-only AES-GCM envelope. Decrypt returns null on any error
-        // (wrong key, corrupt envelope) — surface that honestly instead of an auth error.
+        // Credentials: write-only AES-GCM envelope, bound to this source's id. Decrypt throws
+        // CredentialUnbindableException on any error (wrong key, corrupt envelope, wrong scope) —
+        // mapped to the safe ErrCredentialsUnreadable message below.
         var password = string.Empty;
         if (isFileChannel && !string.IsNullOrEmpty(source.EncryptedPassword))
         {
-            password = _encryption.Decrypt(source.EncryptedPassword)
-                ?? throw new CatalogSyncException(ErrCredentialsUnreadable);
+            try
+            {
+                password = _encryption.Decrypt(source.EncryptedPassword, CredentialScope.ForSupplier(
+                    source.OrgId, CredentialPurpose.SupplierCatalogPassword, source.Id));
+            }
+            catch (CredentialUnbindableException)
+            {
+                throw new CatalogSyncException(ErrCredentialsUnreadable);
+            }
         }
         else if (source.Protocol is "sftp" or "ftps")
         {
@@ -489,12 +497,22 @@ public class CatalogPullService : ICatalogPullService
         if (!guardResult.Allowed)
             throw new CatalogSyncException(ErrUrlNotAllowed);
 
-        // Decrypt the write-only auth-config envelope (decrypt returns null on any error).
+        // Decrypt the write-only auth-config envelope, bound to this source's id. Throws
+        // CredentialUnbindableException on any error (wrong key, corrupt envelope, wrong scope).
         JsonElement creds = default;
         if (!string.IsNullOrEmpty(source.AuthConfigEncrypted))
         {
-            var json = _encryption.Decrypt(source.AuthConfigEncrypted)
-                ?? throw new CatalogSyncException(ErrAuthConfigUnreadable);
+            string json;
+            try
+            {
+                json = _encryption.Decrypt(source.AuthConfigEncrypted, CredentialScope.ForSupplier(
+                    source.OrgId, CredentialPurpose.SupplierCatalogAuthConfig, source.Id));
+            }
+            catch (CredentialUnbindableException)
+            {
+                throw new CatalogSyncException(ErrAuthConfigUnreadable);
+            }
+
             try { creds = JsonSerializer.Deserialize<JsonElement>(json, JsonOpts); }
             catch (JsonException) { throw new CatalogSyncException(ErrAuthConfigUnreadable); }
         }
@@ -549,12 +567,22 @@ public class CatalogPullService : ICatalogPullService
         if (!guardResult.Allowed)
             throw new CatalogSyncException(ErrUrlNotAllowed);
 
-        // Decrypt the write-only vendor-credential envelope (decrypt returns null on any error).
+        // Decrypt the write-only vendor-credential envelope, bound to this source's id. Throws
+        // CredentialUnbindableException on any error (wrong key, corrupt envelope, wrong scope).
         JsonElement creds = default;
         if (!string.IsNullOrEmpty(source.AuthConfigEncrypted))
         {
-            var json = _encryption.Decrypt(source.AuthConfigEncrypted)
-                ?? throw new CatalogSyncException(ErrAuthConfigUnreadable);
+            string json;
+            try
+            {
+                json = _encryption.Decrypt(source.AuthConfigEncrypted, CredentialScope.ForSupplier(
+                    source.OrgId, CredentialPurpose.SupplierCatalogAuthConfig, source.Id));
+            }
+            catch (CredentialUnbindableException)
+            {
+                throw new CatalogSyncException(ErrAuthConfigUnreadable);
+            }
+
             try { creds = JsonSerializer.Deserialize<JsonElement>(json, JsonOpts); }
             catch (JsonException) { throw new CatalogSyncException(ErrAuthConfigUnreadable); }
         }
