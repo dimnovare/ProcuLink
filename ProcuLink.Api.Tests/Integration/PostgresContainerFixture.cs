@@ -24,6 +24,18 @@ namespace ProcuLink.Api.Tests.Integration;
 /// <para>Serialisation is retained deliberately — see
 /// <see cref="PostgresContainerCollection"/>. This fixture buys sharing; the collection
 /// definition still buys one-class-at-a-time.</para>
+///
+/// <para><b>On Windows, a random class in this collection fails roughly one full-suite run in
+/// three to five</b>, with either "Only one usage of each socket address …" or "An existing
+/// connection was forcibly closed by the remote host", and passes in isolation. That is the host
+/// running out of ephemeral ports: nearly every class here sets <c>Pooling=false</c>, so each
+/// DbContext operation opens a fresh TCP connection whose port then sits in TIME_WAIT for a
+/// measured 119.6 s, against a 16,384-port range. It is a Windows-host limit, not a defect here,
+/// and CI (ubuntu-latest) is unaffected — Linux ran 60,000 of the same connections with zero
+/// errors. Do not "fix" it by turning pooling on across the collection; the ten concurrency
+/// classes need separate physical connections for their claim races to be real. Measurements,
+/// the three explanations the evidence rules out, and the host settings that mitigate it are in
+/// <c>docs/ops/2026-08-07-windows-ephemeral-port-exhaustion.md</c>.</para>
 /// </summary>
 public sealed class PostgresContainerFixture : IAsyncLifetime
 {
