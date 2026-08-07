@@ -100,12 +100,18 @@ public sealed class SftpIngressService : ISftpIngressService
             }
         }
 
-        var password = _encryption.Decrypt(config.EncryptedPassword);
-        if (password is null)
+        string password;
+        try
         {
-            _logger.LogWarning(
-                "SFTP ingress: cannot decrypt password for org {OrgId}. Skipping poll.",
-                organisationId);
+            password = _encryption.Decrypt(
+                config.EncryptedPassword,
+                CredentialScope.ForOrg(organisationId, CredentialPurpose.OrgIngressSftpPassword));
+        }
+        catch (CredentialUnbindableException ex)
+        {
+            _logger.LogWarning(ex,
+                "SFTP ingress: cannot decrypt password for org {OrgId} ({Reason}). Skipping poll.",
+                organisationId, ex.Reason);
             return 0;
         }
 

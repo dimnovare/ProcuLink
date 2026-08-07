@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Email;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services;
 
 namespace ProcuLink.Infrastructure.Tests.Services;
@@ -83,7 +84,8 @@ public class EmailSettingsServiceTests
         org.EmailConfigJson.Should().NotContain("secret");
 
         var stored = EmailPollingConfig.FromJson(org.EmailConfigJson);
-        encryption.Decrypt(stored.PasswordCiphertext!).Should().Be("secret");
+        encryption.Decrypt(stored.PasswordCiphertext!, CredentialScope.ForOrg(
+            orgId, CredentialPurpose.OrgEmailImapPassword)).Should().Be("secret");
     }
 
     [Fact]

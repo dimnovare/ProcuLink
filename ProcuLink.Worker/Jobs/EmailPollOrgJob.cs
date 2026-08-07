@@ -12,6 +12,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Jobs;
 using ProcuLink.Infrastructure.Services;
@@ -140,14 +141,22 @@ public sealed class EmailPollOrgJob
             }
         }
 
-        var password = string.IsNullOrWhiteSpace(config.PasswordCiphertext)
-            ? string.Empty
-            : _encryption.Decrypt(config.PasswordCiphertext);
-
-        if (password is null)
+        var password = string.Empty;
+        if (!string.IsNullOrWhiteSpace(config.PasswordCiphertext))
         {
-            _logger.LogWarning("EmailPollOrgJob: IMAP password could not be decrypted for org {OrgId}.", orgId);
-            return;
+            try
+            {
+                password = _encryption.Decrypt(
+                    config.PasswordCiphertext,
+                    CredentialScope.ForOrg(orgId, CredentialPurpose.OrgEmailImapPassword));
+            }
+            catch (CredentialUnbindableException ex)
+            {
+                _logger.LogWarning(ex,
+                    "EmailPollOrgJob: IMAP password could not be decrypted for org {OrgId} ({Reason}).",
+                    orgId, ex.Reason);
+                return;
+            }
         }
 
         // ── SSRF guard IMMEDIATELY before connect (SEC-1) ────────────────────
