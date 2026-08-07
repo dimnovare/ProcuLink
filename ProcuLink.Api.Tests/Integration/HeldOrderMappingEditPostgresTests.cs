@@ -340,7 +340,7 @@ public sealed class HeldOrderMappingEditPostgresTests : IAsyncLifetime
             ConfigJson = "{\"url\":\"https://supplier.example/orders\"}",
             EncryptedCredentials = encryption.Encrypt(
                 "{\"type\":\"none\"}",
-                CredentialScope.ForSupplier(orgId, "supplier.delivery.credentials", supplierId)),
+                CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierDeliveryCredentials, supplierId)),
             CreatedAt = now, UpdatedAt = now,
         });
         db.PurchaseOrders.Add(new PurchaseOrderEntity
