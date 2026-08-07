@@ -93,6 +93,7 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
             // turn a security weakness into an outage — but never silently. The save path now
             // rejects these, so this fires only for a pre-existing row that nobody has re-saved.
             WarnIfInsecureTransport(config, endpoint);
+            WarnIfCredentialHeaders(config);
 
             // ── SSRF guard — must pass before any outbound request ────────────
             var guardResult = await _guard.ValidateAsync(httpCfg.Url, ct);
@@ -224,6 +225,27 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
             + "(scheme '{Scheme}', host '{Host}'). This config predates TLS enforcement and can no "
             + "longer be saved; delivery continues so orders are not lost. {Warning}",
             config.SupplierId, endpoint.Scheme, endpoint.Host, warning);
+    }
+
+    /// <summary>
+    /// Logs — once per delivery attempt — that this supplier's saved config carries a credential in
+    /// its extra-headers map, which <c>config_json</c> stores in cleartext.
+    ///
+    /// <para>Only the header NAME is logged. Logging the value would copy the credential out of one
+    /// cleartext store and into another, which is the defect this exists to surface. Delivery
+    /// continues: the rule lands on the write paths, and refusing here would strand orders for every
+    /// customer whose config predates it.</para>
+    /// </summary>
+    private void WarnIfCredentialHeaders(SupplierDeliveryConfig config)
+    {
+        var names = DeliveryConfigTransport.FindCredentialHeaders(config.ConfigJson);
+        if (names.Count == 0) return;
+
+        _logger.LogWarning(
+            "Supplier {SupplierId} has credential-bearing delivery header(s) {HeaderNames} stored in "
+            + "cleartext config_json. Delivery continues so orders are not lost; move the value into "
+            + "the encrypted delivery credentials. The value itself is never logged.",
+            config.SupplierId, string.Join(", ", names));
     }
 
     // ── Private config POCO ───────────────────────────────────────────────────
