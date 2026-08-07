@@ -247,4 +247,74 @@ public class CredentialBindingBackfillTests
             "verbatim CredentialsRef copy, and trips the published-revision immutability trigger");
         VersionOf(delivery.EncryptedCredentials).Should().Be(1);
     }
+
+    // ── the per-row skip path (regression guard for TryRebind's failure isolation) ─────────────
+
+    /// <summary>
+    /// One row's SCOPE is unreadable, not its blob: <c>OrganisationId</c> is unset (a data-
+    /// integrity anomaly), while <c>EncryptedSecret</c> is a perfectly good legacy envelope.
+    /// <c>IsLegacy</c> says yes, so <c>TryRebind</c> runs; <c>Decrypt</c> succeeds (a version-1
+    /// blob carries no associated data, so it never inspects the scope); it is the re-<c>Encrypt</c>
+    /// call's <c>scope.ToAssociatedData()</c> that rejects <c>OrgId == Guid.Empty</c> and throws
+    /// <see cref="ArgumentException"/> — the exact failure the widened <c>TryRebind</c> catch
+    /// exists for. Before that widening, this one row's <see cref="ArgumentException"/> escaped
+    /// <c>TryRebind</c>, escaped the per-column loop, and unwound
+    /// <c>RebindLegacyCredentialsAsync</c> entirely, costing every OTHER row — in every OTHER
+    /// table — its migration too, not just the one anomalous row.
+    /// </summary>
+    [Fact]
+    public async Task Rebind_SkipsARowWhoseScopeIsUnreadableWithoutAbortingTheRestOfTheBatch()
+    {
+        await using var db = NewDb();
+        var now = DateTime.UtcNow;
+
+        // Two good rows, in two different covered columns, under the real org id.
+        db.SftpIngressConfigs.Add(new SftpIngressConfig
+        {
+            Id = Guid.NewGuid(),
+            OrgId = OrgId,
+            EncryptedPassword = LegacyBlob("sftp-password"),
+            CreatedAt = now,
+        });
+
+        db.S3IngressConfigs.Add(new S3IngressConfig
+        {
+            Id = Guid.NewGuid(),
+            OrgId = OrgId,
+            EncryptedSecretKey = LegacyBlob("s3-secret-key"),
+            CreatedAt = now,
+        });
+
+        // The bad row: a THIRD covered column, with OrganisationId unset. EncryptedSecret is a
+        // completely valid legacy envelope — this is not a corrupt blob.
+        var badSubId = Guid.NewGuid();
+        db.IntegrationSubscriptions.Add(new IntegrationSubscription
+        {
+            Id = badSubId,
+            OrganisationId = Guid.Empty,
+            Platform = "custom",
+            EventType = "order.delivered",
+            TargetUrl = "https://hooks.example.com/webhook",
+            EncryptedSecret = LegacyBlob("webhook-secret"),
+            IsActive = true,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        await db.SaveChangesAsync();
+
+        var count = await Service(db).RebindLegacyCredentialsAsync(default);
+
+        count.Should().Be(2, "the two good rows rebind; the row with no org id is skipped, not counted");
+
+        var sftp = await db.SftpIngressConfigs.AsNoTracking().SingleAsync();
+        VersionOf(sftp.EncryptedPassword).Should().Be(2, "a good row in a different column must still migrate");
+
+        var s3 = await db.S3IngressConfigs.AsNoTracking().SingleAsync();
+        VersionOf(s3.EncryptedSecretKey).Should().Be(2, "a good row in a different column must still migrate");
+
+        var badSub = await db.IntegrationSubscriptions.AsNoTracking().SingleAsync();
+        VersionOf(badSub.EncryptedSecret!).Should()
+            .Be(1, "the unreadable row must be left untouched, not partially rewritten");
+    }
 }

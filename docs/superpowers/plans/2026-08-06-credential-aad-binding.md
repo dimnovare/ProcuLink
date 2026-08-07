@@ -740,9 +740,31 @@ Edit `Encrypt(string, CredentialScope)` and drop the associated data — change
 
 Run: `dotnet test ProcuLink.Infrastructure.Tests --filter "FullyQualifiedName~DeliveryEncryptionServiceAadTests"`
 
-Expected: `Decrypt_SameOrgSameSupplier_RoundTrips`, `Decrypt_DifferentOrg_Throws`,
+Expected: only `Decrypt_SameOrgSameSupplier_RoundTrips` FAILS (verified: 1 failed, 13 passed of 14).
+The other four "must not decrypt" tests — `Decrypt_DifferentOrg_Throws`,
 `Decrypt_DifferentSupplier_Throws`, `Decrypt_DifferentPurposeSameSupplier_Throws`,
-`Decrypt_OrgScopedBlob_DoesNotDecryptAsADifferentOrgScopedPurpose` all FAIL.
+`Decrypt_OrgScopedBlob_DoesNotDecryptAsADifferentOrgScopedPurpose` — stay GREEN under this mutation;
+do not expect them to fail.
+
+Reason: AES-GCM tag verification is binary, not field-by-field. Once `Encrypt` writes a tag over
+empty AAD, `Decrypt` — which is untouched by this mutation and still calls
+`scope.ToAssociatedData()` for every version-2 blob — presents a non-empty AAD for verification no
+matter which scope it is given. Tag verification fails identically whether the presented scope is
+the RIGHT one (round-trip) or a WRONG one (the four negative cases): every one of them throws
+`CredentialUnbindableException`. The round-trip test expected success and got a throw, so it goes
+red; the four negative tests expected a throw and still get one — for the "wrong" underlying
+reason, but `.Should().Throw<CredentialUnbindableException>()` cannot tell the difference, so they
+stay green.
+
+To actually redden the per-field negative tests, point the mutation at
+`CredentialScope.ToAssociatedData()` instead and drop one field from the interpolated string —
+e.g. remove `{Purpose}`. Verified: that mutation reddens exactly the two purpose-specific tests,
+`Decrypt_DifferentPurposeSameSupplier_Throws` and
+`Decrypt_OrgScopedBlob_DoesNotDecryptAsADifferentOrgScopedPurpose` (2 failed, 12 passed of 14),
+because both encrypt and decrypt sides independently recompute the same (now Purpose-blind) AAD
+from their own scope, so two scopes that differ only by purpose stop being distinguishable — while
+the org- and supplier-scoped tests, where the field that still differs (`OrgId`/`ScopeId`) remains
+in the AAD, are unaffected.
 
 Restore the `associatedData` argument **by editing**.
 
@@ -1643,9 +1665,24 @@ Expected: PASS.
 
 - [ ] **Step 5: Mutation-check the unsigned-send guard**
 
-Edit `FireIntegrationTriggerJob.cs` and replace the `catch` body with `{ secret = null!; }` followed
-by a `if (secret is null) { /* fall through unsigned */ }` — that is, restore the old fail-open
-behaviour so a failed decrypt leaves `sigHeader` null and the POST proceeds.
+`{ secret = null!; }` alone does NOT reproduce the old bug — `secret` is declared `string secret;`
+(non-nullable), and the line right after the `try`/`catch`, `Encoding.UTF8.GetBytes(secret)`, still
+runs unconditionally. Forcing it null there is a **crash** (`ArgumentNullException` out of
+`GetBytes`), not the silent unsigned send the old code actually produced.
+
+Reproduce the historical bug for real — the old shape was
+`var secret = _enc.Decrypt(...); if (secret is not null) { …sign… }` with no `else`, so make the
+same shape here:
+
+1. Change the declaration from `string secret;` to `string? secret;`.
+2. Replace the `catch (CredentialUnbindableException ex) { … throw …; }` body with
+   `catch (CredentialUnbindableException) { secret = null; }` — swallow instead of rethrow.
+3. Wrap the four lines below the `try`/`catch` (`var secretBytes = …` through
+   `sigHeader = $"sha256=…"`) in `if (secret is not null) { … }`.
+
+Now a failed decrypt leaves `secret` (and therefore `sigHeader`) null, the signing block is
+skipped, and — because nothing downstream checks `sigHeader` before sending — the POST proceeds
+unsigned, exactly reproducing the historical bug.
 
 Run: `dotnet test ProcuLink.Infrastructure.Tests --filter "FullyQualifiedName~FireIntegrationTriggerJobSecretBindingTests"`
 
@@ -2201,9 +2238,17 @@ Expected: PASS.
 
 - [ ] **Step 5: Confirm no unbound call survives**
 
-Run: `git grep -n "\.Encrypt(\|\.Decrypt(" -- '*.cs' | grep -v "aes\.\|Aes\." | grep -v "CredentialScope\|Scope)\|scope)"`
+Already proven by Step 4 — do not add a grep here. A textual
+`git grep -n "\.Encrypt(\|\.Decrypt(" -- '*.cs' | grep -v "aes\.\|Aes\." | grep -v "CredentialScope\|Scope)\|scope)"`
+was tried and rejected: it is single-line, so it fires on every call whose `CredentialScope`
+argument is formatted onto the next line — ~77 false positives in practice, not a usable signal.
 
-Expected: no output. Any line printed is an unbound call that slipped through; give it a scope.
+The real proof is structural, not textual. Step 1 deleted the unbound `Encrypt(string)` /
+`Decrypt(string)` overloads, so a surviving unbound call site is not something a grep might miss —
+it is a **compile error** (CS7036, "no overload takes N arguments"). Step 4's
+`dotnet build ProcuLink.slnx --configuration Release` succeeding with zero errors already IS the
+completeness proof: the compiler enumerated every call site in the solution, and every one of them
+resolved to the scoped overload.
 
 - [ ] **Step 6: Commit**
 
@@ -3143,9 +3188,14 @@ other organisation from being polled, rather than skipping the one org."
 ## Post-implementation verification
 
 - [ ] Run the full suite: `dotnet test ProcuLink.slnx --configuration Release` — all green.
-- [ ] Confirm no unbound call survives:
-      `git grep -n "\.Encrypt(\|\.Decrypt(" -- '*.cs' | grep -v "aes\.\|Aes\." | grep -v "CredentialScope\|Scope)\|scope)"`
-      — no output.
+- [ ] Confirm no unbound call survives: already proven above (Task 7). Do NOT re-add a
+      `git grep -n "\.Encrypt(\|\.Decrypt("` check here — it is single-line, so it fires on every
+      call whose `CredentialScope` argument is formatted onto the next line, and printed ~77 false
+      positives when tried. The real proof is structural: Task 7 Step 1 deleted the unbound
+      `Encrypt(string)` / `Decrypt(string)` overloads, so a surviving unbound call is a **compile
+      error** (CS7036), not a grep miss. A clean `dotnet build ProcuLink.slnx --configuration
+      Release` — which the full-suite run above already required to succeed — IS the completeness
+      proof.
 - [ ] Confirm the backfill never names the excluded columns:
       `git grep -n "EncryptedCredentials\|CredentialsRef" -- ProcuLink.Api/Services/CredentialBindingBackfillService.cs`
       — matches only inside comments.

@@ -1,7 +1,7 @@
 # Binding encrypted credentials to their tenant and their purpose
 
 Date: 2026-08-06
-Status: design approved, not yet implemented
+Status: implemented on branch `feat/credential-aad-binding`
 
 ## Problem
 
@@ -190,6 +190,46 @@ This is accepted knowingly. The other seven credential kinds gain the full prope
 and every newly-saved delivery credential is bound from the moment this ships. Prompting operators
 to rotate delivery credentials is the remediation that would close the residual; it is out of scope
 here and belongs with the frontend.
+
+### Operational warning: roll forward only, once the backfill has run
+
+**Never roll an environment back to a pre-binding build after its first successful boot with the
+credential binding backfill enabled.** This is a one-way door, and it is dangerous in a way that
+produces no error and no log line pointing at the cause.
+
+Before this change, `Decrypt` was `if (combined[0] != Version) return null;` with `Version = 1` —
+any blob whose version byte it did not recognise came back as a plain `null`, indistinguishable
+from "no credential configured." `CredentialBindingBackfillService` runs at boot
+(`ProcuLink.Api/Program.cs:1103-1114`, best-effort inside its own `try`/`catch` so a failure there
+cannot stop the app from serving) and rewrites the seven covered columns from version 1 to version
+2 the first time a build containing it starts.
+
+If the deployment is then rolled BACK to a pre-binding build, that old binary's `Decrypt` sees
+`combined[0] == 2` on every row the backfill touched — a version it has never heard of — and
+returns `null` for all seven kinds, exactly as if the credential had been deleted. Each consumer
+reacts differently to that null, and two of them react dangerously — verified against the pre-branch
+source at commit `1433807` (the merge-base with `main`), not assumed:
+
+| Credential kind | Consumer (pre-branch) | Old code's reaction to a `null` decrypt | Consequence of a rollback |
+|---|---|---|---|
+| `IntegrationSubscription.EncryptedSecret` — webhook signing secret | `FireIntegrationTriggerJob.cs` | `if (secret is not null) { …compute HMAC… }` with no `else` | **Dangerous — the case this warning exists for.** `sigHeader` simply stays `null` and the webhook is POSTed anyway, unsigned, with no log line and no recorded failure. A subscriber who configured a secret specifically to verify authenticity silently stops receiving one. |
+| `SupplierDeliveryConfig.EncryptedCxmlSharedSecret` | `CxmlCredentialResolver.cs` (pre-branch path: `ProcuLink.Infrastructure/Services/CxmlCredentialResolver.cs`) | `sharedSecret = …Decrypt(...)`, and the method only returns `null` overall (safe "use legacy identities" fallback) when the supplier has **neither** cXML identity fields **nor** a DTD configured | **Dangerous whenever the supplier also has cXML identity fields or a DTD configured.** `ResolveAsync` returns a config with `SharedSecret = null`, and the cXML transform stamps a document with no Sender credential — silently. Only the narrow case of a supplier whose sole cXML setting is the shared secret itself degrades safely (falls back to legacy GUID identities, a documented no-op). |
+| `SftpIngressConfig.EncryptedPassword`, `S3IngressConfig.EncryptedSecretKey`, IMAP password inside `Organisation.EmailConfigJson` | `SftpIngressService.cs`, `S3IngressService.cs`, `EmailPollOrgJob.cs` — the three ingress pollers | `if (password/secretKey is null) { LogWarning(...); return 0; }` (or `return;` for IMAP) | Safe. The poller logs a warning and skips that one organisation for the cycle — no connection is attempted, nothing is sent. Availability impact only; self-heals the moment the environment is rolled forward again. |
+| `SupplierCatalogSource.EncryptedPassword`, `SupplierCatalogSource.AuthConfigEncrypted` | `CatalogPullService.cs` | `password = …Decrypt(...) ?? throw new CatalogSyncException(ErrCredentialsUnreadable);` | Safe. The sync attempt fails loudly (`LastSyncError` recorded, exception surfaced) — the same shape as any other catalog-pull failure. Availability impact only. |
+
+The pollers and the catalog puller fail closed by accident of their pre-existing null-handling, not
+because anyone designed them to survive this scenario — but they do survive it. The webhook signing
+secret and the cXML shared secret do not: both silently downgrade a signed/authenticated send into
+an unsigned/unauthenticated one, with nothing in the logs to say so. An operator rolling back to
+"the last known-good build" to chase an unrelated regression, after the backfill has already run in
+that environment, will find webhooks (and, for suppliers with cXML identities configured, cXML
+deliveries) silently losing their authentication — not an outage, which would page someone, but a
+quiet integrity regression that only a subscriber-side signature check would ever notice.
+
+**Rule: once the backfill has run in an environment, only ever roll that environment forward.** If a
+regression needs to be undone, ship a fix forward rather than reverting the binary. This is also why
+the backfill is unconditional at every boot rather than a one-time migration step — see Program.cs
+comment above — but that idempotency protects re-running forward, not rolling back.
 
 ### Failure handling
 

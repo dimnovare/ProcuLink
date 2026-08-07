@@ -72,11 +72,18 @@ public sealed class CredentialBindingBackfillService : ICredentialBindingBackfil
             var plaintext = _encryption.Decrypt(blob, scope);
             return _encryption.Encrypt(plaintext, scope);
         }
-        catch (CredentialUnbindableException ex)
+        // CredentialUnbindableException is Decrypt failing to read the blob. ArgumentException is
+        // the re-Encrypt's scope.ToAssociatedData() rejecting a malformed scope (e.g. OrgId ==
+        // Guid.Empty on an anomalous row). Both mean "this one row can't be migrated" — neither
+        // should unwind the whole backfill pass and cost every other tenant its migration.
+        catch (Exception ex) when (ex is CredentialUnbindableException or ArgumentException)
         {
+            var reason = ex is CredentialUnbindableException unbindable
+                ? unbindable.Reason.ToString()
+                : ex.GetType().Name;
             _logger.LogWarning(ex,
                 "Credential rebind: skipping {Row} — the stored blob could not be read ({Reason}).",
-                rowDescription, ex.Reason);
+                rowDescription, reason);
             return null;
         }
     }
