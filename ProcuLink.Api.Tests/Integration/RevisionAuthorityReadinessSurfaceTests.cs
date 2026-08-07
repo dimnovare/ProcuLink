@@ -34,6 +34,7 @@ namespace ProcuLink.Api.Tests.Integration;
 /// read it through real HTTP against the real readiness pipeline, not through the writer in
 /// isolation. Both polarities are asserted so the surface cannot be a constant.</para>
 /// </summary>
+[Collection("postgres-container")]
 public sealed class RevisionAuthorityReadinessSurfaceTests
 {
     /// <summary>
