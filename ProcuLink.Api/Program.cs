@@ -550,6 +550,10 @@ builder.Services.AddScoped<IRuleDefinitionBackfillService, RuleDefinitionBackfil
 builder.Services.AddScoped<ISupplierConnectionService, SupplierConnectionService>();
 builder.Services.AddScoped<IConnectionResolver, ConnectionResolver>();
 builder.Services.AddScoped<IConnectionBackfillService, ConnectionBackfillService>();
+// Task 8 (credential AAD binding) — idempotent boot backfill that re-encrypts pre-binding
+// (version-1) credential blobs into the bound (version-2) envelope. See
+// ICredentialBindingBackfillService for the columns covered and the delivery-credentials exclusion.
+builder.Services.AddScoped<ICredentialBindingBackfillService, CredentialBindingBackfillService>();
 // Launch batch 7 — revision authority: pinned-revision config bundle resolver, consumed by
 // parse-mapping/item-codes, validation, transform, and delivery. Flag-gated by
 // Connections:RevisionAuthority. The CODE default is OFF (live tables, byte-identical behaviour),
@@ -1089,6 +1093,25 @@ app.Lifetime.ApplicationStarted.Register(() =>
                     migLogger.LogError(rebackfillEx,
                         "Promoted-output re-backfill failed (app stays up; affected pinned orders use the fixed transformer until repaired).");
                     SentrySdk.CaptureException(rebackfillEx);
+                }
+
+                // ── Credential binding backfill ──────────────────────────────
+                // Re-encrypt pre-binding (version 1) credential blobs into the bound envelope, so
+                // they gain the tenant + purpose + scope binding. Idempotent — a version-2 blob is
+                // skipped — so it is safe on every boot. Best-effort: dual read means a blob left
+                // on version 1 still works, so a failure here must NOT keep the app from serving.
+                try
+                {
+                    var rebind = scope.ServiceProvider.GetRequiredService<ICredentialBindingBackfillService>();
+                    var reboundCount = await rebind.RebindLegacyCredentialsAsync(CancellationToken.None);
+                    migLogger.LogInformation(
+                        "Credential binding backfill complete: {Count} credential(s) rebound.", reboundCount);
+                }
+                catch (Exception rebindEx)
+                {
+                    migLogger.LogError(rebindEx,
+                        "Credential binding backfill failed (app stays up; unbound credentials still decrypt).");
+                    SentrySdk.CaptureException(rebindEx);
                 }
 
                 // ── Group V4: idempotent rule-definition seed + link ─────────
