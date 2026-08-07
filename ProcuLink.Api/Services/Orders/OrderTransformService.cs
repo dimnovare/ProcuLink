@@ -847,6 +847,25 @@ internal sealed class OrderTransformService
 
         await _db.SaveChangesAsync(ct);
 
+        // CLOSE the exception row this order's earlier failure may have opened. Every transform
+        // failure path opens a `transform_failed` exception row via SafeReconcileExceptionsAsync;
+        // before this line nothing closed one on a later success. The documented escape — "a
+        // successful re-transform enqueues delivery, and DeliveryService reconciles on every
+        // successful attempt" — only holds when a delivery attempt is actually PERSISTED, and with
+        // AutoDeliver off the automatic dispatch claim matches 0 rows, writes no attempt and
+        // reconciles nothing. The row then sits open forever on a perfectly healthy order, and the
+        // exceptions UI derives `transform_failed` from status, so no operator can clear it by hand.
+        //
+        // That went from rare to routine when the wrapper started recording transient faults (a DB
+        // blip, an R2 blip) as transform_failed: those are exactly the ones the +10s Hangfire retry
+        // cures, so the failure and its own cure now arrive seconds apart. A permanently red
+        // exceptions list is one operators learn to ignore.
+        //
+        // Best-effort by construction (SafeReconcileExceptionsAsync swallows and logs), so it cannot
+        // turn a transform that succeeded into one that failed. Reconcile is idempotent and derives
+        // everything from current status: on an order with no open row it is a no-op.
+        await _shared.SafeReconcileExceptionsAsync(organisationId, orderId, ct);
+
         _logger.LogInformation(
             "Order {OrderId} transformed to {Format}, artifact {ArtifactId}",
             orderId, effectiveFormat, artifactId);
@@ -874,9 +893,16 @@ internal sealed class OrderTransformService
     ///
     /// <para>The reconcile is best-effort ON PURPOSE (<c>SafeReconcileExceptionsAsync</c> swallows and
     /// logs): the status + audit event are the durable record, and losing the derived exception row must
-    /// never turn a reported failure into an unhandled one. Nothing here re-resolves the exception on a
-    /// later success — a successful re-transform enqueues delivery, and DeliveryService reconciles on
-    /// every successful attempt, which auto-resolves the row once the condition no longer holds.</para>
+    /// never turn a reported failure into an unhandled one.</para>
+    ///
+    /// <para><b>What closes the row again.</b> <c>TransformCoreAsync</c>'s SUCCESS path reconciles too,
+    /// immediately after the commit that writes the artifact and <c>ready_to_deliver</c> — so a failure
+    /// that later self-heals resolves its own exception row. This paragraph used to claim the closing
+    /// happened downstream instead ("a successful re-transform enqueues delivery, and DeliveryService
+    /// reconciles on every successful attempt"), which was wrong: that holds only when a delivery
+    /// attempt is actually PERSISTED, and with AutoDeliver off the automatic dispatch claim matches 0
+    /// rows and writes none. The row stayed open on a healthy order, and the exceptions UI derives
+    /// <c>transform_failed</c> from status, so nobody could clear it by hand either.</para>
     /// </summary>
     private async Task FailTransformAsync(
         PurchaseOrderEntity entity,
@@ -907,7 +933,7 @@ internal sealed class OrderTransformService
     /// <summary>
     /// Commits a transform failure from OUTSIDE the claim: moves the order to
     /// <see cref="OrderStatusConstants.TransformFailed"/> only while it is still one of
-    /// <see cref="OrderStatusMachine.ClaimableForTransformFrom"/>, and writes the audit trail ONLY
+    /// <see cref="OrderStatusMachine.TransformFailableFrom"/>, and writes the audit trail ONLY
     /// when that guarded update actually won the row.
     ///
     /// <para><b>Why guarded, when <see cref="FailTransformAsync"/> is not.</b> Every caller of
@@ -916,8 +942,21 @@ internal sealed class OrderTransformService
     /// after it has been released by a completed transform). An unguarded write there would land on
     /// top of whatever else moved the order in the meantime — a <c>billing_held</c> park, an MV-1
     /// <c>pending_review</c> reset, or a <c>ready_to_deliver</c> transform that had already
-    /// succeeded. The guard set is the CLAIM's own set, which makes the rule one sentence: if we
-    /// could have claimed it, we may fail it.</para>
+    /// succeeded.</para>
+    ///
+    /// <para><b>Why the guard set is NOT the claim's set.</b> The tempting one-sentence rule — "if
+    /// we could have claimed it, we may fail it" — is wrong, because starting a transform and
+    /// overwriting a status with a failure are different operations that happen to share three of
+    /// their four statuses. <see cref="OrderStatusMachine.ClaimableForTransformFrom"/> also admits
+    /// <c>rejected_by_supplier</c>, which is a POST-SUCCESS OPERATOR VERDICT: a human recorded that
+    /// the supplier refused the document. <c>OrderResolutionService.MarkRejectedAsync</c> has no
+    /// from-status guard and <c>transforming → rejected_by_supplier</c> is a documented edge, so an
+    /// operator can record that verdict while this very transform is in flight — and failing the
+    /// order afterwards would replace their finding with "something went wrong". Re-TRANSFORMING a
+    /// rejected order is right (it is how a corrected document is produced); FAILING one is not.
+    /// <see cref="OrderStatusMachine.TransformFailableFrom"/> carries that distinction and its
+    /// evidence, and the one-status delta is pinned by
+    /// <c>OrderStatusMachineTests.TransformFailableFrom_IsClaimableMinus_RejectedBySupplier</c>.</para>
     ///
     /// <para>The set comes from <see cref="OrderStatusMachine"/> rather than a literal for the same
     /// reason the claim's does — this is the second hand-written copy of a status list, which is
@@ -937,14 +976,14 @@ internal sealed class OrderTransformService
 
         // Parameterised as `= ANY(@p)` rather than inlined, for the same reason the claim is: it
         // keeps the SQL text (and therefore the Postgres plan) stable whatever the set contains.
-        var claimableStatuses = OrderStatusMachine.ClaimableForTransformFrom.ToArray();
+        var failableStatuses = OrderStatusMachine.TransformFailableFrom.ToArray();
 
         int failed;
         if (_db.Database.IsRelational())
         {
             failed = await _db.PurchaseOrders
                 .Where(x => x.Id == orderId && x.OrgId == organisationId
-                         && claimableStatuses.Contains(x.Status))
+                         && failableStatuses.Contains(x.Status))
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(o => o.Status,    OrderStatusConstants.TransformFailed)
                     .SetProperty(o => o.UpdatedAt, failedAt), ct);
@@ -952,13 +991,14 @@ internal sealed class OrderTransformService
         else
         {
             // EF InMemory cannot translate ExecuteUpdateAsync — emulate the same guarded transition
-            // through the change tracker (tests are single-threaded there), mirroring the claim.
+            // through the change tracker (tests are single-threaded there). Both branches read the
+            // SAME declaration: this is the second copy of the rule, and the pair that drifts.
             var row = await _db.PurchaseOrders
                 .Where(x => x.Id == orderId && x.OrgId == organisationId)
                 .FirstOrDefaultAsync(ct);
 
             failed = row is not null
-                  && OrderStatusMachine.ClaimableForTransformFrom.Contains(row.Status) ? 1 : 0;
+                  && OrderStatusMachine.TransformFailableFrom.Contains(row.Status) ? 1 : 0;
 
             if (failed == 1)
             {
@@ -971,11 +1011,12 @@ internal sealed class OrderTransformService
         {
             // Not ours to fail. Something else already moved the order — most often a transform that
             // SUCCEEDED (ready_to_deliver and beyond), which must never be overwritten with a
-            // failure. Logged rather than silent, because "we could not record this" is itself worth
-            // seeing.
+            // failure; or an operator who recorded rejected_by_supplier while this attempt was in
+            // flight, whose verdict must outrank a machine failure. Logged rather than silent,
+            // because "we could not record this" is itself worth seeing.
             _logger.LogWarning(
-                "Order {OrderId} (org {OrgId}) transform failed, but the order is no longer in a claimable "
-              + "status — leaving it untouched and recording nothing. Error was: {Error}",
+                "Order {OrderId} (org {OrgId}) transform failed, but the order has moved to a status a transform "
+              + "failure may not overwrite — leaving it untouched and recording nothing. Error was: {Error}",
                 orderId, organisationId, error);
             return;
         }

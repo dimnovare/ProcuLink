@@ -19,16 +19,40 @@ namespace ProcuLink.Api.Tests.Services;
 /// An unexpected failure anywhere in <c>TransformAsync</c> must be VISIBLE.
 ///
 /// <para>Before this fix, <c>TransformAsync</c> had no exception handling at all between its first
-/// line and the acceptance gate's try at <c>:455</c>, and none again between the artifact generation
-/// handler at <c>:647</c> and the end of the method. Anything thrown in either region unwound
-/// through <c>TransformOrderJob</c> into Hangfire, which retried and then permanently failed the
-/// job, leaving the order at <c>transforming</c>. <c>StuckOrderDetectionService</c> then recovered
-/// that strand to <c>ready</c> — deliberately, and explicitly never marking it failed, because its
-/// premise was that a job which actually RAN and failed had already written its own status.</para>
+/// line and the acceptance gate's <c>try</c> around <c>_acceptanceGate.EvaluateAsync</c>, and none
+/// again between the artifact-generation <c>try</c> (the one whose catches match
+/// <c>TransformTemplateException</c>/<c>TransformValidationException</c>) and the end of the method.
+/// Anything thrown in either region unwound through <c>TransformOrderJob</c> into Hangfire, which
+/// retried and then permanently failed the job, leaving the order at <c>transforming</c>.
+/// <c>StuckOrderDetectionService</c> then recovered that strand to <c>ready</c> — deliberately, and
+/// explicitly never marking it failed, because its premise was that a job which actually RAN and
+/// failed had already written its own status.</para>
 ///
 /// <para>The combined effect was that a real, repeatable error produced no <c>transform_failed</c>
 /// status, no error message, no ops-health count, and no exception row. It looked like nothing had
-/// happened. These tests fail on the pre-fix code.</para>
+/// happened.</para>
+///
+/// <para><b>What proves what — because "these tests fail on the pre-fix code" is not true of all of
+/// them, and a blanket claim hides which ones carry the weight.</b></para>
+/// <list type="bullet">
+///   <item><b>Red-then-green against the pre-fix code</b> (they were run against it and failed):
+///     <c>APreClaimThrow_…</c>, <c>AThrowOnAnOrderThatIsNotClaimable_…</c> and
+///     <c>AFailedArtifactUpload_…</c>. These are the proof that the strand existed and is
+///     closed.</item>
+///   <item><b>Controls and regression pins, green before and after — by design:</b>
+///     <c>NegativeControl_…</c> (identical fixture, nothing throws; without it "the guard records
+///     real failures" and "something now fails every transform" would be indistinguishable) and
+///     <c>ACancelledTransform_…</c> (pre-fix nothing caught cancellation either — it pins the
+///     <c>catch (OperationCanceledException) { throw; }</c> clause, and deleting that clause does
+///     turn it red).</item>
+///   <item><b>Added after the fix landed, and verified by MUTATION rather than by a pre-fix run:</b>
+///     <c>AThrowFromTheFinalCommit_…</c> (covers <c>ChangeTracker.Clear()</c>, which no earlier test
+///     reached), <c>NoRegisteredTransformer_…</c> and <c>UnresolvedLines_…</c> (the two
+///     <c>Result.Fail</c> returns, which strand an order exactly as a throw did),
+///     <c>ATransformFailureOnARejectedOrder_…</c> (the guard set is narrower than the claim set) and
+///     <c>ATransientFailureThatLaterSucceeds_…</c> (the success path closes the exception row it
+///     opened). Each names the mutation that kills it.</item>
+/// </list>
 /// </summary>
 public sealed class TransformStrandNeverSilentTests
 {
@@ -38,7 +62,8 @@ public sealed class TransformStrandNeverSilentTests
             .Options);
 
     /// <summary>A cXML credential resolver that throws — a real seam on the pre-claim path
-    /// (<c>OrderTransformService.cs:154</c>), reached only when the effective format is cXML.</summary>
+    /// (<c>OrderTransformService</c>'s <c>_cxmlResolver.ResolveAsync</c> call, which sits well above
+    /// the atomic claim), reached only when the effective format is cXML.</summary>
     private sealed class ThrowingCxmlResolver : ICxmlCredentialResolver
     {
         private readonly Exception _toThrow;
@@ -51,7 +76,7 @@ public sealed class TransformStrandNeverSilentTests
     /// Throws from <c>SaveChangesAsync</c> on the ONE call that is persisting an Added
     /// <see cref="OutboundArtifact"/> — which happens only on the FINAL commit inside
     /// <c>TransformCoreAsync</c> (artifact + <c>ready_to_deliver</c> status + the "Transformed" audit
-    /// event, all in the one <c>SaveChangesAsync</c> at <c>OrderTransformService.cs:819</c>).
+    /// event, all in <c>TransformCoreAsync</c>'s FINAL <c>SaveChangesAsync</c>).
     ///
     /// <para>This is the discriminator, not a call counter, because a counter would also have to
     /// account for <see cref="SeedAsync"/>'s own <c>SaveChangesAsync</c> — made through this SAME
@@ -59,9 +84,9 @@ public sealed class TransformStrandNeverSilentTests
     /// <c>TransformCoreAsync</c> itself. Neither of those, nor anything any collaborator (mapping,
     /// exception service) might save, ever has an <see cref="OutboundArtifact"/> on the tracker: the
     /// ONLY <c>_db.OutboundArtifacts.Add(...)</c> in the whole call graph reached from
-    /// <c>OrderService.TransformAsync</c> is the one immediately before the final commit
-    /// (<c>OrderTransformService.cs:807</c>). Checking for it identifies the final commit exactly,
-    /// regardless of how many other calls happen first.</para>
+    /// <c>OrderService.TransformAsync</c> is the one immediately before that final commit. Checking
+    /// for it identifies the final commit exactly, regardless of how many other calls happen
+    /// first.</para>
     /// </summary>
     private sealed class ThrowsOnFinalArtifactCommitDbContext : ProcuLinkDbContext
     {
@@ -87,9 +112,41 @@ public sealed class TransformStrandNeverSilentTests
             .Options, toThrow);
 
     /// <summary>
+    /// The same discriminator as <see cref="ThrowsOnFinalArtifactCommitDbContext"/>, but ARMED ONCE:
+    /// the first artifact commit throws and every later one is allowed through. That is the
+    /// TRANSIENT-fault shape — a storage or DB blip that Hangfire's +10s retry cures — and it is the
+    /// only way to drive one order through a failure and then a success on a single context.
+    /// </summary>
+    private sealed class ThrowsOnceOnFinalArtifactCommitDbContext : ProcuLinkDbContext
+    {
+        private readonly Exception _toThrow;
+        private bool _armed = true;
+
+        public ThrowsOnceOnFinalArtifactCommitDbContext(DbContextOptions<ProcuLinkDbContext> options, Exception toThrow)
+            : base(options) => _toThrow = toThrow;
+
+        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            if (_armed && ChangeTracker.Entries<OutboundArtifact>().Any(e => e.State == EntityState.Added))
+            {
+                _armed = false;
+                throw _toThrow;
+            }
+
+            return base.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    private static ThrowsOnceOnFinalArtifactCommitDbContext NewDbThrowingOnceOnFinalCommit(Exception toThrow) =>
+        new(new DbContextOptionsBuilder<ProcuLinkDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options, toThrow);
+
+    /// <summary>
     /// OrderService wired for cXML, with an injectable cXML resolver and an injectable upload
-    /// behaviour. <paramref name="uploadThrows"/> covers the far side of the method (the R2 call at
-    /// <c>OrderTransformService.cs:664</c>), which was unguarded for the same reason.
+    /// behaviour. <paramref name="uploadThrows"/> covers the far side of the method (the R2 call —
+    /// <c>_fileStorage.UploadAsync</c> in <c>TransformCoreAsync</c>), which was unguarded for the
+    /// same reason.
     /// </summary>
     private static OrderService Build(
         ProcuLinkDbContext db,
@@ -159,6 +216,20 @@ public sealed class TransformStrandNeverSilentTests
     private static Task<string> StatusOfAsync(ProcuLinkDbContext db, Guid orderId) =>
         db.PurchaseOrders.AsNoTracking().Where(o => o.Id == orderId).Select(o => o.Status).FirstAsync();
 
+    /// <summary>
+    /// The OPEN <c>transform_failed</c> exception rows for an order. Open-set rather than absence on
+    /// purpose: <c>OrderExceptionService.ReconcileAsync</c> CLEARS a row by flipping
+    /// <c>State</c> to <c>"resolved"</c> and stamping <c>ResolvedAt</c> — it never deletes it, and a
+    /// resolved row is deliberately never resurrected. Asserting "no rows at all" would therefore
+    /// assert the wrong model and fail even on correct behaviour.
+    /// </summary>
+    private static Task<List<OrderException>> OpenTransformFailedExceptionsAsync(
+        ProcuLinkDbContext db, Guid orgId, Guid orderId) =>
+        db.OrderExceptions.AsNoTracking()
+            .Where(e => e.OrgId == orgId && e.OrderId == orderId
+                     && e.Code == "transform_failed" && e.State == "open")
+            .ToListAsync();
+
     // ── 1. A pre-claim throw is recorded, not swallowed ───────────────────────
 
     [Fact]
@@ -186,13 +257,13 @@ public sealed class TransformStrandNeverSilentTests
         Assert.False(result.IsSuccess);
     }
 
-    // ── 2. The guard: a row we could not have claimed is not touched ──────────
+    // ── 2. The guard: a row we may not fail is not touched ────────────────────
 
     [Fact]
     public async Task AThrowOnAnOrderThatIsNotClaimable_leavesTheStatusAlone()
     {
         await using var db = NewDb();
-        // ready_to_deliver is NOT in OrderStatusMachine.ClaimableForTransformFrom: this order has a
+        // ready_to_deliver is NOT in OrderStatusMachine.TransformFailableFrom: this order has a
         // completed transform and possibly an in-flight delivery. Failing it here would overwrite a
         // good result with a false failure.
         var seed = await SeedAsync(db, status: OrderStatusConstants.ReadyToDeliver);
@@ -228,8 +299,9 @@ public sealed class TransformStrandNeverSilentTests
     {
         await using var db = NewDb();
         var seed = await SeedAsync(db);
-        // The R2 call at OrderTransformService.cs:664 sat outside every try for the same reason the
-        // pre-claim region did, and a storage blip is the likelier of the two in production.
+        // The R2 call (_fileStorage.UploadAsync in TransformCoreAsync) sat outside every try for the
+        // same reason the pre-claim region did, and a storage blip is the likelier of the two in
+        // production.
         var svc = Build(db, uploadThrows: new IOException("R2 unavailable"));
 
         var result = await svc.TransformAsync(seed.OrgId, seed.OrderId, OutputFormat.CXml, CancellationToken.None);
@@ -241,10 +313,11 @@ public sealed class TransformStrandNeverSilentTests
         Assert.Equal(OrderStatusConstants.TransformFailed, await StatusOfAsync(db, seed.OrderId));
         Assert.False(result.IsSuccess);
 
-        // No OutboundArtifact assertion here: the upload throws at OrderTransformService.cs:736-737,
-        // well before the artifact row is even constructed (:794) or Added (:807), so "no artifact
-        // exists" would hold whether or not the guarded write worked — a tautology. That check is only
-        // meaningful where the row was genuinely pending when the failure hit; see
+        // No OutboundArtifact assertion here: _fileStorage.UploadAsync throws well before the
+        // artifact row is even constructed (`new OutboundArtifact { … }`) or Added
+        // (`_db.OutboundArtifacts.Add`), so "no artifact exists" would hold whether or not the guarded
+        // write worked — a tautology. That check is only meaningful where the row was genuinely
+        // pending when the failure hit; see
         // AThrowFromTheFinalCommit_isRecordedAsTransformFailed_noOrphanedArtifact below.
     }
 
@@ -252,10 +325,10 @@ public sealed class TransformStrandNeverSilentTests
 
     /// <summary>
     /// Finding 1 (task-1-review.md): every test above throws BEFORE the artifact is ever added to the
-    /// tracker, so none of them exercise <c>_db.ChangeTracker.Clear()</c> at
-    /// <c>OrderTransformService.cs:150</c> — delete that line and all five original tests still pass.
-    /// This test throws from the FINAL <c>SaveChangesAsync</c> instead
-    /// (<c>OrderTransformService.cs:819</c>), the one moment the tracker holds an Added
+    /// tracker, so none of them exercise the <c>_db.ChangeTracker.Clear()</c> in
+    /// <c>TransformAsync</c>'s catch — delete that line and all five original tests still pass.
+    /// This test throws from <c>TransformCoreAsync</c>'s FINAL <c>SaveChangesAsync</c> instead, the
+    /// one moment the tracker holds an Added
     /// <c>OutboundArtifact</c> and a modified <c>Status = ready_to_deliver</c> together — exactly the
     /// state <c>Clear()</c> exists to discard before <c>FailTransformFromClaimableAsync</c> writes
     /// <c>transform_failed</c>.
@@ -310,11 +383,12 @@ public sealed class TransformStrandNeverSilentTests
         Assert.Single(await db.OutboundArtifacts.AsNoTracking().Where(a => a.OrderId == seed.OrderId).ToListAsync());
     }
 
-    // ── 6. A Fail return is as invisible as a throw ───────────────────────────
+    // ── 7. A Fail return is as invisible as a throw ───────────────────────────
 
     /// <summary>
-    /// TransformOrderJob turns a Fail into a throw (<c>TransformOrderJob.cs:71</c>), so a Fail that
-    /// writes no status strands the order in exactly the same way an unhandled exception did.
+    /// TransformOrderJob turns a Fail into a throw (its <c>if (!result.IsSuccess) throw new
+    /// InvalidOperationException($"Transform failed: {result.Error}")</c>), so a Fail that writes no
+    /// status strands the order in exactly the same way an unhandled exception did.
     /// </summary>
     [Fact]
     public async Task NoRegisteredTransformer_isRecordedAsTransformFailed_notASilentFail()
@@ -353,5 +427,85 @@ public sealed class TransformStrandNeverSilentTests
 
         Assert.Equal(OrderStatusConstants.TransformFailed, await StatusOfAsync(db, seed.OrderId));
         Assert.False(result.IsSuccess);
+    }
+
+    // ── 8. An operator's verdict outranks a machine failure ───────────────────
+
+    /// <summary>
+    /// The guard set is NARROWER than the claim set, by exactly <c>rejected_by_supplier</c>.
+    ///
+    /// <para>The interleaving this pins: a transform is in flight (the order is
+    /// <c>transforming</c>); an operator records a supplier rejection, because the supplier told
+    /// them out of band that the PO is refused; the in-flight transform then throws. Guarding the
+    /// failure write on <c>ClaimableForTransformFrom</c> — which admits <c>rejected_by_supplier</c>,
+    /// so that a CORRECTED document can be produced — would stamp <c>transform_failed</c> over that
+    /// verdict, replacing a human's finding with "something went wrong preparing this order to
+    /// send". The verdict is load-bearing: it is the one status no delivery claim set admits, and it
+    /// feeds the supplier acceptance-rate figures.</para>
+    ///
+    /// <para><b>Mutation that kills this test:</b> guard
+    /// <c>OrderTransformService.FailTransformFromClaimableAsync</c> on
+    /// <c>OrderStatusMachine.ClaimableForTransformFrom</c> again (both the relational and the
+    /// InMemory branch) — the status is overwritten and the audit row appears.</para>
+    /// </summary>
+    [Fact]
+    public async Task ATransformFailureOnARejectedOrder_leavesTheOperatorsVerdictStanding()
+    {
+        await using var db = NewDb();
+        var seed = await SeedAsync(db, status: OrderStatusConstants.RejectedBySupplier);
+        var svc = Build(db, cxmlResolver: new ThrowingCxmlResolver(new InvalidOperationException("resolver exploded")));
+
+        var result = await svc.TransformAsync(seed.OrgId, seed.OrderId, OutputFormat.CXml, CancellationToken.None);
+
+        // EVIDENCE FIRST, same rule as test 1: a mutation run reports only the first failing
+        // assertion, so the trail is asserted ahead of the status it explains.
+        Assert.Empty(await TransformFailedEventsAsync(db, seed.OrderId));
+        Assert.Equal(OrderStatusConstants.RejectedBySupplier, await StatusOfAsync(db, seed.OrderId));
+
+        // Still a failure to the caller — refusing to OVERWRITE the status is not the same as
+        // pretending the transform worked.
+        Assert.False(result.IsSuccess);
+    }
+
+    // ── 9. A failure that self-heals closes its own exception row ─────────────
+
+    /// <summary>
+    /// A transient fault opens a <c>transform_failed</c> exception row; the retry succeeds; the row
+    /// must not stay open on a now-healthy order.
+    ///
+    /// <para>Why it used to: the only production callers of <c>ReconcileAsync</c> sat on the
+    /// delivery side, and the documented escape ("a successful re-transform enqueues delivery, and
+    /// DeliveryService reconciles on every successful attempt") holds only when a delivery attempt
+    /// is actually PERSISTED. With AutoDeliver off the automatic dispatch claim matches 0 rows,
+    /// writes no attempt and reconciles nothing — and the exceptions UI derives
+    /// <c>transform_failed</c> from status, so no operator could clear it by hand either. The
+    /// wrapper made that routine rather than rare: a DB or storage blip now opens a row and then
+    /// self-heals on the +10s Hangfire retry.</para>
+    ///
+    /// <para><b>Mutation that kills this test:</b> delete the
+    /// <c>SafeReconcileExceptionsAsync</c> call on <c>TransformCoreAsync</c>'s success path — the
+    /// row is still open after the successful re-transform.</para>
+    /// </summary>
+    [Fact]
+    public async Task ATransientFailureThatLaterSucceeds_leavesNoOpenTransformFailedException()
+    {
+        await using var db = NewDbThrowingOnceOnFinalCommit(new InvalidOperationException("storage blip"));
+        var seed = await SeedAsync(db);
+        var svc = Build(db);
+
+        var firstAttempt = await svc.TransformAsync(seed.OrgId, seed.OrderId, OutputFormat.CXml, CancellationToken.None);
+        Assert.False(firstAttempt.IsSuccess);
+
+        // NON-VACUITY: the row must genuinely be open at this point, or the final assertion proves
+        // nothing at all. transform_failed is also the status here, so the exception really is derived.
+        Assert.Single(await OpenTransformFailedExceptionsAsync(db, seed.OrgId, seed.OrderId));
+        Assert.Equal(OrderStatusConstants.TransformFailed, await StatusOfAsync(db, seed.OrderId));
+
+        // The Hangfire retry, in effect: transform_failed is re-claimable, and nothing throws now.
+        var retry = await svc.TransformAsync(seed.OrgId, seed.OrderId, OutputFormat.CXml, CancellationToken.None);
+        Assert.True(retry.IsSuccess, retry.Error);
+        Assert.Equal(OrderStatusConstants.ReadyToDeliver, await StatusOfAsync(db, seed.OrderId));
+
+        Assert.Empty(await OpenTransformFailedExceptionsAsync(db, seed.OrgId, seed.OrderId));
     }
 }
