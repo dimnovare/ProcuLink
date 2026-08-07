@@ -147,6 +147,10 @@ internal sealed class OrderTransformService
             // would re-attempt that entire failed commit and write ready_to_deliver back over the
             // transform_failed we are about to record. A Postgres SaveChanges is all-or-nothing, so a
             // failed one committed nothing worth keeping.
+            //
+            // This also discards a queued AcceptanceGateOverrideUsed row when the gate was overridden
+            // earlier in this same attempt (see TransformCoreAsync, where it is queued) — self-healing,
+            // not a regression: a retry re-evaluates the gate and re-queues the same event.
             _db.ChangeTracker.Clear();
 
             // Plain language, and deliberately NOT ex.Message: this string becomes the order's
@@ -582,6 +586,11 @@ internal sealed class OrderTransformService
             // committed by whichever SaveChanges finishes this transform (the artifact commit, or
             // FailTransformAsync if generation then fails for an unrelated reason): either way an
             // attempt was admitted under the override, which is what the row records.
+            //
+            // A THIRD outcome — TransformAsync's wrapper catching an unexpected failure anywhere else
+            // in this attempt — clears the tracker before recording the failure (see its
+            // ChangeTracker.Clear() comment) and drops this row too. Self-healing, not a regression: a
+            // retry re-evaluates the gate and re-queues the same event.
             _db.AuditEvents.Add(AcceptanceGate.BuildOverrideUsedEvent(organisationId, orderId, gate));
             _logger.LogWarning(
                 "Order {OrderId}: transforming despite {Count} blocking supplier acceptance rule(s) — operator override by {Actor}.",

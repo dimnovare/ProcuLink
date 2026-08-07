@@ -48,6 +48,45 @@ public sealed class TransformStrandNeverSilentTests
     }
 
     /// <summary>
+    /// Throws from <c>SaveChangesAsync</c> on the ONE call that is persisting an Added
+    /// <see cref="OutboundArtifact"/> — which happens only on the FINAL commit inside
+    /// <c>TransformCoreAsync</c> (artifact + <c>ready_to_deliver</c> status + the "Transformed" audit
+    /// event, all in the one <c>SaveChangesAsync</c> at <c>OrderTransformService.cs:819</c>).
+    ///
+    /// <para>This is the discriminator, not a call counter, because a counter would also have to
+    /// account for <see cref="SeedAsync"/>'s own <c>SaveChangesAsync</c> — made through this SAME
+    /// context before <c>TransformAsync</c> is even invoked — and for the InMemory claim commit inside
+    /// <c>TransformCoreAsync</c> itself. Neither of those, nor anything any collaborator (mapping,
+    /// exception service) might save, ever has an <see cref="OutboundArtifact"/> on the tracker: the
+    /// ONLY <c>_db.OutboundArtifacts.Add(...)</c> in the whole call graph reached from
+    /// <c>OrderService.TransformAsync</c> is the one immediately before the final commit
+    /// (<c>OrderTransformService.cs:807</c>). Checking for it identifies the final commit exactly,
+    /// regardless of how many other calls happen first.</para>
+    /// </summary>
+    private sealed class ThrowsOnFinalArtifactCommitDbContext : ProcuLinkDbContext
+    {
+        private readonly Exception _toThrow;
+
+        public ThrowsOnFinalArtifactCommitDbContext(DbContextOptions<ProcuLinkDbContext> options, Exception toThrow)
+            : base(options) => _toThrow = toThrow;
+
+        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            var committingTheArtifact = ChangeTracker.Entries<OutboundArtifact>()
+                .Any(e => e.State == EntityState.Added);
+
+            return committingTheArtifact
+                ? throw _toThrow
+                : base.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    private static ThrowsOnFinalArtifactCommitDbContext NewDbThrowingOnFinalCommit(Exception toThrow) =>
+        new(new DbContextOptionsBuilder<ProcuLinkDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options, toThrow);
+
+    /// <summary>
     /// OrderService wired for cXML, with an injectable cXML resolver and an injectable upload
     /// behaviour. <paramref name="uploadThrows"/> covers the far side of the method (the R2 call at
     /// <c>OrderTransformService.cs:664</c>), which was unguarded for the same reason.
@@ -202,11 +241,50 @@ public sealed class TransformStrandNeverSilentTests
         Assert.Equal(OrderStatusConstants.TransformFailed, await StatusOfAsync(db, seed.OrderId));
         Assert.False(result.IsSuccess);
 
-        // The failed transform left nothing behind that a delivery sweep could pick up.
+        // No OutboundArtifact assertion here: the upload throws at OrderTransformService.cs:736-737,
+        // well before the artifact row is even constructed (:794) or Added (:807), so "no artifact
+        // exists" would hold whether or not the guarded write worked — a tautology. That check is only
+        // meaningful where the row was genuinely pending when the failure hit; see
+        // AThrowFromTheFinalCommit_isRecordedAsTransformFailed_noOrphanedArtifact below.
+    }
+
+    // ── 5. The line no other test reaches: the FINAL SaveChanges itself ──────
+
+    /// <summary>
+    /// Finding 1 (task-1-review.md): every test above throws BEFORE the artifact is ever added to the
+    /// tracker, so none of them exercise <c>_db.ChangeTracker.Clear()</c> at
+    /// <c>OrderTransformService.cs:150</c> — delete that line and all five original tests still pass.
+    /// This test throws from the FINAL <c>SaveChangesAsync</c> instead
+    /// (<c>OrderTransformService.cs:819</c>), the one moment the tracker holds an Added
+    /// <c>OutboundArtifact</c> and a modified <c>Status = ready_to_deliver</c> together — exactly the
+    /// state <c>Clear()</c> exists to discard before <c>FailTransformFromClaimableAsync</c> writes
+    /// <c>transform_failed</c>.
+    /// </summary>
+    [Fact]
+    public async Task AThrowFromTheFinalCommit_isRecordedAsTransformFailed_noOrphanedArtifact()
+    {
+        await using var db = NewDbThrowingOnFinalCommit(new InvalidOperationException("final commit exploded"));
+        var seed = await SeedAsync(db);
+        var svc = Build(db);   // nothing else throws — only the final SaveChangesAsync does, via the DbContext above
+
+        var result = await svc.TransformAsync(seed.OrgId, seed.OrderId, OutputFormat.CXml, CancellationToken.None);
+
+        // Same ordering rule as test 1: the audit row is asserted before the status, because a mutation
+        // run reports only the first failing assertion, and a status check ahead of it could hide a
+        // mutation that writes the status but drops the trail.
+        var events = await TransformFailedEventsAsync(db, seed.OrderId);
+        Assert.Single(events);
+
+        Assert.Equal(OrderStatusConstants.TransformFailed, await StatusOfAsync(db, seed.OrderId));
+        Assert.False(result.IsSuccess);
+
+        // Unlike test 4's version of this check, the artifact row genuinely WAS pending (Added, inside
+        // the very commit that failed) at the moment the failure hit — so finding it empty here actually
+        // proves the abandoned Add was discarded, not silently re-committed later by the guarded write.
         Assert.Empty(await db.OutboundArtifacts.AsNoTracking().Where(a => a.OrderId == seed.OrderId).ToListAsync());
     }
 
-    // ── 5. Negative control ───────────────────────────────────────────────────
+    // ── 6. Negative control ───────────────────────────────────────────────────
 
     /// <summary>
     /// Identical fixture, identical code path; the ONLY difference is that nothing throws. Without
@@ -225,5 +303,10 @@ public sealed class TransformStrandNeverSilentTests
         Assert.True(result.IsSuccess, result.Error);
         Assert.Empty(await TransformFailedEventsAsync(db, seed.OrderId));
         Assert.Equal(OrderStatusConstants.ReadyToDeliver, await StatusOfAsync(db, seed.OrderId));
+
+        // The positive contrast the failure tests' Assert.Empty(OutboundArtifacts...) needs: without
+        // this, "the guard records real failures" and "something now fails every transform" would both
+        // leave the same empty-artifacts result, and the control would not actually distinguish them.
+        Assert.Single(await db.OutboundArtifacts.AsNoTracking().Where(a => a.OrderId == seed.OrderId).ToListAsync());
     }
 }
