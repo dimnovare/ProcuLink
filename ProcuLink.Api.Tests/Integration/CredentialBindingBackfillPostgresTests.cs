@@ -5,6 +5,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services.Email;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using Testcontainers.PostgreSql;
@@ -80,37 +82,69 @@ public sealed class CredentialBindingBackfillPostgresTests : IAsyncLifetime
     public async Task Rebind_DoesNotTripThePublishedRevisionImmutabilityTrigger()
     {
         var legacy = LegacyBlob("delivery-credentials");
-        await SeedPublishedRevisionWithCopiedCredentialsAsync(legacy);
+        var seed = await SeedPublishedRevisionWithCopiedCredentialsAsync(legacy);
 
-        await using var db = NewContext();
-        var act = async () => await new CredentialBindingBackfillService(
-            db, Encryption(), NullLogger<CredentialBindingBackfillService>.Instance)
-            .RebindLegacyCredentialsAsync(default);
+        var count = -1;
+        await using (var db = NewContext())
+        {
+            var act = async () =>
+            {
+                count = await new CredentialBindingBackfillService(
+                    db, Encryption(), NullLogger<CredentialBindingBackfillService>.Instance)
+                    .RebindLegacyCredentialsAsync(default);
+            };
 
-        // A PostgresException with SqlState 'P0001' from
-        // proculink_block_published_revision_content_update means the backfill reached
-        // credentials_ref, which it must never do.
-        await act.Should().NotThrowAsync();
+            // A PostgresException with SqlState 'P0001' from
+            // proculink_block_published_revision_content_update means the backfill reached
+            // credentials_ref, which it must never do.
+            await act.Should().NotThrowAsync();
+        }
+
+        // ANTI-VACUITY FLOOR. Without this, "no P0001 was thrown" and "bytes unchanged" are also
+        // exactly what a service stubbed to `return 0;` would produce — the seed must give the
+        // backfill real covered work, and this proves it actually did some.
+        count.Should().BeGreaterThan(0,
+            "the backfill must actually rewrite something, or this test proves nothing about the exclusion");
+
+        // Re-read the IMAP password from a FRESH context to prove the jsonb write-back genuinely
+        // round-trips through the real Postgres provider — not only through EF InMemory, which has
+        // no jsonb cast semantics at all. This is the same column whose READ-side jsonb cast produced
+        // the 22P02 defect this task already found and fixed (a SQL-side `!= ""` predicate against a
+        // jsonb column), so it is the one column most likely to hide an equivalent WRITE-side defect.
+        await using var verify = NewContext();
+        var org = await verify.Organisations.AsNoTracking().SingleAsync(x => x.Id == seed.OrgId);
+        var emailConfig = EmailPollingConfig.FromJson(org.EmailConfigJson);
+
+        Convert.FromBase64String(emailConfig.PasswordCiphertext!)[0].Should().Be(2,
+            "the nested IMAP password must be rewritten to the bound envelope on real Postgres");
+        Encryption().Decrypt(emailConfig.PasswordCiphertext!, CredentialScope.ForOrg(
+            seed.OrgId, CredentialPurpose.OrgEmailImapPassword)).Should().Be("imap-password");
     }
 
     [DockerRequiredFact]
     public async Task Rebind_LeavesTheLiveAndRevisionCredentialBytesEqual()
     {
         var legacy = LegacyBlob("delivery-credentials");
-        var supplierId = await SeedPublishedRevisionWithCopiedCredentialsAsync(legacy);
+        var seed = await SeedPublishedRevisionWithCopiedCredentialsAsync(legacy);
 
+        int count;
         await using (var db = NewContext())
         {
-            await new CredentialBindingBackfillService(
+            count = await new CredentialBindingBackfillService(
                 db, Encryption(), NullLogger<CredentialBindingBackfillService>.Instance)
                 .RebindLegacyCredentialsAsync(default);
         }
 
+        // ANTI-VACUITY FLOOR — see the sibling test for why this matters: without it, the
+        // byte-equality assertions below hold just as well when the service does nothing at all.
+        count.Should().BeGreaterThan(0,
+            "the backfill must actually rewrite something, or this test proves nothing about the exclusion");
+
         await using var check = NewContext();
         var live = await check.SupplierDeliveryConfigs.AsNoTracking()
-            .SingleAsync(x => x.SupplierId == supplierId);
+            .SingleAsync(x => x.SupplierId == seed.SupplierId);
         var revision = await check.SupplierConnectionRevisions.AsNoTracking()
-            .SingleAsync(x => x.SupplierId == supplierId && x.Status == "published");
+            .SingleAsync(x => x.SupplierId == seed.SupplierId && x.Status == "published");
 
         // This ordinal equality IS what DeliverySnapshotMatches (SupplierConnectionService.cs:554)
         // compares. Re-encrypting either side changes the bytes — a random nonce guarantees it —
@@ -122,15 +156,23 @@ public sealed class CredentialBindingBackfillPostgresTests : IAsyncLifetime
 
     // ── seeding ──────────────────────────────────────────────────────────────
 
+    private sealed record Seed(Guid OrgId, Guid SupplierId);
+
     /// <summary>
     /// Seeds an org + supplier + SupplierConnection + PUBLISHED revision whose CredentialsRef is the
     /// SAME bytes as the live SupplierDeliveryConfig.EncryptedCredentials — the verbatim copy
     /// production creates at SupplierConnectionService.cs:483. Modeled on
     /// PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests.SeedGovernedSupplierAsync (this test
-    /// class does not need the order/dispatch machinery that file also seeds). Returns the supplier
-    /// id.
+    /// class does not need the order/dispatch machinery that file also seeds).
+    ///
+    /// <para>ALSO seeds two COVERED legacy blobs (the org's nested IMAP password and the delivery
+    /// config's cXML shared secret) so the backfill has real work to do against Postgres. Without
+    /// this, <c>RebindLegacyCredentialsAsync</c> returns 0, <c>SaveChangesAsync</c> never runs, and
+    /// no UPDATE of any kind reaches Postgres — the two tests in this file would pass unchanged even
+    /// if the whole service body were replaced with <c>return 0;</c>. The anti-vacuity floor
+    /// (<c>count.Should().BeGreaterThan(0, ...)</c>) in both tests depends on this seed data.</para>
     /// </summary>
-    private async Task<Guid> SeedPublishedRevisionWithCopiedCredentialsAsync(string legacyBlob)
+    private async Task<Seed> SeedPublishedRevisionWithCopiedCredentialsAsync(string legacyBlob)
     {
         var orgId        = Guid.NewGuid();
         var supplierId   = Guid.NewGuid();
@@ -149,6 +191,18 @@ public sealed class CredentialBindingBackfillPostgresTests : IAsyncLifetime
             Plan = "operations",
             AccountStatus = "active",
             CreatedAt = now,
+            // COVERED: the nested IMAP password. Real work for RebindEmailConfigsAsync, and the
+            // column whose jsonb READ-side cast already produced the 22P02 defect this task fixed —
+            // this is what proves the WRITE-side round-trips through the real provider too.
+            EmailConfigJson = (EmailPollingConfig.Empty with
+            {
+                Enabled = true,
+                Host = "imap.example.com",
+                Port = 993,
+                Username = "poller@example.com",
+                Folder = "INBOX",
+                PasswordCiphertext = LegacyBlob("imap-password"),
+            }).ToJson(),
         });
         db.Suppliers.Add(new Supplier
         {
@@ -197,7 +251,9 @@ public sealed class CredentialBindingBackfillPostgresTests : IAsyncLifetime
         conn.ActiveRevisionId = revisionId;
         await db.SaveChangesAsync();
 
-        // The live row starts in sync with the published revision — same legacy blob, byte for byte.
+        // The live row starts in sync with the published revision — same legacy blob, byte for byte,
+        // on the EXCLUDED EncryptedCredentials column. EncryptedCxmlSharedSecret on this same row is
+        // COVERED (only EncryptedCredentials is excluded) — real work for RebindCxmlSecretsAsync.
         db.SupplierDeliveryConfigs.Add(new SupplierDeliveryConfig
         {
             Id = Guid.NewGuid(),
@@ -207,13 +263,14 @@ public sealed class CredentialBindingBackfillPostgresTests : IAsyncLifetime
             AutoDeliver = true,
             ConfigJson = """{"url":"https://supplier.test/endpoint","method":"POST"}""",
             EncryptedCredentials = legacyBlob,
+            EncryptedCxmlSharedSecret = LegacyBlob("cxml-shared-secret"),
             OutputFormat = "csv",
             CreatedAt = now,
             UpdatedAt = now,
         });
         await db.SaveChangesAsync();
 
-        return supplierId;
+        return new Seed(orgId, supplierId);
     }
 
     // Builds a version-1 envelope directly, the way rows were written before binding existed.
