@@ -87,6 +87,7 @@ public sealed class HardeningTestFactory : WebApplicationFactory<Program>
     }
 }
 
+[Collection("postgres-container")]
 public sealed class ProgramHardeningTests : IClassFixture<HardeningTestFactory>
 {
     private readonly HardeningTestFactory _factory;
