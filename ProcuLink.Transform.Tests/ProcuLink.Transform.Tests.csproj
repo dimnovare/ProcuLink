@@ -32,7 +32,11 @@
          "De-identified" is enforced, not asserted, in two directions:
            • CONTENTS — Architecture\FixtureDeIdentificationGuardTests sweeps every tracked fixture
              in the repository and fails on an email address outside the RFC 2606 / RFC 6761
-             reserved names, an absolute local filesystem path, or a file:// URI.
+             reserved names, an absolute local filesystem path, a file:// URI, a URL or hostname
+             on a host that is neither reserved-for-documentation nor an approved standards host,
+             or an Ariba Network ID outside the reserved all-zeros placeholder range. The host
+             rule is an allow-list for the same reason the naming vocabulary is: a deny-list of
+             real domains would republish, in the current tree, exactly what it suppresses.
            • NAMES — Architecture\FixtureNamingGuardTests sweeps the same corpus's PATHS and fails
              on any directory or file-name token outside the approved format/dialect/shape
              vocabulary. This repository is public, so a file name is as readable as its contents. -->
