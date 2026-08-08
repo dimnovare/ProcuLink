@@ -1,7 +1,7 @@
 <Index xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <CatalogHead>
     <CatalogId>2026070203000627543751594</CatalogId>
-    <CustomerId>REDACTED-NETWORK-ID</CustomerId>
+    <CustomerId>TESTBUYER_EE</CustomerId>
     <UpdatedDate>2026-07-02</UpdatedDate>
     <UpdatedTime>03:00</UpdatedTime>
     <Currency>EUR</Currency>
@@ -24,8 +24,8 @@
       <ManufacturerName>REDACTED-ORDER-DATA</ManufacturerName>
       <LeadTime>4</LeadTime>
       <Extrinsic name="ListName">Self-service portal</Extrinsic>
-      <Extrinsic name="Image">https://example.invalid/redacted</Extrinsic>
-      <Extrinsic name="Thumbnail">https://example.invalid/redacted</Extrinsic>
+      <Extrinsic name="Image">https://cdn.example.com/images/big/08262ec549d61e915ce85e1cb01d9bab.jpg</Extrinsic>
+      <Extrinsic name="Thumbnail">https://cdn.example.com/images/small/08262ec549d61e915ce85e1cb01d9bab.jpg</Extrinsic>
     </ItemDetail>
   </IndexItem>
 <IndexItem>
@@ -45,8 +45,8 @@
       <ManufacturerName>Deltaco</ManufacturerName>
       <LeadTime>5</LeadTime>
       <Extrinsic name="ListName">Self-service portal</Extrinsic>
-      <Extrinsic name="Image">https://example.invalid/redacted</Extrinsic>
-      <Extrinsic name="Thumbnail">https://example.invalid/redacted</Extrinsic>
+      <Extrinsic name="Image">https://cdn.example.com/images/big/3cbc071ac2d257b456d5a9af41293819.jpg</Extrinsic>
+      <Extrinsic name="Thumbnail">https://cdn.example.com/images/small/3cbc071ac2d257b456d5a9af41293819.jpg</Extrinsic>
     </ItemDetail>
   </IndexItem>
 <IndexItem>
@@ -66,8 +66,8 @@
       <ManufacturerName>Gembird</ManufacturerName>
       <LeadTime>28</LeadTime>
       <Extrinsic name="ListName">Self-service portal</Extrinsic>
-      <Extrinsic name="Image">https://example.invalid/redacted</Extrinsic>
-      <Extrinsic name="Thumbnail">https://example.invalid/redacted</Extrinsic>
+      <Extrinsic name="Image">https://cdn.example.com/images/big/85b9a544f0d591c7390694f7f4853d04.jpg</Extrinsic>
+      <Extrinsic name="Thumbnail">https://cdn.example.com/images/small/85b9a544f0d591c7390694f7f4853d04.jpg</Extrinsic>
     </ItemDetail>
   </IndexItem>
 </Index>
