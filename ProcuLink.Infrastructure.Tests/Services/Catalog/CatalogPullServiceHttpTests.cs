@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Catalog;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Catalog;
@@ -83,16 +84,19 @@ public class CatalogPullServiceHttpTests
             CreatedAt = DateTime.UtcNow,
         });
 
+        var sourceId = Guid.NewGuid();
         var source = new SupplierCatalogSource
         {
-            Id = Guid.NewGuid(),
+            Id = sourceId,
             OrgId = orgId,
             SupplierId = supplierId,
             Protocol = "https",
             Url = url,
             HttpMethod = "GET",
             AuthMethod = authConfigJson is null ? "none" : "configured",
-            AuthConfigEncrypted = authConfigJson is null ? null : encryption.Encrypt(authConfigJson),
+            AuthConfigEncrypted = authConfigJson is null ? null : encryption.Encrypt(
+                authConfigJson,
+                CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierCatalogAuthConfig, sourceId)),
             FileFormat = "auto",
             IsEnabled = true,
             CreatedAt = DateTime.UtcNow,
@@ -206,6 +210,35 @@ public class CatalogPullServiceHttpTests
         (await act.Should().ThrowAsync<CatalogSyncException>())
             .Which.Message.Should().Be("Catalog file exceeds 256 MB.");
         h.Sink.UpsertCalls.Should().Be(0);
+    }
+
+    // ── transport response cap must not refuse a legitimate catalog ───────────
+
+    [Fact]
+    public async Task Pull_RealGuardedHandler_LargeCatalog_OptsUpPastTheTransportResponseCap()
+    {
+        // A REAL guarded handler whose default response ceiling is deliberately 1 KB. The catalog
+        // download is the one call in the system that legitimately exceeds the transport default,
+        // so it opts itself up to CatalogLimits.MaxCatalogFileBytes per request. Remove that opt-up
+        // in CatalogPullService and this body — an ordinary 2-product feed padded past 1 KB —
+        // stops arriving at all.
+        var json = "{ \"products\": [ { \"sku\": \"A-1\", \"description\": \""
+                   + new string('w', 4096)
+                   + "\", \"unit_price\": 9.50, \"currency\": \"EUR\" } ] }";
+        json.Length.Should().BeGreaterThan(1024, "the body must actually exceed the transport default under test");
+
+        using var server = ProcuLink.Infrastructure.Tests.Services.Security.StubHttpServer.Start(
+            ProcuLink.Infrastructure.Tests.Services.Security.StubHttpServer.Ok(json, "application/json"));
+
+        var guard = new OutboundRequestGuard(Config(allowPrivate: true), NullLogger<OutboundRequestGuard>.Instance);
+        using var guardedClient = new HttpClient(guard.CreateGuardedHttpHandler(maxResponseBytes: 1024));
+
+        var h = await BuildAsync(guardedClient, allowPrivate: true, url: $"{server.BaseUrl}/catalog.json");
+
+        var result = await h.Service.PullAsync(h.OrgId, h.SourceId, CancellationToken.None);
+
+        result.Status.Should().Be("ok");
+        result.Created.Should().Be(1);
     }
 
     // ── non-2xx response → safe message, no import ────────────────────────────

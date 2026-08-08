@@ -7,10 +7,10 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Transform.Conformance;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -55,14 +55,14 @@ namespace ProcuLink.Api.Tests.Integration;
 /// IDENTICAL.</para>
 /// </summary>
 [Collection("postgres-container")]
-public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests : IAsyncLifetime
+public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests(PostgresContainerFixture postgres) : IAsyncLifetime
 {
     private const string OldUrl     = "https://supplier.test/v1-endpoint";
     private const string NewUrl     = "https://supplier.test/v2-endpoint";
     private const string OldUrlJson = $$"""{"url":"{{OldUrl}}","method":"POST"}""";
     private const string NewUrlJson = $$"""{"url":"{{NewUrl}}","method":"POST"}""";
 
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
     private DbContextOptions<ProcuLinkDbContext>? _options;
 
     public async Task InitializeAsync()
@@ -70,16 +70,9 @@ public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests : IAsy
         if (DockerProbe.UnavailableReason is not null)
             return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_revauth_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_revauth");
 
-        await _pg.StartAsync();
-
-        var connectionString = new NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        var connectionString = new NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = false,
         }.ConnectionString;
@@ -87,15 +80,11 @@ public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests : IAsy
         _options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseNpgsql(connectionString)
             .Options;
-
-        await using var migrateDb = new ProcuLinkDbContext(_options);
-        await migrateDb.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null)
-            await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     // ── (a1) THE PROOF ────────────────────────────────────────────────────────
@@ -278,6 +267,15 @@ public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests : IAsy
         var v1Id         = Guid.NewGuid();
         var now          = DateTime.UtcNow;
 
+        // Both the published revision's CredentialsRef and the live config's EncryptedCredentials
+        // represent the SAME credential — in production CredentialsRef is a verbatim byte-copy of
+        // the live row at publish time, so this is encrypted ONCE and assigned to both below. A
+        // second Encrypt call would use a fresh random nonce and diverge byte-for-byte even though
+        // the plaintext and scope are identical.
+        var v1CredentialsCiphertext = encryption.Encrypt(
+            """{"type":"v1"}""",
+            CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierDeliveryCredentials, supplierId));
+
         await using var db = NewContext();
         db.Organisations.Add(new Organisation
         {
@@ -305,7 +303,7 @@ public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests : IAsy
             DeliveryProtocol    = "http",
             DeliveryConfigJson  = OldUrlJson,
             DeliveryAutoDeliver = true,
-            CredentialsRef      = encryption.Encrypt("""{"type":"v1"}"""),
+            CredentialsRef      = v1CredentialsCiphertext,
         });
         await db.SaveChangesAsync();
 
@@ -318,7 +316,7 @@ public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests : IAsy
         {
             Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,
             Protocol = "http", AutoDeliver = true, ConfigJson = OldUrlJson,
-            EncryptedCredentials = encryption.Encrypt("""{"type":"v1"}"""),
+            EncryptedCredentials = v1CredentialsCiphertext,
             OutputFormat = "csv", CreatedAt = now, UpdatedAt = now,
         });
         await db.SaveChangesAsync();
@@ -357,7 +355,9 @@ public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests : IAsy
         var live = await db.SupplierDeliveryConfigs
             .SingleAsync(x => x.OrgId == seed.OrgId && x.SupplierId == seed.SupplierId);
         live.ConfigJson           = configJson;
-        live.EncryptedCredentials = encryption.Encrypt("""{"type":"v2"}""");
+        live.EncryptedCredentials = encryption.Encrypt(
+            """{"type":"v2"}""",
+            CredentialScope.ForSupplier(seed.OrgId, CredentialPurpose.SupplierDeliveryCredentials, seed.SupplierId));
         live.UpdatedAt            = DateTime.UtcNow;
         await db.SaveChangesAsync();
     }

@@ -78,7 +78,7 @@ public sealed class DeliverableArtifactSelectionIsRoutedTests
     private static readonly string[] KnownSelectionSites =
     [
         "ProcuLink.Api.Controllers.OrdersController.MapToDto",
-        "ProcuLink.Api.Services.OrderTransformService.TransformAsync",
+        "ProcuLink.Api.Services.OrderTransformService.TransformCoreAsync",
         "ProcuLink.Api.Services.PassportService.GetAsync",
         "ProcuLink.Api.Services.ReplayService.ReprocessAsync",
         "ProcuLink.Core.Services.OutboundArtifactSelection.NewestDeliverable",

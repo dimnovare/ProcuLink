@@ -40,7 +40,47 @@ jobs:
   build-and-test:
     name: Build + test (213 baseline)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Measured 2026-08-06 across the last 10 green runs. Two clocks matter and they are not the
+    # same clock, which is the whole reason this setting was mis-sized:
+    #
+    #   steps  — first step start to last step end: 11.55, 12.13, 12.13, 12.25, 12.55,
+    #            12.58, 12.82, 12.87, 12.88, 14.17 minutes. Stable, and NOT what the cap reads.
+    #   job    — what `timeout-minutes` actually bounds. Normally the steps plus 3-5 seconds of
+    #            runner overhead, so the two agree. On four runs today it did not: the runner
+    #            stalled 2.6-3.4 MINUTES outside the step timeline, in the same window GitHub was
+    #            also returning "not acquired by Runner of type hosted" and failing `Set up job`.
+    #
+    # That stall has a name. githubstatus.com logged "Incident with Actions", impact critical, from
+    # 2026-08-06 15:22:49 UTC — twenty-one minutes before the first run this killed — reporting
+    # throttled workflow triggers and "runners are stuck retrying unavailable jobs". So the runs
+    # were not slow, they were waiting on a provider incident, and a cap this tight reports that
+    # incident as a failing pull request. Incidents recur; the cap should survive the next one.
+    #
+    # That stall, not the suite, is what killed green work. Run 31117088351 attempt 1 (PR #157)
+    # finished all thirteen steps green in 12m39s — Test itself took 11m00s — and was cancelled
+    # anyway at a 16m12s job clock. Runs 31118298579 and 31118266459 died the same way at 12m38s
+    # and 12m08s of steps. Run 31118326565 survived at 15m33s only because its stall was 2.6m
+    # rather than 3.4m. A 15-minute cap on a 12.5-minute suite has no room for a 3-minute stall,
+    # so it converts an Actions incident into a red PR on work that passed.
+    #
+    # 25 absorbs a ~3-minute stall on a suite that has already touched 14.17 minutes on its own,
+    # and still kills a genuinely hung job long before it burns an hour of runner time.
+    #
+    # The suite was also nowhere near its floor, which is why this is a cap change and not an
+    # excuse. The trx said Test was 10m39s of a 12m08s step span, and 538s of that was 56 Postgres
+    # classes each starting their OWN postgres:16 container for 25.2s of real test work — they
+    # shared the `postgres-container` collection, so those 56 starts ran end to end on the critical
+    # path. #168 gives that collection an ICollectionFixture holding one container: run 31127050382
+    # measured Test at 157s and the whole job at 4m20s, with the Api.Tests count unchanged at
+    # 2232/1 skipped and Σ test durations UP (312.3s → 339.1s). Faster because the container starts
+    # are gone, not because anything stopped running.
+    #
+    # 25 is deliberately not re-tightened to track that. A cap's job is to kill a hung job, not to
+    # sit just above the runtime — sitting just above the runtime is the bug being fixed here. It
+    # also has to hold whichever of these two PRs lands first, and if the container fix is ever
+    # reverted the suite is back at 12.5 minutes. If runs ever approach 25, read the trx artifact
+    # this workflow already uploads and find what got slower. Do not raise this again.
+    timeout-minutes: 25
 
     steps:
       - name: Checkout

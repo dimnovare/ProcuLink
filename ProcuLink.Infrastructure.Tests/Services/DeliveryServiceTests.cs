@@ -6,6 +6,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services;
 
 namespace ProcuLink.Infrastructure.Tests.Services;
@@ -173,6 +174,93 @@ public class DeliveryServiceTests
         attempt.ErrorMessage.Should().Contain("download failed");
     }
 
+    /// <summary>
+    /// A retention-purged blob is reported honestly and NOT retried. The blob-retention sweep is
+    /// blob-only: the artifact row, its <c>FileKey</c> and its <c>ArtifactSha256</c> all survive, so
+    /// every selection query still finds the artifact and the delivery path still downloads by key.
+    /// Unchecked, that download throws and lands in the generic
+    /// <c>"Artifact download failed: …"</c> branch above — which routes the order into the backoff
+    /// ladder to retry, forever, against an object that will never return.
+    ///
+    /// <para>The read paths already answer this honestly (<c>OrderQueryService.GetDownloadUrlAsync</c>
+    /// returns <see cref="RetentionConstants.BlobPurgedError"/>, which the controller maps to
+    /// 410 Gone). The delivery path is the one that was still guessing.</para>
+    /// </summary>
+    [Fact]
+    public async Task DispatchArtifactAsync_PurgedBlob_ReportsThePurgeAndIsNotRetryable()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, autoDeliver: true));
+        (await db.OutboundArtifacts.SingleAsync()).BlobPurgedAt = DateTime.UtcNow.AddDays(-1);
+        await db.SaveChangesAsync();
+        var dispatcher = new FakeDispatcher(new DeliveryResult(true, null, 200));
+        var service = CreateService(db, dispatcher, encryption);
+
+        var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
+
+        result.Success.Should().BeFalse();
+        result.ErrorMessage.Should().Be(RetentionConstants.BlobPurgedError,
+            "the operator must be told the bytes were purged, not handed a generic download failure");
+        result.ErrorMessage.Should().NotContain("download failed");
+        result.Outcome.Should().Be(DeliveryOutcome.NotRetryable, "a purge is permanent — no later attempt can change it");
+        dispatcher.Calls.Should().Be(0);
+
+        // Side-effect free, like the artifact-not-found early return it sits beside: the check
+        // happens BEFORE the 'delivering' claim, so a purged blob never strands or mis-labels the order.
+        (await db.PurchaseOrders.SingleAsync()).Status.Should().Be(OrderStatusConstants.ReadyToDeliver);
+        (await db.DeliveryAttempts.CountAsync()).Should().Be(0);
+    }
+
+    /// <summary>
+    /// The same check on the AUTOMATIC backoff queue, where it matters most: no human is in this
+    /// loop, so an unchecked purged blob is a retry ladder nobody asked for and nobody sees.
+    /// </summary>
+    [Fact]
+    public async Task RetryDeliveryAsync_PurgedBlob_ReportsThePurgeAndIsNotRetryable()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.DeliveryFailed);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, autoDeliver: true));
+        (await db.OutboundArtifacts.SingleAsync()).BlobPurgedAt = DateTime.UtcNow.AddDays(-1);
+        await db.SaveChangesAsync();
+        var dispatcher = new FakeDispatcher(new DeliveryResult(true, null, 200));
+        var service = CreateService(db, dispatcher, encryption);
+
+        var result = await service.RetryDeliveryAsync(ids.OrgId, ids.OrderId, maxAttempts: 3, default);
+
+        result.Success.Should().BeFalse();
+        result.ErrorMessage.Should().Be(RetentionConstants.BlobPurgedError);
+        result.Outcome.Should().Be(DeliveryOutcome.NotRetryable);
+        dispatcher.Calls.Should().Be(0);
+        (await db.PurchaseOrders.SingleAsync()).Status.Should().Be(OrderStatusConstants.DeliveryFailed,
+            "checked before the claim — the retry never took ownership of the order");
+    }
+
+    /// <summary>
+    /// Anti-vacuity companion to the two tests above: with the artifact NOT purged, the very same
+    /// setup dispatches. So "no dispatch" for a purged blob is the purge check firing, not a fixture
+    /// that never delivers.
+    /// </summary>
+    [Fact]
+    public async Task RetryDeliveryAsync_UnpurgedBlob_StillDispatches()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db, OrderStatusConstants.DeliveryFailed);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, autoDeliver: true));
+        await db.SaveChangesAsync();
+        var dispatcher = new FakeDispatcher(new DeliveryResult(true, null, 200));
+        var service = CreateService(db, dispatcher, encryption);
+
+        var result = await service.RetryDeliveryAsync(ids.OrgId, ids.OrderId, maxAttempts: 3, default);
+
+        result.Success.Should().BeTrue();
+        dispatcher.Calls.Should().Be(1);
+    }
+
     [Fact]
     public async Task TestFireAsync_WritesAttemptWithNullOrderId()
     {
@@ -227,7 +315,9 @@ public class DeliveryServiceTests
             Protocol = "http",
             AutoDeliver = autoDeliver,
             ConfigJson = "{\"url\":\"https://supplier.example/orders\"}",
-            EncryptedCredentials = encryption.Encrypt("{\"type\":\"none\"}"),
+            EncryptedCredentials = encryption.Encrypt(
+                "{\"type\":\"none\"}",
+                CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierDeliveryCredentials, supplierId)),
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };

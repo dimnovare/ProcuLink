@@ -19,6 +19,7 @@ using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Core.Services.Mapping;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Detection;
@@ -26,7 +27,6 @@ using ProcuLink.Infrastructure.Services.Email;
 using ProcuLink.Infrastructure.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Security;
 using ProcuLink.Worker.Jobs;
-using Testcontainers.PostgreSql;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -150,9 +150,9 @@ internal sealed record CellActual(
 /// overload that makes these suites flake ("Timeout during reading attempt"). A class fixture is
 /// created once and shared by every case.
 /// </summary>
-public sealed class SupplierRoutingMatrixPostgresFixture : IAsyncLifetime
+public sealed class SupplierRoutingMatrixPostgresFixture(PostgresContainerFixture postgres) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
 
     /// <summary>Null when Docker is unavailable — the Docker-gated theory skips before touching it.</summary>
     public DbContextOptions<ProcuLinkDbContext>? Options { get; private set; }
@@ -162,16 +162,9 @@ public sealed class SupplierRoutingMatrixPostgresFixture : IAsyncLifetime
         if (DockerProbe.UnavailableReason is not null)
             return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_routing_matrix_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_routing_matrix");
 
-        await _pg.StartAsync();
-
-        var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = false,
         }.ConnectionString;
@@ -179,15 +172,11 @@ public sealed class SupplierRoutingMatrixPostgresFixture : IAsyncLifetime
         Options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseNpgsql(connectionString)
             .Options;
-
-        await using var migrateDb = new ProcuLinkDbContext(Options);
-        await migrateDb.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null)
-            await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 }
 
@@ -552,7 +541,9 @@ public sealed class SupplierRoutingMatrixPostgresTests
             seed.Set<SftpIngressConfig>().Add(new SftpIngressConfig
             {
                 Id = Guid.NewGuid(), OrgId = orgId, Host = "sftp.example.com", Port = 22, Username = "u",
-                EncryptedPassword = Enc().Encrypt("pw"), RemoteDirectory = remoteDir,
+                EncryptedPassword = Enc().Encrypt(
+                    "pw", CredentialScope.ForOrg(orgId, CredentialPurpose.OrgIngressSftpPassword)),
+                RemoteDirectory = remoteDir,
                 DefaultSupplierId = configuredSupplierId, IsEnabled = true,
                 CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
             });
@@ -586,7 +577,9 @@ public sealed class SupplierRoutingMatrixPostgresTests
             {
                 Id = Guid.NewGuid(), OrgId = orgId, BucketName = bucket, KeyPrefix = string.Empty,
                 Region = "eu-west-1", ServiceUrl = null, AccessKeyId = "AKIA",
-                EncryptedSecretKey = Enc().Encrypt("secret"), DefaultSupplierId = configuredSupplierId,
+                EncryptedSecretKey = Enc().Encrypt(
+                    "secret", CredentialScope.ForOrg(orgId, CredentialPurpose.OrgIngressS3SecretKey)),
+                DefaultSupplierId = configuredSupplierId,
                 IsEnabled = true, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
             });
             await seed.SaveChangesAsync();
@@ -1244,9 +1237,9 @@ public sealed class SupplierRoutingMatrixPostgresTests
             => throw new NotImplementedException();
         public Task<Result<IReadOnlyList<PurchaseOrderSummary>>> ListAsync(Guid organisationId, CancellationToken ct)
             => throw new NotImplementedException();
-        public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListPagedAsync(Guid organisationId, int page, int pageSize, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
+        public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>> ListPagedAsync(Guid organisationId, int page, int pageSize, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
             => throw new NotImplementedException();
-        public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListWindowAsync(Guid organisationId, int skip, int take, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
+        public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>> ListWindowAsync(Guid organisationId, int skip, int take, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
             => throw new NotImplementedException();
         public Task<Result<TransformResponse>> TransformAsync(Guid organisationId, Guid orderId, OutputFormat format, CancellationToken ct)
             => throw new NotImplementedException();

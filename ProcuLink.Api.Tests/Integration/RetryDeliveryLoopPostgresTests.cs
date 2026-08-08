@@ -10,10 +10,10 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Jobs;
 using ProcuLink.Infrastructure.Services;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -38,12 +38,12 @@ namespace ProcuLink.Api.Tests.Integration;
 /// tracker with NO status gate — it cannot produce a lost claim at all. Docker-gated.</para>
 /// </summary>
 [Collection("postgres-container")]
-public sealed class RetryDeliveryLoopPostgresTests : IAsyncLifetime
+public sealed class RetryDeliveryLoopPostgresTests(PostgresContainerFixture postgres) : IAsyncLifetime
 {
     private static readonly DeliveryReliabilityOptions Options =
         new() { MaxAttempts = 3, BackoffMinutes = new[] { 30, 60, 120 } };
 
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
     private DbContextOptions<ProcuLinkDbContext>? _options;
 
     public async Task InitializeAsync()
@@ -51,27 +51,16 @@ public sealed class RetryDeliveryLoopPostgresTests : IAsyncLifetime
         if (DockerProbe.UnavailableReason is not null)
             return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_retryloop_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
-
-        await _pg.StartAsync();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_retryloop");
 
         _options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
-            .UseNpgsql(_pg.GetConnectionString())
+            .UseNpgsql(_databaseConnectionString)
             .Options;
-
-        await using var migrateDb = new ProcuLinkDbContext(_options);
-        await migrateDb.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null)
-            await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     private ProcuLinkDbContext NewContext() => new(_options!);
@@ -245,7 +234,9 @@ public sealed class RetryDeliveryLoopPostgresTests : IAsyncLifetime
             Protocol             = "http",
             AutoDeliver          = true,
             ConfigJson           = "{\"url\":\"https://supplier.example/orders\"}",
-            EncryptedCredentials = CreateEncryption().Encrypt("{\"type\":\"none\"}"),
+            EncryptedCredentials = CreateEncryption().Encrypt(
+                "{\"type\":\"none\"}",
+                CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierDeliveryCredentials, supplierId)),
             CreatedAt            = now,
             UpdatedAt            = now,
         });

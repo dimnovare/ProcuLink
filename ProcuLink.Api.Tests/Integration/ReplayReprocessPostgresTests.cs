@@ -15,7 +15,6 @@ using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Transform.Output;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -47,9 +46,9 @@ namespace ProcuLink.Api.Tests.Integration;
 /// contended machine — time out opening the first connection. Every cell seeds its own org, so a
 /// shared database isolates them perfectly well.
 /// </summary>
-public sealed class ReplayReprocessFixture : IAsyncLifetime
+public sealed class ReplayReprocessFixture(PostgresContainerFixture postgres) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
     public DbContextOptions<ProcuLinkDbContext>? Options { get; private set; }
 
     public async Task InitializeAsync()
@@ -57,16 +56,9 @@ public sealed class ReplayReprocessFixture : IAsyncLifetime
         if (DockerProbe.UnavailableReason is not null)
             return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_wp35_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_wp35");
 
-        await _pg.StartAsync();
-
-        var connectionString = new NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        var connectionString = new NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = false,
             // Npgsql's 15s default is measured against an idle machine. A developer box running
@@ -80,15 +72,11 @@ public sealed class ReplayReprocessFixture : IAsyncLifetime
         Options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseNpgsql(connectionString)
             .Options;
-
-        await using var migrateDb = new ProcuLinkDbContext(Options);
-        await migrateDb.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null)
-            await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 }
 

@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Ingress;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services;
 
 namespace ProcuLink.Infrastructure.Tests.Services;
@@ -46,7 +47,8 @@ public class PullIngressSettingsServiceTests
         var row = await db.SftpIngressConfigs.SingleAsync();
         row.OrgId.Should().Be(orgId);
         row.EncryptedPassword.Should().NotBe("s3cret");
-        encryption.Decrypt(row.EncryptedPassword).Should().Be("s3cret");
+        encryption.Decrypt(row.EncryptedPassword, CredentialScope.ForOrg(
+            orgId, CredentialPurpose.OrgIngressSftpPassword)).Should().Be("s3cret");
 
         // Re-save with null password preserves the saved secret.
         var before = row.EncryptedPassword;
@@ -176,7 +178,8 @@ public class PullIngressSettingsServiceTests
 
         var row = await db.S3IngressConfigs.SingleAsync();
         row.EncryptedSecretKey.Should().NotBe("super-secret");
-        encryption.Decrypt(row.EncryptedSecretKey).Should().Be("super-secret");
+        encryption.Decrypt(row.EncryptedSecretKey, CredentialScope.ForOrg(
+            orgId, CredentialPurpose.OrgIngressS3SecretKey)).Should().Be("super-secret");
     }
 
     [Fact]

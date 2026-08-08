@@ -25,9 +25,19 @@ namespace ProcuLink.Api.Tests.Integration;
 //      Railway/monitoring can see the stale-schema state without the process
 //      going down (liveness stays up).
 //
-//  These tests run SERIALLY within one class (xUnit serializes methods in a
-//  class) and always restore the process-global MigrationReadiness flag, so the
-//  shared static can't leak across tests.
+//  ISOLATION. These tests run SERIALLY within one class (xUnit serializes methods
+//  in a class) and always restore the process-global MigrationReadiness flag. That
+//  is necessary and NOT sufficient, and this comment used to stop there and
+//  conclude "the shared static can't leak across tests" — reasoning only about
+//  methods of THIS class while the dangerous writer was a different CLASS.
+//  MigrationReadiness is a static volatile int, i.e. per-PROCESS, but xUnit gives
+//  every test class its own host, and classes in different collections run
+//  CONCURRENTLY. Anything that boots a WebApplicationFactory<Program> also writes
+//  it, because Program.cs's ApplicationStarted migration task does.
+//
+//  So the class joins the "postgres-container" collection — the assembly's single
+//  serialisation domain for process-global state (see PostgresContainerCollection).
+//  Membership is enforced by ProcessGlobalStateIsSerializedTests, not remembered.
 // ════════════════════════════════════════════════════════════════════════════
 
 /// <summary>
@@ -85,6 +95,7 @@ public sealed class HealthTestFactory : WebApplicationFactory<Program>
     }
 }
 
+[Collection("postgres-container")]
 public sealed class HealthEndpointTests : IClassFixture<HealthTestFactory>
 {
     private readonly HealthTestFactory _factory;

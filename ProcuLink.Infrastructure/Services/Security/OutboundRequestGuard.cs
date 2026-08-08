@@ -180,14 +180,54 @@ public sealed class OutboundRequestGuard
     ///
     /// When <see cref="AllowPrivateNetworkTargets"/> is set the callback connects normally
     /// (dev/test escape hatch), mirroring <see cref="ValidateAsync"/>.
+    ///
+    /// <para><b>Redirects are refused, not followed</b> (<c>AllowAutoRedirect = false</c>).
+    /// <see cref="SocketsHttpHandler"/> defaults that to <c>true</c>, and the connect callback
+    /// alone does not close the hole: it re-validates each hop's IP, so a redirect to an INTERNAL
+    /// address was already blocked, but a redirect to any PUBLIC host was followed without a
+    /// second pass through <see cref="ValidateAsync"/> and without any same-origin check.</para>
+    ///
+    /// <para>Why that mattered more than it usually does. Measured on this runtime in
+    /// <c>GuardedTransportRedirectTests</c>: a <c>307</c> preserves the method and replays the
+    /// request BODY verbatim to the redirect target, and a custom header crosses on every redirect
+    /// (a <c>302</c> from a POST is downgraded to GET and does drop the body, but keeps the custom
+    /// header). Only <c>Authorization</c> is stripped, and only when the host name differs. Two of
+    /// this system's credential shapes are neither: <c>DirectoConnector</c> puts
+    /// <c>user</c>/<c>password</c> in the form body, and the <c>apikey</c> auth mode puts the
+    /// secret in a custom header. A supplier endpoint — or a hijacked or expired supplier domain —
+    /// answering <c>307 Location: https://attacker.example/</c> therefore received the purchase
+    /// order and the ERP credentials.</para>
+    ///
+    /// <para>Refusing outright rather than following manually with re-validation is deliberate.
+    /// No channel needs redirects: HTTP delivery, both ERP connectors, the catalog pull, the OAuth
+    /// token exchange and the integration-trigger webhook all POST or GET a single
+    /// tenant-configured endpoint, and not one of them reads or acts on a 3xx. Following a hop
+    /// would mean re-attaching tenant credentials to a host the tenant never approved, which is
+    /// precisely the thing that must not happen. A supplier that moves gives the tenant a new URL.
+    /// Every caller already treats a 3xx as a non-success, so the redirect surfaces as a failure
+    /// the operator can act on.</para>
+    ///
+    /// <para>The handler is also wrapped in a <see cref="ResponseSizeLimitingHandler"/> so no
+    /// single guarded call can buffer an unbounded response body. See
+    /// <see cref="OutboundResponseLimits"/> for the cap and how a caller opts up.</para>
     /// </summary>
-    public SocketsHttpHandler CreateGuardedHttpHandler()
+    /// <param name="maxResponseBytes">
+    /// Default response-body ceiling for calls made through this handler. Individual requests may
+    /// opt up via <see cref="ResponseSizeLimitingHandler.MaxResponseBytesOption"/>.
+    /// </param>
+    public HttpMessageHandler CreateGuardedHttpHandler(
+        long maxResponseBytes = OutboundResponseLimits.DefaultMaxResponseBytes)
     {
         var handler = new SocketsHttpHandler
         {
             ConnectCallback = GuardedConnectAsync,
+
+            // Never follow a redirect. See the remarks above: the redirect target is never
+            // re-validated, and .NET replays the body and custom headers across a 307/308.
+            AllowAutoRedirect = false,
         };
-        return handler;
+
+        return new ResponseSizeLimitingHandler(handler, maxResponseBytes);
     }
 
     /// <summary>

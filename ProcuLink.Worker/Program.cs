@@ -188,7 +188,16 @@ builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
 // T4 — external web/product-code grounding (no-op unless Ai:OpenAI:ProductSearch:Enabled=true).
 builder.Services.AddSingleton<IProductCodeSearch, OpenAiProductCodeSearch>();
 builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
-builder.Services.AddScoped<IPoMappingService, PoMappingService>();
+// Same decorator as the API composition root. No Worker job writes a supplier PO mapping today — all
+// six writers are API-side — so this is behaviour-neutral here. It is registered anyway because the
+// alternative is two composition roots that disagree about what IPoMappingService means, and the
+// first Worker job that ever writes one would silently skip the invalidation.
+builder.Services.AddScoped<PoMappingService>();
+builder.Services.AddScoped<IPoMappingService>(sp => new ArtifactInvalidatingPoMappingService(
+    sp.GetRequiredService<PoMappingService>(),
+    sp.GetRequiredService<ProcuLinkDbContext>(),
+    sp.GetRequiredService<IEffectiveConnectionConfigResolver>(),
+    sp.GetRequiredService<ILogger<ArtifactInvalidatingPoMappingService>>()));
 builder.Services.AddSingleton<DeliveryEncryptionService>();
 builder.Services.AddSingleton<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>();
 // Group O reliability: retry-queue backoff + SLA window tunables (section Delivery:Reliability).

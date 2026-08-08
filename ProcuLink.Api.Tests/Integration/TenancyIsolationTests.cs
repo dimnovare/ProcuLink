@@ -198,6 +198,7 @@ public sealed class TenancyTestFactory : WebApplicationFactory<Program>
 /// pipeline, so the TenantResolutionMiddleware + [Authorize] + CurrentTenantService
 /// chain has never been exercised end-to-end.
 /// </summary>
+[Collection("postgres-container")]
 public sealed class TenancyIsolationTests : IDisposable
 {
     private readonly TenancyTestFactory _factory;

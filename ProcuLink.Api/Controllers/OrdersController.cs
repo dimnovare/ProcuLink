@@ -233,7 +233,20 @@ public sealed class OrdersController : ControllerBase
     /// 409 for a row this org cannot see would confirm it exists. Those fall through to the normal
     /// not-found path.</para>
     /// </summary>
-    private async Task<IActionResult?> RefusedByResolveHoldAsync(Guid orderId, CancellationToken ct)
+    private Task<IActionResult?> RefusedByResolveHoldAsync(Guid orderId, CancellationToken ct) =>
+        RefusedByStatusHoldAsync(orderId, OrderStatusMachine.ResolveHeldFrom, ct);
+
+    /// <summary>
+    /// The body of the guard above, parameterised by the set that refuses. MV-2 added a THIRD
+    /// endpoint — <c>PUT /api/orders/{id}/mapping-override</c> — whose writer is destructive from a
+    /// STRICT SUBSET of <see cref="OrderStatusMachine.ResolveHeldFrom"/>
+    /// (<see cref="OrderStatusMachine.MappingEditRefusedFrom"/>, which carries the evidence per
+    /// status). One helper rather than a second copy: the 409 shape, the log line, the org scoping,
+    /// and the sentence lookup are the same answer to the same question, and a copy of them is how
+    /// the five delivery-claim lists drifted apart four times.
+    /// </summary>
+    private async Task<IActionResult?> RefusedByStatusHoldAsync(
+        Guid orderId, IReadOnlySet<string> heldFrom, CancellationToken ct)
     {
         var status = await _db.PurchaseOrders.AsNoTracking()
             .Where(o => o.Id == orderId && o.OrgId == _tenant.OrganisationId)
@@ -242,7 +255,7 @@ public sealed class OrdersController : ControllerBase
 
         // Derived from the canonical set, never a literal — the same discipline the five
         // delivery-claim lists were centralised under after drifting apart four times.
-        if (status is null || !OrderStatusMachine.ResolveHeldFrom.Contains(status))
+        if (status is null || !heldFrom.Contains(status))
             return null;
 
         _logger.LogInformation(
@@ -447,13 +460,18 @@ public sealed class OrdersController : ControllerBase
         if (!result.IsSuccess)
             return BadRequest(new { error = result.Error });
 
-        var (items, totalCount) = result.Value;
+        var (items, totalCount, sampleCount) = result.Value;
 
         // Report the window back as page/pageSize so the envelope is identical regardless of
         // which paging style the caller used. With a non-page-aligned offset, page is the
         // 1-based index of the window that starts at `skip`.
+        //
+        // sampleCount rides along because this list RETURNS onboarding practice orders while
+        // every count reported beside it (GET /api/orders/summary, /api/dashboard/stats,
+        // /api/onboarding/status, billing quota) excludes them. totalCount - sampleCount is the
+        // metered population, so the caller can reconcile the two instead of contradicting itself.
         var effectivePage = take > 0 ? (skip / take) + 1 : 1;
-        return Ok(new PaginatedResult<PurchaseOrderSummary>(items, totalCount, effectivePage, take));
+        return Ok(new PaginatedResult<PurchaseOrderSummary>(items, totalCount, effectivePage, take, sampleCount));
     }
 
     // ── GET /api/orders/{id} ──────────────────────────────────────────────────
@@ -849,16 +867,31 @@ public sealed class OrdersController : ControllerBase
     /// <c>ManipulatorRegistry</c> (resolve + a dry apply) BEFORE the write, so a bad/unknown
     /// manipulator returns 400 here and can NEVER reach the transform path. Org-scoped: a
     /// cross-tenant order id returns 404.
+    ///
+    /// <para>MV-2 — refused with 409 while the order is mid-transform or mid-send, per
+    /// <see cref="OrderStatusMachine.MappingEditRefusedFrom"/>. Without it the edit was accepted and
+    /// stored while a document built BEFORE it went out, and nothing reported the loss.</para>
     /// </summary>
     [HttpPut("{id:guid}/mapping-override")]
     [ProducesResponseType(typeof(OrderMappingOverride), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> PutMappingOverride(
         Guid id,
         [FromBody] OrderMappingOverride request,
         CancellationToken ct)
     {
+        // MV-2 — before the body, because the answer does not depend on it (the same placement, and
+        // the same reason, as the guard on /resolve). A well-formed override saved while the order
+        // is 'delivering' or 'transforming' is stored and then silently discarded: the artifact
+        // already handed to the dispatcher — or the one the running transform is about to commit
+        // over this endpoint's status reset — is what reaches the counterparty, and the automatic
+        // retry ships that same pre-edit artifact again afterwards. Refusing is the only cure; a
+        // reset cannot un-send bytes and cannot outlive the transform's untokened completion write.
+        if (await RefusedByStatusHoldAsync(id, OrderStatusMachine.MappingEditRefusedFrom, ct) is { } held)
+            return held;
+
         if (request is null)
             return BadRequest(new { error = "A mapping override body is required." });
 

@@ -3646,12 +3646,45 @@ and not commit messages. Nine parallel verifiers, one section each, every one in
 
 **Does UBL output satisfy Peppol BIS 3? There is no proof, and two mandatory-field violations are visible in
 the emitter.** `find -name "*.sch"` returns zero files; `PeppolBisValidator` rejects any non-`<Invoice>` root;
-`UblProfileChecker.cs:55-58` asserts only that the conformance ids are **non-empty**, never that they equal
-the Peppol values. Meanwhile `UblOrderTransformService.cs:93` writes a **GUID** into
+~~`UblProfileChecker.cs:55-58` asserts only that the conformance ids are **non-empty**, never that they equal
+the Peppol values.~~ Meanwhile `UblOrderTransformService.cs:93` writes a **GUID** into
 `SellerSupplierParty/PartyName/Name` (its own comment calls it a placeholder) and no `cbc:EndpointID` is
 emitted for either party. `format-catalog.ts:98` hardcodes this as `status: "live"` while
 `standards/catalog.ts:107` says `partial`. **The two frontend files contradict each other and the hardcoded
 one wins on the marketing page.**
+
+> **CORRECTION 2026-08-06 — the verdict above is unchanged, but every mechanism it names has since
+> moved. Read the struck clause as history, not current state.**
+>
+> - **The two non-empty conformance-id checks are DELETED** (BE #155 / FE #109). `UblProfileChecker`
+>   no longer looks at `cbc:CustomizationID` or `cbc:ProfileID` at all, because the emitter no longer
+>   writes them: both were removed from `ProcuLink.Transform/Output/UblOrderTransformService.cs`,
+>   since a receiving access point routes and validates on exactly those two elements and nothing in
+>   either repo can back a BIS conformance claim. Both are `minOccurs="0"` in the OASIS UBL 2.1
+>   Order-2 schema, so requiring them was never a UBL rule and omitting them keeps the document
+>   schema-valid UBL. The profile is renamed `OASIS UBL 2.1 Order — mandatory elements`. Reinstating
+>   the ids fails `ProcuLink.Transform.Tests/Output/UblOrderDeclaresNoPeppolProfileTests.cs`.
+> - **Both mandatory-field violations are fixed** — the GUID in `SellerSupplierParty/PartyName/Name`
+>   became the supplier's real name (BE #141), and `cbc:EndpointID` is emitted for the supplier party
+>   when `Supplier.EdiCode` is provably a GS1 GLN (BE #146). Buyer-side `EndpointID` remains
+>   impossible; see the 2026-08-06 CORRECTION in `04-CAPABILITY-TRUTH-LEDGER.md` for why.
+> - **The two frontend files no longer contradict each other.** The catalog moved to
+>   `src/lib/marketing/format-catalog.ts` and its rows now derive through `standardRow()` instead of
+>   carrying a hardcoded status, and `src/lib/standards/catalog.ts` reads `transform: "planned"` —
+>   softening that back up is the defect this note exists to prevent.
+>
+> **None of this makes the answer yes.** There is still no Schematron, still no order accepted by a
+> real Access Point, and the Peppol BIS 3 claim stays withdrawn from every user-facing surface
+> (FE #91, FE #109). Naming a Peppol BIS profile on any frontend surface, or carrying either Peppol
+> identifier as a literal, fails the *"no surface claims conformance to a standard ProcuLink does not
+> emit"* block in `src/test/gatedCapabilityClaims.test.ts:1314`.
+>
+> **Merge state when this note was written:** FE #109 is on frontend `main`. **BE #155 was still an
+> open PR** (`fix/stop-declaring-peppol-conformance`) — the emitter change, the `UblProfileChecker`
+> deletions and `UblOrderDeclaresNoPeppolProfileTests.cs` land with it. If a future session finds
+> `PeppolBisCustomizationId` still in `UblOrderTransformService.cs`, that PR did not merge; the
+> struck instructions stay struck either way, because the frontend refusal that kills them is already
+> enforced on `main` by FE #100 and FE #109.
 
 ### The one genuine unenforced tier claim
 

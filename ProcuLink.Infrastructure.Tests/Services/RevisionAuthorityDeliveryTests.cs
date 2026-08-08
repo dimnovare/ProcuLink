@@ -6,6 +6,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Security;
 
@@ -100,7 +101,9 @@ public class RevisionAuthorityDeliveryTests
             Id = Guid.NewGuid(), OrgId = seeded.OrgId, SupplierId = seeded.SupplierId,
             Protocol = "http", AutoDeliver = autoDeliver,
             ConfigJson = configJson ?? $"{{\"url\":\"{url}\"}}",
-            EncryptedCredentials = encryption.Encrypt("{\"type\":\"live\"}"),
+            EncryptedCredentials = encryption.Encrypt(
+                "{\"type\":\"live\"}",
+                CredentialScope.ForSupplier(seeded.OrgId, CredentialPurpose.SupplierDeliveryCredentials, seeded.SupplierId)),
             CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync();
@@ -149,7 +152,9 @@ public class RevisionAuthorityDeliveryTests
         await SeedRevisionAsync(db, seeded,
             protocol: "http",
             configJson: "{\"url\":\"https://revision.example/orders\"}",
-            credentialsRef: encryption.Encrypt("{\"type\":\"revision\"}"));
+            credentialsRef: encryption.Encrypt(
+                "{\"type\":\"revision\"}",
+                CredentialScope.ForSupplier(seeded.OrgId, CredentialPurpose.SupplierDeliveryCredentials, seeded.SupplierId)));
 
         var dispatcher = new CapturingDispatcher(new DeliveryResult(true, null, 200));
         var service = CreateService(db, dispatcher, encryption, flagEnabled: true);
@@ -166,6 +171,53 @@ public class RevisionAuthorityDeliveryTests
         attempt.Destination.Should().Be("https://revision.example/orders"); // audit shows the real destination
     }
 
+    // ── Credential AAD binding: the detached snapshot's Id is Guid.Empty, never a real row id ──
+    //
+    // Before Task 7 of the credential-AAD-binding plan deleted the legacy single-argument
+    // Encrypt(string), every OTHER test in this file seeded credentialsRef with it, writing a
+    // version-1 envelope carrying no associated data at all — decryptable under ANY
+    // CredentialScope, including one keyed on the wrong id. That made every test above BLIND to
+    // which id DeliveryService actually scopes on: DeliveryService.cs's detached-snapshot branch
+    // sets Id = Guid.Empty (this config was never added to the DbContext) and SupplierId = the
+    // order's real supplier — so scoping on config.Id instead of config.SupplierId would have
+    // silently passed every test above while breaking every pinned-order delivery in production.
+    // This test was written to close that blind spot by seeding a BOUND (version-2) envelope
+    // explicitly, keyed on (org, purpose, SUPPLIER id).
+    //
+    // Now that the legacy overload no longer exists, every test in this file seeds through the
+    // same bound scope (AddLiveConfigAsync / SeedRevisionAsync both key on seeded.SupplierId), so
+    // the whole file discriminates on the correct id — a regression to config.Id would fail here
+    // too, not just in this one test. This test remains: it is the one that states the invariant
+    // by name, in isolation from the shared helpers.
+    [Fact]
+    public async Task FlagOn_Pinned_BoundCredentials_DecryptSucceeds_ScopedOnSupplierId_NotTheDetachedSnapshotsEmptyId()
+    {
+        await using var db = NewDb();
+        var encryption = CreateEncryption();
+        var seeded = await SeedOrderWithArtifactAsync(db);
+        await AddLiveConfigAsync(db, seeded, encryption, url: "https://live-edited.example/orders");
+
+        var boundCredentialsRef = encryption.Encrypt(
+            "{\"type\":\"revision\"}",
+            CredentialScope.ForSupplier(seeded.OrgId, CredentialPurpose.SupplierDeliveryCredentials, seeded.SupplierId));
+        await SeedRevisionAsync(db, seeded,
+            protocol: "http",
+            configJson: "{\"url\":\"https://revision.example/orders\"}",
+            credentialsRef: boundCredentialsRef);
+
+        var dispatcher = new CapturingDispatcher(new DeliveryResult(true, null, 200));
+        var service = CreateService(db, dispatcher, encryption, flagEnabled: true);
+
+        var result = await service.DispatchArtifactAsync(seeded.OrgId, seeded.OrderId, seeded.ArtifactId, true, default);
+
+        result.Success.Should().BeTrue();
+        dispatcher.Calls.Should().Be(1);
+        // The revision's snapshotted, AAD-bound credentials arrived at the dispatcher intact —
+        // not the live config's, and not refused as unbindable.
+        dispatcher.LastCredentials.Should().Be("{\"type\":\"revision\"}");
+        (await db.PurchaseOrders.SingleAsync()).Status.Should().Be(OrderStatusConstants.Delivered);
+    }
+
     [Fact]
     public async Task FlagOn_Pinned_RevisionChannel_DeliversEvenWhenNoLiveConfigRowExists()
     {
@@ -176,7 +228,9 @@ public class RevisionAuthorityDeliveryTests
         await SeedRevisionAsync(db, seeded,
             protocol: "http",
             configJson: "{\"url\":\"https://revision.example/orders\"}",
-            credentialsRef: encryption.Encrypt("{\"type\":\"revision\"}"));
+            credentialsRef: encryption.Encrypt(
+                "{\"type\":\"revision\"}",
+                CredentialScope.ForSupplier(seeded.OrgId, CredentialPurpose.SupplierDeliveryCredentials, seeded.SupplierId)));
 
         var dispatcher = new CapturingDispatcher(new DeliveryResult(true, null, 200));
         var service = CreateService(db, dispatcher, encryption, flagEnabled: true);
@@ -200,7 +254,9 @@ public class RevisionAuthorityDeliveryTests
         await SeedRevisionAsync(db, seeded,
             protocol: "http",
             configJson: "{\"url\":\"https://revision.example/orders\"}",
-            credentialsRef: encryption.Encrypt("{\"type\":\"revision\"}"),
+            credentialsRef: encryption.Encrypt(
+                "{\"type\":\"revision\"}",
+                CredentialScope.ForSupplier(seeded.OrgId, CredentialPurpose.SupplierDeliveryCredentials, seeded.SupplierId)),
             autoDeliver: false);
 
         var dispatcher = new CapturingDispatcher(new DeliveryResult(true, null, 200));
@@ -249,7 +305,9 @@ public class RevisionAuthorityDeliveryTests
         await SeedRevisionAsync(db, seeded,
             protocol: "http",
             configJson: "{\"url\":\"https://revision.example/orders\"}",
-            credentialsRef: encryption.Encrypt("{\"type\":\"revision\"}"));
+            credentialsRef: encryption.Encrypt(
+                "{\"type\":\"revision\"}",
+                CredentialScope.ForSupplier(seeded.OrgId, CredentialPurpose.SupplierDeliveryCredentials, seeded.SupplierId)));
 
         var dispatcher = new CapturingDispatcher(new DeliveryResult(true, null, 200));
         var service = CreateService(db, dispatcher, encryption, flagEnabled: false);
@@ -271,7 +329,9 @@ public class RevisionAuthorityDeliveryTests
         await SeedRevisionAsync(db, seeded,
             protocol: "http",
             configJson: "{\"url\":\"https://revision.example/orders\"}",
-            credentialsRef: encryption.Encrypt("{\"type\":\"revision\"}"),
+            credentialsRef: encryption.Encrypt(
+                "{\"type\":\"revision\"}",
+                CredentialScope.ForSupplier(seeded.OrgId, CredentialPurpose.SupplierDeliveryCredentials, seeded.SupplierId)),
             pin: false);
 
         var dispatcher = new CapturingDispatcher(new DeliveryResult(true, null, 200));
@@ -342,7 +402,9 @@ public class RevisionAuthorityDeliveryTests
         await SeedRevisionAsync(db, seeded,
             protocol: "http",
             configJson: "{\"url\":\"https://revision.example/orders\"}",
-            credentialsRef: encryption.Encrypt("{\"type\":\"revision\"}"));
+            credentialsRef: encryption.Encrypt(
+                "{\"type\":\"revision\"}",
+                CredentialScope.ForSupplier(seeded.OrgId, CredentialPurpose.SupplierDeliveryCredentials, seeded.SupplierId)));
 
         var dispatcher = new CapturingDispatcher(
             new DeliveryResult(true, null, 200, LearnedHostKeyFingerprint: "SHA256:learnedfromtheserver"));
@@ -372,7 +434,9 @@ public class RevisionAuthorityDeliveryTests
         await SeedRevisionAsync(db, seeded,
             protocol: "http",
             configJson: "{\"url\":\"https://revision.example/orders\",\"hostKeyFingerprints\":[\"SHA256:frozenlongago\"]}",
-            credentialsRef: encryption.Encrypt("{\"type\":\"revision\"}"));
+            credentialsRef: encryption.Encrypt(
+                "{\"type\":\"revision\"}",
+                CredentialScope.ForSupplier(seeded.OrgId, CredentialPurpose.SupplierDeliveryCredentials, seeded.SupplierId)));
 
         var dispatcher = new CapturingDispatcher(new DeliveryResult(true, null, 200));
         var service = CreateService(db, dispatcher, encryption, flagEnabled: true);

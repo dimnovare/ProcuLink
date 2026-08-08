@@ -4,6 +4,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services;
@@ -69,6 +70,14 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
             .Where(x => x.OrgId == orgId && x.SupplierId == supplierId)
             .FirstOrDefaultAsync(ct);
 
+        // Before ANY mutation. config_json is cleartext by design, so a credential typed into the
+        // extra-headers map is refused here rather than at dispatch — refusing mid-flight would
+        // strand orders. Grandfathered against the STORED blob deliberately: the delivery editor has
+        // no headers field and carries the stored map through every save untouched, so refusing that
+        // identical echo would lock an operator out of changing a timeout with no UI anywhere to
+        // remove the header. Adding one, or rotating its value, is still refused.
+        ValidateCredentialHeaders(request.ConfigJson, existing?.ConfigJson);
+
         if (existing is null)
         {
             existing = new SupplierDeliveryConfig
@@ -83,7 +92,15 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
 
         existing.Protocol = protocol;
         existing.AutoDeliver = request.AutoDeliver;
-        existing.AutoTransform = request.AutoTransform;
+        // Null = keep. Same argument as the host-key comment directly below, and as
+        // CredentialsJson further down: a client that has never heard of a property must not be
+        // able to clear it by omission. AutoTransform arrived as a non-nullable bool defaulting to
+        // false, so every save from a caller that does not know about it — which today is every
+        // caller — switched auto-send off. An explicit value, including false, still wins.
+        if (request.AutoTransform is not null)
+        {
+            existing.AutoTransform = request.AutoTransform.Value;
+        }
         // Whole-object replace, EXCEPT the recorded SSH host-key fingerprints: no client sends a
         // property it has never heard of, so a plain assignment would un-pin the supplier every time
         // an operator changed the timeout. Sending the property explicitly — including as an empty
@@ -97,7 +114,10 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
         {
             existing.EncryptedCredentials = string.IsNullOrWhiteSpace(request.CredentialsJson)
                 ? string.Empty
-                : _encryption.Encrypt(request.CredentialsJson);
+                : _encryption.Encrypt(
+                    request.CredentialsJson,
+                    CredentialScope.ForSupplier(
+                        orgId, CredentialPurpose.SupplierDeliveryCredentials, supplierId));
         }
 
         ApplyCxmlCredentials(existing, request.CxmlCredentials);
@@ -130,7 +150,10 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
         {
             existing.EncryptedCxmlSharedSecret = string.IsNullOrWhiteSpace(cxml.SenderSharedSecret)
                 ? null
-                : _encryption.Encrypt(cxml.SenderSharedSecret);
+                : _encryption.Encrypt(
+                    cxml.SenderSharedSecret,
+                    CredentialScope.ForSupplier(
+                        existing.OrgId, CredentialPurpose.SupplierDeliveryCxmlSecret, existing.SupplierId));
         }
     }
 
@@ -163,7 +186,7 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
             config.OutputFormat,
             CxmlCredentials: BuildCxmlResponse(config),
             AutoTransform: config.AutoTransform,
-            InsecureTransportWarning: DeliveryConfigTransport.DescribeInsecureTransport(
+            InsecureTransportWarning: DeliveryConfigTransport.DescribeConfigWarnings(
                 config.Protocol, config.ConfigJson));
     }
 
@@ -242,18 +265,34 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
     ///
     /// <para>The key lookup is case-insensitive because the dispatchers deserialize with
     /// <c>PropertyNameCaseInsensitive = true</c> — <c>{"URL":...}</c> is delivered, so it must also
-    /// be inspected.</para>
+    /// be inspected — and EVERY url-keyed value is judged, not just the first: a repeated key kept
+    /// both, and the deserializer binds the last, so inspecting one of them was bypassable.</para>
     /// </summary>
     private static void ValidateTransportSecurity(string protocol, string configJson)
     {
-        var url = DeliveryConfigTransport.ExtractUrl(protocol, configJson);
-
-        // No url key at all is left as-is: that config cannot deliver anything, and failing it here
-        // would be a separate behaviour change from the one this guard is for.
-        if (string.IsNullOrWhiteSpace(url)) return;
-
-        var verdict = OutboundUrlPolicy.Inspect(url, "Delivery endpoint");
+        // Allow when the protocol carries no URL at all: that config cannot deliver anything, and
+        // failing it here would be a separate behaviour change from the one this guard is for.
+        var verdict = DeliveryConfigTransport.InspectEndpoint(protocol, configJson);
         if (!verdict.Allowed)
             throw new OutboundUrlPolicyException(verdict, nameof(UpsertDeliveryConfigRequest.ConfigJson));
+    }
+
+    /// <summary>
+    /// Refuses a credential written into the delivery config's extra-headers map. Every entry of
+    /// that map is applied to the outbound request by <c>HttpDeliveryDispatcher</c>, so
+    /// <c>Authorization: Bearer …</c> typed there is a real credential stored in a cleartext column,
+    /// returned by GET, and copied into every connection-revision snapshot.
+    ///
+    /// <para>The revision write path MUST reach this same primitive
+    /// (<see cref="DeliveryConfigTransport.FindCredentialHeaders"/>) rather than hand-rolling its own
+    /// header check — see <c>SupplierConnectionService.ValidateCredentialHeaders</c>. Two copies of a
+    /// security rule is how the transport gap existed in the first place, and #157 exists to stop it
+    /// happening twice.</para>
+    /// </summary>
+    private static void ValidateCredentialHeaders(string configJson, string? storedConfigJson)
+    {
+        var offending = DeliveryConfigTransport.FindCredentialHeaders(configJson, storedConfigJson);
+        if (offending.Count > 0)
+            throw new CredentialHeaderInConfigException(offending);
     }
 }

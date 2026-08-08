@@ -304,13 +304,21 @@ public class CatalogPullService : ICatalogPullService
         var isVendor = _vendorFetchers.ContainsKey(source.Protocol);
         var isFileChannel = source.Protocol is "sftp" or "ftp" or "ftps";
 
-        // Credentials: write-only AES-GCM envelope. Decrypt returns null on any error
-        // (wrong key, corrupt envelope) — surface that honestly instead of an auth error.
+        // Credentials: write-only AES-GCM envelope, bound to this source's id. Decrypt throws
+        // CredentialUnbindableException on any error (wrong key, corrupt envelope, wrong scope) —
+        // mapped to the safe ErrCredentialsUnreadable message below.
         var password = string.Empty;
         if (isFileChannel && !string.IsNullOrEmpty(source.EncryptedPassword))
         {
-            password = _encryption.Decrypt(source.EncryptedPassword)
-                ?? throw new CatalogSyncException(ErrCredentialsUnreadable);
+            try
+            {
+                password = _encryption.Decrypt(source.EncryptedPassword, CredentialScope.ForSupplier(
+                    source.OrgId, CredentialPurpose.SupplierCatalogPassword, source.Id));
+            }
+            catch (CredentialUnbindableException)
+            {
+                throw new CatalogSyncException(ErrCredentialsUnreadable);
+            }
         }
         else if (source.Protocol is "sftp" or "ftps")
         {
@@ -489,12 +497,22 @@ public class CatalogPullService : ICatalogPullService
         if (!guardResult.Allowed)
             throw new CatalogSyncException(ErrUrlNotAllowed);
 
-        // Decrypt the write-only auth-config envelope (decrypt returns null on any error).
+        // Decrypt the write-only auth-config envelope, bound to this source's id. Throws
+        // CredentialUnbindableException on any error (wrong key, corrupt envelope, wrong scope).
         JsonElement creds = default;
         if (!string.IsNullOrEmpty(source.AuthConfigEncrypted))
         {
-            var json = _encryption.Decrypt(source.AuthConfigEncrypted)
-                ?? throw new CatalogSyncException(ErrAuthConfigUnreadable);
+            string json;
+            try
+            {
+                json = _encryption.Decrypt(source.AuthConfigEncrypted, CredentialScope.ForSupplier(
+                    source.OrgId, CredentialPurpose.SupplierCatalogAuthConfig, source.Id));
+            }
+            catch (CredentialUnbindableException)
+            {
+                throw new CatalogSyncException(ErrAuthConfigUnreadable);
+            }
+
             try { creds = JsonSerializer.Deserialize<JsonElement>(json, JsonOpts); }
             catch (JsonException) { throw new CatalogSyncException(ErrAuthConfigUnreadable); }
         }
@@ -502,6 +520,14 @@ public class CatalogPullService : ICatalogPullService
         var method = string.IsNullOrWhiteSpace(source.HttpMethod) ? "GET" : source.HttpMethod.Trim().ToUpperInvariant();
         var client = CreateHttpClient();
         using var request = new HttpRequestMessage(new HttpMethod(method), url);
+
+        // The catalog file is the one outbound response in the system that legitimately exceeds
+        // the guarded transport's default ceiling (OutboundResponseLimits.DefaultMaxResponseBytes,
+        // sized for acknowledgements and 10 MB objects). Opt THIS request up to the same cap the
+        // bounded read below already enforces, so the transport limit and the stream limit agree
+        // instead of the transport silently refusing a legitimate 174 MB feed.
+        request.Options.Set(
+            ResponseSizeLimitingHandler.MaxResponseBytesOption, CatalogLimits.MaxCatalogFileBytes);
 
         // (2) Apply auth via the shared applier (oauth2 fetches a fresh token, SSRF-guarded).
         var authError = await _auth.ApplyAsync(request, creds, client, token);
@@ -549,12 +575,22 @@ public class CatalogPullService : ICatalogPullService
         if (!guardResult.Allowed)
             throw new CatalogSyncException(ErrUrlNotAllowed);
 
-        // Decrypt the write-only vendor-credential envelope (decrypt returns null on any error).
+        // Decrypt the write-only vendor-credential envelope, bound to this source's id. Throws
+        // CredentialUnbindableException on any error (wrong key, corrupt envelope, wrong scope).
         JsonElement creds = default;
         if (!string.IsNullOrEmpty(source.AuthConfigEncrypted))
         {
-            var json = _encryption.Decrypt(source.AuthConfigEncrypted)
-                ?? throw new CatalogSyncException(ErrAuthConfigUnreadable);
+            string json;
+            try
+            {
+                json = _encryption.Decrypt(source.AuthConfigEncrypted, CredentialScope.ForSupplier(
+                    source.OrgId, CredentialPurpose.SupplierCatalogAuthConfig, source.Id));
+            }
+            catch (CredentialUnbindableException)
+            {
+                throw new CatalogSyncException(ErrAuthConfigUnreadable);
+            }
+
             try { creds = JsonSerializer.Deserialize<JsonElement>(json, JsonOpts); }
             catch (JsonException) { throw new CatalogSyncException(ErrAuthConfigUnreadable); }
         }

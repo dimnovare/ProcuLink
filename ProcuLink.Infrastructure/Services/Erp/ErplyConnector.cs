@@ -6,6 +6,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Security;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Erp;
+using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services.Erp;
 
@@ -140,6 +141,11 @@ public sealed class ErplyConnector : IErpConnector
 
     private static string BuildFailureMessage(string connector, int code, string body)
     {
+        // The guarded transport refuses redirects — a 307 replays this request body, and any
+        // apikey-style credential header, to a host nobody configured. Name that, and the fix.
+        if (OutboundRedirectPolicy.IsRedirect(code))
+            return $"{connector} {OutboundRedirectPolicy.DescribeRefusal(code)}";
+
         if (string.IsNullOrWhiteSpace(body))
             return $"{connector} HTTP {code}: ERP endpoint returned an error.";
 

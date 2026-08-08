@@ -11,9 +11,17 @@ public sealed record UpsertDeliveryConfigRequest(
     CxmlCredentialsInput? CxmlCredentials = null,
     // WP-33 — "auto-send when clean". Distinct from AutoDeliver above: AutoDeliver decides whether
     // dispatch follows a transform a human asked for; this decides whether the transform happens
-    // without anyone asking. Defaults false, and while auto-send is in its dry-run stage turning it
-    // on records what would have been sent and sends nothing.
-    bool AutoTransform = false);
+    // without anyone asking. While auto-send is in its dry-run stage, turning it on records what
+    // would have been sent and sends nothing.
+    //
+    // NULLABLE, and null/omitted = keep whatever is saved — the same rule as CredentialsJson and
+    // CxmlCredentials above, and the same rule the recorded SSH host-key fingerprints get inside
+    // UpsertAsync. It shipped as a non-nullable `bool` defaulting to false, which made "the client
+    // has never heard of this property" indistinguishable from "the operator switched it off": no
+    // caller sends it today, so every unrelated save — a changed timeout, a new URL — silently
+    // turned auto-send off. Sending it explicitly, including as `false`, still wins and is the
+    // deliberate way to switch it off.
+    bool? AutoTransform = null);
 
 /// <summary>
 /// cXML network credentials sent to the supplier delivery-config upsert. Identities are cleartext;
@@ -74,11 +82,12 @@ public sealed record DeliveryConfigResponse(
     // WP-33 — the per-supplier auto-send indicator. An operator must always be able to see which
     // suppliers are automatic, so this travels with every read of the delivery config.
     bool AutoTransform = false,
-    // Set when the SAVED endpoint is one the transport policy now refuses — a config written
-    // before TLS enforcement existed. Delivery continues (refusing mid-flight would turn a
-    // security weakness into an outage), so this is how the operator finds out. Null when fine.
-    // Never contains the URL: a stored userinfo URL is precisely the case where echoing it would
-    // copy the password into the editor.
+    // Set when the SAVED config carries a fault the write path now refuses: an endpoint the
+    // transport policy rejects (written before TLS enforcement existed), a credential sitting in the
+    // extra-headers map, or both. Delivery continues — refusing mid-flight would turn a security
+    // weakness into an outage — so this is how the operator finds out. Null when fine. Never
+    // contains the URL or a header value: those are precisely the strings that would copy the secret
+    // into the editor.
     string? InsecureTransportWarning = null);
 
 /// <summary>

@@ -1,4 +1,4 @@
-<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://schemas.xmlsoap.org/soap/envelope/ file:///C:/Users/Dmitri/REDACTED/Product%20-%20EDI/Catalogue/REDACTED">
+<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://schemas.xmlsoap.org/soap/envelope/ https://schemas.example.com/Product%20-%20EDI/Catalogue/Customer-TestBuyer-QAS.xsd">
   <Body>
     <Index xmlns="">
       <CatalogHead>
@@ -25,13 +25,13 @@
           <Classification domain="UNSPSC">52161600</Classification>
           <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID>
           <ManufacturerName>REDACTED-PARTY</ManufacturerName>
-          <CustomerId>REDACTED</CustomerId>
-          <SupplierId>REDACTED</SupplierId>
+          <CustomerId>TESTBUYER_DE</CustomerId>
+          <SupplierId>TESTSUPPLIER_DE</SupplierId>
           <CountryCode>DE</CountryCode>
           <LeadTime>14</LeadTime>
-          <Extrinsic name="ListName">REDACTED</Extrinsic>
-          <Extrinsic name="Image">https://example.invalid/redacted</Extrinsic>
-          <Extrinsic name="Thumbnail">https://example.invalid/redacted</Extrinsic>
+          <Extrinsic name="ListName">Test Buyer Standard Warenkorb</Extrinsic>
+          <Extrinsic name="Image">https://cdn.example.com/images/big/763ad9e57fd69df5938c0f6066ddf463.jpg</Extrinsic>
+          <Extrinsic name="Thumbnail">https://cdn.example.com/images/small/763ad9e57fd69df5938c0f6066ddf463.jpg</Extrinsic>
         </ItemDetail>
       </IndexItem>
 <IndexItem>
@@ -50,13 +50,13 @@
           <Classification domain="UNSPSC">52161600</Classification>
           <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID>
           <ManufacturerName>REDACTED-PARTY</ManufacturerName>
-          <CustomerId>REDACTED</CustomerId>
-          <SupplierId>REDACTED</SupplierId>
+          <CustomerId>TESTBUYER_DE</CustomerId>
+          <SupplierId>TESTSUPPLIER_DE</SupplierId>
           <CountryCode>DE</CountryCode>
           <LeadTime>14</LeadTime>
-          <Extrinsic name="ListName">REDACTED</Extrinsic>
-          <Extrinsic name="Image">https://example.invalid/redacted</Extrinsic>
-          <Extrinsic name="Thumbnail">https://example.invalid/redacted</Extrinsic>
+          <Extrinsic name="ListName">Test Buyer Standard Warenkorb</Extrinsic>
+          <Extrinsic name="Image">https://cdn.example.com/images/big/a12f80d206fac401eba0a9cdcad852c8.jpg</Extrinsic>
+          <Extrinsic name="Thumbnail">https://cdn.example.com/images/small/a12f80d206fac401eba0a9cdcad852c8.jpg</Extrinsic>
         </ItemDetail>
       </IndexItem>
     </Index>

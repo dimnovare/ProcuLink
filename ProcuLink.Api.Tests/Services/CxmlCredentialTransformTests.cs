@@ -4,11 +4,13 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Api.Services;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Mapping;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Transform.Output;
@@ -158,5 +160,66 @@ public class CxmlCredentialTransformTests
         Assert.Contains($"<Identity>{orgId}</Identity>", cxml);
         Assert.Contains("domain=\"SupplierId\"", cxml);
         Assert.DoesNotContain("SharedSecret", cxml);
+    }
+
+    // ── Scope-addition: an unbindable secret must fail the transform, not strand it ────
+    //
+    // Approved scope addition to the credential-AAD-binding plan's Task 3. Before this, an
+    // unreadable cXML secret propagated an unhandled CredentialUnbindableException out of
+    // TransformAsync: the call sits before the idempotency claim and outside every other
+    // try/catch in the method, so the exception unwound through TransformOrderJob (Hangfire
+    // retries it identically 3x, since an AAD mismatch is not transient), and
+    // StuckOrderDetectionService — which by design never fails a 'transforming' strand —
+    // silently recovered the order back to 'ready' with no visible error. This proves the fix:
+    // the same scenario now ends in transform_failed with a plain, visible error.
+
+    [Fact]
+    public async Task SecretBoundToADifferentSupplier_EndsInTransformFailed_NotStrandedOrSilentlyRecovered()
+    {
+        await using var db = NewDb();
+        var encryption = Encryption();
+        var (orgId, supplierId, orderId) = await SeedResolvedOrderAsync(db);
+
+        // Seed the shared secret encrypted for a DIFFERENT supplier than the one on this order —
+        // the exact condition CredentialScope AAD binding exists to refuse. Written directly
+        // (not through DeliveryConfigService, which always encrypts for the correct supplier) to
+        // simulate the mismatch this task's binding is meant to catch.
+        var otherSupplierId = Guid.NewGuid();
+        db.SupplierDeliveryConfigs.Add(new SupplierDeliveryConfig
+        {
+            Id = Guid.NewGuid(),
+            OrgId = orgId,
+            SupplierId = supplierId,
+            Protocol = "http",
+            CxmlConfigJson = """{"fromDomain":"NetworkId","fromIdentity":"REDACTED-NETWORK-ID"}""",
+            EncryptedCxmlSharedSecret = encryption.Encrypt(
+                "wire-secret",
+                CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierDeliveryCxmlSecret, otherSupplierId)),
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var (svc, _) = Build(db, encryption);
+        var result = await svc.TransformAsync(orgId, orderId, OutputFormat.CXml, CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(
+            "The supplier's cXML shared secret could not be decrypted, so the order was not transformed.",
+            result.Error);
+
+        var order = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+        Assert.Equal(OrderStatusConstants.TransformFailed, order.Status);
+        Assert.NotEqual(OrderStatusConstants.Transforming, order.Status);
+        Assert.NotEqual(OrderStatusConstants.Ready, order.Status); // not silently recovered either
+        Assert.Equal(0, await db.OutboundArtifacts.CountAsync(a => a.OrderId == orderId));
+
+        // Visible the same way every other terminal transform failure is: the audit trail
+        // FailTransformAsync writes, which OrdersController reads for the order's errorMessage.
+        var audit = await db.AuditEvents.SingleAsync(
+            e => e.EntityId == orderId && e.OrgId == orgId && e.Action == "TransformFailed");
+        Assert.True(audit.Payload!.RootElement.TryGetProperty("error", out var error));
+        Assert.Equal(
+            "The supplier's cXML shared secret could not be decrypted, so the order was not transformed.",
+            error.GetString());
     }
 }

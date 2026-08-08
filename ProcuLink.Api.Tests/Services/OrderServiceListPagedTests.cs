@@ -67,7 +67,7 @@ public class OrderServiceListPagedTests
             null, null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var (items, total) = result.Value;
+        var (items, total, _) = result.Value;
         Assert.Equal(10, total);
         Assert.Equal(3, items.Count);
         // Newest first — the first 3 ids (reversed) map to top of DESC list.
@@ -86,7 +86,7 @@ public class OrderServiceListPagedTests
             null, null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var (items, total) = result.Value;
+        var (items, total, _) = result.Value;
         Assert.Equal(10, total);
         Assert.Equal(3, items.Count);
         Assert.Equal(ids[3], items[0].Id);
@@ -105,7 +105,7 @@ public class OrderServiceListPagedTests
             null, null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var (items, total) = result.Value;
+        var (items, total, _) = result.Value;
         Assert.Equal(10, total);
         Assert.Single(items);
         Assert.Equal(ids[9], items[0].Id);
@@ -121,7 +121,7 @@ public class OrderServiceListPagedTests
             null, null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var (items, total) = result.Value;
+        var (items, total, _) = result.Value;
         Assert.Equal(5, total);
         Assert.Empty(items);
     }
@@ -138,7 +138,7 @@ public class OrderServiceListPagedTests
             null, null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var (items, _) = result.Value;
+        var (items, _, _) = result.Value;
         Assert.Equal(5, items.Count);
         // ids[0] is the newest; verify full ordering.
         for (var i = 0; i < 5; i++)
@@ -234,7 +234,7 @@ public class OrderServiceListPagedTests
             status: "delivered", null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var (items, total) = result.Value;
+        var (items, total, _) = result.Value;
         Assert.Equal(2, total);
         Assert.Equal(2, items.Count);
         Assert.All(items, i => Assert.Equal("delivered", i.Status));
@@ -281,7 +281,7 @@ public class OrderServiceListPagedTests
             status: "failed", null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var (items, total) = result.Value;
+        var (items, total, _) = result.Value;
         // All five failure statuses match; the two non-failure rows do not.
         Assert.Equal(5, total);
         Assert.Equal(5, items.Count);
@@ -332,7 +332,7 @@ public class OrderServiceListPagedTests
             status: "delivered", null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var (items, total) = result.Value;
+        var (items, total, _) = result.Value;
         Assert.Equal(2, total);
         Assert.All(items, i => Assert.Equal("delivered", i.Status));
     }
@@ -378,7 +378,7 @@ public class OrderServiceListPagedTests
             null, supplierId: sup1, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var (items, total) = result.Value;
+        var (items, total, _) = result.Value;
         Assert.Equal(2, total);
         Assert.Equal(2, items.Count);
         Assert.All(items, i => Assert.Equal("Sup One", i.SupplierName));
@@ -421,7 +421,7 @@ public class OrderServiceListPagedTests
             null, null, null, dateFrom: from, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var (items, total) = result.Value;
+        var (items, total, _) = result.Value;
         // Feb + Mar match; Jan does not.
         Assert.Equal(2, total);
         Assert.Equal(2, items.Count);
@@ -462,7 +462,7 @@ public class OrderServiceListPagedTests
             null, null, null, null, dateTo: to, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var (items, total) = result.Value;
+        var (items, total, _) = result.Value;
         // Jan + Feb match; Mar does not.
         Assert.Equal(2, total);
         Assert.Equal(2, items.Count);
@@ -504,7 +504,7 @@ public class OrderServiceListPagedTests
             null, null, null, dateFrom: from, dateTo: to, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var (items, total) = result.Value;
+        var (items, total, _) = result.Value;
         // Only Feb 15 is in range.
         Assert.Equal(1, total);
         Assert.Single(items);
@@ -548,7 +548,7 @@ public class OrderServiceListPagedTests
             null, null, search: null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var (items, total) = result.Value;
+        var (items, total, _) = result.Value;
         Assert.Equal(3, total);
         Assert.Equal(3, items.Count);
     }
@@ -589,7 +589,7 @@ public class OrderServiceListPagedTests
             null, null, search: null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var (items, total) = result.Value;
+        var (items, total, _) = result.Value;
         Assert.Equal(2, total);
         Assert.Equal(2, items.Count);
         // Both supplier names are surfaced correctly.
@@ -648,7 +648,7 @@ public class OrderServiceListPagedTests
             null, null, search: null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var (items, total) = result.Value;
+        var (items, total, _) = result.Value;
         Assert.Equal(2, total);
 
         // Newest first: idWithoutBuyer was inserted at baseTime+1min.
@@ -726,7 +726,7 @@ public class OrderServiceListPagedTests
             status: "ready", null, null, dateFrom: from, dateTo: to, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var (items, total) = result.Value;
+        var (items, total, _) = result.Value;
         Assert.Equal(2, total);
         Assert.All(items, i => Assert.Equal("ready", i.Status));
         Assert.All(items, i => Assert.True(i.CreatedAt >= from && i.CreatedAt <= to));
@@ -743,7 +743,7 @@ public class OrderServiceListPagedTests
             null, null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var (items, total) = result.Value;
+        var (items, total, _) = result.Value;
         Assert.Equal(0, total);
         Assert.Empty(items);
     }
@@ -759,7 +759,7 @@ public class OrderServiceListPagedTests
             null, null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        var (items, total) = result.Value;
+        var (items, total, _) = result.Value;
         Assert.Equal(15, total);
         Assert.Equal(5, items.Count);
     }

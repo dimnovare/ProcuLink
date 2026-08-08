@@ -195,7 +195,7 @@ internal sealed class OrderIngestionService
         var lineEntities = await BuildLineEntitiesAsync(
             organisationId, supplierId, supplierName, parsedOrder.Lines, aiCandidates, ct);
 
-        bool anyUnresolved    = lineEntities.Any(l => l.NeedsReview);
+        bool anyUnresolved    = OrderNeedsReview(lineEntities, parsedOrder);
         var  aiSuggestionCount = lineEntities.Count(l => !string.IsNullOrWhiteSpace(l.AiSuggestedSupplierItemCode));
 
         // 7. Build the order entity
@@ -1044,7 +1044,8 @@ internal sealed class OrderIngestionService
             OrderServiceShared.ApplyExtractionReviewFlags(
                 lineEntities, structuredReviewLineNumbers, structuredReviewReasons);
 
-            bool anyUnresolved    = lineEntities.Any(l => l.NeedsReview);
+            // The Worker's parse path — the one most orders actually take.
+            bool anyUnresolved    = OrderNeedsReview(lineEntities, parsedOrder);
             var  aiSuggestionCount = lineEntities.Count(l => !string.IsNullOrWhiteSpace(l.AiSuggestedSupplierItemCode));
 
             // ── Supplier auto-detect ──────────────────────────────────────────
@@ -2158,6 +2159,28 @@ internal sealed class OrderIngestionService
     /// structured-extraction overlay adds its own reasons afterwards via
     /// <see cref="OrderServiceShared.ApplyExtractionReviewFlags"/>.)
     /// </summary>
+    /// <summary>
+    /// THE predicate for "must this order stop for a human before it can be transformed?" —
+    /// one factory used by every deterministic parse path, because two hand-written copies of
+    /// the same rule is how gate lists in this codebase have drifted apart before.
+    ///
+    /// <para>Two independent terms, and the second is NOT redundant:</para>
+    /// <list type="bullet">
+    ///   <item>A LINE the parser or mapper flagged (unresolved code, ambiguous quantity/price).</item>
+    ///   <item>A HEADER field the parser could not read unambiguously — today a numeric order
+    ///     date whose day/month ordering was a genuine ≤12/≤12 coin-flip ("03/04/2026" is
+    ///     3 April or 4 March depending on who sent it). A header field has no per-line home,
+    ///     and <c>Any()</c> over an EMPTY line set is <b>false</b> (OrderStatusMachine.cs:223),
+    ///     so without this term a header-only problem would sail through as <c>ready</c>.</item>
+    /// </list>
+    /// The resulting <c>pending_review</c> is not cosmetic: it is absent from
+    /// <see cref="OrderStatusMachine.TransformableFrom"/>, so the order cannot start a
+    /// transform — and therefore cannot be delivered — until a human clears it.
+    /// </summary>
+    internal static bool OrderNeedsReview(
+        IEnumerable<PurchaseOrderLineEntity> lineEntities, ParsedOrder parsedOrder) =>
+        lineEntities.Any(l => l.NeedsReview) || parsedOrder.NeedsReview;
+
     internal static string? ComposeReviewReason(bool resolved, bool parserFlagged, ParsedOrderLine line)
     {
         if (resolved && !parserFlagged) return null;

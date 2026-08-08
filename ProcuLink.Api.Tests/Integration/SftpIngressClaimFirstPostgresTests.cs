@@ -6,11 +6,11 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Security;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -33,33 +33,24 @@ namespace ProcuLink.Api.Tests.Integration;
 /// Docker-gated; skips cleanly where Docker is absent.
 /// </summary>
 [Collection("postgres-container")]
-public sealed class SftpIngressClaimFirstPostgresTests : IAsyncLifetime
+public sealed class SftpIngressClaimFirstPostgresTests(PostgresContainerFixture postgres) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
     private DbContextOptions<ProcuLinkDbContext>? _options;
 
     public async Task InitializeAsync()
     {
         if (DockerProbe.UnavailableReason is not null) return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_sftp_cf_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
-        await _pg.StartAsync();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_sftp_cf");
 
-        var cs = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString()) { Pooling = false }.ConnectionString;
+        var cs = new Npgsql.NpgsqlConnectionStringBuilder(_databaseConnectionString) { Pooling = false }.ConnectionString;
         _options = new DbContextOptionsBuilder<ProcuLinkDbContext>().UseNpgsql(cs).Options;
-
-        await using var migrateDb = new ProcuLinkDbContext(_options);
-        await migrateDb.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null) await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     private static DeliveryEncryptionService Enc()
@@ -94,7 +85,9 @@ public sealed class SftpIngressClaimFirstPostgresTests : IAsyncLifetime
         db.Set<SftpIngressConfig>().Add(new SftpIngressConfig
         {
             Id = Guid.NewGuid(), OrgId = orgId, Host = "sftp.example.com", Port = 22, Username = "u",
-            EncryptedPassword = Enc().Encrypt("pw"), RemoteDirectory = remoteDir, DefaultSupplierId = supplierId,
+            EncryptedPassword = Enc().Encrypt(
+                "pw", CredentialScope.ForOrg(orgId, CredentialPurpose.OrgIngressSftpPassword)),
+            RemoteDirectory = remoteDir, DefaultSupplierId = supplierId,
             IsEnabled = true, CreatedAt = now, UpdatedAt = now,
         });
         await db.SaveChangesAsync();

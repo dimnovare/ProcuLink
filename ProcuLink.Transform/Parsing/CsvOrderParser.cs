@@ -80,9 +80,14 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
             return new ParsedOrder(null, null, null, null, Array.Empty<ParsedOrderLine>());
         }
 
-        // A ';'-delimited file is the reliable signal of a European locale (comma is
-        // the decimal separator there), so numbers are parsed accordingly.
-        return BuildParsedOrder(rows, european: delimiter == ";");
+        // A ';' delimiter is a genuine locale DECLARATION — Excel emits it precisely because
+        // the comma is already taken as the decimal separator — so it seeds the numeric
+        // convention. It is only a seed, though: it used to be the SOLE signal, which meant a
+        // tab- or comma-delimited European file had no locale at all and read "1.000" as 1.0.
+        // The document's own numbers now decide first (see BuildParsedOrder).
+        return BuildParsedOrder(rows, declared: delimiter == ";"
+            ? DecimalConvention.Comma
+            : DecimalConvention.Unknown);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -109,13 +114,28 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
             .ToArray());
     }
 
-    private static ParsedOrder BuildParsedOrder(List<RawRow> rows, bool european)
+    private static ParsedOrder BuildParsedOrder(List<RawRow> rows, DecimalConvention declared)
     {
         // Header-level fields come from the first non-null value across all rows
         var poNumber   = rows.Select(r => r.PoNumber  ).FirstOrDefault(v => !string.IsNullOrEmpty(v));
         var buyerName  = rows.Select(r => r.BuyerName ).FirstOrDefault(v => !string.IsNullOrEmpty(v));
         var currency   = rows.Select(r => r.Currency  ).FirstOrDefault(v => !string.IsNullOrEmpty(v));
-        var orderDate  = ParseDate(rows.Select(r => r.OrderDate).FirstOrDefault(v => !string.IsNullOrEmpty(v)));
+        var orderDateRaw = rows.Select(r => r.OrderDate).FirstOrDefault(v => !string.IsNullOrEmpty(v));
+        var (orderDate, orderDateAmbiguous) = DateParsing.TryParseHeaderDate(orderDateRaw);
+
+        // Decide the decimal convention from the WHOLE FILE before reading any single cell.
+        // "1.000" is one thousand in Germany and one in the UK — no cell can answer that
+        // alone, but a column containing "73,22" or "1.234,56" settles it for every cell in
+        // it. Preference order: this column's own evidence, then the whole document's, then
+        // whatever the delimiter declared. Where none of the three decides, the ambiguous
+        // cells are flagged for review rather than guessed at.
+        var qtyTokens   = rows.Select(r => r.Quantity).ToList();
+        var priceTokens = rows.Select(r => r.UnitPrice).ToList();
+        var document    = NumberParsing.InferDecimalConvention(qtyTokens.Concat(priceTokens));
+        var qtyConvention = NumberParsing.FirstKnown(
+            NumberParsing.InferDecimalConvention(qtyTokens), document, declared);
+        var priceConvention = NumberParsing.FirstKnown(
+            NumberParsing.InferDecimalConvention(priceTokens), document, declared);
 
         int autoLineNum = 1;
         var lines = new List<ParsedOrderLine>(rows.Count);
@@ -123,8 +143,8 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
         foreach (var raw in rows)
         {
             var lineNumber  = int.TryParse(raw.LineNumber, out var ln) ? ln : autoLineNum;
-            var (qtyVal,   qtyAmbiguous)   = NumberParsing.TryParseFlexibleDecimal(raw.Quantity,  european);
-            var (priceVal, priceAmbiguous) = NumberParsing.TryParseFlexibleDecimal(raw.UnitPrice, european);
+            var (qtyVal,   qtyAmbiguous)   = NumberParsing.TryParseFlexibleDecimal(raw.Quantity,  qtyConvention);
+            var (priceVal, priceAmbiguous) = NumberParsing.TryParseFlexibleDecimal(raw.UnitPrice, priceConvention);
             var buyerCode   = NullIfEmpty(raw.BuyerItemCode ?? raw.ItemCode) ?? string.Empty;
 
             lines.Add(new ParsedOrderLine(
@@ -144,19 +164,12 @@ public sealed class CsvOrderParser : IPurchaseOrderParser
             autoLineNum++;
         }
 
-        return new ParsedOrder(poNumber, orderDate, buyerName, currency, lines);
-    }
-
-    private static DateTime? ParseDate(string? value)
-    {
-        if (string.IsNullOrEmpty(value)) return null;
-
-        string[] formats = { "yyyy-MM-dd", "dd/MM/yyyy", "MM/dd/yyyy", "yyyy-MM-ddTHH:mm:ss", "M/d/yyyy", "d.M.yyyy" };
-        if (DateTime.TryParseExact(value, formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
-            return dt;
-        if (DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out dt))
-            return dt;
-        return null;
+        return new ParsedOrder(poNumber, orderDate, buyerName, currency, lines,
+            // A CSV declares nothing about its date ordering, so "03/04/2026" is a genuine
+            // coin-flip. The day-first reading is emitted, but the order is flagged so a
+            // human confirms it rather than the guess shipping silently.
+            NeedsReview:  orderDateAmbiguous,
+            ReviewReason: DateParsing.BuildAmbiguityReason(orderDateAmbiguous, "order date", orderDateRaw));
     }
 
     private static string? NullIfEmpty(string? value) =>

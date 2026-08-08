@@ -3,7 +3,6 @@ using ProcuLink.Api.Services;
 using ProcuLink.Api.Tests.TestSupport;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure;
-using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -30,9 +29,9 @@ namespace ProcuLink.Api.Tests.Integration;
 /// skips where Docker is absent instead of failing the suite.</para>
 /// </summary>
 [Collection("postgres-container")]
-public sealed class OrdersListPagingPostgresTests : IAsyncLifetime
+public sealed class OrdersListPagingPostgresTests(PostgresContainerFixture postgres) : IAsyncLifetime
 {
-    private PostgreSqlContainer? _pg;
+    private string? _databaseConnectionString;
     private DbContextOptions<ProcuLinkDbContext>? _options;
 
     public async Task InitializeAsync()
@@ -40,16 +39,9 @@ public sealed class OrdersListPagingPostgresTests : IAsyncLifetime
         if (DockerProbe.UnavailableReason is not null)
             return;
 
-        _pg = new PostgreSqlBuilder()
-            .WithImage("postgres:16")
-            .WithDatabase($"proculink_paging_{Guid.NewGuid():N}")
-            .WithUsername("postgres")
-            .WithPassword("postgres")
-            .Build();
+        _databaseConnectionString = await postgres.CreateDatabaseAsync("proculink_paging");
 
-        await _pg.StartAsync();
-
-        var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_pg.GetConnectionString())
+        var connectionString = new Npgsql.NpgsqlConnectionStringBuilder(_databaseConnectionString)
         {
             Pooling = false,
         }.ConnectionString;
@@ -57,15 +49,11 @@ public sealed class OrdersListPagingPostgresTests : IAsyncLifetime
         _options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseNpgsql(connectionString)
             .Options;
-
-        await using var migrateDb = new ProcuLinkDbContext(_options);
-        await migrateDb.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
     {
-        if (_pg is not null)
-            await _pg.DisposeAsync();
+        await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
     [DockerRequiredFact]
@@ -116,7 +104,7 @@ public sealed class OrdersListPagingPostgresTests : IAsyncLifetime
                     orgId, skip, take, null, null, null, null, null, CancellationToken.None);
 
                 Assert.True(result.IsSuccess);
-                var (items, totalCount) = result.Value;
+                var (items, totalCount, _) = result.Value;
                 Assert.Equal(total, totalCount);             // count is the whole set, every page
                 collected.AddRange(items.Select(i => i.Id));
             }

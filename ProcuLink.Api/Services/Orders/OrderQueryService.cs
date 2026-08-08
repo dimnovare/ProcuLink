@@ -45,7 +45,7 @@ internal sealed class OrderQueryService
 
     // ── ListPagedAsync ────────────────────────────────────────────────────────
 
-    public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListPagedAsync(
+    public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>> ListPagedAsync(
         Guid      organisationId,
         int       page,
         int       pageSize,
@@ -65,7 +65,25 @@ internal sealed class OrderQueryService
 
     // ── ListWindowAsync ─────────────────────────────────────────────────────────
 
-    public async Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount)>> ListWindowAsync(
+    /// <summary>
+    /// Returns one window of the org's orders plus TWO counts over the SAME filtered population:
+    /// <c>TotalCount</c> (every row this filter matches) and <c>SampleCount</c> (how many of those
+    /// are onboarding practice orders).
+    ///
+    /// <para><b>Why the second count exists.</b> This list deliberately RETURNS practice orders,
+    /// but every count the product reports excludes them — billing quota
+    /// (<c>StripeBillingService.CountOrdersAsync</c>), the dashboard KPIs and per-status summary
+    /// (<c>DashboardController</c>), and the onboarding milestones (<c>OnboardingController</c>)
+    /// all filter <c>!o.IsSample</c>. Returning a bare <c>TotalCount</c> therefore described a
+    /// DIFFERENT population from every other number on the screen, with nothing saying so: a
+    /// first-run org whose only order was the promoted sample read "Received 0" beside a card
+    /// saying "1 orders received" and a table listing that order.
+    ///
+    /// <c>TotalCount - SampleCount</c> is the metered population, so it reconciles with
+    /// <c>OrdersSummaryDto.Total</c> by construction, and <c>SampleCount</c> is the label that
+    /// lets a caller explain the difference instead of contradicting itself.</para>
+    /// </summary>
+    public async Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>> ListWindowAsync(
         Guid      organisationId,
         int       skip,
         int       take,
@@ -130,11 +148,21 @@ internal sealed class OrderQueryService
                 (o.BuyerName != null && EF.Functions.ILike(o.BuyerName, $"%{trimmedSearch}%")));
         }
 
-        // ── Step 3: total count from SQL (no full-table load) ──────────────────
-        var totalCount = await baseQuery.CountAsync(ct);
+        // ── Step 3: total + practice-order counts from SQL (no full-table load) ─
+        // ONE round trip for both numbers: grouping on the bool splits the same filtered
+        // population into practice / real, so SampleCount can never be computed over a
+        // different set of predicates than TotalCount — which is the whole defect.
+        var populationRows = await baseQuery
+            .GroupBy(o => o.IsSample)
+            .Select(g => new { IsSample = g.Key, Count = g.Count() })
+            .ToListAsync(ct);
+
+        var totalCount  = populationRows.Sum(r => r.Count);
+        var sampleCount = populationRows.Where(r => r.IsSample).Sum(r => r.Count);
+
         if (totalCount == 0)
-            return Result<(IReadOnlyList<PurchaseOrderSummary>, int)>.Ok(
-                (Array.Empty<PurchaseOrderSummary>(), 0));
+            return Result<(IReadOnlyList<PurchaseOrderSummary>, int, int)>.Ok(
+                (Array.Empty<PurchaseOrderSummary>(), 0, 0));
 
         // ── Step 4: paginate in SQL, select minimal columns ────────────────────
         // CreatedAt DESC is the user-visible order, but it is NOT unique: a large bulk API
@@ -159,6 +187,7 @@ internal sealed class OrderQueryService
                 o.CreatedAt,
                 o.Currency,
                 o.SourceFileKey,
+                o.IsSample,
             })
             .ToListAsync(ct);
 
@@ -210,11 +239,12 @@ internal sealed class OrderQueryService
                 lc?.TotalValue ?? 0m,
                 o.Currency,
                 sourceFormat,
-                o.CreatedAt);
+                o.CreatedAt,
+                o.IsSample);
         }).ToList();
 
-        return Result<(IReadOnlyList<PurchaseOrderSummary>, int)>.Ok(
-            ((IReadOnlyList<PurchaseOrderSummary>)summaries, totalCount));
+        return Result<(IReadOnlyList<PurchaseOrderSummary>, int, int)>.Ok(
+            ((IReadOnlyList<PurchaseOrderSummary>)summaries, totalCount, sampleCount));
     }
 
     // ── GetDownloadUrlAsync ───────────────────────────────────────────────────

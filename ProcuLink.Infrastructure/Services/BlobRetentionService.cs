@@ -15,11 +15,10 @@ namespace ProcuLink.Infrastructure.Services;
 ///   and &gt; 0). An unconfigured org is never even queried for candidates.</description></item>
 ///   <item><description><c>Retention:DryRun</c> defaults to TRUE — even an opted-in org only
 ///   gets a <c>dry_run</c> audit row until the founder flips the knob on the Worker.</description></item>
-///   <item><description>Only TERMINAL orders (delivered / dead-letter / rejected / failed /
-///   transform_failed — the same conservative set as <see cref="DataRetentionService"/>) are
-///   candidates. In-flight orders are untouched regardless of age; notably
-///   <c>delivery_failed</c> is EXCLUDED because it is retryable and a retry re-reads the
-///   artifact blob.</description></item>
+///   <item><description>Only TERMINAL orders (delivered / rejected / failed / transform_failed)
+///   are candidates. In-flight orders are untouched regardless of age; notably
+///   <c>delivery_failed</c> AND <c>delivery_dead_letter</c> are EXCLUDED because both are
+///   re-dispatchable and a re-dispatch re-reads the artifact blob.</description></item>
 ///   <item><description>BLOB-ONLY: DB rows, file keys, <c>ArtifactSha256</c> hashes, provenance
 ///   and the audit trail all STAY. Rows are marked purged
 ///   (<c>source_file_purged_at</c> / <c>blob_purged_at</c>) — which is also what makes the
@@ -37,15 +36,31 @@ namespace ProcuLink.Infrastructure.Services;
 public class BlobRetentionService : IBlobRetentionService
 {
     /// <summary>
-    /// Statuses whose blobs may be retention-purged. Mirrors
-    /// <see cref="DataRetentionService"/>'s terminal set exactly: delivered / dead-letter /
-    /// rejected / failed / transform_failed. <c>delivery_failed</c> is deliberately NOT here —
-    /// it is retryable, and a retry must still find the artifact blob.
+    /// Statuses whose blobs may be retention-purged: delivered / rejected / failed /
+    /// transform_failed. The rule is not "the order is finished" but the narrower
+    /// <b>"no path can still need these bytes"</b>, so a status is admitted only when nothing
+    /// re-dispatches the stored artifact from it.
+    ///
+    /// <para><b>Both retryable-with-blob statuses are excluded.</b> <c>delivery_failed</c> always
+    /// was — it is retryable and a retry must still find the artifact blob.
+    /// <c>delivery_dead_letter</c> now is too, for the same reason applied to the other half of the
+    /// pair: <see cref="OrderStatusMachine.RequeueableFrom"/> admits it, and that endpoint's doc
+    /// calls the ops requeue <b>the ONLY way back</b> from a dead-letter — <c>/retry-delivery</c>
+    /// deliberately refuses the status. Purging the blob would therefore delete the one escape from
+    /// the one status that has only one, permanently and silently: the requeue rewrites the order to
+    /// the claimable <c>delivery_failed</c>, the dispatch downloads by <c>FileKey</c>, the object is
+    /// gone, and the order drops into a retry ladder against a blob that will never come back.</para>
+    ///
+    /// <para><b>This set no longer mirrors <see cref="DataRetentionService"/>'s.</b> It used to, and
+    /// the identical membership read as a shared rule when it was a coincidence — which is part of
+    /// how <c>delivery_dead_letter</c> survived here. The two answer different questions: that one
+    /// prunes <c>delivery_attempts</c> AUDIT ROWS for finished orders (a dead-letter's attempt
+    /// history is genuinely disposable, and pruning it breaks no requeue), while this one deletes
+    /// the BYTES a re-dispatch would send. Do not re-sync them.</para>
     /// </summary>
     private static readonly string[] TerminalOrderStatuses =
     {
         OrderStatusConstants.Delivered,
-        OrderStatusConstants.DeliveryDeadLetter,
         OrderStatusConstants.RejectedBySupplier,
         OrderStatusConstants.Failed,
         OrderStatusConstants.TransformFailed,

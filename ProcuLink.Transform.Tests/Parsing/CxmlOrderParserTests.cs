@@ -80,15 +80,17 @@ public class CxmlOrderParserTests
         parser.CanParse(".pdf").Should().BeFalse();
     }
 
-    // ── Real-world cXML (Coupa / Nasdaq) — regression for the live failures ──────
+    // ── Real-world cXML (Coupa) — regression for the live failures ──────────────
 
     [Fact]
     public async Task ParseAsync_RealCoupaCxml_WithDoctypeAndNoDeploymentMode_ParsesAndKeepsRealCodes()
     {
-        // A genuine Coupa OrderRequest (Nasdaq → Markit) that failed on prod 2026-06-14:
-        // it carries a <!DOCTYPE cXML SYSTEM "…dtd"> header and its <Request> has NO
-        // deploymentMode attribute. Both used to throw. It also carries the real codes
-        // (SupplierPartID 39424093, ManufacturerPartID REDACTED-ORDER-DATA) that must survive.
+        // A real Coupa OrderRequest that failed on prod 2026-06-14: it carries a
+        // <!DOCTYPE cXML SYSTEM "…dtd"> header and its <Request> has NO deploymentMode
+        // attribute. Both used to throw. The fixture keeps that shape but its buyer
+        // identity, contact and addresses are de-identified placeholders; the product
+        // codes (SupplierPartID 39424093, ManufacturerPartID REDACTED-ORDER-DATA) are what must
+        // survive parsing, and they are not customer data.
         var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "cxml-coupa-orderrequest-sek.cxml");
         await using var stream = File.OpenRead(path);
 

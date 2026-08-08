@@ -113,4 +113,133 @@ public class UblInvoiceParserTests
     [Fact]
     public void CanParse_CsvExtension_ReturnsFalse()
         => new UblInvoiceParser().CanParse(".csv").Should().BeFalse();
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Parse failures must never become a plausible-looking value
+    // ════════════════════════════════════════════════════════════════════════
+    //
+    // The parser used to answer "I could not read this" with today's date or 0.00 —
+    // values indistinguishable from a real answer. ABSENT and UNREADABLE are different
+    // facts and must not collapse into the same output.
+
+    private static string WithIssueDate(string issueDate)
+        => MinimalUblInvoice.Replace(
+            "<cbc:IssueDate>2026-05-28</cbc:IssueDate>",
+            $"<cbc:IssueDate>{issueDate}</cbc:IssueDate>",
+            StringComparison.Ordinal);
+
+    private static string WithPayableAmount(string amount)
+        => MinimalUblInvoice.Replace(
+            @"<cbc:PayableAmount currencyID=""EUR"">120.00</cbc:PayableAmount>",
+            $@"<cbc:PayableAmount currencyID=""EUR"">{amount}</cbc:PayableAmount>",
+            StringComparison.Ordinal);
+
+    [Fact]
+    public async Task ParseAsync_BlankAndUnparseableIssueDate_DoNotBothBecomeToday()
+    {
+        // THE DEFECT, VERBATIM: both a blank <IssueDate> and an unparseable one returned
+        // DateOnly.FromDateTime(DateTime.UtcNow) — so an invoice with a corrupt date was
+        // indistinguishable from one genuinely issued today.
+        // Both cases now fail loudly, so neither can return ANY date — today's least of all.
+        var parser = new UblInvoiceParser();
+
+        await using var blank = ToStream(WithIssueDate(""));
+        var blankFailure = await Assert.ThrowsAsync<InvoiceParseException>(
+            () => parser.ParseAsync(blank, CancellationToken.None));
+
+        await using var garbage = ToStream(WithIssueDate("not-a-date"));
+        var garbageFailure = await Assert.ThrowsAsync<InvoiceParseException>(
+            () => parser.ParseAsync(garbage, CancellationToken.None));
+
+        blankFailure.Message.Should().Contain("IssueDate");
+        garbageFailure.Message.Should().Contain("IssueDate");
+        garbageFailure.Message.Should().Contain("not-a-date",
+            "the operator needs the token that could not be read, not just the element");
+    }
+
+    [Fact]
+    public async Task ParseAsync_ValidIssueDate_StillParses()
+    {
+        // DO NOT REGRESS THE WORKING CASE.
+        var parser = new UblInvoiceParser();
+        await using var stream = ToStream(MinimalUblInvoice);
+
+        var result = await parser.ParseAsync(stream, CancellationToken.None);
+
+        result.IssueDate.Should().Be(new DateOnly(2026, 5, 28));
+    }
+
+    [Fact]
+    public async Task ParseAsync_UnparseableAmount_DoesNotSilentlyBecomeZero()
+    {
+        // A payable amount of 0.00 is a real, plausible number. Returning it because the
+        // parser could not read "twelve euro" is the same class of defect as the date.
+        var parser = new UblInvoiceParser();
+        await using var stream = ToStream(WithPayableAmount("twelve euro"));
+
+        var failure = await Assert.ThrowsAsync<InvoiceParseException>(
+            () => parser.ParseAsync(stream, CancellationToken.None));
+
+        failure.Message.Should().Contain("twelve euro");
+    }
+
+    [Fact]
+    public async Task ParseAsync_EuropeanDecimalAmount_IsReadNotRejected()
+    {
+        // The point of reading the value properly first: "1.234,56" is a well-formed
+        // European amount, not garbage. It must parse — NOT become 7322-style corruption
+        // and NOT hard-fail an otherwise-good invoice.
+        var parser = new UblInvoiceParser();
+        await using var stream = ToStream(WithPayableAmount("1.234,56"));
+
+        var result = await parser.ParseAsync(stream, CancellationToken.None);
+
+        result.GrandTotal.Should().Be(1234.56m);
+    }
+
+    [Fact]
+    public async Task ParseAsync_EuropeanDecimalComma_IsNotReadAsHundredfold()
+    {
+        var parser = new UblInvoiceParser();
+        await using var stream = ToStream(WithPayableAmount("73,22"));
+
+        var result = await parser.ParseAsync(stream, CancellationToken.None);
+
+        result.GrandTotal.Should().Be(73.22m);
+        result.GrandTotal.Should().NotBe(7322m,
+            "reading the decimal comma as a thousands separator is the hundredfold defect");
+    }
+
+    [Fact]
+    public async Task ParseAsync_AbsentOptionalAmount_StaysZero_WithoutFailing()
+    {
+        // ABSENT is not UNREADABLE. An invoice that simply carries no <TaxTotal> has zero
+        // tax — that is a fact, not a guess, and must not start throwing.
+        var parser = new UblInvoiceParser();
+        var noTax = MinimalUblInvoice.Replace(
+            """
+              <cac:TaxTotal>
+                <cbc:TaxAmount currencyID="EUR">20.00</cbc:TaxAmount>
+              </cac:TaxTotal>
+            """,
+            "", StringComparison.Ordinal);
+        await using var stream = ToStream(noTax);
+
+        var result = await parser.ParseAsync(stream, CancellationToken.None);
+
+        result.TaxTotal.Should().Be(0m);
+        result.GrandTotal.Should().Be(120m);
+    }
+
+    [Fact]
+    public async Task ParseAsync_AbsentOptionalDueDate_StaysNull_WithoutFailing()
+    {
+        // The fixture carries no <PaymentDueDate>. Null means "not stated" — honest.
+        var parser = new UblInvoiceParser();
+        await using var stream = ToStream(MinimalUblInvoice);
+
+        var result = await parser.ParseAsync(stream, CancellationToken.None);
+
+        result.DueDate.Should().BeNull();
+    }
 }

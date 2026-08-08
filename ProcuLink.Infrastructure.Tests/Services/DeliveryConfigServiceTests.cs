@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services;
 
 namespace ProcuLink.Infrastructure.Tests.Services;
@@ -59,7 +60,10 @@ public class DeliveryConfigServiceTests
         row.OrgId.Should().Be(orgId);
         row.SupplierId.Should().Be(supplierId);
         row.EncryptedCredentials.Should().NotBe(credentials);
-        encryption.Decrypt(row.EncryptedCredentials).Should().Be(credentials);
+        encryption.Decrypt(
+            row.EncryptedCredentials,
+            CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierDeliveryCredentials, supplierId))
+            .Should().Be(credentials);
     }
 
     [Fact]
@@ -114,6 +118,89 @@ public class DeliveryConfigServiceTests
         after.EncryptedCredentials.Should().Be(before);
         after.AutoDeliver.Should().BeTrue();
         after.ConfigJson.Should().Contain("b.example");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_OmittedAutoTransform_PreservesExistingAutoTransform()
+    {
+        // WP-33's switch used to be a non-nullable bool defaulting to false, so an unrelated save
+        // — a changed URL, a new timeout — silently turned auto-send off. No frontend sends the
+        // property, so EVERY save did it. Latent only until stage 2 gives someone a way to turn it
+        // on, and then the symptom is "auto-send stopped working" with nothing in the audit trail
+        // to explain it.
+        await using var db = CreateDb();
+        var service = new DeliveryConfigService(db, CreateEncryption());
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        await service.UpsertAsync(
+            orgId,
+            supplierId,
+            new UpsertDeliveryConfigRequest(
+                "http", false, "{\"url\":\"https://a.example\"}", null, AutoTransform: true),
+            default);
+
+        (await db.SupplierDeliveryConfigs.SingleAsync()).AutoTransform.Should().BeTrue();
+
+        // A save that says nothing about auto-send — the shape every caller sends today.
+        var response = await service.UpsertAsync(
+            orgId,
+            supplierId,
+            new UpsertDeliveryConfigRequest("http", false, "{\"url\":\"https://b.example\"}", null),
+            default);
+
+        var after = await db.SupplierDeliveryConfigs.SingleAsync();
+        after.AutoTransform.Should().BeTrue();
+        after.ConfigJson.Should().Contain("b.example");
+        // The read-back must agree with the row, or the UI shows a switch in the wrong position.
+        response.AutoTransform.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ExplicitFalseAutoTransform_TurnsItOff()
+    {
+        // The other half: null means keep, so switching auto-send OFF has to still work. Without
+        // this, "preserve on omit" is indistinguishable from "can never be turned off".
+        await using var db = CreateDb();
+        var service = new DeliveryConfigService(db, CreateEncryption());
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+
+        await service.UpsertAsync(
+            orgId,
+            supplierId,
+            new UpsertDeliveryConfigRequest(
+                "http", false, "{\"url\":\"https://a.example\"}", null, AutoTransform: true),
+            default);
+
+        var response = await service.UpsertAsync(
+            orgId,
+            supplierId,
+            new UpsertDeliveryConfigRequest(
+                "http", false, "{\"url\":\"https://a.example\"}", null, AutoTransform: false),
+            default);
+
+        (await db.SupplierDeliveryConfigs.SingleAsync()).AutoTransform.Should().BeFalse();
+        response.AutoTransform.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task UpsertAsync_OmittedAutoTransform_OnACreate_DefaultsToOff()
+    {
+        // A brand-new config has nothing to keep, so "null = keep" must land on the entity default
+        // rather than on whatever a stale row held. Off is the safe default for a switch that
+        // sends orders without anyone asking.
+        await using var db = CreateDb();
+        var service = new DeliveryConfigService(db, CreateEncryption());
+
+        var response = await service.UpsertAsync(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            new UpsertDeliveryConfigRequest("http", false, "{\"url\":\"https://a.example\"}", null),
+            default);
+
+        (await db.SupplierDeliveryConfigs.SingleAsync()).AutoTransform.Should().BeFalse();
+        response.AutoTransform.Should().BeFalse();
     }
 
     [Fact]
@@ -276,7 +363,10 @@ public class DeliveryConfigServiceTests
         // The secret is encrypted at rest and never echoed back in the response.
         var row = await db.SupplierDeliveryConfigs.SingleAsync();
         row.EncryptedCxmlSharedSecret.Should().NotBeNullOrEmpty().And.NotBe("top-secret");
-        encryption.Decrypt(row.EncryptedCxmlSharedSecret!).Should().Be("top-secret");
+        encryption.Decrypt(
+            row.EncryptedCxmlSharedSecret!,
+            CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierDeliveryCxmlSecret, supplierId))
+            .Should().Be("top-secret");
         saved.ToString().Should().NotContain("top-secret");
         row.CxmlConfigJson.Should().Contain("REDACTED-NETWORK-ID").And.NotContain("top-secret");
     }
@@ -358,7 +448,10 @@ public class DeliveryConfigServiceTests
 
         var after = await db.SupplierDeliveryConfigs.SingleAsync();
         after.EncryptedCxmlSharedSecret.Should().Be(before, "a null secret must keep the saved one");
-        encryption.Decrypt(after.EncryptedCxmlSharedSecret!).Should().Be("first-secret");
+        encryption.Decrypt(
+            after.EncryptedCxmlSharedSecret!,
+            CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierDeliveryCxmlSecret, supplierId))
+            .Should().Be("first-secret");
         after.CxmlConfigJson.Should().Contain("REDACTED-NETWORK-ID"); // identities still updated
     }
 

@@ -84,12 +84,7 @@ public class Wave1ColumnDropStaysDeferredTests
         var migrateRx = new Regex(@"Database\s*\.\s*Migrate(Async)?\s*\(", RegexOptions.Compiled);
         var root      = RepoRoot();
 
-        var workerHits = Directory
-            .EnumerateFiles(Path.Combine(root, "ProcuLink.Worker"), "*.cs", SearchOption.AllDirectories)
-            .Where(f => !f.Replace('\\', '/').Contains("/bin/") && !f.Replace('\\', '/').Contains("/obj/"))
-            .Where(f => migrateRx.IsMatch(File.ReadAllText(f)))
-            .Select(f => Path.GetRelativePath(root, f).Replace('\\', '/'))
-            .ToList();
+        var workerHits = MigrateCallSites(root, "ProcuLink.Worker", migrateRx);
 
         workerHits.Should().BeEmpty(
             "the Worker deploying independently WITHOUT migrating is exactly why a column drop cannot ride " +
@@ -97,11 +92,31 @@ public class Wave1ColumnDropStaysDeferredTests
             "expand/contract sequence in Wave1RetireDeadSubsystems' doc comment instead of deleting this " +
             "assertion. Hit(s): " + string.Join(", ", workerHits));
 
-        // ...and the API genuinely does, so the sequence has a step 1 at all.
-        var apiProgram = Path.Combine(root, "ProcuLink.Api", "Program.cs");
-        migrateRx.IsMatch(File.ReadAllText(apiProgram)).Should().BeTrue(
-            "ProcuLink.Api/Program.cs is the single place migrations are applied (Database.MigrateAsync)");
+        // ...and the API genuinely does, so the sequence has a step 1 at all. Scanned across the
+        // whole project rather than pinned to Program.cs: the claim is about which SERVICE migrates,
+        // and pinning the file made an ordinary refactor read as "the API stopped migrating". It
+        // did exactly that when the startup task moved to Startup/MigrationBootstrap.cs — the API
+        // still migrated, the guard just could not see it any more.
+        var apiHits = MigrateCallSites(root, "ProcuLink.Api", migrateRx);
+
+        apiHits.Should().NotBeEmpty(
+            "the API is the service that applies migrations, so the expand/contract sequence has a step 1 " +
+            "at all. No Database.MigrateAsync call anywhere in ProcuLink.Api means either it was deleted — " +
+            "in which case NOTHING migrates the deployed schema — or the scan broke.");
     }
+
+    /// <summary>
+    /// Every <c>Database.Migrate(Async)</c> call site in one project's sources, repo-relative. Both
+    /// halves of the claim above go through this, so neither can drift into scanning a narrower
+    /// corpus than the other.
+    /// </summary>
+    private static List<string> MigrateCallSites(string root, string project, Regex migrateRx) =>
+        Directory
+            .EnumerateFiles(Path.Combine(root, project), "*.cs", SearchOption.AllDirectories)
+            .Where(f => !f.Replace('\\', '/').Contains("/bin/") && !f.Replace('\\', '/').Contains("/obj/"))
+            .Where(f => migrateRx.IsMatch(File.ReadAllText(f)))
+            .Select(f => Path.GetRelativePath(root, f).Replace('\\', '/'))
+            .ToList();
 
     /// <summary>
     /// The text of a migration's <c>Up</c> method — everything between its signature and the

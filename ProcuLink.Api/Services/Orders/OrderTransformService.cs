@@ -5,6 +5,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Transform.Output;
 
@@ -90,7 +91,83 @@ internal sealed class OrderTransformService
 
     // ── TransformAsync ────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// The single server-side transform door. A thin guard around <see cref="TransformCoreAsync"/>,
+    /// which holds the whole of the previous method body verbatim.
+    ///
+    /// <para><b>Why the guard exists.</b> The body had no exception handling at all between its
+    /// first line and the acceptance gate's try, and none again between the generation handler and
+    /// the end of the method — so the entity load, the cXML credential resolve, the override read,
+    /// the atomic claim, the R2 upload and the final commit could each throw straight out of this
+    /// method. <c>TransformOrderJob</c> turns that into a Hangfire retry and then a permanently
+    /// failed job, leaving the order at <c>transforming</c>, where
+    /// <c>StuckOrderDetectionService</c> recovers it to <c>ready</c> and deliberately never marks it
+    /// failed. A real, repeatable error therefore produced no status, no message, no ops-health
+    /// count and no exception row: it looked like nothing had happened.</para>
+    ///
+    /// <para><b>Why the catch is broad rather than per-operation.</b> The defect is regional, not
+    /// per-call — the mapping-read helpers below are each already defended by their own catch-all
+    /// (see <c>TryReadPinnedOutputConfig</c>, whose comment names this exact hazard), and it is the
+    /// gaps BETWEEN those narrow fixes that stayed open. A per-operation catch protects only today's
+    /// statements; the next line added to the method reopens the hole.</para>
+    ///
+    /// <para><b>Why turning a transient fault terminal is acceptable here.</b> Because of what
+    /// <c>transform_failed</c> costs, which is very little: it is in
+    /// <see cref="OrderStatusMachine.ClaimableForTransformFrom"/>, <c>TransformOrderJob</c> carries
+    /// <c>AutomaticRetry(3, [10, 60, 300])</c>, and the endpoint's <c>TransformableFrom</c> admits
+    /// it. So a DB blip becomes a VISIBLE transform_failed, a retry ten seconds later, a successful
+    /// re-claim, and a completed transform. This is the same trade the acceptance gate's catch
+    /// already makes and argues, twenty lines into the core.</para>
+    ///
+    /// <para>Cancellation is rethrown untouched: a cancelled request is not a failure.</para>
+    /// </summary>
     public async Task<Result<TransformResponse>> TransformAsync(
+        Guid organisationId,
+        Guid orderId,
+        OutputFormat format,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await TransformCoreAsync(organisationId, orderId, format, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Order {OrderId} (org {OrgId}): the transform failed unexpectedly. Recording it as transform_failed "
+              + "rather than letting it unwind into Hangfire and strand the order in 'transforming'.",
+                orderId, organisationId);
+
+            // Discard whatever the failed attempt left on the change tracker before writing the
+            // failure. A throw from the final SaveChanges leaves an Added OutboundArtifact and a
+            // modified Status = ready_to_deliver pending; without this, the helper's own SaveChanges
+            // would re-attempt that entire failed commit and write ready_to_deliver back over the
+            // transform_failed we are about to record. A Postgres SaveChanges is all-or-nothing, so a
+            // failed one committed nothing worth keeping.
+            //
+            // This also discards a queued AcceptanceGateOverrideUsed row when the gate was overridden
+            // earlier in this same attempt (see TransformCoreAsync, where it is queued) — self-healing,
+            // not a regression: a retry re-evaluates the gate and re-queues the same event.
+            _db.ChangeTracker.Clear();
+
+            // Plain language, and deliberately NOT ex.Message: this string becomes the order's
+            // errorMessage (OrdersController reads the audit payload's `error` key), and
+            // "Npgsql.PostgresException: 57P01" is not a sentence an operator can act on. The
+            // exception itself is in the log line above.
+            const string reason =
+                "Something went wrong preparing this order to send, so it wasn't sent. "
+              + "Try sending it again in a moment.";
+
+            await FailTransformFromClaimableAsync(organisationId, orderId, reason, ct);
+            return Result<TransformResponse>.Fail(reason);
+        }
+    }
+
+    private async Task<Result<TransformResponse>> TransformCoreAsync(
         Guid organisationId,
         Guid orderId,
         OutputFormat format,
@@ -108,10 +185,22 @@ internal sealed class OrderTransformService
             return Result<TransformResponse>.Fail("Order not found.");
 
         // Pre-flight check: all lines must be resolved
+        //
+        // Recorded, not merely returned. TransformOrderJob turns a Fail into a throw, so a Fail that
+        // writes no status leaves the order at 'transforming' exactly as an unhandled exception did —
+        // and the controller has ALREADY flipped ready → transforming before enqueueing this job. The
+        // sentence is already written for a user and names the exact lines, so it is passed through
+        // unaltered. This does move such an order out of 'ready' and into the exceptions list, which
+        // is the point: the strand it replaces is invisible, and transform_failed keeps the retry
+        // door open on both ClaimableForTransformFrom and TransformableFrom.
         var unresolved = entity.Lines.Where(l => l.NeedsReview).Select(l => l.LineNumber).ToList();
         if (unresolved.Count > 0)
-            return Result<TransformResponse>.Fail(
-                $"Resolve all lines before transforming. Unresolved: {string.Join(", ", unresolved)}.");
+        {
+            var unresolvedError =
+                $"Resolve all lines before transforming. Unresolved: {string.Join(", ", unresolved)}.";
+            await FailTransformFromClaimableAsync(organisationId, orderId, unresolvedError, ct);
+            return Result<TransformResponse>.Fail(unresolvedError);
+        }
 
         // ── Launch batch 7 — revision authority ────────────────────────────────
         // Resolve the pinned revision's effective bundle ONCE per transform. Live bundle when
@@ -151,7 +240,33 @@ internal sealed class OrderTransformService
         // LIVE delivery-config row, the same source the controller used to pick the cXML format.
         CxmlCredentialConfig? cxmlCredentials = null;
         if (effectiveFormat == OutputFormat.CXml && _cxmlResolver is not null)
-            cxmlCredentials = await _cxmlResolver.ResolveAsync(organisationId, entity.SupplierId ?? Guid.Empty, ct);
+        {
+            try
+            {
+                cxmlCredentials = await _cxmlResolver.ResolveAsync(organisationId, entity.SupplierId ?? Guid.Empty, ct);
+            }
+            catch (CredentialUnbindableException ex)
+            {
+                // This call sits before the idempotency claim below and outside every other
+                // try/catch in this method (the first one starts ~300 lines down, at the
+                // acceptance gate). Left unguarded, a throw here unwinds straight through
+                // TransformOrderJob, Hangfire retries it 3x identically (the AAD mismatch is not
+                // transient), then StuckOrderDetectionService — which by design NEVER fails a
+                // 'transforming' strand — quietly resets the order to 'ready' with no error message.
+                // That is a silent strand, not a fix. Route it through the SAME terminal-failure
+                // helper every other unrecoverable transform failure in this method uses, so it is
+                // visible (ops health, the exception row, the order's errorMessage) and recoverable
+                // (transform_failed is re-claimable, same as every other terminal failure here).
+                _logger.LogError(ex,
+                    "Order {OrderId}: cXML shared secret for supplier {SupplierId} could not be decrypted ({Reason}) — failing the transform.",
+                    orderId, entity.SupplierId, ex.Reason);
+
+                const string error =
+                    "The supplier's cXML shared secret could not be decrypted, so the order was not transformed.";
+                await FailTransformAsync(entity, organisationId, orderId, error, ct);
+                return Result<TransformResponse>.Fail(error);
+            }
+        }
 
         // heart-piece-flex flexible mapping: SIX transform modes, in precedence order.
         //   1. TEMPLATE MODE — order carries a non-blank whole-document OutputTemplate → render the
@@ -283,13 +398,21 @@ internal sealed class OrderTransformService
         }
 
         // Locate the fixed transformer (Xml/Csv/Json/...). Required EXCEPT for template mode and the
-        // native CSV/JSON override path; resolved up-front so a missing transformer fails before status
-        // mutation. NOTE: the revision-pinned and supplier-promoted paths deliberately do NOT relax
-        // this requirement — the fixed transformer must exist so the defensive fallback below is
-        // always possible.
+        // native CSV/JSON override path. NOTE: the revision-pinned and supplier-promoted paths
+        // deliberately do NOT relax this requirement — the fixed transformer must exist so the
+        // defensive fallback below is always possible.
+        //
+        // This comment used to end "resolved up-front so a missing transformer fails before status
+        // mutation", which was the bug stated as a feature: failing before the status mutation is
+        // precisely what made it invisible. A missing transformer is an unambiguously terminal,
+        // order-level failure — no retry of the same inputs can cure it — so it is RECORDED as one.
         var transformer = _transformers.FirstOrDefault(t => t.CanTransform(effectiveFormat));
         if (!useOutputNode && !useTemplate && !useNativeOverride && transformer is null)
-            return Result<TransformResponse>.Fail($"No transform service registered for format '{effectiveFormat}'.");
+        {
+            var noTransformerError = $"No transform service registered for format '{effectiveFormat}'.";
+            await FailTransformFromClaimableAsync(organisationId, orderId, noTransformerError, ct);
+            return Result<TransformResponse>.Fail(noTransformerError);
+        }
 
         // ── WS-12 — per-connection EDI/cXML envelope identity ───────────────────
         // The supplier's required X12 ISA/GS identity (sender/receiver qualifier+id, version, usage,
@@ -510,6 +633,11 @@ internal sealed class OrderTransformService
             // committed by whichever SaveChanges finishes this transform (the artifact commit, or
             // FailTransformAsync if generation then fails for an unrelated reason): either way an
             // attempt was admitted under the override, which is what the row records.
+            //
+            // A THIRD outcome — TransformAsync's wrapper catching an unexpected failure anywhere else
+            // in this attempt — clears the tracker before recording the failure (see its
+            // ChangeTracker.Clear() comment) and drops this row too. Self-healing, not a regression: a
+            // retry re-evaluates the gate and re-queues the same event.
             _db.AuditEvents.Add(AcceptanceGate.BuildOverrideUsedEvent(organisationId, orderId, gate));
             _logger.LogWarning(
                 "Order {OrderId}: transforming despite {Count} blocking supplier acceptance rule(s) — operator override by {Actor}.",
@@ -746,6 +874,25 @@ internal sealed class OrderTransformService
 
         await _db.SaveChangesAsync(ct);
 
+        // CLOSE the exception row this order's earlier failure may have opened. Every transform
+        // failure path opens a `transform_failed` exception row via SafeReconcileExceptionsAsync;
+        // before this line nothing closed one on a later success. The documented escape — "a
+        // successful re-transform enqueues delivery, and DeliveryService reconciles on every
+        // successful attempt" — only holds when a delivery attempt is actually PERSISTED, and with
+        // AutoDeliver off the automatic dispatch claim matches 0 rows, writes no attempt and
+        // reconciles nothing. The row then sits open forever on a perfectly healthy order, and the
+        // exceptions UI derives `transform_failed` from status, so no operator can clear it by hand.
+        //
+        // That went from rare to routine when the wrapper started recording transient faults (a DB
+        // blip, an R2 blip) as transform_failed: those are exactly the ones the +10s Hangfire retry
+        // cures, so the failure and its own cure now arrive seconds apart. A permanently red
+        // exceptions list is one operators learn to ignore.
+        //
+        // Best-effort by construction (SafeReconcileExceptionsAsync swallows and logs), so it cannot
+        // turn a transform that succeeded into one that failed. Reconcile is idempotent and derives
+        // everything from current status: on an order with no open row it is a no-op.
+        await _shared.SafeReconcileExceptionsAsync(organisationId, orderId, ct);
+
         _logger.LogInformation(
             "Order {OrderId} transformed to {Format}, artifact {ArtifactId}",
             orderId, effectiveFormat, artifactId);
@@ -773,9 +920,16 @@ internal sealed class OrderTransformService
     ///
     /// <para>The reconcile is best-effort ON PURPOSE (<c>SafeReconcileExceptionsAsync</c> swallows and
     /// logs): the status + audit event are the durable record, and losing the derived exception row must
-    /// never turn a reported failure into an unhandled one. Nothing here re-resolves the exception on a
-    /// later success — a successful re-transform enqueues delivery, and DeliveryService reconciles on
-    /// every successful attempt, which auto-resolves the row once the condition no longer holds.</para>
+    /// never turn a reported failure into an unhandled one.</para>
+    ///
+    /// <para><b>What closes the row again.</b> <c>TransformCoreAsync</c>'s SUCCESS path reconciles too,
+    /// immediately after the commit that writes the artifact and <c>ready_to_deliver</c> — so a failure
+    /// that later self-heals resolves its own exception row. This paragraph used to claim the closing
+    /// happened downstream instead ("a successful re-transform enqueues delivery, and DeliveryService
+    /// reconciles on every successful attempt"), which was wrong: that holds only when a delivery
+    /// attempt is actually PERSISTED, and with AutoDeliver off the automatic dispatch claim matches 0
+    /// rows and writes none. The row stayed open on a healthy order, and the exceptions UI derives
+    /// <c>transform_failed</c> from status, so nobody could clear it by hand either.</para>
     /// </summary>
     private async Task FailTransformAsync(
         PurchaseOrderEntity entity,
@@ -798,6 +952,113 @@ internal sealed class OrderTransformService
         _logger.LogError(
             "Order {OrderId} (org {OrgId}) TRANSFORM FAILED terminally: {Error}. The order is marked transform_failed " +
             "(visible in ops health + exceptions) and needs a template/mapping fix before it can be re-transformed.",
+            orderId, organisationId, error);
+
+        await _shared.SafeReconcileExceptionsAsync(organisationId, orderId, ct);
+    }
+
+    /// <summary>
+    /// Commits a transform failure from OUTSIDE the claim: moves the order to
+    /// <see cref="OrderStatusConstants.TransformFailed"/> only while it is still one of
+    /// <see cref="OrderStatusMachine.TransformFailableFrom"/>, and writes the audit trail ONLY
+    /// when that guarded update actually won the row.
+    ///
+    /// <para><b>Why guarded, when <see cref="FailTransformAsync"/> is not.</b> Every caller of
+    /// <c>FailTransformAsync</c> sits behind the claim and therefore owns the row. This one does
+    /// not: it runs from the wrapper's catch, which can fire before the claim has been taken (or
+    /// after it has been released by a completed transform). An unguarded write there would land on
+    /// top of whatever else moved the order in the meantime — a <c>billing_held</c> park, an MV-1
+    /// <c>pending_review</c> reset, or a <c>ready_to_deliver</c> transform that had already
+    /// succeeded.</para>
+    ///
+    /// <para><b>Why the guard set is NOT the claim's set.</b> The tempting one-sentence rule — "if
+    /// we could have claimed it, we may fail it" — is wrong, because starting a transform and
+    /// overwriting a status with a failure are different operations that happen to share three of
+    /// their four statuses. <see cref="OrderStatusMachine.ClaimableForTransformFrom"/> also admits
+    /// <c>rejected_by_supplier</c>, which is a POST-SUCCESS OPERATOR VERDICT: a human recorded that
+    /// the supplier refused the document. <c>OrderResolutionService.MarkRejectedAsync</c> has no
+    /// from-status guard and <c>transforming → rejected_by_supplier</c> is a documented edge, so an
+    /// operator can record that verdict while this very transform is in flight — and failing the
+    /// order afterwards would replace their finding with "something went wrong". Re-TRANSFORMING a
+    /// rejected order is right (it is how a corrected document is produced); FAILING one is not.
+    /// <see cref="OrderStatusMachine.TransformFailableFrom"/> carries that distinction and its
+    /// evidence, and the one-status delta is pinned by
+    /// <c>OrderStatusMachineTests.TransformFailableFrom_IsClaimableMinus_RejectedBySupplier</c>.</para>
+    ///
+    /// <para>The set comes from <see cref="OrderStatusMachine"/> rather than a literal for the same
+    /// reason the claim's does — this is the second hand-written copy of a status list, which is
+    /// exactly how the five delivery-claim lists drifted apart four times.</para>
+    ///
+    /// <para>Idempotent: a second pass over an order already in <c>transform_failed</c> re-writes the
+    /// same status (it is in the claimable set) and adds one more audit row, producing no artifact
+    /// and no delivery either way.</para>
+    /// </summary>
+    private async Task FailTransformFromClaimableAsync(
+        Guid              organisationId,
+        Guid              orderId,
+        string            error,
+        CancellationToken ct)
+    {
+        var failedAt = DateTime.UtcNow;
+
+        // Parameterised as `= ANY(@p)` rather than inlined, for the same reason the claim is: it
+        // keeps the SQL text (and therefore the Postgres plan) stable whatever the set contains.
+        var failableStatuses = OrderStatusMachine.TransformFailableFrom.ToArray();
+
+        int failed;
+        if (_db.Database.IsRelational())
+        {
+            failed = await _db.PurchaseOrders
+                .Where(x => x.Id == orderId && x.OrgId == organisationId
+                         && failableStatuses.Contains(x.Status))
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(o => o.Status,    OrderStatusConstants.TransformFailed)
+                    .SetProperty(o => o.UpdatedAt, failedAt), ct);
+        }
+        else
+        {
+            // EF InMemory cannot translate ExecuteUpdateAsync — emulate the same guarded transition
+            // through the change tracker (tests are single-threaded there). Both branches read the
+            // SAME declaration: this is the second copy of the rule, and the pair that drifts.
+            var row = await _db.PurchaseOrders
+                .Where(x => x.Id == orderId && x.OrgId == organisationId)
+                .FirstOrDefaultAsync(ct);
+
+            failed = row is not null
+                  && OrderStatusMachine.TransformFailableFrom.Contains(row.Status) ? 1 : 0;
+
+            if (failed == 1)
+            {
+                row!.Status    = OrderStatusConstants.TransformFailed;
+                row.UpdatedAt  = failedAt;
+            }
+        }
+
+        if (failed == 0)
+        {
+            // Not ours to fail. Something else already moved the order — most often a transform that
+            // SUCCEEDED (ready_to_deliver and beyond), which must never be overwritten with a
+            // failure; or an operator who recorded rejected_by_supplier while this attempt was in
+            // flight, whose verdict must outrank a machine failure. Logged rather than silent,
+            // because "we could not record this" is itself worth seeing.
+            _logger.LogWarning(
+                "Order {OrderId} (org {OrgId}) transform failed, but the order has moved to a status a transform "
+              + "failure may not overwrite — leaving it untouched and recording nothing. Error was: {Error}",
+                orderId, organisationId, error);
+            return;
+        }
+
+        _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "TransformFailed", new
+        {
+            error,
+            stage = "transform",
+        }));
+
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogError(
+            "Order {OrderId} (org {OrgId}) TRANSFORM FAILED: {Error}. The order is marked transform_failed "
+          + "(visible in ops health + exceptions) and stays re-claimable, so a retry re-drives it.",
             orderId, organisationId, error);
 
         await _shared.SafeReconcileExceptionsAsync(organisationId, orderId, ct);

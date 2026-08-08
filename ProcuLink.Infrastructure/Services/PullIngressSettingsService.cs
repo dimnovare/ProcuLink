@@ -70,7 +70,9 @@ public sealed class PullIngressSettingsService : IPullIngressSettingsService
         {
             cfg.EncryptedPassword = string.IsNullOrWhiteSpace(request.Password)
                 ? string.Empty
-                : _encryption.Encrypt(request.Password);
+                : _encryption.Encrypt(
+                    request.Password,
+                    CredentialScope.ForOrg(orgId, CredentialPurpose.OrgIngressSftpPassword));
         }
         // null = keep whatever the last successful poll recorded (a client that has never heard of
         // host keys must not silently un-pin the connection); "" = the operator deliberately
@@ -124,7 +126,9 @@ public sealed class PullIngressSettingsService : IPullIngressSettingsService
         {
             cfg.EncryptedSecretKey = string.IsNullOrWhiteSpace(request.SecretKey)
                 ? string.Empty
-                : _encryption.Encrypt(request.SecretKey);
+                : _encryption.Encrypt(
+                    request.SecretKey,
+                    CredentialScope.ForOrg(orgId, CredentialPurpose.OrgIngressS3SecretKey));
         }
         cfg.UpdatedAt = now;
 

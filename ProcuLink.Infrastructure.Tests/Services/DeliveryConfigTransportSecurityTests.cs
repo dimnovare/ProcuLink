@@ -110,6 +110,54 @@ public class DeliveryConfigTransportSecurityTests
     }
 
     /// <summary>
+    /// A repeated <c>url</c> key defeated the inspection entirely.
+    ///
+    /// <para>System.Text.Json keeps BOTH properties: <c>JsonDocument.EnumerateObject</c> lists them
+    /// in document order, while <c>JsonSerializer.Deserialize&lt;HttpConfig&gt;</c> — what the
+    /// dispatchers use — binds the LAST. The extraction returned the first, so
+    /// <c>{"url":"https://ok…","url":"http://evil…"}</c> was validated as the https endpoint and
+    /// delivered to the cleartext one. The extraction now inspects EVERY url-keyed value rather than
+    /// betting on which one the deserializer picks, so the two cannot disagree in either direction.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData("""{"url":"https://ok.example/orders","url":"http://evil.example/orders"}""")]
+    [InlineData("""{"url":"http://evil.example/orders","url":"https://ok.example/orders"}""")]
+    [InlineData("""{"URL":"https://ok.example/orders","url":"http://evil.example/orders"}""")]
+    public async Task UpsertAsync_ARepeatedUrlKey_CannotSmuggleACleartextEndpointPast(string configJson)
+    {
+        await using var db = CreateDb();
+        var service = CreateService(db);
+
+        var act = () => SaveAsync(service, Guid.NewGuid(), Guid.NewGuid(),
+            DeliveryProtocolConstants.Http, configJson);
+
+        (await act.Should().ThrowAsync<OutboundUrlPolicyException>())
+            .And.ErrorCode.Should().Be(OutboundUrlPolicy.ErrorInsecureTransport);
+
+        (await db.SupplierDeliveryConfigs.CountAsync()).Should().Be(0);
+    }
+
+    /// <summary>
+    /// The negative control for the case above: a blob whose repeated key is https BOTH times is
+    /// unambiguous and must still save. Refusing every duplicate outright would pass the test above
+    /// while turning a bypass into a different behaviour change.
+    /// </summary>
+    [Fact]
+    public async Task UpsertAsync_ARepeatedUrlKeyThatIsSecureEveryTime_StillSaves()
+    {
+        await using var db = CreateDb();
+        var service = CreateService(db);
+
+        var saved = await SaveAsync(service, Guid.NewGuid(), Guid.NewGuid(),
+            DeliveryProtocolConstants.Http,
+            """{"url":"https://a.example/orders","url":"https://b.example/orders"}""");
+
+        saved.Should().NotBeNull();
+        (await db.SupplierDeliveryConfigs.CountAsync()).Should().Be(1);
+    }
+
+    /// <summary>
     /// config_json is cleartext by design (SupplierDeliveryConfig.cs documents the invariant).
     /// A userinfo URL puts a password straight into it — and into GET, every delivery-attempt
     /// destination, and the order passport screen that renders it.

@@ -12,6 +12,7 @@ using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Core.Services.Organisation;
+using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Security;
@@ -144,7 +145,8 @@ public class SettingsControllerPullIngressTests
         var row = await h.Db.SftpIngressConfigs.AsNoTracking().SingleAsync();
         row.OrgId.Should().Be(h.OrgId);
         row.EncryptedPassword.Should().NotBe("super-secret-password");
-        h.Encryption.Decrypt(row.EncryptedPassword).Should().Be("super-secret-password");
+        h.Encryption.Decrypt(row.EncryptedPassword, CredentialScope.ForOrg(
+            h.OrgId, CredentialPurpose.OrgIngressSftpPassword)).Should().Be("super-secret-password");
 
         // The GET response leaks neither the plaintext nor the ciphertext.
         var get = await h.Controller.GetSftp(CancellationToken.None);
@@ -169,7 +171,8 @@ public class SettingsControllerPullIngressTests
         var row = await h.Db.SftpIngressConfigs.AsNoTracking().SingleAsync();
         row.EncryptedPassword.Should().Be(originalCipher, "null password means keep");
         row.Port.Should().Be(2222);
-        h.Encryption.Decrypt(row.EncryptedPassword).Should().Be("original");
+        h.Encryption.Decrypt(row.EncryptedPassword, CredentialScope.ForOrg(
+            h.OrgId, CredentialPurpose.OrgIngressSftpPassword)).Should().Be("original");
     }
 
     // ── SFTP: billing gate + validation ────────────────────────────────────────
@@ -297,7 +300,8 @@ public class SettingsControllerPullIngressTests
         var row = await h.Db.S3IngressConfigs.AsNoTracking().SingleAsync();
         row.OrgId.Should().Be(h.OrgId);
         row.EncryptedSecretKey.Should().NotBe("super-secret-key");
-        h.Encryption.Decrypt(row.EncryptedSecretKey).Should().Be("super-secret-key");
+        h.Encryption.Decrypt(row.EncryptedSecretKey, CredentialScope.ForOrg(
+            h.OrgId, CredentialPurpose.OrgIngressS3SecretKey)).Should().Be("super-secret-key");
 
         var get = await h.Controller.GetS3(CancellationToken.None);
         var body = ((OkObjectResult)get).Value.Should().BeOfType<S3IngressResponse>().Subject;
@@ -320,7 +324,8 @@ public class SettingsControllerPullIngressTests
         var row = await h.Db.S3IngressConfigs.AsNoTracking().SingleAsync();
         row.EncryptedSecretKey.Should().Be(originalCipher, "null secret means keep");
         row.KeyPrefix.Should().Be("newer/");
-        h.Encryption.Decrypt(row.EncryptedSecretKey).Should().Be("original");
+        h.Encryption.Decrypt(row.EncryptedSecretKey, CredentialScope.ForOrg(
+            h.OrgId, CredentialPurpose.OrgIngressS3SecretKey)).Should().Be("original");
     }
 
     // ── S3/R2: billing gate + validation + SSRF on ServiceUrl ──────────────────
@@ -397,13 +402,16 @@ public class SettingsControllerPullIngressTests
     {
         var h = Build();
         // Seed a config owned by a DIFFERENT org directly.
+        var otherOrgId = Guid.NewGuid();
         h.Db.SftpIngressConfigs.Add(new SftpIngressConfig
         {
             Id = Guid.NewGuid(),
-            OrgId = Guid.NewGuid(),
+            OrgId = otherOrgId,
             Host = "other-org.example",
             Username = "other",
-            EncryptedPassword = h.Encryption.Encrypt("other-secret"),
+            EncryptedPassword = h.Encryption.Encrypt(
+                "other-secret",
+                CredentialScope.ForOrg(otherOrgId, CredentialPurpose.OrgIngressSftpPassword)),
             IsEnabled = true,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
