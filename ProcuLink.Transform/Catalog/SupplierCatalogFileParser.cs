@@ -176,7 +176,7 @@ public static partial class SupplierCatalogFileParser
     /// Content-sniffing router for 'auto' (plan 2026-07-2 4.2). Inspects the leading bytes AFTER
     /// any zip unwrap: <c>CIF_I_V</c> → CIF; a leading <c>&lt;</c> → XML (cXML Index by LocalName
     /// → dedicated parser, else generic repeating-element XML); <c>[</c>/<c>{</c> → JSON; anything
-    /// else → extension routing then CSV. The saint-gobain case (a CIF file named <c>.xml</c>) is
+    /// else → extension routing then CSV. The mislabelled-CIF case (a CIF file named <c>.xml</c>) is
     /// why we sniff CONTENT, not the extension.
     /// </summary>
     public static async Task<CatalogFileParseResult> ParseAutoAsync(

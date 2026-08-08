@@ -381,7 +381,7 @@ public class CatalogFormatAndMappingTests
     [Fact]
     public async Task ParseAuto_CifNamedAsXml_DetectedByContent()
     {
-        // saint-gobain ships a CIF file with a .xml extension — must sniff CONTENT.
+        // A real feed ships a CIF file with a .xml extension — must sniff CONTENT.
         var result = await SupplierCatalogFileParser.ParseAutoAsync(
             Open("cif-3.0.cif"), contentType: null, fileName: "catalog.xml", CancellationToken.None);
         result.Format.Should().Be("cif");

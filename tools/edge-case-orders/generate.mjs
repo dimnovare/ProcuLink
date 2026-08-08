@@ -374,7 +374,7 @@ emit("cxml-21-zero-neg-qty.xml",
     { format: "cxml", case: "200 lines", expect: "parse", lines: 200 });
 }
 
-// 23. cXML non-EUR currency (PLN, like real Nestle POs)
+// 23. cXML non-EUR currency (PLN, as seen on real PL purchase orders)
 emit("cxml-23-pln-currency.xml",
   cxml({ orderID: "CX-PLN", currency: "PLN", total: "295.02", lines: [
     { line: 10, qty: "1.0", sku: "29048107", price: "295.02", desc: "Gigaset 550 HX — Dodatkowa słuch", uom: "EA" },
