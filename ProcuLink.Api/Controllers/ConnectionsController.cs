@@ -185,6 +185,10 @@ public sealed class ConnectionsController : ControllerBase
         {
             return RejectedCredentialHeader(ex);
         }
+        catch (UnsupportedOutputFormatException ex)
+        {
+            return RejectedOutputFormat(ex);
+        }
     }
 
     [HttpPut("{connectionId:guid}/revisions/{revisionId:guid}")]
@@ -213,6 +217,10 @@ public sealed class ConnectionsController : ControllerBase
         catch (CredentialHeaderInConfigException ex)
         {
             return RejectedCredentialHeader(ex);
+        }
+        catch (UnsupportedOutputFormatException ex)
+        {
+            return RejectedOutputFormat(ex);
         }
 
         return result switch
@@ -247,6 +255,18 @@ public sealed class ConnectionsController : ControllerBase
     /// </summary>
     private BadRequestObjectResult RejectedCredentialHeader(CredentialHeaderInConfigException ex) =>
         BadRequest(new { error = CredentialHeaderInConfigException.Code, message = ex.PolicyMessage });
+
+    /// <summary>
+    /// An output format no registered transform can build is refused at WRITE time rather than
+    /// discovered when an order dies at transform, so it is a 400 naming the format and the supported
+    /// set. Same body shape as the three refusals above.
+    ///
+    /// <para>Publish/rollback are deliberately not covered: they activate a bundle that is already
+    /// stored, and refusing them would strand an organisation that already has such a revision rather
+    /// than stopping a new one. See <c>SupplierConnectionService.ValidateOutputFormat</c>.</para>
+    /// </summary>
+    private BadRequestObjectResult RejectedOutputFormat(UnsupportedOutputFormatException ex) =>
+        BadRequest(new { error = UnsupportedOutputFormatException.Code, message = ex.PolicyMessage });
 
     /// <summary>
     /// Launch batch 3 — runs the REAL test pack (replay over recent orders + conformance check;

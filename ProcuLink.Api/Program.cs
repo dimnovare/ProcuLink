@@ -721,14 +721,14 @@ builder.Services.AddSingleton<IPurchaseOrderParser, X12OrderParser>(); // Group 
 builder.Services.AddSingleton<OrderParserFactory>();
 
 // ── Transform layer (ProcuLink.Transform) ──────────────────────────────────
-// Both implementations registered as ITransformService. OrderService resolves
-// the correct one at runtime via IEnumerable<ITransformService> + CanTransform().
-builder.Services.AddSingleton<ITransformService, XmlTransformService>();
-builder.Services.AddSingleton<ITransformService, CsvTransformService>();
-builder.Services.AddSingleton<ITransformService, CxmlTransformService>();
-builder.Services.AddSingleton<ITransformService, JsonTransformService>();
-builder.Services.AddSingleton<ITransformService, UblOrderTransformService>(); // Group M Phase 1 — plain OASIS UBL 2.1 Order; no Peppol profile is declared
-builder.Services.AddSingleton<ITransformService, X12TransformService>(); // Group M — ANSI X12 850
+// Every implementation registered as ITransformService. OrderService resolves the correct one at
+// runtime via IEnumerable<ITransformService> + CanTransform().
+//
+// Registered FROM OutputTransformRegistry.All rather than listed here, because the same list also
+// derives OutputTransformRegistry.Catalog — the allow-list every write path that stores an output
+// format checks against. Listing them separately is how the two drifted: the revision write path
+// accepted formats (UblOrder / X12_850 / EdifactOrders) that no transform below can build.
+builder.Services.AddOutputTransforms();
 
 // ── Group V8: standards conformance reports ─────────────────────────────────
 // Validates a generated outbound document against its NAMED standard profile

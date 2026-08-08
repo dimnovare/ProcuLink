@@ -59,6 +59,16 @@ public static class DeliveryMediaTypes
             [OutputFormat.X12]  = new("application/edi-x12", ".x12"),
 
             // Named standards-profile identifiers (conformance layer). Same documents, same envelopes.
+            //
+            // NOT AN OFFER. These three name a conformance PROFILE; no ITransformService in this
+            // solution builds a document for any of them, and EDIFACT in particular is inbound-only —
+            // EdifactOrderParser reads it, nothing writes it. A row here is required (the table is
+            // exhaustive over OutputFormat by design, so a value cannot be silently mis-typed) and it
+            // is what these bytes WOULD travel as; it is not evidence the bytes can be produced.
+            //
+            // The thing that decides whether a caller may SELECT one of these is
+            // OutputTransformRegistry.Catalog, which derives the selectable set from the registered
+            // transforms and refuses all three. Adding a row here must never be read as widening it.
             [OutputFormat.UblOrder]      = new("application/xml", ".xml"),
             [OutputFormat.X12_850]       = new("application/edi-x12", ".x12"),
             [OutputFormat.EdifactOrders] = new("application/edifact", ".edi"),
@@ -73,6 +83,11 @@ public static class DeliveryMediaTypes
         {
             // Peppol BIS (Order and Billing) documents are UBL 2.1 XML.
             ["peppol"]  = OutputFormat.Ubl,
+            // Read-side only, like the EdifactOrders row it points at: this resolves a persisted
+            // "edifact" token on an existing artifact to the envelope those bytes travel as. No write
+            // path accepts it — OutputTransformRegistry.Catalog refuses it, because nothing can build
+            // it. Kept rather than deleted so an artifact row that already carries the token keeps its
+            // content type instead of silently degrading to application/octet-stream.
             ["edifact"] = OutputFormat.EdifactOrders,
         };
 
