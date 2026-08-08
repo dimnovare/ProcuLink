@@ -9,6 +9,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Tenancy;
 
 namespace ProcuLink.Api.Controllers;
 
@@ -20,10 +21,27 @@ namespace ProcuLink.Api.Controllers;
 ///
 /// Do NOT add <c>OrganisationId</c> org-scoping here — that is the whole point
 /// of this controller — but equally do NOT remove the <c>[AdminOnly]</c> gate.
+///
+/// <para><b>Why <see cref="CrossOrganisationReadAttribute"/> is on the class.</b> The organisation
+/// query filters are armed per request by <c>TenantResolutionMiddleware</c>. Without this opt-out
+/// every read here would be silently restricted to whichever organisation the admin happens to be
+/// signed into: MRR computed from one tenant, the organisation list showing one row, per-org order
+/// and supplier aggregates covering one org — all returned as 200 OK with confident-looking numbers.
+/// The attribute is on the CLASS, not on the two aggregate actions, because the whole controller is
+/// cross-tenant by design and a new action added here must inherit the opt-out rather than start
+/// life truncated. It also covers the services this controller delegates to
+/// (<c>IItemMappingService</c>, <c>IDataErasureService</c>, <c>IBillingService</c>), which share the
+/// request's DbContext and would otherwise return nothing for every organisation but the admin's
+/// own.</para>
 /// </summary>
 [ApiController]
 [Route("api/admin")]
 [AdminOnly]
+[CrossOrganisationRead(
+    "platform-owner surface: every action aggregates or acts across ALL organisations (MRR, org " +
+    "list, per-org order/supplier volume, item-mapping twins, trial extension, erasure). Scoping it " +
+    "to the signed-in admin's own organisation would not error — it would report one tenant's " +
+    "numbers as the platform's. Admission is gated by [AdminOnly].")]
 public sealed class AdminController : ControllerBase
 {
     /// <summary>

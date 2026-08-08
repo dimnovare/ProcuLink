@@ -25,10 +25,19 @@ namespace ProcuLink.Api.Tests.Middleware;
 /// </summary>
 public class TenantResolutionMiddlewareOClaimTests
 {
-    private static ProcuLinkDbContext NewDb() =>
-        new(new DbContextOptionsBuilder<ProcuLinkDbContext>()
+    private static DbContextOptions<ProcuLinkDbContext> NewOptions() =>
+        new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
-            .Options);
+            .Options;
+
+    /// <summary>
+    /// A context over the test's single in-memory store. Seeding, the request context handed to
+    /// InvokeAsync, and the post-invoke assertions each get their OWN instance: the middleware
+    /// arms the request context with ScopeToOrganisation at the end of InvokeAsync, and that
+    /// refuses a context which has already resolved its model by running a query.
+    /// </summary>
+    private static ProcuLinkDbContext NewDb(DbContextOptions<ProcuLinkDbContext> options) =>
+        new(options);
 
     private static TenantResolutionMiddleware NewMiddleware() =>
         new(next: _ => Task.CompletedTask,
@@ -66,10 +75,13 @@ public class TenantResolutionMiddlewareOClaimTests
     [Fact]
     public async Task InvokeAsync_OClaim_WithMatchingPersonalTenant_AdoptsAndRekeys()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var legacy = SeedOrg("user_U", "PersonalWorkspace");
-        db.Organisations.Add(legacy);
-        await db.SaveChangesAsync();
+        await using (var seed = NewDb(options))
+        {
+            seed.Organisations.Add(legacy);
+            await seed.SaveChangesAsync();
+        }
         var legacyId = legacy.Id;
 
         var analytics = new FakeAnalyticsService();
@@ -77,7 +89,12 @@ public class TenantResolutionMiddlewareOClaimTests
             OClaim("org_REAL", "admin", "acme"),
             new Claim("sub", "user_U"));
 
-        await NewMiddleware().InvokeAsync(ctx, db, analytics);
+        await using (var requestDb = NewDb(options))
+        {
+            await NewMiddleware().InvokeAsync(ctx, requestDb, analytics, options);
+        }
+
+        await using var db = NewDb(options);
 
         // No new row — the SAME row was re-keyed to the org_ id from o.id.
         Assert.Equal(1, await db.Organisations.CountAsync());
@@ -98,13 +115,18 @@ public class TenantResolutionMiddlewareOClaimTests
     [Fact]
     public async Task InvokeAsync_OClaim_NoPersonalTenant_ProvisionsFresh()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var analytics = new FakeAnalyticsService();
         var ctx = WithClaims(
             OClaim("org_REAL", "admin", "fresh-co"),
             new Claim("sub", "user_NEW"));
 
-        await NewMiddleware().InvokeAsync(ctx, db, analytics);
+        await using (var requestDb = NewDb(options))
+        {
+            await NewMiddleware().InvokeAsync(ctx, requestDb, analytics, options);
+        }
+
+        await using var db = NewDb(options);
 
         Assert.Equal(1, await db.Organisations.CountAsync());
         var created = await db.Organisations.AsNoTracking().SingleAsync();
@@ -123,14 +145,19 @@ public class TenantResolutionMiddlewareOClaimTests
     [Fact]
     public async Task InvokeAsync_V1OrgId_StillProvisions_FallbackDoesNotBreakV1()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var analytics = new FakeAnalyticsService();
         var ctx = WithClaims(
             new Claim("org_id", "org_LEGACY"),
             new Claim("org_slug", "legacy-co"),
             new Claim("sub", "user_V1"));
 
-        await NewMiddleware().InvokeAsync(ctx, db, analytics);
+        await using (var requestDb = NewDb(options))
+        {
+            await NewMiddleware().InvokeAsync(ctx, requestDb, analytics, options);
+        }
+
+        await using var db = NewDb(options);
 
         Assert.Equal(1, await db.Organisations.CountAsync());
         var created = await db.Organisations.AsNoTracking().SingleAsync();
@@ -146,14 +173,19 @@ public class TenantResolutionMiddlewareOClaimTests
     [Fact]
     public async Task InvokeAsync_BothV1AndOClaim_V1OrgIdWins()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var analytics = new FakeAnalyticsService();
         var ctx = WithClaims(
             new Claim("org_id", "org_FROM_V1"),
             OClaim("org_FROM_O", "admin", "other"),
             new Claim("sub", "user_M"));
 
-        await NewMiddleware().InvokeAsync(ctx, db, analytics);
+        await using (var requestDb = NewDb(options))
+        {
+            await NewMiddleware().InvokeAsync(ctx, requestDb, analytics, options);
+        }
+
+        await using var db = NewDb(options);
 
         Assert.Equal(1, await db.Organisations.CountAsync());
         var created = await db.Organisations.AsNoTracking().SingleAsync();
@@ -164,13 +196,18 @@ public class TenantResolutionMiddlewareOClaimTests
     [Fact]
     public async Task InvokeAsync_MalformedOClaim_NotJson_FailsClosed_NoCrash()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var analytics = new FakeAnalyticsService();
         var ctx = WithClaims(
             new Claim("o", "not-json"),
             new Claim("sub", "user_BAD"));
 
-        await NewMiddleware().InvokeAsync(ctx, db, analytics);
+        await using (var requestDb = NewDb(options))
+        {
+            await NewMiddleware().InvokeAsync(ctx, requestDb, analytics, options);
+        }
+
+        await using var db = NewDb(options);
 
         Assert.Equal(0, await db.Organisations.CountAsync());
         Assert.Empty(analytics.CapturedEvents);
@@ -181,13 +218,18 @@ public class TenantResolutionMiddlewareOClaimTests
     [Fact]
     public async Task InvokeAsync_EmptyOClaimObject_FailsClosed_NoCrash()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var analytics = new FakeAnalyticsService();
         var ctx = WithClaims(
             new Claim("o", "{}"),
             new Claim("sub", "user_EMPTY"));
 
-        await NewMiddleware().InvokeAsync(ctx, db, analytics);
+        await using (var requestDb = NewDb(options))
+        {
+            await NewMiddleware().InvokeAsync(ctx, requestDb, analytics, options);
+        }
+
+        await using var db = NewDb(options);
 
         Assert.Equal(0, await db.Organisations.CountAsync());
         Assert.Empty(analytics.CapturedEvents);
@@ -198,17 +240,25 @@ public class TenantResolutionMiddlewareOClaimTests
     [Fact]
     public async Task InvokeAsync_EmptyOClaim_WithLegacySubOrg_SoftResolves()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var legacy = SeedOrg("user_L", "LegacyTenant");
-        db.Organisations.Add(legacy);
-        await db.SaveChangesAsync();
+        await using (var seed = NewDb(options))
+        {
+            seed.Organisations.Add(legacy);
+            await seed.SaveChangesAsync();
+        }
 
         var analytics = new FakeAnalyticsService();
         var ctx = WithClaims(
             new Claim("o", "{}"),
             new Claim("sub", "user_L"));
 
-        await NewMiddleware().InvokeAsync(ctx, db, analytics);
+        await using (var requestDb = NewDb(options))
+        {
+            await NewMiddleware().InvokeAsync(ctx, requestDb, analytics, options);
+        }
+
+        await using var db = NewDb(options);
 
         Assert.Equal(1, await db.Organisations.CountAsync());
         Assert.Empty(analytics.CapturedEvents);
@@ -221,13 +271,18 @@ public class TenantResolutionMiddlewareOClaimTests
     [Fact]
     public async Task InvokeAsync_OClaim_NonOrgPrefixedId_FailsClosed()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var analytics = new FakeAnalyticsService();
         var ctx = WithClaims(
             OClaim("not-an-org-id", "admin", "x"),
             new Claim("sub", "user_Z"));
 
-        await NewMiddleware().InvokeAsync(ctx, db, analytics);
+        await using (var requestDb = NewDb(options))
+        {
+            await NewMiddleware().InvokeAsync(ctx, requestDb, analytics, options);
+        }
+
+        await using var db = NewDb(options);
 
         Assert.Equal(0, await db.Organisations.CountAsync());
         Assert.False(ctx.Items.ContainsKey(CurrentTenantService.Items.OrganisationId));

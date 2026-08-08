@@ -17,7 +17,9 @@ public class TenantResolutionMiddlewareEmitsOrgCreatedTests
         var dbOptions = new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
             .Options;
-        await using var db = new ProcuLinkDbContext(dbOptions);
+        // The request-scoped context the middleware arms. It must be fresh and never queried:
+        // ScopeToOrganisation refuses a context that has already resolved its model.
+        await using var requestDb = new ProcuLinkDbContext(dbOptions);
 
         var analytics = new FakeAnalyticsService();
         var middleware = new TenantResolutionMiddleware(
@@ -32,7 +34,7 @@ public class TenantResolutionMiddlewareEmitsOrgCreatedTests
             new Claim("sub", "user_TEST_abc"),
         }, authenticationType: "test"));
 
-        await middleware.InvokeAsync(ctx, db, analytics);
+        await middleware.InvokeAsync(ctx, requestDb, analytics, dbOptions);
 
         Assert.Single(analytics.CapturedEvents);
         var ev = analytics.CapturedEvents[0];
@@ -49,19 +51,25 @@ public class TenantResolutionMiddlewareEmitsOrgCreatedTests
         var dbOptions = new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
             .Options;
-        await using var db = new ProcuLinkDbContext(dbOptions);
-        db.Organisations.Add(new ProcuLink.Core.Entities.Organisation
+        // Seeding runs on its OWN context: a context that has queried can no longer be scoped,
+        // so the one handed to InvokeAsync below must be untouched.
+        await using (var seed = new ProcuLinkDbContext(dbOptions))
         {
-            Id = Guid.NewGuid(),
-            ClerkOrgId = "org_EXISTING",
-            Name = "Existing",
-            Slug = "existing-1234",
-            Plan = "pilot",
-            AccountStatus = "trialing",
-            CreatedAt = DateTime.UtcNow,
-            TrialStartedAt = DateTime.UtcNow,
-        });
-        await db.SaveChangesAsync();
+            seed.Organisations.Add(new ProcuLink.Core.Entities.Organisation
+            {
+                Id = Guid.NewGuid(),
+                ClerkOrgId = "org_EXISTING",
+                Name = "Existing",
+                Slug = "existing-1234",
+                Plan = "pilot",
+                AccountStatus = "trialing",
+                CreatedAt = DateTime.UtcNow,
+                TrialStartedAt = DateTime.UtcNow,
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        await using var requestDb = new ProcuLinkDbContext(dbOptions);
 
         var analytics = new FakeAnalyticsService();
         var middleware = new TenantResolutionMiddleware(
@@ -75,7 +83,7 @@ public class TenantResolutionMiddlewareEmitsOrgCreatedTests
             new Claim("sub", "user_EXISTING_abc"),
         }, authenticationType: "test"));
 
-        await middleware.InvokeAsync(ctx, db, analytics);
+        await middleware.InvokeAsync(ctx, requestDb, analytics, dbOptions);
 
         Assert.Empty(analytics.CapturedEvents);
     }

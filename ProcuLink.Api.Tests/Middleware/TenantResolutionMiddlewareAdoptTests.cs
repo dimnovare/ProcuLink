@@ -35,10 +35,19 @@ namespace ProcuLink.Api.Tests.Middleware;
 /// </summary>
 public class TenantResolutionMiddlewareAdoptTests
 {
-    private static ProcuLinkDbContext NewDb() =>
-        new(new DbContextOptionsBuilder<ProcuLinkDbContext>()
+    private static DbContextOptions<ProcuLinkDbContext> NewOptions() =>
+        new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
-            .Options);
+            .Options;
+
+    /// <summary>
+    /// A context over the test's single in-memory store. Seeding, the request context handed to
+    /// InvokeAsync, and the post-invoke assertions each get their OWN instance: the middleware
+    /// arms the request context with ScopeToOrganisation at the end of InvokeAsync, and that
+    /// refuses a context which has already resolved its model by running a query.
+    /// </summary>
+    private static ProcuLinkDbContext NewDb(DbContextOptions<ProcuLinkDbContext> options) =>
+        new(options);
 
     private static TenantResolutionMiddleware NewMiddleware() =>
         new(next: _ => Task.CompletedTask,
@@ -71,10 +80,13 @@ public class TenantResolutionMiddlewareAdoptTests
     [Fact]
     public async Task InvokeAsync_NewOrg_WithMatchingPersonalTenant_AdoptsAndRekeys()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var legacy = SeedOrg("user_U", "PersonalWorkspace");
-        db.Organisations.Add(legacy);
-        await db.SaveChangesAsync();
+        await using (var seed = NewDb(options))
+        {
+            seed.Organisations.Add(legacy);
+            await seed.SaveChangesAsync();
+        }
         var legacyId = legacy.Id;
 
         var analytics = new FakeAnalyticsService();
@@ -83,7 +95,12 @@ public class TenantResolutionMiddlewareAdoptTests
             new Claim("org_slug", "team-co"),
             new Claim("sub", "user_U"));
 
-        await NewMiddleware().InvokeAsync(ctx, db, analytics);
+        await using (var requestDb = NewDb(options))
+        {
+            await NewMiddleware().InvokeAsync(ctx, requestDb, analytics, options);
+        }
+
+        await using var db = NewDb(options);
 
         // No new row — the SAME row was re-keyed.
         Assert.Equal(1, await db.Organisations.CountAsync());
@@ -107,14 +124,19 @@ public class TenantResolutionMiddlewareAdoptTests
     [Fact]
     public async Task InvokeAsync_NewOrg_NoPersonalTenant_ProvisionsFresh()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var analytics = new FakeAnalyticsService();
         var ctx = WithClaims(
             new Claim("org_id", "org_FRESH"),
             new Claim("org_slug", "fresh-co"),
             new Claim("sub", "user_NEW"));
 
-        await NewMiddleware().InvokeAsync(ctx, db, analytics);
+        await using (var requestDb = NewDb(options))
+        {
+            await NewMiddleware().InvokeAsync(ctx, requestDb, analytics, options);
+        }
+
+        await using var db = NewDb(options);
 
         Assert.Equal(1, await db.Organisations.CountAsync());
         var created = await db.Organisations.AsNoTracking().SingleAsync();
@@ -130,17 +152,25 @@ public class TenantResolutionMiddlewareAdoptTests
     [Fact]
     public async Task InvokeAsync_ExistingOrgId_Resolves_NoAdopt_NoAnalytics()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var existing = SeedOrg("org_EXIST", "Existing");
-        db.Organisations.Add(existing);
-        await db.SaveChangesAsync();
+        await using (var seed = NewDb(options))
+        {
+            seed.Organisations.Add(existing);
+            await seed.SaveChangesAsync();
+        }
 
         var analytics = new FakeAnalyticsService();
         var ctx = WithClaims(
             new Claim("org_id", "org_EXIST"),
             new Claim("sub", "user_x"));
 
-        await NewMiddleware().InvokeAsync(ctx, db, analytics);
+        await using (var requestDb = NewDb(options))
+        {
+            await NewMiddleware().InvokeAsync(ctx, requestDb, analytics, options);
+        }
+
+        await using var db = NewDb(options);
 
         Assert.Equal(1, await db.Organisations.CountAsync());
         Assert.Empty(analytics.CapturedEvents);
@@ -152,15 +182,23 @@ public class TenantResolutionMiddlewareAdoptTests
     [Fact]
     public async Task InvokeAsync_SubOnly_ExistingLegacyOrg_SoftResolves()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var legacy = SeedOrg("user_L", "LegacyTenant");
-        db.Organisations.Add(legacy);
-        await db.SaveChangesAsync();
+        await using (var seed = NewDb(options))
+        {
+            seed.Organisations.Add(legacy);
+            await seed.SaveChangesAsync();
+        }
 
         var analytics = new FakeAnalyticsService();
         var ctx = WithClaims(new Claim("sub", "user_L"));
 
-        await NewMiddleware().InvokeAsync(ctx, db, analytics);
+        await using (var requestDb = NewDb(options))
+        {
+            await NewMiddleware().InvokeAsync(ctx, requestDb, analytics, options);
+        }
+
+        await using var db = NewDb(options);
 
         Assert.Equal(1, await db.Organisations.CountAsync());
         Assert.Empty(analytics.CapturedEvents);
@@ -172,11 +210,16 @@ public class TenantResolutionMiddlewareAdoptTests
     [Fact]
     public async Task InvokeAsync_SubOnly_NoOrg_FailsClosed()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var analytics = new FakeAnalyticsService();
         var ctx = WithClaims(new Claim("sub", "user_LONELY"));
 
-        await NewMiddleware().InvokeAsync(ctx, db, analytics);
+        await using (var requestDb = NewDb(options))
+        {
+            await NewMiddleware().InvokeAsync(ctx, requestDb, analytics, options);
+        }
+
+        await using var db = NewDb(options);
 
         Assert.Equal(0, await db.Organisations.CountAsync());
         Assert.Empty(analytics.CapturedEvents);
@@ -188,10 +231,13 @@ public class TenantResolutionMiddlewareAdoptTests
     [Fact]
     public async Task InvokeAsync_NewOrg_OtherUsersTenant_NotAdopted_ProvisionsFresh()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var other = SeedOrg("user_OTHER", "OthersWorkspace");
-        db.Organisations.Add(other);
-        await db.SaveChangesAsync();
+        await using (var seed = NewDb(options))
+        {
+            seed.Organisations.Add(other);
+            await seed.SaveChangesAsync();
+        }
         var otherId = other.Id;
 
         var analytics = new FakeAnalyticsService();
@@ -200,7 +246,12 @@ public class TenantResolutionMiddlewareAdoptTests
             new Claim("org_slug", "me-co"),
             new Claim("sub", "user_ME"));
 
-        await NewMiddleware().InvokeAsync(ctx, db, analytics);
+        await using (var requestDb = NewDb(options))
+        {
+            await NewMiddleware().InvokeAsync(ctx, requestDb, analytics, options);
+        }
+
+        await using var db = NewDb(options);
 
         // Another user's row is UNTOUCHED.
         var otherStill = await db.Organisations.AsNoTracking()

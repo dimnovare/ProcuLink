@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using ProcuLink.Api.Services;
+using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
 using ProcuLink.Infrastructure;
 
@@ -31,18 +32,37 @@ public sealed class ApiKeyAuthHandler : AuthenticationHandler<ApiKeyAuthOptions>
     /// </summary>
     private static readonly TimeSpan LastUsedThrottle = TimeSpan.FromMinutes(5);
 
-    private readonly ProcuLinkDbContext _db;
+    /// <summary>
+    /// Why the key lookup reads unfiltered. This is the query that DISCOVERS which organisation the
+    /// request belongs to (it writes the answer to <c>HttpContext.Items</c> below), so it runs
+    /// before any tenant is known and cannot be scoped to one.
+    /// </summary>
+    internal const string BootstrapReason =
+        "API-key authentication: resolves a key hash to its owning organisation. This is the query " +
+        "that discovers which organisation the request belongs to, so it necessarily runs before " +
+        "any tenant is known.";
+
+    /// <summary>
+    /// Options for a short-lived bootstrap context, NOT the request-scoped context.
+    ///
+    /// <para>This handler runs inside <c>UseAuthentication</c>, ahead of
+    /// <c>TenantResolutionMiddleware</c>. Querying the request-scoped context here would resolve its
+    /// model before any organisation is known, and a context that has already queried can no longer
+    /// be scoped — so the middleware's <c>ScopeToOrganisation</c> would throw and every API-key
+    /// request would 500. Using our own context leaves the request one pristine and armable.</para>
+    /// </summary>
+    private readonly DbContextOptions<ProcuLinkDbContext> _dbOptions;
     private readonly string _hashSecret;
 
     public ApiKeyAuthHandler(
         IOptionsMonitor<ApiKeyAuthOptions> options,
         ILoggerFactory logger,
         UrlEncoder encoder,
-        ProcuLinkDbContext db,
+        DbContextOptions<ProcuLinkDbContext> dbOptions,
         IConfiguration configuration)
         : base(options, logger, encoder)
     {
-        _db = db;
+        _dbOptions = dbOptions;
         _hashSecret = configuration["Security:ApiKeyHashSecret"]
                       ?? throw new InvalidOperationException(
                           "Security:ApiKeyHashSecret is not configured. " +
@@ -60,10 +80,18 @@ public sealed class ApiKeyAuthHandler : AuthenticationHandler<ApiKeyAuthOptions>
 
         var hash = ApiKeyHasher.ComputeHash(rawKey, _hashSecret);
 
-        var apiKey = await _db.TenantApiKeys
-            .Include(k => k.Organisation)
-            .Where(k => k.KeyHash == hash && k.IsActive)
-            .FirstOrDefaultAsync();
+        TenantApiKey? apiKey;
+        await using (var db = new ProcuLinkDbContext(_dbOptions).UseCrossOrganisationScope(BootstrapReason))
+        {
+            // Include materialises the Organisation up front, so reading its Slug below still works
+            // after this context is disposed. Lazy loading is not enabled anywhere in this model, so
+            // there is no deferred navigation left to fault in.
+            apiKey = await db.TenantApiKeys
+                .AsNoTracking()
+                .Include(k => k.Organisation)
+                .Where(k => k.KeyHash == hash && k.IsActive)
+                .FirstOrDefaultAsync();
+        }
 
         if (apiKey is null)
             return AuthenticateResult.Fail("API key not found or inactive.");

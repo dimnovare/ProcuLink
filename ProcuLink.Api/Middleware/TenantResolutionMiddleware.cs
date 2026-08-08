@@ -5,6 +5,7 @@ using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Tenancy;
 
 namespace ProcuLink.Api.Middleware;
 
@@ -26,9 +27,22 @@ namespace ProcuLink.Api.Middleware;
 /// tenant (downstream [Authorize] / tenant-scoped controllers fail closed).
 ///
 /// Unauthenticated requests (e.g. /health) pass through untouched.
+///
+/// <para><b>This middleware is where organisation query filters are armed</b> — the single site, for
+/// both auth schemes. See <see cref="ApplyOrganisationScope"/>.</para>
 /// </summary>
 public sealed class TenantResolutionMiddleware
 {
+    /// <summary>
+    /// Why tenant resolution itself reads unfiltered. This is the query that DISCOVERS which
+    /// organisation a request belongs to, so by definition it runs before any tenant is known and
+    /// cannot be scoped to one.
+    /// </summary>
+    internal const string BootstrapReason =
+        "tenant resolution: looks up (and, on first login, adopts or provisions) the Organisation " +
+        "row for a Clerk key. This is the query that discovers which organisation the request " +
+        "belongs to, so it necessarily runs before any tenant is known.";
+
     private readonly RequestDelegate _next;
     private readonly ILogger<TenantResolutionMiddleware> _logger;
 
@@ -83,12 +97,33 @@ public sealed class TenantResolutionMiddleware
         _utcNow = utcNow ?? (() => DateTime.UtcNow);
     }
 
-    public async Task InvokeAsync(HttpContext context, ProcuLinkDbContext db, IAnalyticsService analytics)
+    /// <param name="requestDb">
+    /// The REQUEST-scoped context — the one the controller and every service it calls will share.
+    /// This middleware never queries it, because a DbContext resolves its model on first use and a
+    /// context that has already queried can no longer be scoped (see
+    /// <see cref="ProcuLinkDbContext.ScopeToOrganisation"/>). Tenant resolution below therefore runs
+    /// on its own short-lived context, leaving this one pristine and armable.
+    /// </param>
+    /// <param name="dbOptions">
+    /// Used to construct the short-lived bootstrap context. Registered by <c>AddDbContext</c>
+    /// alongside the context itself, and already carries the configured provider and interceptors,
+    /// so the bootstrap context is identical to the request one in everything but lifetime.
+    /// </param>
+    public async Task InvokeAsync(
+        HttpContext context,
+        ProcuLinkDbContext requestDb,
+        IAnalyticsService analytics,
+        DbContextOptions<ProcuLinkDbContext> dbOptions)
     {
         var sub = context.User.FindFirst("sub")?.Value;
 
         if (context.User.Identity?.IsAuthenticated == true)
         {
+            // Constructed only for authenticated requests, so /health and other anonymous traffic
+            // allocate nothing. EF opens no connection until a query actually runs.
+            await using var db = new ProcuLinkDbContext(dbOptions)
+                .UseCrossOrganisationScope(BootstrapReason);
+
             var clerkOrgId = context.User.FindFirst("org_id")?.Value;
             var orgSlug    = context.User.FindFirst("org_slug")?.Value;
 
@@ -169,7 +204,49 @@ public sealed class TenantResolutionMiddleware
             }
         }
 
+        ApplyOrganisationScope(context, requestDb);
+
         await _next(context);
+    }
+
+    /// <summary>
+    /// Arms the organisation query filters on the request-scoped context, so a query written
+    /// WITHOUT an explicit <c>.Where(x =&gt; x.OrgId == orgId)</c> still cannot return another
+    /// organisation's rows.
+    ///
+    /// <para><b>One arming site, both auth schemes.</b> The organisation id is read from
+    /// <c>HttpContext.Items</c> rather than from this middleware's own resolution, because the JWT
+    /// path writes it above and <c>ApiKeyAuthHandler</c> writes the same key during authentication.
+    /// Reading the resolved value covers both without a second arming site to keep in sync — and an
+    /// auth scheme added later that publishes the tenant the same way is armed for free.</para>
+    ///
+    /// <para><b>Requests with no resolved tenant are left unscoped</b>, which is what they were
+    /// before: anonymous traffic, a throttled provision, and a sub with no legacy org all fall
+    /// through here. None of them reach tenant data — downstream <c>[Authorize]</c> and the
+    /// tenant-scoped controllers fail closed on a missing tenant — so arming would change nothing
+    /// except to turn a 401 into a confusing empty 200.</para>
+    /// </summary>
+    private static void ApplyOrganisationScope(HttpContext context, ProcuLinkDbContext requestDb)
+    {
+        // A deliberately cross-tenant endpoint must NOT be armed, or it silently truncates to the
+        // caller's own organisation and reports the result as the whole system's. Endpoint metadata
+        // is populated by routing, which WebApplication inserts at the head of the pipeline — ahead
+        // of this middleware. That ordering is load-bearing (a null endpoint here would arm the
+        // admin surface), so it is proved over the real pipeline by
+        // TheAdminSurface_StillSeesEveryOrganisation rather than assumed.
+        var crossOrg = context.GetEndpoint()?.Metadata.GetMetadata<CrossOrganisationReadAttribute>();
+        if (crossOrg is not null)
+        {
+            requestDb.UseCrossOrganisationScope(crossOrg.Reason);
+            return;
+        }
+
+        if (context.Items.TryGetValue(CurrentTenantService.Items.OrganisationId, out var resolved)
+            && resolved is Guid orgId
+            && orgId != Guid.Empty)
+        {
+            requestDb.ScopeToOrganisation(orgId);
+        }
     }
 
     /// <summary>

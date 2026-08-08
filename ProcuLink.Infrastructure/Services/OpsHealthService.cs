@@ -140,6 +140,16 @@ public sealed class OpsHealthService : IOpsHealthService
 
     public async Task<WorkerHealthSnapshot> GetWorkerHealthSnapshotAsync(CancellationToken ct)
     {
+        // Declares the cross-tenant intent AND enforces it. On an unscoped context (the Worker's
+        // alerting job, which is the only caller) this records the reason and changes nothing. If a
+        // future API path ever calls this on a request-scoped context, it throws here instead of
+        // quietly counting one tenant's dead letters and reporting them as the platform's — the
+        // difference between a page nobody gets and a page everybody gets.
+        _db.UseCrossOrganisationScope(
+            "worker health probe: counts dead-lettered and failed deliveries across ALL " +
+            "organisations to answer 'is the product delivering at all'. It is a system-fault " +
+            "signal that drives operational alerting, not a tenant-facing number.");
+
         // Reuse the same Hangfire heartbeat probe the org-scoped summary uses.
         var (activeWorkers, _, secondsSince, workerHealthy) = GetWorkerHealth();
 
