@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services.Catalog;
 using ProcuLink.Infrastructure.Services.Security;
+using ProcuLink.Api.Auth;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Services.StarterTemplates;
 using ProcuLink.Core.Canonical;
@@ -752,9 +753,21 @@ public class SuppliersController : ControllerBase
 
     // ── PUT /api/suppliers/{id}/delivery-config ──────────────────────────────
 
+    /// <summary>
+    /// Administrators only. This writes the endpoint, protocol and credentials every future order
+    /// for this supplier is sent to — and it republishes the live connection revision, so the change
+    /// takes effect for pinned orders too. Repointing it is how an organisation's purchase orders
+    /// would end up somewhere nobody chose, and until now any member could do it.
+    ///
+    /// <para>Note there are now TWO 403s on this action and they are unrelated: the plan gate below
+    /// refuses a channel or output format the org's plan does not include, while
+    /// <see cref="RequireOrgAdminAttribute"/> refuses a caller who is not an administrator.</para>
+    /// </summary>
     [HttpPut("{id:guid}/delivery-config")]
+    [RequireOrgAdmin]
     [ProducesResponseType(typeof(DeliveryConfigResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> UpsertDeliveryConfig(
         Guid id,
@@ -826,8 +839,15 @@ public class SuppliersController : ControllerBase
 
     // ── DELETE /api/suppliers/{id}/delivery-config ───────────────────────────
 
+    /// <summary>
+    /// Administrators only. Removing the route is the other half of changing it: the credentials
+    /// are gone and cannot be recovered from the response (they were never returned), and every
+    /// subsequent send for this supplier fails for want of a destination.
+    /// </summary>
     [HttpDelete("{id:guid}/delivery-config")]
+    [RequireOrgAdmin]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> DeleteDeliveryConfig(Guid id, CancellationToken ct)
     {

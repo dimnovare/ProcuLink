@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Api.Auth;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
@@ -93,10 +94,16 @@ public sealed class BillingController : ControllerBase
 
     // ── POST /api/billing/checkout ────────────────────────────────────────
 
+    /// <summary>
+    /// Administrators only: this commits the organisation to a recurring charge on a card the
+    /// organisation already has on file. Money is the reason, not risk of data loss.
+    /// </summary>
     [HttpPost("checkout")]
     [Authorize]
+    [RequireOrgAdmin]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> CreateCheckout(
         [FromBody] CheckoutRequest request,
         CancellationToken ct)
@@ -125,10 +132,20 @@ public sealed class BillingController : ControllerBase
 
     // ── POST /api/billing/portal ──────────────────────────────────────────
 
+    /// <summary>
+    /// Administrators only. This is where a subscription is CANCELLED — ProcuLink has no cancel
+    /// endpoint of its own; it hands the caller a Stripe Billing Portal session and the portal does
+    /// it. Cancelling stops every ingest path at once (upload, inbound email, IMAP, SFTP, S3 and
+    /// the REST ingress API) and nothing is queued for later, so orders simply stop arriving. It is
+    /// the single most destructive action available in the product, and it was reachable by any
+    /// member.
+    /// </summary>
     [HttpPost("portal")]
     [Authorize]
+    [RequireOrgAdmin]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> CreatePortal(CancellationToken ct)
     {
         var returnUrl = $"{GetPrimaryFrontendUrl()}/settings";

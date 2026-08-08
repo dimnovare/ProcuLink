@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Api.Auth;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -126,6 +127,7 @@ public sealed class TenantResolutionMiddleware
                 {
                     // (1a) Already provisioned/adopted → resolve.
                     context.Items[CurrentTenantService.Items.OrganisationId] = id;
+                    StampRole(context, ClerkOrgRole.FromClaims(context.User));
                 }
                 else
                 {
@@ -145,7 +147,23 @@ public sealed class TenantResolutionMiddleware
                 // so this cannot mint per-user "Personal workspace" tenants.
                 var legacyId = await ResolveOrgIdByClerkKeyAsync(db, sub, context.RequestAborted);
                 if (legacyId is { } id)
+                {
                     context.Items[CurrentTenantService.Items.OrganisationId] = id;
+
+                    // BOOTSTRAP. This organisation's clerk_org_id IS this authenticated user's own
+                    // Clerk user id — that is the only way the lookup above could have matched. It
+                    // is their personal tenant, they are its sole member, and there is nobody else
+                    // who could ever be its administrator. So they are one.
+                    //
+                    // This is NOT "no role claim → admit". A token with no role that resolves a REAL
+                    // Clerk org (branch 1a/1b) is refused; the admission here rests on a matched
+                    // clerk_org_id == sub, which is a determined fact about the resolved tenant, not
+                    // an absence of information. Without it, adding this gate would lock every
+                    // pre-existing customer out of their own billing, delivery config and API keys
+                    // on the day it shipped: the production base is entirely sub-keyed orgs whose
+                    // tokens carry no organisation, and therefore no role, at all.
+                    StampRole(context, OrgRole.Admin);
+                }
                 // No legacy org for this sub → leave UNRESOLVED (fail closed). The
                 // frontend org gate forces real org creation before tenant-scoped calls.
             }
@@ -212,7 +230,10 @@ public sealed class TenantResolutionMiddleware
                     db.Entry(personal).State = EntityState.Detached;
                     var winnerId = await ResolveOrgIdByClerkKeyAsync(db, clerkOrgId, ct);
                     if (winnerId is { } wid)
+                    {
                         context.Items[CurrentTenantService.Items.OrganisationId] = wid;
+                        StampRole(context, ClerkOrgRole.FromClaims(context.User));
+                    }
                     return;
                 }
 
@@ -231,6 +252,13 @@ public sealed class TenantResolutionMiddleware
                     ct: ct);
 
                 context.Items[CurrentTenantService.Items.OrganisationId] = personal.Id;
+
+                // The adopting user re-keyed their OWN personal tenant into a real Clerk org, so
+                // from here on the org's roles are Clerk's to state. Read the claim rather than
+                // carrying the personal tenant's implicit ownership forward: they created the org
+                // and Clerk makes a creator org:admin, so the claim says the same thing — and if it
+                // ever does not, the claim is the answer that stays true after they add members.
+                StampRole(context, ClerkOrgRole.FromClaims(context.User));
                 return;
             }
         }
@@ -276,7 +304,10 @@ public sealed class TenantResolutionMiddleware
             db.Entry(newOrg).State = EntityState.Detached;
             var winnerId = await ResolveOrgIdByClerkKeyAsync(db, clerkOrgId, ct);
             if (winnerId is { } wid)
+            {
                 context.Items[CurrentTenantService.Items.OrganisationId] = wid;
+                StampRole(context, ClerkOrgRole.FromClaims(context.User));
+            }
             return;
         }
 
@@ -296,7 +327,18 @@ public sealed class TenantResolutionMiddleware
             ct: ct);
 
         context.Items[CurrentTenantService.Items.OrganisationId] = newOrg.Id;
+        StampRole(context, ClerkOrgRole.FromClaims(context.User));
     }
+
+    /// <summary>
+    /// Records the caller's role for this request, for <see cref="RequireOrgAdminAttribute"/> to read.
+    ///
+    /// <para>Called ONLY where a tenant genuinely resolved. A request that leaves here without a
+    /// stamp carries no role at all, which <see cref="OrgRole.Unknown"/> represents and the gate
+    /// refuses — so forgetting to stamp closes a door rather than opening one.</para>
+    /// </summary>
+    private static void StampRole(HttpContext context, OrgRole role) =>
+        context.Items[ClerkOrgRole.ItemsKey] = role;
 
     /// <summary>
     /// True when a <see cref="DbUpdateException"/> was caused by a Postgres unique-index

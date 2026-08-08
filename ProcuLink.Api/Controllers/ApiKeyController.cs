@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ProcuLink.Api.Auth;
 using ProcuLink.Core.Services;
 
 namespace ProcuLink.Api.Controllers;
@@ -36,7 +37,16 @@ public sealed class ApiKeyController : ControllerBase
 
     public sealed record CreateKeyRequest(string Label, DateTime? ExpiresAt);
 
+    /// <summary>
+    /// Mints a bearer credential with org-wide machine access, shown once and never retrievable.
+    /// Administrators only: the key is not attributed to whoever created it, so it is a permanent,
+    /// unattributable grant of access to the organisation's data — and today any member could mint
+    /// one. Revoking (below) is deliberately left open to every member: spotting a leaked key and
+    /// being unable to kill it would be the worse failure.
+    /// </summary>
     [HttpPost]
+    [RequireOrgAdmin]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> Create([FromBody] CreateKeyRequest req, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(req.Label))
