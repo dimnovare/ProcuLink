@@ -98,6 +98,11 @@ public sealed class ApiKeyAuthHandler : AuthenticationHandler<ApiKeyAuthOptions>
             // limit per API key instead of per source IP. Prefixed so it can never collide
             // with a Clerk user id.
             new Claim("sub",         $"apikey:{apiKey.Id}"),
+            // Deliberately NO role claim. An API key is machine access minted by an administrator
+            // for one integration; it is not that administrator. Without a role it resolves to
+            // OrgRole.Unknown, so RequireOrgAdminAttribute refuses it — a leaked key cannot mint
+            // another key, cancel the subscription, repoint a supplier's deliveries, or override
+            // the acceptance gate. The ingest surface it exists for (/api/ingress/*) is ungated.
         };
         var identity  = new ClaimsIdentity(claims, Scheme.Name);
         var principal = new ClaimsPrincipal(identity);

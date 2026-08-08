@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Api.Auth;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
@@ -47,7 +48,18 @@ public sealed class IntegrationController : ControllerBase
     public sealed record CreateSubRequest(
         string Platform, string EventType, string TargetUrl, string? Secret);
 
+    /// <summary>
+    /// Administrators only. This stands up an outbound subscription that ships the payload of every
+    /// matching order to a URL of the caller's choosing — the most direct way in the product to
+    /// silently send an organisation's documents somewhere new, and it needed no approval at all.
+    ///
+    /// <para>Delete and Toggle below stay open: both only stop an existing subscription, are fully
+    /// recoverable by creating it again, and cannot point anything anywhere. The redirection
+    /// primitive is Create, so gating Create is what actually closes the hole.</para>
+    /// </summary>
     [HttpPost]
+    [RequireOrgAdmin]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> Create([FromBody] CreateSubRequest req, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(req.TargetUrl))

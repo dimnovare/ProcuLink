@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Api.Auth;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
@@ -68,7 +69,18 @@ public sealed class SettingsController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>
+    /// Administrators only — the inbound mirror of redirecting deliveries. This stores an IMAP
+    /// host, username and password and names the supplier that arriving documents are attributed
+    /// to, so a member could repoint the organisation's ingestion at a mailbox they control and
+    /// feed it fabricated purchase orders. GET stays open (it never returns the password).
+    ///
+    /// <para>The existing 403 on this action is the PLAN gate and is unrelated: that one refuses an
+    /// org whose plan does not include email ingestion, this one refuses a caller who is not an
+    /// administrator. They carry different error codes and both can fire.</para>
+    /// </summary>
     [HttpPut("email")]
+    [RequireOrgAdmin]
     [ProducesResponseType(typeof(EmailSettingsResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -131,7 +143,12 @@ public sealed class SettingsController : ControllerBase
     public async Task<IActionResult> GetSftp(CancellationToken ct)
         => Ok(await _pullIngress.GetSftpAsync(_tenant.OrganisationId, ct));
 
+    /// <summary>
+    /// Administrators only, for the same reason as the IMAP settings above: host, username and
+    /// password for an external server the poller then pulls purchase orders out of.
+    /// </summary>
     [HttpPut("sftp")]
+    [RequireOrgAdmin]
     [ProducesResponseType(typeof(SftpIngressResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -181,7 +198,12 @@ public sealed class SettingsController : ControllerBase
     public async Task<IActionResult> GetS3(CancellationToken ct)
         => Ok(await _pullIngress.GetS3Async(_tenant.OrganisationId, ct));
 
+    /// <summary>
+    /// Administrators only, for the same reason as the IMAP and SFTP settings above: bucket,
+    /// endpoint and access keys for an external store the poller then pulls purchase orders out of.
+    /// </summary>
     [HttpPut("s3")]
+    [RequireOrgAdmin]
     [ProducesResponseType(typeof(S3IngressResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]

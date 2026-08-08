@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ProcuLink.Api.Auth;
 using ProcuLink.Core.Services;
 
 namespace ProcuLink.Api.Controllers;
@@ -70,10 +71,17 @@ public sealed class OrderAcceptanceGateController : ControllerBase
     /// Authorises sending this order despite the supplier's blocking rules. The reason is required
     /// and the caller's identity is recorded; the override covers exactly the failures present when
     /// it is granted, so a rule that starts failing afterwards blocks again.
+    ///
+    /// <para>Administrators only. This is the one action that overrules the supplier's own stated
+    /// terms, and what follows it — a document reaching the supplier — cannot be recalled. The GET
+    /// above stays open to everyone: seeing why an order is blocked is how an operator does their
+    /// job, and it mutates nothing.</para>
     /// </summary>
     [HttpPost("{id:guid}/acceptance-gate/override")]
+    [RequireOrgAdmin]
     [ProducesResponseType(typeof(AcceptanceGateDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Override(

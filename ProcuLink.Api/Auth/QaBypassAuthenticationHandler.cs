@@ -28,6 +28,12 @@ public sealed class QaBypassAuthenticationHandler : AuthenticationHandler<Authen
             new Claim("sub", "user_qa_local"),
             new Claim("org_id", "org_qa_local"),
             new Claim("org_slug", "QA Local"),
+            // The local QA principal is the sole member of its own throwaway org, so it is that
+            // org's administrator and the admin-gated screens are reachable during QA. Stated
+            // explicitly rather than inherited from a missing claim — a token with no role is
+            // refused by RequireOrgAdminAttribute, and that is the behaviour worth keeping.
+            // This handler is registered only when IsDevelopment() && PROCULINK_QA_BYPASS_AUTH.
+            new Claim("org_role", "org:admin"),
         };
 
         var identity = new ClaimsIdentity(claims, SchemeName);

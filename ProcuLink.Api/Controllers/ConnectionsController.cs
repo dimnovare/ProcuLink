@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ProcuLink.Api.Auth;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Constants;
@@ -269,7 +270,15 @@ public sealed class ConnectionsController : ControllerBase
         };
     }
 
+    /// <summary>
+    /// Administrators only. Publishing moves the connection's ACTIVE pointer: from this moment the
+    /// revision's delivery bundle is what pinned orders are sent through. Authoring a draft
+    /// (CreateDraft / UpdateDraft) and marking it tested stay open to every member, because a draft
+    /// delivers nothing until it is published — the approval belongs at the step that takes effect,
+    /// not at the step that proposes.
+    /// </summary>
     [HttpPost("{connectionId:guid}/revisions/{revisionId:guid}/publish")]
+    [RequireOrgAdmin]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
@@ -293,8 +302,13 @@ public sealed class ConnectionsController : ControllerBase
     /// bundle into a NEW published revision (next version number, CreatedBy <c>rollback:{user}</c>),
     /// archives the currently published revision, and moves the connection's active pointer.
     /// The target stays archived/immutable; orders already pinned to it are unaffected.
+    ///
+    /// <para>Administrators only, for the same reason as Publish and then some: rollback publishes
+    /// a bundle nobody re-approved and moves the active pointer to it, so it is a redirection of
+    /// future deliveries expressed as an undo.</para>
     /// </summary>
     [HttpPost("{connectionId:guid}/revisions/{revisionId:guid}/rollback")]
+    [RequireOrgAdmin]
     [ProducesResponseType(typeof(ConnectionRevisionDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
