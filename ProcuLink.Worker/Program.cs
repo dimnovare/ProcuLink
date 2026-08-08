@@ -301,12 +301,10 @@ builder.Services.AddSingleton<OrderParserFactory>();
 // OrderIngestionService.ParseStoredFileAsync) needs this to capture the FULL source-token set
 // for structured formats into source_captures. Singleton — stateless, mirrors the Api registration.
 builder.Services.AddSingleton<ProcuLink.Transform.Tokenizing.ISourceTokenizer, ProcuLink.Transform.Tokenizing.SourceTokenizer>();
-builder.Services.AddSingleton<ITransformService, XmlTransformService>();
-builder.Services.AddSingleton<ITransformService, CsvTransformService>();
-builder.Services.AddSingleton<ITransformService, CxmlTransformService>();
-builder.Services.AddSingleton<ITransformService, JsonTransformService>();
-builder.Services.AddSingleton<ITransformService, UblOrderTransformService>(); // Group M Phase 1 — UBL 2.1 Peppol BIS 3.0
-builder.Services.AddSingleton<ITransformService, X12TransformService>(); // Group M — ANSI X12 850
+// Registered FROM OutputTransformRegistry.All — the same list that derives the buildable-format
+// allow-list every output-format write path checks against. See the Api registration for why the
+// two must not be typed out separately.
+builder.Services.AddOutputTransforms();
 
 // ── Wave 2: pull-ingress (SFTP / S3-R2) + OCR fallback ────────────────────
 builder.Services.AddSingleton<ISftpClientFactory, RenciSftpClientFactory>();

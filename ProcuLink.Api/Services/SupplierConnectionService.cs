@@ -10,6 +10,7 @@ using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Transform.Conformance;
+using ProcuLink.Transform.Output;
 
 namespace ProcuLink.Api.Services;
 
@@ -667,8 +668,9 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
         {
             conformanceLeg = new ConformanceLeg(
                 true, null, null, 0, 0,
-                $"Standards check skipped — '{rev.OutputFormat ?? "(none)"}' is a flexible supplier format, not a " +
-                "published EDI standard (only cXML, UBL, X12, and EDIFACT are standards-checked). Your output still delivers normally.");
+                $"Standards check skipped — '{rev.OutputFormat ?? "(none)"}' is a flexible supplier format with no " +
+                $"published standard to check it against (standards-checked formats: {StandardsCheckedFormatsForMessage}). " +
+                "Your output still delivers normally.");
         }
         else
         {
@@ -705,6 +707,39 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
 
     private static OutputFormat? ParseFormat(string? format) =>
         Enum.TryParse<OutputFormat>(format, ignoreCase: true, out var f) ? f : null;
+
+    /// <summary>
+    /// The formats a revision can actually be PUBLISHED with that also have a named standards profile,
+    /// as an operator-facing list.
+    ///
+    /// <para>This sentence used to be typed out as "only cXML, UBL, X12, and EDIFACT are
+    /// standards-checked", which told a customer ProcuLink emits EDIFACT. It does not: EDIFACT is
+    /// inbound-only (<c>EdifactOrderParser</c> reads it, no <c>ITransformService</c> writes it), and
+    /// <see cref="OutputFormat.EdifactOrders"/> exists solely to name a conformance profile. Frontend
+    /// PR #125 removed the same claim from every user-facing surface it appeared on; this copy was
+    /// still being served from the API.</para>
+    ///
+    /// <para>Derived rather than typed, from the two facts that decide it: what
+    /// <see cref="OutputTransformRegistry.Catalog"/> can build, and what <c>_conformance</c> has a
+    /// profile for. A transform or a profile added on either side changes this sentence with no edit
+    /// here — which is what stops it going stale a second time.</para>
+    /// </summary>
+    private string StandardsCheckedFormatsForMessage =>
+        _standardsCheckedFormats ??= BuildStandardsCheckedFormats();
+
+    private string? _standardsCheckedFormats;
+
+    private string BuildStandardsCheckedFormats()
+    {
+        var checkable = OutputTransformRegistry.Catalog.Buildable
+            .Where(_conformance.SupportsFormat)
+            .Select(OutputFormatCatalog.Token)
+            .ToList();
+
+        // Honest empty case rather than a dangling "formats: )". Unreachable with the real
+        // ConformanceService; reachable with a stub that supports nothing.
+        return checkable.Count == 0 ? "none" : string.Join(", ", checkable);
+    }
 
     /// <summary>
     /// Refuses a caller-supplied revision delivery endpoint that would send the purchase order — and
@@ -787,6 +822,38 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
             throw new ClientSuppliedCredentialsRefException();
     }
 
+    /// <summary>
+    /// Refuses a caller-supplied output format no registered transform can build, and normalises an
+    /// accepted one to its persisted lowercase token.
+    ///
+    /// <para><b>Why this has to be here.</b> With <c>Connections:RevisionAuthority</c> on — which it
+    /// is in production on both Railway services — a PUBLISHED revision is the authority that decides
+    /// what a pinned order is transformed and delivered as. <c>OutputFormat</c> carries three values
+    /// no transform in this solution can build (<c>UblOrder</c>, <c>X12_850</c>,
+    /// <c>EdifactOrders</c> — they name conformance PROFILES, and EDIFACT is inbound-only), and
+    /// <c>Enum.TryParse(ignoreCase: true)</c> re-hydrates every one of them. This line used to be a
+    /// bare <c>rev.OutputFormat = input.OutputFormat</c>, so a revision could be written naming a
+    /// format nothing could produce; nothing noticed until an order reached
+    /// <c>OrderTransformService</c>'s "No transform service registered for format '…'" and died there
+    /// terminally. Published revision content is frozen by
+    /// <c>proculink_block_published_revision_content_update</c>, so by then it could not even be
+    /// edited back.</para>
+    ///
+    /// <para>Deliberately the SAME primitive the live delivery-config save path runs
+    /// (<c>DeliveryConfigService.NormalizeOutputFormat</c>): both reach
+    /// <see cref="OutputTransformRegistry.Catalog"/>, whose allow-list is DERIVED from the registered
+    /// <c>ITransformService</c> set. Same reasoning as <see cref="ValidateTransportSecurity"/> — a
+    /// second, hand-rolled list here would be a second rule free to drift from the first, which is
+    /// exactly how this gap existed.</para>
+    ///
+    /// <para><b>Only caller-supplied input</b>, for the same reason the transport check is: the
+    /// clone-from-active, rollback, republish-from-live and V1-backfill paths copy a bundle that is
+    /// ALREADY stored and do not pass through <see cref="ApplyScalars"/>. Refusing those would turn a
+    /// write-time guard into an outage for whoever already has such a revision.</para>
+    /// </summary>
+    private static string? ValidateOutputFormat(string? outputFormat) =>
+        OutputTransformRegistry.Catalog.Normalize(outputFormat);
+
     // ── helpers ──────────────────────────────────────────────────────────────
     // Scalar-only assignment (used by both create and update); item mappings are handled
     // separately so the UPDATE path can mutate the TRACKED collection rather than reassign it
@@ -797,16 +864,20 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
     private static void ApplyScalars(
         SupplierConnectionRevision rev, ConnectionRevisionDraftInput input, string? storedConfigJson = null)
     {
-        // Before ANY assignment: this is the only place a caller-supplied delivery endpoint or
-        // credential blob enters a revision, and a half-applied bundle behind a refusal would be
-        // worse than the refusal.
+        // Before ANY assignment: this is the only place a caller-supplied delivery endpoint,
+        // credential blob or output format enters a revision, and a half-applied bundle behind a
+        // refusal would be worse than the refusal.
         ValidateTransportSecurity(input.DeliveryProtocol, input.DeliveryConfigJson);
         ValidateCredentialHeaders(input.DeliveryConfigJson, storedConfigJson);
         ValidateNoClientSuppliedCredentials(input.CredentialsRef);
+        var outputFormat = ValidateOutputFormat(input.OutputFormat);
 
         rev.InputMappingJson    = input.InputMappingJson;
         rev.OutputMappingJson   = input.OutputMappingJson;
-        rev.OutputFormat        = input.OutputFormat;
+        // Normalised to the persisted lowercase token, the same value the live delivery-config row
+        // stores — so the two representations a drift check compares are the same spelling, not two
+        // casings of it.
+        rev.OutputFormat        = outputFormat;
         rev.DeliveryProtocol    = input.DeliveryProtocol;
         rev.DeliveryConfigJson  = input.DeliveryConfigJson;
         rev.DeliveryAutoDeliver = input.DeliveryAutoDeliver;
