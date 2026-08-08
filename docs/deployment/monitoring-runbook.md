@@ -24,14 +24,16 @@ default no Slack message. **The alert is exactly as good as this repo's GitHub A
 notification settings**, which are account-level and are not stored in the repo, so this
 document cannot tell you whether they are currently on. Verify them (§4) — do not assume.
 
-There is a **second, independent** alert path — a recurring Hangfire job that now evaluates
-**five** conditions and reports to Sentry **and to an email address you choose** (§3). It has
-its own blind spot, described there. The two paths are complementary, not redundant, and
-neither is a pager.
+There is a **second, independent** alert path — a recurring Hangfire job that evaluates **five
+health conditions plus one meta-condition** and reports to Sentry **and to an email address you
+choose** (§3). It has its own blind spot, described there. The two paths are complementary, not
+redundant, and neither is a pager.
 
-**One thing to set.** The email destination is off until `Alerting__Email__To` is set on the
-Worker service. Until then §3's conditions fire into Sentry only — and into nothing at all if
-`Sentry__Dsn` is also unset. See §3.1.
+**One thing to set — and the Worker now insists on it.** In Production the Worker **refuses to
+start** unless it has a working alert destination: either `Sentry__Dsn`, or `Alerting__Email__To`
+together with `Email__Postmark__ServerToken`. Booting cleanly with a dead alarm is the one
+alerting failure that cannot be reported at runtime, because there is nowhere to report it to;
+a crash loop in front of whoever is deploying is the only loud option left. See §3.1.
 
 ---
 
@@ -131,9 +133,9 @@ production until someone redeploys it.
 ## 3. The second alert path: `WorkerHealthAlertJob` → Sentry + email
 
 Independent of GitHub Actions, the Worker runs `worker-health-alert` **every 5 minutes**
-(`ProcuLink.Worker/Worker.cs`). It calls `WorkerHealthAlertService`, which evaluates five
-conditions. Each has its own trip rule and its own independent 30-minute cooldown
-(`WorkerHealthAlertOptions.MinAlertIntervalMinutes`), so a long-running incident on one
+(`ProcuLink.Worker/Worker.cs`). It calls `WorkerHealthAlertService`, which evaluates five health
+conditions and one meta-condition. Each has its own trip rule and its own independent 30-minute
+cooldown (`WorkerHealthAlertOptions.MinAlertIntervalMinutes`), so a long-running incident on one
 condition can never swallow the first notification of another.
 
 | Alert key | Fires when | Tunable |
@@ -143,9 +145,31 @@ condition can never swallow the first notification of another.
 | `delivery_failure_rate` | ≥ **10** concluded delivery attempts in the last **60 min** and ≥ **50 %** of them failed | `DeliveryFailureMinAttempts`, `DeliveryFailureWindowMinutes`, `DeliveryFailurePercent` |
 | `pull_channel_stalled` | an inbound pull channel with ≥ 1 org enabled has no observed success for ≥ **60 min** | `PullChannelStaleMinutes` |
 | `ai_token_cap_latched` | ≥ 1 org **in good standing** is at/over its monthly OpenAI token budget | — |
+| `alert_sweep_degraded` | the sweep could not read one of its own inputs, so the conditions that input feeds were **not evaluated** | — |
 
 All tunables live under the `WorkerHealthAlert` configuration section. None of them appears in
 any `appsettings.json` — the defaults above are what runs.
+
+### `alert_sweep_degraded` — the alarm reporting on itself
+
+The two inputs (`OpsHealthService.GetWorkerHealthSnapshotAsync` and `IOperationalAlertProbe`) are
+read independently and defensively. If one throws, the conditions it feeds are treated as
+**unknown and skipped**, the other input's conditions are still evaluated, and the fact that the
+sweep was partially blind is raised as `alert_sweep_degraded` through the same sink and the same
+cooldown as any other alert. The all-clear log line is suppressed for that run.
+
+This exists because the previous behaviour was the opposite on both counts. A failing probe
+degraded to an all-clear value — zero attempts, no channels, no latched orgs — which evaluates as
+*not bad* on all three conditions it feeds, and the same run logged `healthy`. A failing snapshot
+read was not guarded at all and, with `[AutomaticRetry(Attempts = 0)]` on the job, took every
+condition down for that cycle in silence. A permanently broken query was therefore indistinguishable
+from a permanently healthy system.
+
+**Triage:** this alert says nothing about whether the system is unhealthy — it says the alarm
+cannot see. Treat it as more urgent than a health alert, not less. The message names each blind
+input; the accompanying `LogError` carries the exception. Almost always database connectivity.
+Job cancellation at host shutdown is deliberately **not** treated as a failure, so a deploy does
+not page.
 
 ### Where each condition's evidence comes from
 
@@ -191,23 +215,40 @@ unconfigured, and neither can throw into the Worker.
 
 | Sink | Configured by | Unset behaviour |
 |---|---|---|
-| `SentryWorkerAlertSink` | `Sentry__Dsn` on the Worker service | SDK initialises disabled → silent no-op |
-| `EmailWorkerAlertSink` | `Alerting__Email__To` (+ the Postmark token the Worker already uses) | logs at Debug, sends nothing |
+| `SentryWorkerAlertSink` | `Sentry__Dsn` on the Worker service | SDK initialises disabled → no-op, **reports not-delivered** |
+| `EmailWorkerAlertSink` | `Alerting__Email__To` **and** `Email__Postmark__ServerToken` | logs, sends nothing, **reports not-delivered** |
+
+Each sink returns whether it actually handed the message to a working transport, and the composite
+returns whether *any* did. When an alert reaches none of them the sweep logs
+`the alert reached no configured transport — NOBODY has been notified` and does **not** count the
+alert as raised. "Did not throw" is not "the operator was told".
 
 **Email is the destination this repo now expects you to use**, because the Worker already
-registers `IEmailApiClient`/Postmark — no new transport, package or credential is introduced,
-only the recipient address. Optional: `Alerting__Email__SubjectPrefix` (default
-`[ProcuLink alert]`); subjects are `<prefix> <alert_key>`, so one mail filter catches all five.
+registers `IEmailApiClient`/Postmark — no new transport or package is introduced, only the
+recipient address. Optional: `Alerting__Email__SubjectPrefix` (default `[ProcuLink alert]`);
+subjects are `<prefix> <alert_key>`, so one mail filter catches all of them.
 
 To turn it on, set on the Worker Railway service (`aware-amazement`):
 
 ```
 Alerting__Email__To=you@example.com
+Email__Postmark__ServerToken=<server token>
 ```
 
-If a recipient is set but the Postmark token is missing, the sink logs a **Warning** naming the
-problem rather than failing silently — that asymmetry is deliberate: silence is fine when you
-never asked for alerts, and a bug when you did.
+### Startup refuses two configurations, both in Production only
+
+`StartupConfigurationValidator` throws before the Worker serves anything when:
+
+1. **Neither** `Alerting__Email__To` nor `Sentry__Dsn` is set — every condition would be evaluated
+   and delivered into a no-op.
+2. `Alerting__Email__To` is set but `Email__Postmark__ServerToken` is not — a declared route that
+   cannot work. This is refused **even when Sentry is healthy**, because nothing at runtime would
+   ever say half the routing is dead: the sink logs one warning per alert while the surviving
+   transport keeps reporting success.
+
+Non-production warns instead, so local runs still need no alerting secrets. The token was
+previously in neither the required nor the optional key list, which is exactly how rule 2 stayed
+invisible.
 
 **Prove it, do not assume it.** There is a gated live-send test that performs a real Postmark
 send to a real inbox:
@@ -224,11 +265,15 @@ It is statically skipped (with a printed reason) when those are absent — never
 
 ### Blind spots, both still load-bearing
 
-1. **Unconfigured means unheard.** With neither `Sentry__Dsn` nor `Alerting__Email__To` set,
-   every one of the five conditions evaluates correctly and reaches nobody. The checked-in
-   `ProcuLink.Worker/appsettings.Production.json` ships `"Dsn": ""`. **Verify both variables in
-   the Railway dashboard before counting this as an alert path.** If neither is set, GitHub
-   Actions is the *only* thing watching production.
+1. **Unconfigured no longer means unheard — it means the Worker will not boot.** This used to be
+   a live blind spot: with neither `Sentry__Dsn` nor `Alerting__Email__To` set, every condition
+   evaluated correctly and reached nobody, and the checked-in
+   `ProcuLink.Worker/appsettings.Production.json` still ships `"Dsn": ""`. Production startup now
+   refuses that configuration outright. **What remains:** a destination that is *configured but
+   broken* — a revoked Postmark token, a Sentry project that silently drops events. The
+   `reached no configured transport` log line covers the first; nothing inside the process can
+   cover the second, which is why `uptime.yml` probes from outside and why the live-send test
+   above exists.
 2. **The job runs *on* the Worker.** If the Worker is dead, the job that would report the
    Worker dead is also dead. This path detects a *backlog spike*, a *failure-rate spike*, a
    *stalled channel* and a *latched cap* well, and a *hung* Worker sometimes; it cannot detect a

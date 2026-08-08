@@ -109,6 +109,57 @@ public class EmailWorkerAlertSinkTests
         client.LastMessage.Should().NotBeNull("the send was attempted; only the provider refused");
     }
 
+    // ── Reporting whether the operator was actually reached ──────────────────────
+
+    [Fact]
+    public async Task AlertAsync_Configured_ReportsDelivered()
+    {
+        var client = new FakeEmailApiClient { IsConfigured = true };
+
+        (await Sink(client, to: "founder@example.com").AlertAsync(Key, Message)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task AlertAsync_NoRecipientConfigured_ReportsNotDelivered()
+    {
+        var client = new FakeEmailApiClient { IsConfigured = true };
+
+        (await Sink(client, to: null).AlertAsync(Key, Message)).Should().BeFalse(
+            "a silent no-op must be reported as 'nobody was told', not as a delivered alert");
+    }
+
+    [Fact]
+    public async Task AlertAsync_EmailProviderNotConfigured_ReportsNotDelivered()
+    {
+        var client = new FakeEmailApiClient { IsConfigured = false };
+
+        (await Sink(client, to: "founder@example.com").AlertAsync(Key, Message)).Should().BeFalse(
+            "an alert address with no Email:Postmark:ServerToken behind it reaches nobody");
+    }
+
+    [Fact]
+    public async Task AlertAsync_ProviderRefused_ReportsNotDelivered()
+    {
+        var client = new FakeEmailApiClient
+        {
+            IsConfigured = true,
+            ResultToReturn = new EmailApiResult(false, "422 inactive recipient", 422),
+        };
+
+        (await Sink(client, to: "founder@example.com").AlertAsync(Key, Message)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task AlertAsync_TransportThrows_ReportsNotDelivered()
+    {
+        var sink = new EmailWorkerAlertSink(
+            new ThrowingEmailApiClient(),
+            new AlertingEmailOptions { To = "founder@example.com" },
+            NullLogger<EmailWorkerAlertSink>.Instance);
+
+        (await sink.AlertAsync(Key, Message)).Should().BeFalse();
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────────
 
     private static EmailWorkerAlertSink Sink(IEmailApiClient client, string? to) =>

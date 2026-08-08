@@ -63,7 +63,14 @@ public static class StartupConfigurationValidator
         // Operator alert destination (WP-37). Unset is a valid deploy — the email alert sink
         // becomes a silent no-op — but it is worth a startup warning, because with this AND
         // Sentry:Dsn both unset the five alert conditions are evaluated and reach nobody.
+        // On a host that RAISES alerts, that combination is a hard failure; see
+        // ValidateOperatorAlertDestination.
         "Alerting:Email:To",
+        // The provider token every emailed alert — and every emailed purchase order — depends on.
+        // It was previously in NEITHER list, so setting only Alerting:Email:To produced a silent
+        // startup and one unread warning per alert: the destination was validated, the transport
+        // it needs was not.
+        "Email:Postmark:ServerToken",
         // Yearly price variants are optional until annual billing is exposed in the
         // pricing UI. (The MONTHLY Distributor price is required — see ApiRequiredKeys
         // above — because Distributor is a sold, self-serve tier.)
@@ -87,7 +94,8 @@ public static class StartupConfigurationValidator
         string environmentName,
         IReadOnlyList<string> requiredKeys,
         IReadOnlyList<string> optionalKeys,
-        string componentName)
+        string componentName,
+        bool raisesOperatorAlerts = false)
     {
         var isProduction = string.Equals(environmentName, "Production", StringComparison.OrdinalIgnoreCase);
 
@@ -107,6 +115,9 @@ public static class StartupConfigurationValidator
         }
 
         AnnounceRevisionAuthority(configuration, logger, componentName);
+
+        if (raisesOperatorAlerts)
+            ValidateOperatorAlertDestination(configuration, logger, environmentName, isProduction, componentName);
 
         // Production hardening: a PRESENT Delivery:EncryptionKey must still not be the
         // all-zero placeholder (or otherwise invalid). Absence is covered by the
@@ -202,6 +213,80 @@ public static class StartupConfigurationValidator
                 "{Component} startup ({Env}): required configuration key '{Key}' is not set. This will fail-fast in Production.",
                 componentName, environmentName, key);
         }
+    }
+
+    /// <summary>
+    /// Validates that the host running the operator-alert sweep can actually deliver an alert.
+    ///
+    /// <para><b>Why this is fail-fast and not a log line.</b> Every other failure in the alerting
+    /// stack can now be reported through the alerting stack — a blind probe, a timed-out snapshot
+    /// and an undelivered alert all reach the operator or land in a log a working Sentry ships. This
+    /// one cannot: with no destination configured there is, by construction, nowhere to report it
+    /// to, and the <c>LogError</c> that would report it goes to a Sentry that the same missing
+    /// configuration disabled. Refusing to boot is the only remaining loud option.</para>
+    ///
+    /// <para><b>Why that is safe.</b> Configuration does not change by itself, so this can only fire
+    /// on a deploy, in front of the person deploying, who sees a crash loop within a minute. The
+    /// alternative — booting clean with a dead alarm — is discovered during the incident the alarm
+    /// existed to catch. Same trade the validator already makes for
+    /// <c>DataProtection:EncryptionKey</c>.</para>
+    ///
+    /// <para><b>Two rules, both narrow.</b> (1) At least one destination must exist. (2) A DECLARED
+    /// destination must be able to work: an <c>Alerting:Email:To</c> with no
+    /// <c>Email:Postmark:ServerToken</c> behind it is refused even when Sentry is healthy, because
+    /// nothing at runtime would ever say that half the routing is dead — the sink logs one warning
+    /// per alert and the other transport keeps reporting success.</para>
+    /// </summary>
+    private static void ValidateOperatorAlertDestination(
+        IConfiguration configuration,
+        ILogger logger,
+        string environmentName,
+        bool isProduction,
+        string componentName)
+    {
+        var alertEmailTo = configuration["Alerting:Email:To"];
+        var postmarkToken = configuration["Email:Postmark:ServerToken"];
+        var sentryDsn = configuration["Sentry:Dsn"];
+
+        var hasEmailRoute = !string.IsNullOrWhiteSpace(alertEmailTo);
+        var hasSentryRoute = !string.IsNullOrWhiteSpace(sentryDsn);
+        var emailRouteIsBroken = hasEmailRoute && string.IsNullOrWhiteSpace(postmarkToken);
+
+        if (!hasEmailRoute && !hasSentryRoute)
+        {
+            const string message =
+                "no operator alert destination is configured: both Alerting:Email:To and Sentry:Dsn " +
+                "are unset, so every worker-health, delivery-failure, stalled-channel and AI-cap " +
+                "alert is evaluated and delivered into a no-op. Set ALERTING__EMAIL__TO (with " +
+                "EMAIL__POSTMARK__SERVERTOKEN) or SENTRY__DSN.";
+
+            if (isProduction)
+                throw new StartupConfigurationException(
+                    $"{componentName} cannot start in Production: {message}",
+                    new[] { "Alerting:Email:To", "Sentry:Dsn" });
+
+            logger.LogWarning(
+                "{Component} startup ({Env}): {Message} This will fail-fast in Production.",
+                componentName, environmentName, message);
+            return;
+        }
+
+        if (!emailRouteIsBroken)
+            return;
+
+        const string brokenEmailMessage =
+            "Alerting:Email:To is configured but Email:Postmark:ServerToken is not, so every emailed " +
+            "alert is dropped by the provider client behind a single warning. Set " +
+            "EMAIL__POSTMARK__SERVERTOKEN, or unset ALERTING__EMAIL__TO if alerts route elsewhere.";
+
+        if (isProduction)
+            throw new StartupConfigurationException(
+                $"{componentName} cannot start in Production: {brokenEmailMessage}",
+                new[] { "Email:Postmark:ServerToken" });
+
+        logger.LogWarning(
+            "{Component} startup ({Env}): {Message} This will fail-fast in Production.",
+            componentName, environmentName, brokenEmailMessage);
     }
 
     /// <summary>

@@ -20,5 +20,15 @@ public interface IWorkerAlertSink
     /// </param>
     /// <param name="message">Human-readable description of what is wrong, with the numbers in it.</param>
     /// <param name="ct">Cancellation for transports that perform I/O.</param>
-    Task AlertAsync(string alertKey, string message, CancellationToken ct = default);
+    /// <returns>
+    /// <c>true</c> only when the alert was actually handed to a working transport. A sink that is
+    /// unconfigured, that the provider refused, or that failed returns <c>false</c>.
+    /// <para>
+    /// This exists because "did not throw" is not "the operator was told". Every sink here is a
+    /// deliberate no-op when unconfigured, so without this the sweep could report that it raised an
+    /// alert while nothing left the process — the exact silence this whole component exists to
+    /// prevent. Callers must treat <c>false</c> as "nobody has been notified".
+    /// </para>
+    /// </returns>
+    Task<bool> AlertAsync(string alertKey, string message, CancellationToken ct = default);
 }

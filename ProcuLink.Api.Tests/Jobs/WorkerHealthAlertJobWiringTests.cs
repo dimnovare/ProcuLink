@@ -1,8 +1,8 @@
 using System.Text.RegularExpressions;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -12,6 +12,7 @@ using ProcuLink.Core.Services.Email;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Alerting;
+using ProcuLink.Worker;
 using ProcuLink.Worker.Jobs;
 using Xunit;
 
@@ -27,10 +28,19 @@ namespace ProcuLink.Api.Tests.Jobs;
 /// composite sink → email sink — and assert on the outbound message that Postmark would have been
 /// handed. Only the email transport itself is a double.</para>
 ///
-/// <para><b>And the host really registers it.</b> The graph test MIRRORS the Worker's registrations,
-/// so on its own it proves the graph constructs, not that <c>ProcuLink.Worker/Program.cs</c> wires
-/// it — the same distinction <c>PushIngressSeamRegistrationTests</c> exists for. The source guard
-/// below closes that half, including the position check against <c>builder.Build()</c>.</para>
+/// <para><b>And the host really registers it.</b> Every test here resolves the PRODUCTION
+/// registration seam, <c>WorkerAlertingRegistration.AddWorkerAlerting</c>, which is the single call
+/// <c>ProcuLink.Worker/Program.cs</c> makes. It used to mirror the Worker's registrations in a
+/// private helper and assert on <c>Program.cs</c> source with a regex — and that combination was
+/// blind: deleting <c>EmailWorkerAlertSink</c> from the real composite left the regex matching (it
+/// stopped at the constructor name), left the sibling <c>AddScoped&lt;EmailWorkerAlertSink&gt;</c>
+/// pattern matching, and left the graph test green because its own copy of the composite still had
+/// the sink. Every test passed while the email routing this packet exists to deliver was gone.</para>
+///
+/// <para>A test that reads source with a regex is what let that through. These resolve a real
+/// container and inspect what it actually built. The one remaining source assertion is the single
+/// <c>AddWorkerAlerting</c> call site and its position relative to <c>builder.Build()</c> — the one
+/// thing a container cannot prove about a host it does not run.</para>
 /// </summary>
 public sealed class WorkerHealthAlertJobWiringTests
 {
@@ -120,6 +130,29 @@ public sealed class WorkerHealthAlertJobWiringTests
         mail.Sent.Should().BeEmpty();
     }
 
+    /// <summary>
+    /// The whole production graph with NO destination behind it — no recipient, and a Sentry SDK
+    /// that an empty DSN left disabled. The sweep must report that it raised nothing, because
+    /// nothing was received. Startup validation refuses this configuration in Production; this pins
+    /// that the runtime is honest about it wherever it does occur.
+    /// </summary>
+    [Fact]
+    public async Task Sweep_withNoDestinationBehindAnyTransport_reportsThatNoAlertWasRaised()
+    {
+        await using var provider = BuildAlertingGraph(
+            new RecordingEmailApiClient(),
+            health: new StubOpsHealth(new WorkerHealthSnapshot(false, 0, 900, 0, 0)),
+            alertEmailTo: null);
+
+        using var scope = provider.CreateScope();
+        var raised = await scope.ServiceProvider
+            .GetRequiredService<IWorkerHealthAlertService>().RunAsync(default);
+
+        raised.Should().BeFalse(
+            "the worker IS down, but no transport could tell anyone — 'raised an alert' must mean "
+          + "an operator was reachable, not that the code path executed");
+    }
+
     [Fact]
     public async Task Job_isIdempotent_repeatRunsInsideTheCooldownDoNotResend()
     {
@@ -139,27 +172,76 @@ public sealed class WorkerHealthAlertJobWiringTests
 
     // ── The host really registers all of this ────────────────────────────────────
 
+    /// <summary>
+    /// THE mutation guard. Every alert this packet raises leaves the process through the composite's
+    /// transports, so a transport dropped from that argument list is the single edit that turns a
+    /// working alarm into a silent one while changing nothing an operator can see.
+    /// <para>
+    /// Asserted on the CONSTRUCTED composite, resolved from the production registration: deleting
+    /// <c>sp.GetRequiredService&lt;EmailWorkerAlertSink&gt;()</c> from
+    /// <see cref="WorkerAlertingRegistration.AddWorkerAlerting"/> fails here and in
+    /// <see cref="Job_deliversAWorkerDownAlertAllTheWayToTheOutboundEmail"/>.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Worker_composesEveryAlertTransport()
+    {
+        using var provider = BuildAlertingGraph(new RecordingEmailApiClient(), new StubOpsHealth(Healthy()));
+        using var scope = provider.CreateScope();
+
+        var sink = scope.ServiceProvider.GetRequiredService<IWorkerAlertSink>();
+
+        sink.Should().BeOfType<CompositeWorkerAlertSink>();
+        ((CompositeWorkerAlertSink)sink).Sinks.Select(s => s.GetType()).Should().BeEquivalentTo(
+            new[] { typeof(SentryWorkerAlertSink), typeof(EmailWorkerAlertSink) },
+            "an alert that reaches only one transport is one outage away from reaching none");
+    }
+
     [Theory]
-    [InlineData(@"AddScoped\s*<\s*IOperationalAlertProbe\s*,\s*OperationalAlertProbe\s*>")]
-    [InlineData(@"AddSingleton\s*<\s*IRecurringJobLastExecutionSource\s*,\s*HangfireRecurringJobLastExecutionSource\s*>")]
-    [InlineData(@"AddScoped\s*<\s*EmailWorkerAlertSink\s*>")]
-    [InlineData(@"AddScoped\s*<\s*IWorkerAlertSink\s*>\s*\(\s*sp\s*=>\s*new\s+CompositeWorkerAlertSink")]
-    [InlineData(@"AlertingEmailOptions\.SectionName")]
-    public void Worker_registersTheAlertingGraph_beforeBuild(string pattern)
+    [InlineData(typeof(IOperationalAlertProbe), typeof(OperationalAlertProbe))]
+    [InlineData(typeof(IRecurringJobLastExecutionSource), typeof(HangfireRecurringJobLastExecutionSource))]
+    [InlineData(typeof(IWorkerHealthAlertService), typeof(WorkerHealthAlertService))]
+    public void Worker_resolvesEachAlertingComponent_asTheProductionType(Type contract, Type expected)
+    {
+        using var provider = BuildAlertingGraph(new RecordingEmailApiClient(), new StubOpsHealth(Healthy()));
+        using var scope = provider.CreateScope();
+
+        scope.ServiceProvider.GetRequiredService(contract).Should().BeOfType(expected,
+            "without it the alert conditions this component feeds are never evaluated in production");
+    }
+
+    [Fact]
+    public void Worker_bindsTheAlertEmailDestinationFromConfiguration()
+    {
+        using var provider = BuildAlertingGraph(
+            new RecordingEmailApiClient(), new StubOpsHealth(Healthy()),
+            alertEmailTo: "founder@example.com");
+
+        provider.GetRequiredService<AlertingEmailOptions>().Recipients
+            .Should().Equal(new[] { "founder@example.com" },
+                "an unbound Alerting:Email section makes every email alert a silent no-op");
+    }
+
+    /// <summary>
+    /// The one thing a container cannot prove: that the host calls the seam at all, and calls it
+    /// before <c>builder.Build()</c> snapshots the service collection. Narrow on purpose — it is a
+    /// single call site, not five patterns each of which could match while meaning nothing.
+    /// </summary>
+    [Fact]
+    public void Worker_callsTheAlertingRegistration_beforeBuild()
     {
         var program = WorkerProgramSource();
 
-        var match = Regex.Match(program, pattern);
+        var match = Regex.Match(program, @"\bAddWorkerAlerting\s*\(");
         Assert.True(match.Success,
-            $"ProcuLink.Worker/Program.cs must contain a registration matching /{pattern}/. " +
-            "Without it the alert condition it feeds is silently never evaluated in production.");
+            "ProcuLink.Worker/Program.cs must call services.AddWorkerAlerting(...). Without it the "
+          + "entire alert sweep is absent from production while the Worker still starts and looks healthy.");
 
-        // Position matters: builder.Build() snapshots the service collection, so a registration
-        // written after it compiles, reads correctly, and is never seen by the built provider.
         var build = Regex.Match(program, @"\bbuilder\s*\.\s*Build\s*\(\s*\)");
         Assert.True(build.Success, "ProcuLink.Worker/Program.cs must call builder.Build().");
         Assert.True(match.Index < build.Index,
-            $"registration /{pattern}/ is at offset {match.Index}, AFTER builder.Build() at {build.Index}.");
+            $"AddWorkerAlerting is at offset {match.Index}, AFTER builder.Build() at {build.Index}. "
+          + "Build() snapshots the service collection, so a later registration is never seen.");
     }
 
     /// <summary>
@@ -202,9 +284,14 @@ public sealed class WorkerHealthAlertJobWiringTests
     private static WorkerHealthSnapshot Healthy() => new(true, 2, 3, 0, 0);
 
     /// <summary>
-    /// Mirrors the Worker's alerting registrations (see the source guard above for the half this
-    /// cannot prove). Everything from the job down is the production type; only the email transport,
-    /// the health snapshot and the AI-limit verdict are doubles.
+    /// Builds the graph through the PRODUCTION registration seam — the same one line
+    /// <c>Program.cs</c> calls. Nothing about the alerting graph is restated here, so this helper
+    /// cannot silently disagree with the host the way its predecessor did.
+    /// <para>
+    /// Only the inputs the graph reads are doubles: the email transport, the health snapshot and
+    /// the AI-limit verdict. Everything from the job down — probe, cooldown state, composite, email
+    /// sink — is the production type built by the production code.
+    /// </para>
     /// </summary>
     private static ServiceProvider BuildAlertingGraph(
         IEmailApiClient mail,
@@ -222,18 +309,13 @@ public sealed class WorkerHealthAlertJobWiringTests
         services.AddScoped(_ => aiUsage ?? new StubAiUsageTracker());
         services.AddScoped(_ => mail);
 
-        services.AddSingleton<WorkerHealthAlertState>();
-        services.AddSingleton(new WorkerHealthAlertOptions());
-        services.AddSingleton(new AlertingEmailOptions { To = alertEmailTo });
-        services.AddSingleton<IRecurringJobLastExecutionSource, NullRecurringJobLastExecutionSource>();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(alertEmailTo is null
+                ? new Dictionary<string, string?>()
+                : new Dictionary<string, string?> { ["Alerting:Email:To"] = alertEmailTo })
+            .Build();
 
-        services.AddScoped<IOperationalAlertProbe, OperationalAlertProbe>();
-        services.AddScoped<EmailWorkerAlertSink>();
-        services.AddScoped<IWorkerAlertSink>(sp => new CompositeWorkerAlertSink(
-            new IWorkerAlertSink[] { sp.GetRequiredService<EmailWorkerAlertSink>() },
-            sp.GetRequiredService<ILogger<CompositeWorkerAlertSink>>()));
-        services.AddScoped<IWorkerHealthAlertService, WorkerHealthAlertService>();
-        services.AddScoped<WorkerHealthAlertJob>();
+        services.AddWorkerAlerting(configuration);
 
         return services.BuildServiceProvider();
     }

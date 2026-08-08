@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Core.Services;
@@ -275,7 +276,7 @@ public class WorkerHealthAlertServiceTests
 
         await CreateService(health, sink, probe).RunAsync(default);
 
-        sink.Calls.Select(c => c.Key).Should().BeEquivalentTo(OperationalAlertKeys.All);
+        sink.Calls.Select(c => c.Key).Should().BeEquivalentTo(OperationalAlertKeys.HealthConditions);
     }
 
     // ── Anti-spam ────────────────────────────────────────────────────────────────
@@ -391,8 +392,7 @@ public class WorkerHealthAlertServiceTests
         var alerted = await CreateService(health, sink, probe).RunAsync(default);
 
         alerted.Should().BeTrue();
-        sink.Calls.Should().ContainSingle();
-        sink.Calls[0].Key.Should().Be(OperationalAlertKeys.WorkerHeartbeatLost,
+        sink.Calls.Select(c => c.Key).Should().Contain(OperationalAlertKeys.WorkerHeartbeatLost,
             "a broken probe must degrade the three extra conditions, not the whole sweep");
     }
 
@@ -414,6 +414,175 @@ public class WorkerHealthAlertServiceTests
             "the second condition must still be offered to the sink after the first throw");
     }
 
+    // ── Fail-closed: the sweep's own failure must alert, never read as all-clear ──
+
+    [Fact]
+    public async Task RunAsync_HealthSnapshotThrows_DoesNotTakeTheSweepDown()
+    {
+        var sink = new RecordingSink();
+
+        var act = async () => await CreateService(HealthThrowing(), sink).RunAsync(default);
+
+        await act.Should().NotThrowAsync(
+            "the job runs with AutomaticRetry(Attempts = 0) — one throw and every condition in "
+          + "this cycle is lost with nothing said");
+    }
+
+    [Fact]
+    public async Task RunAsync_HealthSnapshotThrows_RaisesTheDegradedAlert()
+    {
+        var sink = new RecordingSink();
+
+        var alerted = await CreateService(HealthThrowing(), sink).RunAsync(default);
+
+        alerted.Should().BeTrue();
+        sink.Calls.Should().ContainSingle();
+        sink.Calls[0].Key.Should().Be(OperationalAlertKeys.AlertSweepDegraded);
+        sink.Calls[0].Message.Should().Contain("worker health snapshot");
+    }
+
+    [Fact]
+    public async Task RunAsync_HealthSnapshotThrows_DoesNotReportHealthy()
+    {
+        var log = new CapturingLogger();
+
+        await CreateService(HealthThrowing(), new RecordingSink(), logger: log).RunAsync(default);
+
+        log.Messages.Should().NotContain(m => m.Contains("healthy —"),
+            "reporting all-clear in the same run whose inputs failed is how the alarm goes silent");
+    }
+
+    [Fact]
+    public async Task RunAsync_ProbeThrows_RaisesTheDegradedAlert()
+    {
+        var sink = new RecordingSink();
+
+        var alerted = await CreateService(HealthOk(), sink, ProbeThrowing()).RunAsync(default);
+
+        alerted.Should().BeTrue();
+        sink.Calls.Should().ContainSingle();
+        sink.Calls[0].Key.Should().Be(OperationalAlertKeys.AlertSweepDegraded);
+        sink.Calls[0].Message.Should().Contain("operational probe");
+    }
+
+    [Fact]
+    public async Task RunAsync_ProbeThrows_DoesNotReportHealthy()
+    {
+        var log = new CapturingLogger();
+
+        await CreateService(HealthOk(), new RecordingSink(), ProbeThrowing(), logger: log)
+            .RunAsync(default);
+
+        log.Messages.Should().NotContain(m => m.Contains("healthy —"));
+    }
+
+    [Fact]
+    public async Task RunAsync_ProbeThrowsWhileAConditionIsStandingBad_DoesNotSilentlyRecoverIt()
+    {
+        var sink = new RecordingSink();
+        var now = new DateTime(2026, 8, 6, 9, 0, 0, DateTimeKind.Utc);
+        var state = new WorkerHealthAlertState();
+
+        var latched = Healthy() with { AiTokenLatch = new AiTokenLatchSignal(1) };
+        var probe = new Mock<IOperationalAlertProbe>();
+        var throwNext = false;
+        probe.Setup(p => p.GetSignalsAsync(It.IsAny<CancellationToken>()))
+             .ReturnsAsync(() => throwNext
+                 ? throw new InvalidOperationException("probe exploded")
+                 : latched);
+
+        var svc = new WorkerHealthAlertService(
+            HealthOk().Object, probe.Object, sink, state, new WorkerHealthAlertOptions(),
+            NullLogger<WorkerHealthAlertService>.Instance, () => now);
+
+        // The AI cap latches and alerts once.
+        (await svc.RunAsync(default)).Should().BeTrue();
+        sink.Calls.Should().ContainSingle();
+
+        // The probe then breaks for one cycle, and recovers on the next with the cap STILL latched.
+        throwNext = true;
+        now = now.AddMinutes(5);
+        await svc.RunAsync(default);
+
+        throwNext = false;
+        now = now.AddMinutes(5);
+        await svc.RunAsync(default);
+
+        sink.Calls.Where(c => c.Key == OperationalAlertKeys.AiTokenCapLatched)
+            .Should().ContainSingle(
+                "a blind cycle must not reset the condition to 'healthy' and re-arm a duplicate "
+              + "transition page when the probe comes back");
+    }
+
+    [Fact]
+    public async Task RunAsync_BothInputsThrow_NamesBothInOneDegradedAlert()
+    {
+        var sink = new RecordingSink();
+
+        await CreateService(HealthThrowing(), sink, ProbeThrowing()).RunAsync(default);
+
+        sink.Calls.Should().ContainSingle("one blind sweep is one incident, not two pages");
+        sink.Calls[0].Message.Should().Contain("worker health snapshot").And.Contain("operational probe");
+    }
+
+    [Fact]
+    public async Task RunAsync_DegradedConditionIsRateLimitedLikeAnyOther()
+    {
+        var sink = new RecordingSink();
+        var now = new DateTime(2026, 8, 6, 9, 0, 0, DateTimeKind.Utc);
+
+        var svc = new WorkerHealthAlertService(
+            HealthThrowing().Object, ProbeThrowing().Object, sink, new WorkerHealthAlertState(),
+            new WorkerHealthAlertOptions { MinAlertIntervalMinutes = 30 },
+            NullLogger<WorkerHealthAlertService>.Instance, () => now);
+
+        await svc.RunAsync(default);
+        now = now.AddMinutes(5);
+        await svc.RunAsync(default);
+        now = now.AddMinutes(5);
+        await svc.RunAsync(default);
+
+        sink.Calls.Should().ContainSingle(
+            "a permanently broken input must page once per cooldown, not every 5 minutes");
+    }
+
+    [Fact]
+    public async Task RunAsync_HealthSnapshotThrows_StillEvaluatesTheProbeFedConditions()
+    {
+        var sink = new RecordingSink();
+        var probe = ProbeReturning(Healthy() with { AiTokenLatch = new AiTokenLatchSignal(4) });
+
+        await CreateService(HealthThrowing(), sink, probe).RunAsync(default);
+
+        sink.Calls.Select(c => c.Key).Should().Contain(OperationalAlertKeys.AiTokenCapLatched,
+            "one failed input must cost only the conditions it feeds");
+    }
+
+    // ── An alert nothing delivered is not an alert ───────────────────────────────
+
+    [Fact]
+    public async Task RunAsync_NoTransportDeliveredTheAlert_IsNotReportedAsAlerted()
+    {
+        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 900, 0, 0));
+
+        var alerted = await CreateService(health, new UndeliverableSink()).RunAsync(default);
+
+        alerted.Should().BeFalse(
+            "the sweep's return value is what the job logs — 'an alert was raised' must mean an "
+          + "operator was actually reachable, not that a method did not throw");
+    }
+
+    [Fact]
+    public async Task RunAsync_NoTransportDeliveredTheAlert_SaysSoInTheLog()
+    {
+        var log = new CapturingLogger();
+        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 900, 0, 0));
+
+        await CreateService(health, new UndeliverableSink(), logger: log).RunAsync(default);
+
+        log.Messages.Should().Contain(m => m.Contains("reached no configured transport"));
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────────
 
     private static OperationalAlertSignals Healthy() => new(
@@ -432,6 +601,14 @@ public class WorkerHealthAlertServiceTests
     private static Mock<IOpsHealthService> HealthOk() =>
         HealthReturning(new WorkerHealthSnapshot(true, 1, 3, 0, 0));
 
+    private static Mock<IOpsHealthService> HealthThrowing()
+    {
+        var health = new Mock<IOpsHealthService>();
+        health.Setup(h => h.GetWorkerHealthSnapshotAsync(It.IsAny<CancellationToken>()))
+              .ThrowsAsync(new TimeoutException("snapshot query timed out"));
+        return health;
+    }
+
     private static Mock<IOperationalAlertProbe> ProbeReturning(OperationalAlertSignals signals)
     {
         var probe = new Mock<IOperationalAlertProbe>();
@@ -439,35 +616,68 @@ public class WorkerHealthAlertServiceTests
         return probe;
     }
 
+    private static Mock<IOperationalAlertProbe> ProbeThrowing()
+    {
+        var probe = new Mock<IOperationalAlertProbe>();
+        probe.Setup(p => p.GetSignalsAsync(It.IsAny<CancellationToken>()))
+             .ThrowsAsync(new InvalidOperationException("probe exploded"));
+        return probe;
+    }
+
     private static WorkerHealthAlertService CreateService(
         Mock<IOpsHealthService> health,
         IWorkerAlertSink sink,
-        Mock<IOperationalAlertProbe>? probe = null) =>
+        Mock<IOperationalAlertProbe>? probe = null,
+        ILogger<WorkerHealthAlertService>? logger = null) =>
         new(health.Object, (probe ?? ProbeReturning(Healthy())).Object, sink,
             new WorkerHealthAlertState(), new WorkerHealthAlertOptions(),
-            NullLogger<WorkerHealthAlertService>.Instance);
+            logger ?? NullLogger<WorkerHealthAlertService>.Instance);
+
+    /// <summary>
+    /// Records rendered log messages. The "healthy —" line and the "reached no configured
+    /// transport" line are operator-visible claims, so they are asserted on directly rather than
+    /// inferred.
+    /// </summary>
+    private sealed class CapturingLogger : ILogger<WorkerHealthAlertService>
+    {
+        public List<string> Messages { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => Messages.Add(formatter(state, exception));
+    }
 
     private sealed class RecordingSink : IWorkerAlertSink
     {
         public List<(string Key, string Message)> Calls { get; } = new();
 
-        public Task AlertAsync(string alertKey, string message, CancellationToken ct = default)
+        public Task<bool> AlertAsync(string alertKey, string message, CancellationToken ct = default)
         {
             Calls.Add((alertKey, message));
-            return Task.CompletedTask;
+            return Task.FromResult(true);
         }
+    }
+
+    /// <summary>A sink that accepts the call and delivers nothing — every transport unconfigured.</summary>
+    private sealed class UndeliverableSink : IWorkerAlertSink
+    {
+        public Task<bool> AlertAsync(string alertKey, string message, CancellationToken ct = default) =>
+            Task.FromResult(false);
     }
 
     private sealed class ThrowingOnFirstCallSink : IWorkerAlertSink
     {
         public int Attempts { get; private set; }
 
-        public Task AlertAsync(string alertKey, string message, CancellationToken ct = default)
+        public Task<bool> AlertAsync(string alertKey, string message, CancellationToken ct = default)
         {
             Attempts++;
             if (Attempts == 1)
                 throw new InvalidOperationException("simulated sink failure");
-            return Task.CompletedTask;
+            return Task.FromResult(true);
         }
     }
 }

@@ -238,43 +238,18 @@ builder.Services.AddScoped<IDeliverySlaService, DeliverySlaService>();
 
 // ── Wave 4 reliability/observability: worker-health alert sweep + retention ──
 // The recurring jobs are scheduled in Worker.cs; these are their DI deps.
-// Alert sink is Sentry-backed and a safe no-op when Sentry DSN is unset.
+// Alerts fan out to Sentry AND email; each is a no-op when unconfigured, and each reports that it
+// delivered nothing rather than claiming success. StartupConfigurationValidator refuses to boot
+// this host in Production with no working destination at all.
 builder.Services.AddScoped<IOpsHealthService, OpsHealthService>();
-builder.Services.AddSingleton<WorkerHealthAlertState>(); // singleton: per-condition rate-limit state (no scoped DbContext captured)
-builder.Services.AddScoped<IWorkerHealthAlertService, WorkerHealthAlertService>();
-builder.Services.AddScoped<WorkerHealthAlertJob>();
-// WP-37 "page the founder" — the extra alert conditions and the destination they route to.
-// The probe supplies delivery failure rate, pull-channel freshness and the AI token-cap latch;
-// the recurring-job source is Hangfire's own scheduler record, which is why SFTP/S3 need no new
-// column. Sinks are SCOPED because the email sink resolves the scoped IEmailApiClient — a
-// singleton sink would capture it. The composite fans out and isolates each transport, so a dead
-// Sentry cannot suppress the email and vice versa. Both are safe no-ops when unconfigured.
-builder.Services.AddSingleton<IRecurringJobLastExecutionSource, HangfireRecurringJobLastExecutionSource>();
-builder.Services.AddScoped<IOperationalAlertProbe, OperationalAlertProbe>();
-builder.Services.AddSingleton(_ =>
-{
-    var opts = new AlertingEmailOptions();
-    builder.Configuration.GetSection(AlertingEmailOptions.SectionName).Bind(opts);
-    return opts;
-});
-builder.Services.AddScoped<SentryWorkerAlertSink>();
-builder.Services.AddScoped<EmailWorkerAlertSink>();
-builder.Services.AddScoped<IWorkerAlertSink>(sp => new CompositeWorkerAlertSink(
-    new IWorkerAlertSink[]
-    {
-        sp.GetRequiredService<SentryWorkerAlertSink>(),
-        sp.GetRequiredService<EmailWorkerAlertSink>(),
-    },
-    sp.GetRequiredService<ILogger<CompositeWorkerAlertSink>>()));
+// WP-37 "page the founder" — the whole alerting graph: the recurring sweep, the probe behind its
+// three extra conditions, the tunables, and the transports the alerts route to. It lives in
+// WorkerAlertingRegistration so the wiring guard can resolve THIS graph instead of pattern-matching
+// this file; see that class for why the previous source-regex guard could not see a deleted sink.
+builder.Services.AddWorkerAlerting(builder.Configuration);
 // Liveness beat: proves the recurring-job dispatcher is actually firing (a log
 // line + Sentry breadcrumb every 2 min), complementing Hangfire's server heartbeat.
 builder.Services.AddScoped<WorkerHeartbeatJob>();
-builder.Services.AddSingleton(_ =>
-{
-    var opts = new WorkerHealthAlertOptions();
-    builder.Configuration.GetSection(WorkerHealthAlertOptions.SectionName).Bind(opts);
-    return opts;
-});
 // Data-retention sweep: DISABLED by default; tune via the "DataRetention" section.
 builder.Services.AddSingleton(_ =>
 {
@@ -473,7 +448,11 @@ host.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping
         environmentName: host.Services.GetRequiredService<IHostEnvironment>().EnvironmentName,
         requiredKeys:    StartupConfigurationValidator.WorkerRequiredKeys,
         optionalKeys:    StartupConfigurationValidator.OptionalKeys,
-        componentName:   "ProcuLink.Worker");
+        componentName:   "ProcuLink.Worker",
+        // This host runs the operator-alert sweep, so it must be able to deliver an alert. With no
+        // destination configured there is nowhere to report that fact at runtime, which is why it
+        // is a Production startup failure rather than another log line nobody receives.
+        raisesOperatorAlerts: true);
 }
 
 host.Run();

@@ -18,18 +18,20 @@ public interface IOperationalAlertProbe
     Task<OperationalAlertSignals> GetSignalsAsync(CancellationToken ct);
 }
 
-/// <summary>The three extra signals, read together so one sweep is one round of queries.</summary>
+/// <summary>
+/// The three extra signals, read together so one sweep is one round of queries.
+/// <para>
+/// There is deliberately NO all-clear fallback value here. One used to exist and was returned when
+/// the probe threw: zero attempts, no channels, no latched orgs — every one of which evaluates as
+/// "not bad", so a permanently broken probe query made three of the five alert conditions report
+/// healthy forever while the same run logged "healthy". The sweep now treats an unreadable probe as
+/// UNKNOWN and alerts on that fact instead. Do not reintroduce an <c>Empty</c> here.
+/// </para>
+/// </summary>
 public sealed record OperationalAlertSignals(
     DeliveryFailureRateSignal DeliveryFailureRate,
     IReadOnlyList<PullChannelSignal> PullChannels,
-    AiTokenLatchSignal AiTokenLatch)
-{
-    /// <summary>All-clear snapshot — used as the fallback when the probe itself fails.</summary>
-    public static OperationalAlertSignals Empty { get; } = new(
-        new DeliveryFailureRateSignal(0, 0, 0),
-        Array.Empty<PullChannelSignal>(),
-        new AiTokenLatchSignal(0));
-}
+    AiTokenLatchSignal AiTokenLatch);
 
 /// <summary>
 /// Delivery attempts in the trailing window, all orgs. Only CONCLUDED attempts count:
