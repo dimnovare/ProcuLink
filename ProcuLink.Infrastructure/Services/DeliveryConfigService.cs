@@ -6,6 +6,7 @@ using ProcuLink.Core.Security;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure.Services.Security;
+using ProcuLink.Transform.Output;
 
 namespace ProcuLink.Infrastructure.Services;
 
@@ -25,10 +26,6 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
 
     private static readonly HashSet<string> UrlBasedProtocols = new(
         DeliveryProtocolConstants.UrlBased,
-        StringComparer.OrdinalIgnoreCase);
-
-    private static readonly HashSet<string> AllowedOutputFormats = new(
-        new[] { "xml", "csv", "cxml", "json", "ubl", "x12" },
         StringComparer.OrdinalIgnoreCase);
 
     private readonly ProcuLinkDbContext _db;
@@ -215,15 +212,20 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
             DtdSystemId: ids?.DtdSystemId, DtdPublicId: ids?.DtdPublicId);
     }
 
-    private static string? NormalizeOutputFormat(string? format)
-    {
-        if (string.IsNullOrWhiteSpace(format)) return null;
-        var normalized = format.Trim().ToLowerInvariant();
-        if (!AllowedOutputFormats.Contains(normalized))
-            throw new ArgumentException(
-                "Output format must be one of: xml, csv, cxml, json, ubl, x12.", nameof(format));
-        return normalized;
-    }
+    /// <summary>
+    /// The allow-list used to be a hand-typed <c>{ "xml", "csv", "cxml", "json", "ubl", "x12" }</c>
+    /// here, and a SECOND copy of the same idea did not exist on the connection-revision write path —
+    /// which assigned whatever string it was given. Both now ask
+    /// <see cref="OutputTransformRegistry.Catalog"/>, which derives the set from the registered
+    /// <c>ITransformService</c> implementations, so a seventh transform reaches both paths and the
+    /// message below without either being edited.
+    ///
+    /// <para><see cref="UnsupportedOutputFormatException"/> derives from <c>ArgumentException</c> and
+    /// carries the same <c>Message</c> this method always threw, so the endpoint's
+    /// <c>catch (ArgumentException)</c> returns the same 400 body as before.</para>
+    /// </summary>
+    private static string? NormalizeOutputFormat(string? format) =>
+        OutputTransformRegistry.Catalog.Normalize(format);
 
     private static string NormalizeProtocol(string protocol)
     {
