@@ -222,10 +222,10 @@ public sealed class SupplierSuggestionPostgresTests : IClassFixture<SupplierSugg
         await using var db = new ProcuLinkDbContext(Options());
         var orgId = await SeedOrgAsync(db, "roundtrip");
 
-        var supplier = AddSupplier(db, orgId, "Acme GmbH", vat: "EE101234567", domain: "acme.com");
+        var supplier = AddSupplier(db, orgId, "Acme GmbH", vat: "EE101234567", domain: "acme.example");
         supplier.RegistrationNumber = "12345678";
         supplier.EdiCode = "1111111111116";
-        var order = AddOrder(db, orgId, senderDomain: "acme.com");
+        var order = AddOrder(db, orgId, senderDomain: "acme.example");
         var row = AddSuggestion(db, orgId, order.Id, supplier.Id, 1, 0.6125);
         await db.SaveChangesAsync();
 
@@ -235,10 +235,10 @@ public sealed class SupplierSuggestionPostgresTests : IClassFixture<SupplierSugg
         Assert.Equal("EE101234567", readSupplier.VatNumber);
         Assert.Equal("12345678", readSupplier.RegistrationNumber);
         Assert.Equal("1111111111116", readSupplier.EdiCode);
-        Assert.Equal("acme.com", readSupplier.PrimaryDomain);
+        Assert.Equal("acme.example", readSupplier.PrimaryDomain);
 
         var readOrder = await verify.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == order.Id);
-        Assert.Equal("acme.com", readOrder.InboundSenderDomain);
+        Assert.Equal("acme.example", readOrder.InboundSenderDomain);
         Assert.NotNull(readOrder.InboundSenderDomainCapturedAt);
 
         var readRow = await verify.OrderSupplierSuggestions.AsNoTracking().SingleAsync(s => s.Id == row.Id);
@@ -368,13 +368,13 @@ public sealed class SupplierSuggestionPostgresTests : IClassFixture<SupplierSugg
         var rare  = AddSupplier(db, orgId, "Rare Destination");
         await db.SaveChangesAsync();
 
-        for (var i = 0; i < 3; i++) AddOrder(db, orgId, "delivered", usual.Id, "acme.com");
-        AddOrder(db, orgId, "delivered", rare.Id, "acme.com");
+        for (var i = 0; i < 3; i++) AddOrder(db, orgId, "delivered", usual.Id, "acme.example");
+        AddOrder(db, orgId, "delivered", rare.Id, "acme.example");
         AddOrder(db, orgId, "delivered", rare.Id, "elsewhere.com");   // different domain, must not count
         await db.SaveChangesAsync();
 
         var result = await NewService(db).SuggestAsync(
-            new SupplierSuggestionInput(orgId, Guid.NewGuid(), InboundSenderDomain: "acme.com"), default);
+            new SupplierSuggestionInput(orgId, Guid.NewGuid(), InboundSenderDomain: "acme.example"), default);
 
         Assert.Equal(usual.Id, result[0].SupplierId);
         Assert.Contains("3 earlier orders", result[0].Signals.Single(s => s.Signal == SupplierSignalKind.SenderDomainHistory).Detail);
@@ -533,7 +533,7 @@ public sealed class SupplierSuggestionPostgresTests : IClassFixture<SupplierSugg
         await using var db = new ProcuLinkDbContext(Options());
         var orgId = await SeedOrgAsync(db, "wiring");
 
-        var carrier = AddSupplier(db, orgId, "REDACTED-PARTY");
+        var carrier = AddSupplier(db, orgId, "Exemplar Distribution GmbH");
         var other   = AddSupplier(db, orgId, "Unrelated Ltd");
 
         void Catalog(Guid supplierId, params string[] codes)

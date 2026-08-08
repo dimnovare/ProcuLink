@@ -35,7 +35,7 @@ public class AlertingDestinationStartupValidationTests
     [Fact]
     public void Production_sentryOnly_starts()
     {
-        var act = () => Validate(Config(sentryDsn: "https://example.invalid/redacted"), "Production");
+        var act = () => Validate(Config(sentryDsn: "https://k@o0.ingest.example.com/1"), "Production");
 
         act.Should().NotThrow("Sentry alone still reaches the operator");
     }
@@ -64,7 +64,7 @@ public class AlertingDestinationStartupValidationTests
     public void Production_emailAddressWithNoProviderToken_refusesEvenWhenSentryWorks()
     {
         var act = () => Validate(
-            Config(alertEmailTo: "founder@example.com", sentryDsn: "https://example.invalid/redacted"),
+            Config(alertEmailTo: "founder@example.com", sentryDsn: "https://k@o0.ingest.example.com/1"),
             "Production");
 
         act.Should().Throw<StartupConfigurationException>(
@@ -96,7 +96,7 @@ public class AlertingDestinationStartupValidationTests
     {
         var log = new RecordingLogger();
 
-        Validate(Config(sentryDsn: "https://example.invalid/redacted"), "Production", logger: log);
+        Validate(Config(sentryDsn: "https://k@o0.ingest.example.com/1"), "Production", logger: log);
 
         log.Entries.Should().Contain(e => e.Message.Contains("Email:Postmark:ServerToken"),
             "the Worker also emails purchase orders — an absent token deserves a startup warning "

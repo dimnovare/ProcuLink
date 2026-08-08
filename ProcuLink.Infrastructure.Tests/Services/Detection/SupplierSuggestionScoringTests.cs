@@ -76,10 +76,10 @@ public class SupplierSuggestionScoringTests
     // ── Domain normalisation ──────────────────────────────────────────────────
 
     [Theory]
-    [InlineData("redacted@example.invalid", "acme.com")]
-    [InlineData("www.acme.com", "acme.com")]
-    [InlineData("acme.com.", "acme.com")]
-    [InlineData("  ACME.com ", "acme.com")]
+    [InlineData("Orders@Acme.EXAMPLE", "acme.example")]
+    [InlineData("www.acme.com", "acme.example")]
+    [InlineData("acme.com.", "acme.example")]
+    [InlineData("  ACME.com ", "acme.example")]
     public void NormalizeDomain_lowercasesAndStripsAddressAndWwwAndTrailingDot(string raw, string expected)
     {
         Assert.Equal(expected, SupplierSuggestionScoring.NormalizeDomain(raw));

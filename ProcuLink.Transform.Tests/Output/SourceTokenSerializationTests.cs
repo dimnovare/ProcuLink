@@ -32,12 +32,12 @@ public class SourceTokenSerializationTests
     [Fact]
     public void Deserialize_raw_fields_without_id_synthesises_a_stable_id()
     {
-        using var doc = JsonDocument.Parse("""[{"label":"EDI id","value":"REDACTED-TAXID"}]""");
+        using var doc = JsonDocument.Parse("""[{"label":"EDI id","value":"999000111"}]""");
 
         var tokens = SourceTokenSerialization.FromTokensJson(doc);
 
         var t = Assert.Single(tokens);
-        Assert.Equal("REDACTED-TAXID", t.Value);
+        Assert.Equal("999000111", t.Value);
         Assert.Equal("EDI id", t.Label);
         // No id in the source → a deterministic "raw:{label}" id so SourceMap rules can address it.
         Assert.Equal("raw:EDI id", t.Id);

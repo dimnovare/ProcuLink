@@ -78,7 +78,7 @@ public class PurchaseOrderEntity
     public string? SchemaFingerprintHash { get; set; }
 
     /// <summary>
-    /// DOMAIN ONLY of the address this order's email arrived from (e.g. "acme.com") — never the
+    /// DOMAIN ONLY of the address this order's email arrived from (e.g. "acme.example") — never the
     /// local part, never the full address. Null for every non-email ingest path.
     ///
     /// <para><b>Privacy posture (founder ruling D2, 2026-07-25).</b> The full sender address stays
@@ -182,7 +182,7 @@ public class PurchaseOrderEntity
     /// The BUYER's tax / org identifier as printed on the document (e.g. a Norwegian org number
     /// or an EU VAT number). Nullable; populated by the LLM PDF/email extractor when present.
     /// Drives the cXML <c>From/Credential/Identity</c> so a PO from a different buyer never inherits
-    /// the supplier connection's configured From VatNr (the Gjensidige/REDACTED-PARTY bug). Null → the
+    /// the supplier connection's configured From VatNr (the inherited-From-VatNr bug). Null → the
     /// configured / legacy From identity is used, so unconfigured orders stay byte-identical.
     /// Migration <c>AddBuyerTaxIdAndLineTax</c>.
     /// </summary>

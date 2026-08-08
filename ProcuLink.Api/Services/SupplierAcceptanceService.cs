@@ -577,8 +577,8 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
             case "not_label":
             {
                 // Fail when the value IS a label word, or is a label word followed by a NON-LETTER
-                // boundary — catches a parser that swept a label cell into a data field (REDACTED-PARTY
-                // "UIDNr." / "UIDNr " landing in ShipToCity) WITHOUT false-positiving a legitimate
+                // boundary — catches a parser that swept a label cell into a data field (an Austrian
+                // VAT label "UIDNr." / "UIDNr " landing in ShipToCity) WITHOUT false-positiving a legitimate
                 // value that merely starts with the same letters (e.g. city "Cityville" vs label
                 // "City"). A bare StartsWith would wrongly trip the latter.
                 if (string.IsNullOrWhiteSpace(actual)) return true;

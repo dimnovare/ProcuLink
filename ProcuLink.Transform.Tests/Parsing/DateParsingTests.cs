@@ -31,7 +31,7 @@ public class DateParsingTests
 
     [Theory]
     [InlineData("26/06/2026", 2026, 6, 26)]   // 26 can only be the day
-    [InlineData("13.06.2026", 2026, 6, 13)]   // Rheinbahn-style; 13 forces day-first
+    [InlineData("13.06.2026", 2026, 6, 13)]   // day-first-style; 13 forces day-first
     [InlineData("06/26/2026", 2026, 6, 26)]   // 26 in slot 2 → US month-first, still forced
     public void A_component_over_twelve_forces_the_ordering(string raw, int y, int m, int d)
     {
@@ -44,13 +44,13 @@ public class DateParsingTests
     // ── Genuinely ambiguous (both ≤ 12): follow the locale signal ───────────────
 
     [Theory]
-    [InlineData("12.06.2026", true, 2026, 6, 12)]   // EU: 12 June  (the F-21 Rheinbahn/Siemens bug)
+    [InlineData("12.06.2026", true, 2026, 6, 12)]   // EU: 12 June  (the F-21 day-first bug)
     [InlineData("12.06.2026", false, 2026, 12, 6)]  // US: 6 December
-    [InlineData("12/06/2026", true, 2026, 6, 12)]   // EU: 12 June  (EXEMPLAR SEAFOOD header)
-    [InlineData("12-06-2026", true, 2026, 6, 12)]   // EU: 12 June  (REDACTED-PARTY approval date)
+    [InlineData("12/06/2026", true, 2026, 6, 12)]   // EU: 12 June  (NO order header)
+    [InlineData("12-06-2026", true, 2026, 6, 12)]   // EU: 12 June  (approval date)
     [InlineData("12-06-2026", false, 2026, 12, 6)]  // US: 6 December
     [InlineData("08/10/2026", true, 2026, 10, 8)]   // EU: 8 October
-    [InlineData("10.07.2026", true, 2026, 7, 10)]   // EU: 10 July  (Siemens delivery date)
+    [InlineData("10.07.2026", true, 2026, 7, 10)]   // EU: 10 July  (delivery date)
     [InlineData("10.07.2026", false, 2026, 10, 7)]  // US: 7 October
     public void Ambiguous_pair_follows_prefer_day_first_and_is_reported_ambiguous(
         string raw, bool preferDayFirst, int y, int m, int d)
@@ -63,7 +63,7 @@ public class DateParsingTests
     // ── Textual month — unambiguous ─────────────────────────────────────────────
 
     [Theory]
-    [InlineData("12 Jun 2026", 2026, 6, 12)]     // Danfoss "12 Jun 2026"
+    [InlineData("12 Jun 2026", 2026, 6, 12)]     // Exemplar Valves "12 Jun 2026"
     [InlineData("15 Jun 2026", 2026, 6, 15)]
     [InlineData("Jun 12, 2026", 2026, 6, 12)]
     public void Textual_month_is_unambiguous(string raw, int y, int m, int d)

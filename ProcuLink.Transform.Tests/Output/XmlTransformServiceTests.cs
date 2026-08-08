@@ -47,20 +47,20 @@ public class XmlTransformServiceTests
     private static PurchaseOrderEntity BuildAddressedOrder()
     {
         var order = BuildOrder();
-        order.ContactName      = "REDACTED-NAME";
-        order.ContactEmail     = "redacted@example.invalid";
-        order.ContactPhone     = "REDACTED-PHONE";
-        order.ShipToName       = "REDACTED-PARTY";
-        order.ShipToDeliverTo  = "REDACTED-NAME";
-        order.ShipToStreet     = "REDACTED-ADDRESS)";
-        order.ShipToCity       = "REDACTED-ADDRESS";
+        order.ContactName      = "Testperson Alex";
+        order.ContactEmail     = "alex.testperson@buyer.example.com";
+        order.ContactPhone     = "33100000000";
+        order.ShipToName       = "Usine EXEMPLE de la REDACTED-PARTY";
+        order.ShipToDeliverTo  = "Testperson Alex";
+        order.ShipToStreet     = "12 rue des Essais B12-3 (CTX_0000)";
+        order.ShipToCity       = "VILLE-EXEMPLE";
         order.ShipToPostalCode = "63040";
         order.ShipToCountry    = "FRANCE";
-        order.ShipToEmail      = "redacted@example.invalid";
-        order.ShipToPhone      = "REDACTED-PHONE";
-        order.BillToName       = "REDACTED-PARTY";
-        order.BillToStreet     = "REDACTED-ADDRESS";
-        order.BillToCity       = "REDACTED-ADDRESS";
+        order.ShipToEmail      = "ship@buyer.example.com";
+        order.ShipToPhone      = "33100000000";
+        order.BillToName       = "EXEMPLE Comptabilite Fournisseurs";
+        order.BillToStreet     = "Place des Essais Nord";
+        order.BillToCity       = "VILLE-EXEMPLE";
         order.BillToPostalCode = "63000";
         order.BillToCountry    = "FRANCE";
         return order;
@@ -128,23 +128,23 @@ public class XmlTransformServiceTests
         var header = doc.Root!.Element("Header")!;
 
         var shipTo = header.Element("ShipTo")!;
-        shipTo.Element("Name")!.Value.Should().Be("REDACTED-PARTY");
-        shipTo.Element("DeliverTo")!.Value.Should().Be("REDACTED-NAME");
-        shipTo.Element("Street")!.Value.Should().Be("REDACTED-ADDRESS)");
-        shipTo.Element("City")!.Value.Should().Be("REDACTED-ADDRESS");
+        shipTo.Element("Name")!.Value.Should().Be("Usine EXEMPLE de la REDACTED-PARTY");
+        shipTo.Element("DeliverTo")!.Value.Should().Be("Testperson Alex");
+        shipTo.Element("Street")!.Value.Should().Be("12 rue des Essais B12-3 (CTX_0000)");
+        shipTo.Element("City")!.Value.Should().Be("VILLE-EXEMPLE");
         shipTo.Element("PostalCode")!.Value.Should().Be("63040");
         shipTo.Element("Country")!.Value.Should().Be("FRANCE");
-        shipTo.Element("Email")!.Value.Should().Be("redacted@example.invalid");
-        shipTo.Element("Phone")!.Value.Should().Be("REDACTED-PHONE");
+        shipTo.Element("Email")!.Value.Should().Be("ship@buyer.example.com");
+        shipTo.Element("Phone")!.Value.Should().Be("33100000000");
 
         var billTo = header.Element("BillTo")!;
-        billTo.Element("Name")!.Value.Should().Be("REDACTED-PARTY");
+        billTo.Element("Name")!.Value.Should().Be("EXEMPLE Comptabilite Fournisseurs");
         billTo.Element("PostalCode")!.Value.Should().Be("63000");
 
         var contact = header.Element("Contact")!;
-        contact.Element("Name")!.Value.Should().Be("REDACTED-NAME");
-        contact.Element("Email")!.Value.Should().Be("redacted@example.invalid");
-        contact.Element("Phone")!.Value.Should().Be("REDACTED-PHONE");
+        contact.Element("Name")!.Value.Should().Be("Testperson Alex");
+        contact.Element("Email")!.Value.Should().Be("alex.testperson@buyer.example.com");
+        contact.Element("Phone")!.Value.Should().Be("33100000000");
 
         // Blocks sit inside Header, AFTER SupplierName and BEFORE Lines.
         var headerChildren = doc.Root!.Element("Header")!.Elements().Select(e => e.Name.LocalName).ToList();

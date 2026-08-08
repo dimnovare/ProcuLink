@@ -22,8 +22,21 @@ internal static class FixtureCorpus
     /// committed, and a filesystem walk would flag them.
     /// </summary>
     internal static IReadOnlyList<string> TrackedFixtureFiles(string repoRoot)
+        => TrackedFiles(repoRoot, pathspec: null)
+            .Where(IsUnderFixturesDirectory)
+            .ToList();
+
+    /// <summary>
+    /// Every tracked file matching <paramref name="pathspec"/> (all tracked files when null).
+    /// Shared with <see cref="SourcePersonalDataGuardTests"/>, which polices <c>.cs</c> source
+    /// rather than the fixture corpus: the two sweeps ask git the same question in the same way,
+    /// so a change to how "tracked" is determined cannot silently apply to one and not the other.
+    /// </summary>
+    internal static IReadOnlyList<string> TrackedFiles(string repoRoot, string? pathspec)
     {
-        var psi = new ProcessStartInfo("git", "ls-files -z")
+        var args = pathspec is null ? "ls-files -z" : $"ls-files -z -- \"{pathspec}\"";
+
+        var psi = new ProcessStartInfo("git", args)
         {
             WorkingDirectory = repoRoot,
             RedirectStandardOutput = true,
@@ -47,7 +60,6 @@ internal static class FixtureCorpus
 
         return stdout
             .Split('\0', StringSplitOptions.RemoveEmptyEntries)
-            .Where(IsUnderFixturesDirectory)
             .OrderBy(p => p, StringComparer.Ordinal)
             .ToList();
     }

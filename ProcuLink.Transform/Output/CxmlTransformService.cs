@@ -247,7 +247,7 @@ public sealed class CxmlTransformService : ITransformService
     /// identity, so when the order carries a <see cref="PurchaseOrderEntity.BuyerTaxId"/> it becomes
     /// the From identity — KEEPING the configured From domain (or defaulting to
     /// <see cref="DefaultConfiguredDomain"/> when none is configured). This stops a PO from one buyer
-    /// inheriting the supplier connection's configured From VatNr (the Gjensidige/REDACTED-PARTY bug). When
+    /// inheriting the supplier connection's configured From VatNr (the inherited-From-VatNr bug). When
     /// there is NO buyer tax id the result is byte-identical to the pre-feature output: the configured
     /// From credential when set, else the legacy <c>OrgId</c>/orgId GUID identity.
     /// </summary>

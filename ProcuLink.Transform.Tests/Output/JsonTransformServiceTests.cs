@@ -234,14 +234,14 @@ public class JsonTransformServiceTests
     public async Task TransformAsync_BuyerName_PrefersColumn_WhenCanonicalJsonLacksIt()
     {
         var order = BuildOrder();
-        order.BuyerName     = "REDACTED-PARTY";
+        order.BuyerName     = "Exemplar Stahl GmbH";
         order.CanonicalJson = JsonDocument.Parse("""{"poNumber":"PO-JSON-001"}"""); // no buyerName key
 
         var result = await new JsonTransformService().TransformAsync(order, OutputFormat.Json, CancellationToken.None);
         var doc    = await ReadJson(result);
 
         doc.RootElement.GetProperty("buyerName").GetString()
-            .Should().Be("REDACTED-PARTY", "the buyer_name column is authoritative when CanonicalJson omits it");
+            .Should().Be("Exemplar Stahl GmbH", "the buyer_name column is authoritative when CanonicalJson omits it");
     }
 
     [Fact]
@@ -275,20 +275,20 @@ public class JsonTransformServiceTests
     private static PurchaseOrderEntity BuildAddressedOrder()
     {
         var order = BuildOrder();
-        order.ContactName      = "REDACTED-NAME";
-        order.ContactEmail     = "redacted@example.invalid";
-        order.ContactPhone     = "REDACTED-PHONE";
-        order.ShipToName       = "REDACTED-PARTY";
-        order.ShipToDeliverTo  = "REDACTED-NAME";
-        order.ShipToStreet     = "REDACTED-ADDRESS)";
-        order.ShipToCity       = "REDACTED-ADDRESS";
+        order.ContactName      = "Testperson Alex";
+        order.ContactEmail     = "alex.testperson@buyer.example.com";
+        order.ContactPhone     = "33100000000";
+        order.ShipToName       = "Usine EXEMPLE de la REDACTED-PARTY";
+        order.ShipToDeliverTo  = "Testperson Alex";
+        order.ShipToStreet     = "12 rue des Essais B12-3 (CTX_0000)";
+        order.ShipToCity       = "VILLE-EXEMPLE";
         order.ShipToPostalCode = "63040";
         order.ShipToCountry    = "FRANCE";
-        order.ShipToEmail      = "redacted@example.invalid";
-        order.ShipToPhone      = "REDACTED-PHONE";
-        order.BillToName       = "REDACTED-PARTY";
-        order.BillToStreet     = "REDACTED-ADDRESS";
-        order.BillToCity       = "REDACTED-ADDRESS";
+        order.ShipToEmail      = "ship@buyer.example.com";
+        order.ShipToPhone      = "33100000000";
+        order.BillToName       = "EXEMPLE Comptabilite Fournisseurs";
+        order.BillToStreet     = "Place des Essais Nord";
+        order.BillToCity       = "VILLE-EXEMPLE";
         order.BillToPostalCode = "63000";
         order.BillToCountry    = "FRANCE";
         return order;
@@ -316,24 +316,24 @@ public class JsonTransformServiceTests
         var root = doc.RootElement;
 
         var shipTo = root.GetProperty("shipTo");
-        shipTo.GetProperty("name").GetString().Should().Be("REDACTED-PARTY");
-        shipTo.GetProperty("deliverTo").GetString().Should().Be("REDACTED-NAME");
-        shipTo.GetProperty("street").GetString().Should().Be("REDACTED-ADDRESS)");
-        shipTo.GetProperty("city").GetString().Should().Be("REDACTED-ADDRESS");
+        shipTo.GetProperty("name").GetString().Should().Be("Usine EXEMPLE de la REDACTED-PARTY");
+        shipTo.GetProperty("deliverTo").GetString().Should().Be("Testperson Alex");
+        shipTo.GetProperty("street").GetString().Should().Be("12 rue des Essais B12-3 (CTX_0000)");
+        shipTo.GetProperty("city").GetString().Should().Be("VILLE-EXEMPLE");
         shipTo.GetProperty("postalCode").GetString().Should().Be("63040");
         shipTo.GetProperty("country").GetString().Should().Be("FRANCE");
-        shipTo.GetProperty("email").GetString().Should().Be("redacted@example.invalid");
-        shipTo.GetProperty("phone").GetString().Should().Be("REDACTED-PHONE");
+        shipTo.GetProperty("email").GetString().Should().Be("ship@buyer.example.com");
+        shipTo.GetProperty("phone").GetString().Should().Be("33100000000");
 
         var billTo = root.GetProperty("billTo");
-        billTo.GetProperty("name").GetString().Should().Be("REDACTED-PARTY");
-        billTo.GetProperty("street").GetString().Should().Be("REDACTED-ADDRESS");
+        billTo.GetProperty("name").GetString().Should().Be("EXEMPLE Comptabilite Fournisseurs");
+        billTo.GetProperty("street").GetString().Should().Be("Place des Essais Nord");
         billTo.GetProperty("postalCode").GetString().Should().Be("63000");
 
         var contact = root.GetProperty("contact");
-        contact.GetProperty("name").GetString().Should().Be("REDACTED-NAME");
-        contact.GetProperty("email").GetString().Should().Be("redacted@example.invalid");
-        contact.GetProperty("phone").GetString().Should().Be("REDACTED-PHONE");
+        contact.GetProperty("name").GetString().Should().Be("Testperson Alex");
+        contact.GetProperty("email").GetString().Should().Be("alex.testperson@buyer.example.com");
+        contact.GetProperty("phone").GetString().Should().Be("33100000000");
     }
 
     // ── Validation errors ─────────────────────────────────────────────────────

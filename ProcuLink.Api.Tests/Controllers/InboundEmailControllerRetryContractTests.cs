@@ -34,7 +34,7 @@ public class InboundEmailControllerRetryContractTests
             Success: false,
             OrgId: null,
             CreatedOrderIds: Array.Empty<Guid>(),
-            Error: "redacted@example.invalid",
+            Error: "Recipient 'someone@mail.example' does not look like an inbound ProcuLink address.",
             RejectionKind: InboundEmailRejectionKind.Permanent));
 
         var result = await controller.Postmark(ValidBody(), CancellationToken.None);

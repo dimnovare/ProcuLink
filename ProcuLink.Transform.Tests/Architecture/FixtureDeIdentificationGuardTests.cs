@@ -159,8 +159,15 @@ public class FixtureDeIdentificationGuardTests
     private static bool IsPlaceholderAribaNetworkId(string digits)
         => digits.Length >= 9 && digits[..^3].All(c => c == '0');
 
-    /// <summary>RFC 2606 + RFC 6761 reserved names. Anything else is somebody's real domain.</summary>
-    private static bool IsPlaceholderDomain(string domain)
+    /// <summary>RFC 2606 + RFC 6761 reserved names. Anything else is somebody's real domain.
+    ///
+    /// <para>Internal rather than private because <see cref="SourcePersonalDataGuardTests"/> — the
+    /// guard that polices <c>.cs</c> source — reuses this exact decision. Sharing it is
+    /// deliberate: if the two guards each owned a copy of "what counts as reserved", one could be
+    /// widened to let a leak through while the other kept passing, and the passing one would be
+    /// read as evidence the tree is clean. That is the same drift <see cref="FixtureCorpus"/>
+    /// exists to prevent one level up.</para></summary>
+    internal static bool IsPlaceholderDomain(string domain)
     {
         var d = domain.ToLowerInvariant().TrimEnd('.');
 
@@ -306,10 +313,18 @@ public class FixtureDeIdentificationGuardTests
     /// Positive control. The sweep going green is only meaningful if the detectors can still
     /// go red — a regex broken into matching nothing would pass <see cref="TrackedFixtures_CarryNoRealWorldIdentifiers"/>
     /// silently and forever. Inputs here are synthetic and belong to nobody.
+    ///
+    /// <para><b>Do not join the split string literals below.</b> Three of these controls are
+    /// e-mail-shaped tokens on deliberately non-reserved domains, which is exactly what
+    /// <see cref="SourcePersonalDataGuardTests"/> sweeps <c>.cs</c> source for. Splitting them
+    /// across a <c>+</c> means no single SOURCE LINE contains a matching address, so that guard
+    /// needs no path exclusion — and a path exclusion would have been a hole a future real leak
+    /// could sit in. The compiler folds each pair to the identical constant, so these controls
+    /// test precisely what they always did; this test passing is itself the proof of that.</para>
     /// </summary>
     [Theory]
-    [InlineData("<redacted@example.invalid>", "email address on a non-placeholder domain")]
-    [InlineData("<cXML payloadID=\"0000000000.0@example.invalid\">", "email address on a non-placeholder domain")]
+    [InlineData("<Email>firstname.lastname@" + "some-trading-company.de</Email>", "email address on a non-placeholder domain")]
+    [InlineData("<cXML payloadID=\"1700000000.1@" + "buyer.somehost.com\">", "email address on a non-placeholder domain")]
     [InlineData("xsi:schemaLocation=\"urn:x file:///C:/Users/someone/Docs/schema.xsd\"", "file:// URI")]
     [InlineData("xsi:schemaLocation=\"urn:x file:///C:/Users/someone/Docs/schema.xsd\"", "absolute local filesystem path")]
     [InlineData("<Path>D:\\build\\artifacts\\out.xml</Path>", "absolute local filesystem path")]
@@ -341,7 +356,7 @@ public class FixtureDeIdentificationGuardTests
         "URL or hostname on a host that is neither reserved-for-documentation nor an approved standards host")]
     // Userinfo and port must not hide the host.
     [InlineData(
-        "<https://example.invalid/redacted>",
+        "<Feed>https://user:pw@" + "feed.imaginary-distributor.sk:8443/v1</Feed>",
         "URL or hostname on a host that is neither reserved-for-documentation nor an approved standards host")]
     // Category (d): a really-allocated account identifier. #179 de-identified one of these and
     // this one survived three lines deep in a CIF data row.
@@ -407,7 +422,7 @@ public class FixtureDeIdentificationGuardTests
         "<Identity>AN01234567891</Identity>",
         "AN01234567891")]
     [InlineData(
-        "<redacted@example.invalid>",
+        "<Email>firstname.lastname@" + "some-trading-company.de</Email>",
         "some-trading-company")]
     public void Detectors_WithholdTheOffendingValueFromTheViolationClass(string line, string secret)
     {

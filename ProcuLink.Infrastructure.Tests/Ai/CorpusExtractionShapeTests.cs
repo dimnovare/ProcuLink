@@ -27,20 +27,20 @@ public class CorpusExtractionShapeTests
     private const double HighConfidence = 0.95; // > ConfidenceThreshold (0.6)
 
     /// <summary>
-    /// REDACTED-PARTY — Bestellung 4730154181. Line manufacturer P/N
-    /// <c>SCPMX94EGK</c>, ship-to party VAT <c>REDACTED-TAXID</c>, ordering contact
-    /// email <c>redacted@example.invalid</c>, incoterms <c>DDP</c>. All four must
+    /// AT / EUR, German-labelled PDF ("Bestellung"). Line manufacturer P/N
+    /// <c>SCPMX94EGK</c>, ship-to party VAT <c>ATU99000000</c>, ordering contact
+    /// email <c>c.testperson@buyer.example.com</c>, incoterms <c>DDP</c>. All four must
     /// survive onto the canonical order.
     /// </summary>
     [Fact]
-    public void REDACTED_TEST_NAME()
+    public void PdfAt_Eur_surfaces_mpn_shipto_vat_contact_and_incoterms()
     {
         var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
             Confidence: HighConfidence,
             PoNumber: "4730154181",
             OrderDate: "2026-06-12",
             Currency: "EUR",
-            BuyerName: "REDACTED-PARTY",
+            BuyerName: "Exemplar Stahl GmbH",
             Lines: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(
@@ -50,45 +50,45 @@ public class CorpusExtractionShapeTests
             },
             SupplierName: "REDACTED-PARTY",
             Incoterms: "DDP",
-            Contact: new OpenAiPdfOrderExtractor.ContactDto(Email: "redacted@example.invalid"),
+            Contact: new OpenAiPdfOrderExtractor.ContactDto(Email: "c.testperson@buyer.example.com"),
             Parties: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionPartyDto(
-                    Role: "shipTo", Name: "REDACTED-PARTY", City: "Linz", Vat: "REDACTED-TAXID"),
+                    Role: "shipTo", Name: "Exemplar Stahl GmbH", City: "Teststadt", Vat: "ATU99000000"),
             },
-            RawFields: new[] { new OpenAiPdfOrderExtractor.RawFieldDto("EDI id", "REDACTED-TAXID") });
+            RawFields: new[] { new OpenAiPdfOrderExtractor.RawFieldDto("EDI id", "999000111") });
 
         // Every emitted number present → anti-hallucination passes, zero review flags.
-        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, "REDACTED-DOCNO");
+        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, "4730154181 306.28 1 ST EUR 999000111");
 
         Assert.True(result.Success);
         Assert.Empty(result.ReviewLineNumbers);
         Assert.Equal("DDP", result.Order!.Incoterms);
-        Assert.Equal("redacted@example.invalid", result.Order.ContactEmail);
-        Assert.Equal("REDACTED-TAXID", result.Order.Parties!.Single(p => p.Role == "shipTo").Vat);
+        Assert.Equal("c.testperson@buyer.example.com", result.Order.ContactEmail);
+        Assert.Equal("ATU99000000", result.Order.Parties!.Single(p => p.Role == "shipTo").Vat);
         Assert.Equal("SCPMX94EGK", result.Order.Lines[0].ManufacturerPartNumber);
     }
 
     /// <summary>
-    /// EXEMPLAR SEAFOOD — purchaseOrder_10123140. A per-line <c>Recipient</c>
-    /// (<c>redacted@example.invalid</c>) must survive onto the line. This is the
+    /// NO / NOK, single-line PDF. A per-line <c>Recipient</c>
+    /// (<c>robin.testperson@buyer.example.com</c>) must survive onto the line. This is the
     /// classic field the old fixed-canonical header dropped.
     /// </summary>
     [Fact]
-    public void REDACTED-PARTY()
+    public void PdfNo_Nok_surfaces_per_line_recipient()
     {
         var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
             Confidence: HighConfidence,
             PoNumber: "10123140",
             OrderDate: "2026-06-12",
             Currency: "NOK",
-            BuyerName: "REDACTED-PARTY",
+            BuyerName: "Exemplar Seafood ASA",
             Lines: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(
                     LineNumber: 1, BuyerItemCode: "FEED-001", Description: "Salmon feed",
                     Quantity: 10, Unit: "PC", UnitPrice: 25.0, LineAmount: 250.0,
-                    Recipient: "redacted@example.invalid"),
+                    Recipient: "robin.testperson@buyer.example.com"),
             },
             SupplierName: "REDACTED-PARTY");
 
@@ -96,23 +96,23 @@ public class CorpusExtractionShapeTests
 
         Assert.True(result.Success);
         Assert.Empty(result.ReviewLineNumbers);
-        Assert.Equal("redacted@example.invalid", result.Order!.Lines[0].Recipient);
+        Assert.Equal("robin.testperson@buyer.example.com", result.Order!.Lines[0].Recipient);
     }
 
     /// <summary>
-    /// LähiTapiola — PO2680200079. An EDI id <c>REDACTED-DOCNO</c> arrives in
+    /// FI / EUR PDF. An EDI id <c>003700000004</c> arrives in
     /// <c>raw_fields</c> (it has no canonical slot) and must appear verbatim in
     /// <c>result.Order.RawFields</c>.
     /// </summary>
     [Fact]
-    public void REDACTED_TEST_NAME()
+    public void PdfFi_Eur_surfaces_edi_id_in_raw_fields()
     {
         var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
             Confidence: HighConfidence,
             PoNumber: "2680200079",
             OrderDate: "2026-06-12",
             Currency: "EUR",
-            BuyerName: "LähiTapiola",
+            BuyerName: "Exemplar Vakuutus",
             Lines: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(
@@ -120,28 +120,28 @@ public class CorpusExtractionShapeTests
                     Quantity: 1, Unit: "PC", UnitPrice: 100.0, LineAmount: 100.0),
             },
             SupplierName: "REDACTED-PARTY",
-            RawFields: new[] { new OpenAiPdfOrderExtractor.RawFieldDto("EDI id", "REDACTED-DOCNO") });
+            RawFields: new[] { new OpenAiPdfOrderExtractor.RawFieldDto("EDI id", "003700000004") });
 
-        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, "REDACTED-DOCNO");
+        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, "2680200079 1 100.0 PC EUR 003700000004");
 
         Assert.True(result.Success);
         Assert.Empty(result.ReviewLineNumbers);
-        Assert.Contains(result.Order!.RawFields!, f => f.Label == "EDI id" && f.Value == "REDACTED-DOCNO");
+        Assert.Contains(result.Order!.RawFields!, f => f.Label == "EDI id" && f.Value == "003700000004");
     }
 
     /// <summary>
-    /// REDACTED-PARTY — E032180. Header <c>Incoterms</c> <c>FCA</c> must surface, and a
-    /// line manufacturer P/N <c>X2791HS-B1</c> must ride through.
+    /// FR / EUR PDF, alphanumeric PO number. Header <c>Incoterms</c> <c>FCA</c> must surface,
+    /// and a line manufacturer P/N <c>X2791HS-B1</c> must ride through.
     /// </summary>
     [Fact]
-    public void REDACTED-PARTY()
+    public void PdfFr_Eur_surfaces_header_incoterms_and_line_mpn()
     {
         var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
             Confidence: HighConfidence,
             PoNumber: "E032180",
             OrderDate: "2026-06-12",
             Currency: "EUR",
-            BuyerName: "REDACTED-PARTY",
+            BuyerName: "Manufacture Exemple des Pneumatiques",
             Lines: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(
@@ -161,24 +161,24 @@ public class CorpusExtractionShapeTests
     }
 
     /// <summary>
-    /// DNV — 226131000790. A per-line <c>Recipient</c> AND a <c>raw_fields</c>
+    /// NO / USD services PDF. A per-line <c>Recipient</c> AND a <c>raw_fields</c>
     /// entry must both survive (two different lossless channels on one order).
     /// </summary>
     [Fact]
-    public void REDACTED_TEST_NAME()
+    public void PdfNo_Usd_surfaces_per_line_recipient_and_raw_field()
     {
         var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
             Confidence: HighConfidence,
             PoNumber: "226131000790",
             OrderDate: "2026-06-12",
             Currency: "USD",
-            BuyerName: "REDACTED-PARTY",
+            BuyerName: "Exemplar Marine AS",
             Lines: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(
                     LineNumber: 1, BuyerItemCode: "SRV-1", Description: "Survey service",
                     Quantity: 2, Unit: "PC", UnitPrice: 500.0, LineAmount: 1000.0,
-                    Recipient: "redacted@example.invalid"),
+                    Recipient: "requisitioner@buyer.example.com"),
             },
             SupplierName: "REDACTED-PARTY",
             RawFields: new[] { new OpenAiPdfOrderExtractor.RawFieldDto("Cost centre", "CC-4471") });
@@ -187,23 +187,23 @@ public class CorpusExtractionShapeTests
 
         Assert.True(result.Success);
         Assert.Empty(result.ReviewLineNumbers);
-        Assert.Equal("redacted@example.invalid", result.Order!.Lines[0].Recipient);
+        Assert.Equal("requisitioner@buyer.example.com", result.Order!.Lines[0].Recipient);
         Assert.Contains(result.Order.RawFields!, f => f.Label == "Cost centre" && f.Value == "CC-4471");
     }
 
     /// <summary>
-    /// Danfoss — Purchase Order 4509404105. A bill-to party carrying VAT
-    /// <c>REDACTED-TAXID</c> must survive as a <c>billTo</c> party with its VAT.
+    /// DK / DKK PDF. A bill-to party carrying VAT
+    /// <c>DK99000000</c> must survive as a <c>billTo</c> party with its VAT.
     /// </summary>
     [Fact]
-    public void REDACTED-PARTY()
+    public void PdfDk_Dkk_surfaces_billto_party_and_vat()
     {
         var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
             Confidence: HighConfidence,
             PoNumber: "4509404105",
             OrderDate: "2026-06-12",
             Currency: "DKK",
-            BuyerName: "REDACTED-PARTY",
+            BuyerName: "Exemplar Valves A/S",
             Lines: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(
@@ -214,8 +214,8 @@ public class CorpusExtractionShapeTests
             Parties: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionPartyDto(
-                    Role: "billTo", Name: "REDACTED-PARTY", City: "Nordborg",
-                    Country: "DK", Vat: "REDACTED-TAXID"),
+                    Role: "billTo", Name: "Exemplar Valves A/S", City: "Teststad",
+                    Country: "DK", Vat: "DK99000000"),
             });
 
         var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, "4509404105 5 40.0 200.0 PC DKK");
@@ -223,7 +223,7 @@ public class CorpusExtractionShapeTests
         Assert.True(result.Success);
         Assert.Empty(result.ReviewLineNumbers);
         var billTo = result.Order!.Parties!.Single(p => p.Role == "billTo");
-        Assert.Equal("REDACTED-PARTY", billTo.Name);
-        Assert.Equal("REDACTED-TAXID", billTo.Vat);
+        Assert.Equal("Exemplar Valves A/S", billTo.Name);
+        Assert.Equal("DK99000000", billTo.Vat);
     }
 }

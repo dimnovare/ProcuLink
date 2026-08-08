@@ -1226,7 +1226,7 @@ public class SuppliersController : ControllerBase
     /// <summary>
     /// Stores a primary domain in the same canonical form inbound sender domains are stored in, so
     /// the two are comparable by plain equality. A user who types "https://www.Acme.com/" or
-    /// "redacted@example.invalid" gets "acme.com" either way.
+    /// "orders@Acme.example" gets "acme.example" either way.
     /// </summary>
     private static string? NormalizedDomain(string? value)
     {

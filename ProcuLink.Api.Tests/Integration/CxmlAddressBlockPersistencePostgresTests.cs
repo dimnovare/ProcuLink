@@ -75,23 +75,23 @@ public sealed class CxmlAddressBlockPersistencePostgresTests(PostgresContainerFi
                 OrderDate  = new DateOnly(2024, 1, 15),
                 CreatedAt  = now,
                 UpdatedAt  = now,
-                // REDACTED-PARTY-shaped ship-to + bill-to (denormalised cXML address columns).
-                ShipToName       = "REDACTED-PARTY",
-                ShipToDeliverTo  = "REDACTED-NAME",
-                ShipToStreet     = "REDACTED-ADDRESS)",
-                ShipToCity       = "REDACTED-ADDRESS",
+                // Exemple-shaped ship-to + bill-to (denormalised cXML address columns).
+                ShipToName       = "Usine EXEMPLE de la REDACTED-PARTY",
+                ShipToDeliverTo  = "Testperson Alex",
+                ShipToStreet     = "12 rue des Essais B12-3 (CTX_0000)",
+                ShipToCity       = "VILLE-EXEMPLE",
                 ShipToPostalCode = "63040",
                 ShipToCountry    = "FRANCE",
-                ShipToEmail      = "redacted@example.invalid",
-                ShipToPhone      = "REDACTED-PHONE",
-                BillToName       = "REDACTED-PARTY",
+                ShipToEmail      = "ship@buyer.example.com",
+                ShipToPhone      = "33100000000",
+                BillToName       = "EXEMPLE Comptabilite Fournisseurs",
                 BillToDeliverTo  = "Service Comptable",
-                BillToStreet     = "REDACTED-ADDRESS",
-                BillToCity       = "REDACTED-ADDRESS",
+                BillToStreet     = "Place des Essais Nord",
+                BillToCity       = "VILLE-EXEMPLE",
                 BillToPostalCode = "63000",
                 BillToCountry    = "FRANCE",
-                BillToEmail      = "redacted@example.invalid",
-                BillToPhone      = "REDACTED-PHONE",
+                BillToEmail      = "compta@buyer.example.com",
+                BillToPhone      = "33100000001",
             });
             await db.SaveChangesAsync();
         }
@@ -100,23 +100,23 @@ public sealed class CxmlAddressBlockPersistencePostgresTests(PostgresContainerFi
         {
             var o = await db.PurchaseOrders.AsNoTracking().SingleAsync(x => x.Id == orderId);
 
-            Assert.Equal("REDACTED-PARTY", o.ShipToName);
-            Assert.Equal("REDACTED-NAME", o.ShipToDeliverTo);
-            Assert.Equal("REDACTED-ADDRESS)", o.ShipToStreet);
-            Assert.Equal("REDACTED-ADDRESS", o.ShipToCity);
+            Assert.Equal("Usine EXEMPLE de la REDACTED-PARTY", o.ShipToName);
+            Assert.Equal("Testperson Alex", o.ShipToDeliverTo);
+            Assert.Equal("12 rue des Essais B12-3 (CTX_0000)", o.ShipToStreet);
+            Assert.Equal("VILLE-EXEMPLE", o.ShipToCity);
             Assert.Equal("63040", o.ShipToPostalCode);
             Assert.Equal("FRANCE", o.ShipToCountry);
-            Assert.Equal("redacted@example.invalid", o.ShipToEmail);
-            Assert.Equal("REDACTED-PHONE", o.ShipToPhone);
+            Assert.Equal("ship@buyer.example.com", o.ShipToEmail);
+            Assert.Equal("33100000000", o.ShipToPhone);
 
-            Assert.Equal("REDACTED-PARTY", o.BillToName);
+            Assert.Equal("EXEMPLE Comptabilite Fournisseurs", o.BillToName);
             Assert.Equal("Service Comptable", o.BillToDeliverTo);
-            Assert.Equal("REDACTED-ADDRESS", o.BillToStreet);
-            Assert.Equal("REDACTED-ADDRESS", o.BillToCity);
+            Assert.Equal("Place des Essais Nord", o.BillToStreet);
+            Assert.Equal("VILLE-EXEMPLE", o.BillToCity);
             Assert.Equal("63000", o.BillToPostalCode);
             Assert.Equal("FRANCE", o.BillToCountry);
-            Assert.Equal("redacted@example.invalid", o.BillToEmail);
-            Assert.Equal("REDACTED-PHONE", o.BillToPhone);
+            Assert.Equal("compta@buyer.example.com", o.BillToEmail);
+            Assert.Equal("33100000001", o.BillToPhone);
         }
     }
 }

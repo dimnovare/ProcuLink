@@ -218,15 +218,15 @@ public class OrdersControllerPhase4DtoTests
             UpdatedAt     = DateTime.UtcNow,
             OutboundArtifacts = new List<OutboundArtifact>(),
             // Buyer tax id + extracted ship-to / bill-to / contact.
-            BuyerTaxId       = "REDACTED-TAXID",
-            ShipToName       = "REDACTED-PARTY",
-            ShipToStreet     = "REDACTED-ADDRESS",
-            ShipToCity       = "REDACTED-ADDRESS",
+            BuyerTaxId       = "NO999000000",
+            ShipToName       = "Usine EXEMPLE de la REDACTED-PARTY",
+            ShipToStreet     = "12 rue des Essais",
+            ShipToCity       = "VILLE-EXEMPLE",
             ShipToPostalCode = "63040",
             ShipToCountry    = "FRANCE",
-            BillToName       = "REDACTED-PARTY",
-            ContactName      = "REDACTED-NAME",
-            ContactEmail     = "redacted@example.invalid",
+            BillToName       = "EXEMPLE Comptabilite Fournisseurs",
+            ContactName      = "Testperson Alex",
+            ContactEmail     = "j@x.example",
             Lines = new List<PurchaseOrderLineEntity>
             {
                 new()
@@ -254,12 +254,12 @@ public class OrdersControllerPhase4DtoTests
         var ok  = Assert.IsType<OkObjectResult>(result);
         var dto = Assert.IsType<OrderDto>(ok.Value);
 
-        Assert.Equal("REDACTED-TAXID", dto.BuyerTaxId);
-        Assert.Equal("REDACTED-PARTY", dto.ShipToName);
-        Assert.Equal("REDACTED-ADDRESS", dto.ShipToCity);
-        Assert.Equal("REDACTED-PARTY", dto.BillToName);
-        Assert.Equal("REDACTED-NAME", dto.ContactName);
-        Assert.Equal("redacted@example.invalid", dto.ContactEmail);
+        Assert.Equal("NO999000000", dto.BuyerTaxId);
+        Assert.Equal("Usine EXEMPLE de la REDACTED-PARTY", dto.ShipToName);
+        Assert.Equal("VILLE-EXEMPLE", dto.ShipToCity);
+        Assert.Equal("EXEMPLE Comptabilite Fournisseurs", dto.BillToName);
+        Assert.Equal("Testperson Alex", dto.ContactName);
+        Assert.Equal("j@x.example", dto.ContactEmail);
 
         var line = Assert.Single(dto.Lines);
         Assert.Equal(25m, line.TaxRate);

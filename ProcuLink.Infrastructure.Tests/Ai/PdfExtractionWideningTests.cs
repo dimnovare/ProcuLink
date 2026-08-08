@@ -20,35 +20,35 @@ public class ValidateAndMapWideningTests
             PoNumber: "4730154181",
             OrderDate: "2026-06-12",
             Currency: "EUR",
-            BuyerName: "REDACTED-PARTY",
+            BuyerName: "Exemplar Stahl GmbH",
             Lines: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(
                     LineNumber: 1, BuyerItemCode: "00010", Description: "Panasonic",
                     Quantity: 1, Unit: "ST", UnitPrice: 306.28, LineAmount: 306.28,
-                    ManufacturerPartNumber: "SCPMX94EGK", Recipient: "redacted@example.invalid")
+                    ManufacturerPartNumber: "SCPMX94EGK", Recipient: "c.testperson@buyer.example.com")
             },
             SupplierName: "REDACTED-PARTY",
             Parties: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionPartyDto(
-                    Role: "shipTo", Name: "REDACTED-PARTY", City: "Linz", Vat: "REDACTED-TAXID")
+                    Role: "shipTo", Name: "Exemplar Stahl GmbH", City: "Teststadt", Vat: "ATU99000000")
             },
             // The schema models contact as a nested object (strict-mode), so the DTO
             // carries a ContactDto — ValidateAndMap flattens it to Order.ContactEmail.
-            Contact: new OpenAiPdfOrderExtractor.ContactDto(Email: "redacted@example.invalid"),
+            Contact: new OpenAiPdfOrderExtractor.ContactDto(Email: "c.testperson@buyer.example.com"),
             Incoterms: "DDP",
-            RawFields: new[] { new OpenAiPdfOrderExtractor.RawFieldDto("EDI id", "REDACTED-TAXID") });
+            RawFields: new[] { new OpenAiPdfOrderExtractor.RawFieldDto("EDI id", "999000111") });
 
         // sourceText contains every emitted number so anti-hallucination passes.
-        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, "REDACTED-DOCNO");
+        var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, "4730154181 306.28 1 ST EUR 999000111");
 
         Assert.True(result.Success);
         Assert.Equal("DDP", result.Order!.Incoterms);
-        Assert.Equal("redacted@example.invalid", result.Order.ContactEmail);
-        Assert.Equal("REDACTED-TAXID", result.Order.Parties!.Single(p => p.Role == "shipTo").Vat);
+        Assert.Equal("c.testperson@buyer.example.com", result.Order.ContactEmail);
+        Assert.Equal("ATU99000000", result.Order.Parties!.Single(p => p.Role == "shipTo").Vat);
         Assert.Equal("SCPMX94EGK", result.Order.Lines[0].ManufacturerPartNumber);
-        Assert.Contains(result.Order.RawFields!, f => f.Label == "EDI id" && f.Value == "REDACTED-TAXID");
+        Assert.Contains(result.Order.RawFields!, f => f.Label == "EDI id" && f.Value == "999000111");
     }
 }
 

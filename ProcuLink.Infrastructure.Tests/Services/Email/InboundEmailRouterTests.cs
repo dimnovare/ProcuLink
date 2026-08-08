@@ -889,7 +889,7 @@ public class InboundEmailRouterTests
 
         var payload = new InboundEmailPayload(
             FromEmail: "buyer@example.com",
-            ToEmail:   "redacted@example.invalid",
+            ToEmail:   "someone@mail.example",
             Subject:   "Not for us",
             Attachments: Array.Empty<InboundAttachment>());
 
@@ -1138,10 +1138,10 @@ public class InboundEmailRouterTests
     // ── Sender-domain capture (founder ruling D2) ────────────────────────────
 
     [Theory]
-    [InlineData("redacted@example.invalid", "acme.com")]
-    [InlineData("redacted@example.invalid", "acme.com")]
-    [InlineData("\"Acme Orders\" <redacted@example.invalid>", "example.invalid")]
-    [InlineData("redacted@example.invalid", "acme.com")]
+    [InlineData("orders@acme.example", "acme.example")]
+    [InlineData("Orders@ACME.eXaMpLe", "acme.example")]
+    [InlineData("\"Acme Orders\" <orders@mail.acme.example>", "example.invalid")]
+    [InlineData("a.person+tag@acme.example", "acme.example")]
     public void ExtractSenderDomain_keepsOnlyTheDomain(string from, string expected)
     {
         // The local part is the half that identifies a PERSON. It must not survive this call —
@@ -1175,7 +1175,7 @@ public class InboundEmailRouterTests
         var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: orgId);
 
         var payload = new InboundEmailPayload(
-            FromEmail: "redacted@example.invalid",
+            FromEmail: "Orders@ACME.example",
             ToEmail:   $"orders@{Slug}.proculink.eu",
             Subject:   "PO #12345",
             Attachments: new[]
@@ -1186,7 +1186,7 @@ public class InboundEmailRouterTests
         var result = await router.RouteAsync(payload, default);
 
         result.Success.Should().BeTrue();
-        orders.SenderDomains.Should().ContainSingle().Which.Should().Be("acme.com");
+        orders.SenderDomains.Should().ContainSingle().Which.Should().Be("acme.example");
     }
 
     [Fact]

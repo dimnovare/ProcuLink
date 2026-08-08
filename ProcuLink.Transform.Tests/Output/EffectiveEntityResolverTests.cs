@@ -74,31 +74,31 @@ public class EffectiveEntityResolverTests
         // the structured preview + delivery path (which always goes through Resolve) silently drops every
         // <Contact>/<ShipTo>/<BillTo> block even though the source order has them populated.
         var order = BuildOrder();
-        order.ContactName = "REDACTED-NAME"; order.ContactEmail = "redacted@example.invalid"; order.ContactPhone = "REDACTED-PHONE";
-        order.ShipToName = "Usine REDACTED-PARTY"; order.ShipToStreet = "REDACTED-ADDRESS"; order.ShipToCity = "REDACTED-ADDRESS";
-        order.ShipToPostalCode = "63040"; order.ShipToCountry = "FRANCE"; order.ShipToDeliverTo = "Jacquet";
-        order.BillToName = "REDACTED-PARTY"; order.BillToStreet = "Place des Carmes"; order.BillToCity = "REDACTED-ADDRESS";
+        order.ContactName = "Testperson Alex"; order.ContactEmail = "j@x.example"; order.ContactPhone = "33100000000";
+        order.ShipToName = "Usine EXEMPLE"; order.ShipToStreet = "12 rue des Essais"; order.ShipToCity = "VILLE-EXEMPLE";
+        order.ShipToPostalCode = "63040"; order.ShipToCountry = "FRANCE"; order.ShipToDeliverTo = "Testperson";
+        order.BillToName = "Manufacture Exemple"; order.BillToStreet = "Place des Essais"; order.BillToCity = "VILLE-EXEMPLE CEDEX";
         order.BillToPostalCode = "63040"; order.BillToCountry = "France";
 
         var effective = EffectiveEntityResolver.Resolve(order, new OrderMappingOverride());
 
-        effective.ContactName.Should().Be("REDACTED-NAME");
-        effective.ContactEmail.Should().Be("redacted@example.invalid");
-        effective.ContactPhone.Should().Be("REDACTED-PHONE");
-        effective.ShipToName.Should().Be("Usine REDACTED-PARTY");
-        effective.ShipToStreet.Should().Be("REDACTED-ADDRESS");
-        effective.ShipToCity.Should().Be("REDACTED-ADDRESS");
+        effective.ContactName.Should().Be("Testperson Alex");
+        effective.ContactEmail.Should().Be("j@x.example");
+        effective.ContactPhone.Should().Be("33100000000");
+        effective.ShipToName.Should().Be("Usine EXEMPLE");
+        effective.ShipToStreet.Should().Be("12 rue des Essais");
+        effective.ShipToCity.Should().Be("VILLE-EXEMPLE");
         effective.ShipToPostalCode.Should().Be("63040");
         effective.ShipToCountry.Should().Be("FRANCE");
-        effective.ShipToDeliverTo.Should().Be("Jacquet");
-        effective.BillToName.Should().Be("REDACTED-PARTY");
-        effective.BillToStreet.Should().Be("Place des Carmes");
-        effective.BillToCity.Should().Be("REDACTED-ADDRESS");
+        effective.ShipToDeliverTo.Should().Be("Testperson");
+        effective.BillToName.Should().Be("Manufacture Exemple");
+        effective.BillToStreet.Should().Be("Place des Essais");
+        effective.BillToCity.Should().Be("VILLE-EXEMPLE CEDEX");
 
         // And the cXML transform run on the effective entity actually emits the blocks.
         var cxml = Run(TransformerFor(OutputFormat.CXml), effective, OutputFormat.CXml);
         cxml.Should().Contain("<BillTo>").And.Contain("<Contact>").And.Contain("<ShipTo>");
-        cxml.Should().Contain("REDACTED-PARTY").And.Contain("REDACTED-NAME");
+        cxml.Should().Contain("Manufacture Exemple").And.Contain("Testperson Alex");
     }
 
     [Fact]
@@ -109,19 +109,19 @@ public class EffectiveEntityResolverTests
         // must carry them verbatim — omitting them silently reverts the From identity and drops every
         // line <Tax> on the structured preview + delivery path (which always goes through Resolve).
         var order = BuildOrder();
-        order.BuyerTaxId = "REDACTED-TAXID";
+        order.BuyerTaxId = "NO999000000";
         order.Lines[0].TaxAmount = 834.27m;
         order.Lines[0].TaxRate   = 25m;
 
         var effective = EffectiveEntityResolver.Resolve(order, new OrderMappingOverride());
 
-        effective.BuyerTaxId.Should().Be("REDACTED-TAXID");
+        effective.BuyerTaxId.Should().Be("NO999000000");
         effective.Lines[0].TaxAmount.Should().Be(834.27m);
         effective.Lines[0].TaxRate.Should().Be(25m);
 
         // And the cXML run on the effective entity emits the dynamic From identity + the line <Tax>.
         var cxml = Run(TransformerFor(OutputFormat.CXml), effective, OutputFormat.CXml);
-        cxml.Should().Contain("REDACTED-TAXID").And.Contain("<Tax>").And.Contain("834.27");
+        cxml.Should().Contain("NO999000000").And.Contain("<Tax>").And.Contain("834.27");
     }
 
     // ── SupportsOverrideFormat ────────────────────────────────────────────────

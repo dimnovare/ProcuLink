@@ -37,7 +37,7 @@ public class Supplier
     public string? EdiCode { get; set; }
 
     /// <summary>
-    /// Primary email domain this supplier sends from (e.g. "acme.com"), without scheme or "www.".
+    /// Primary email domain this supplier sends from (e.g. "acme.example"), without scheme or "www.".
     /// Matched against the domain of an inbound order's sender.
     /// </summary>
     public string? PrimaryDomain { get; set; }

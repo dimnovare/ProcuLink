@@ -168,7 +168,7 @@ public class OrderServiceCompositionRootTests
         var orders = scope.ServiceProvider.GetRequiredService<IOrderService>();
         var result = await orders.CreateUnroutedStubFromParsedOrderAsync(
             orgId, ProseOrder(), "email_body_nlp", CancellationToken.None,
-            inboundSenderDomain: "acme.com");
+            inboundSenderDomain: "acme.example");
 
         Assert.True(result.IsSuccess, result.Error);
         Assert.Equal(OrderStatusConstants.Unrouted, result.Value!.Status);

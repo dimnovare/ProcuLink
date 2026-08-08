@@ -20,7 +20,7 @@ namespace ProcuLink.Api.Tests.Integration;
 /// Regression for the BuyerName denormalisation split (prod order 14c340a1, 2026-06-13):
 /// the async parse path writes <c>purchase_orders.buyer_name</c> (the COLUMN) but leaves
 /// <c>CanonicalJson</c> WITHOUT a buyerName. The fixed JSON transform used to read CanonicalJson
-/// only, so a correctly-extracted buyer ("REDACTED-PARTY") was delivered to the supplier
+/// only, so a correctly-extracted buyer ("Exemplar Stahl GmbH") was delivered to the supplier
 /// as <c>"buyerName": ""</c>.
 ///
 /// <para>This drives the REAL <see cref="OrderService.TransformAsync"/> end-to-end on REAL
@@ -152,7 +152,7 @@ public sealed class TransformBuyerNamePostgresTests(PostgresContainerFixture pos
     [DockerRequiredFact]
     public async Task DeliveredJsonArtifact_BuyerName_EqualsExtractedBuyer_NotEmpty()
     {
-        const string buyer = "REDACTED-PARTY";
+        const string buyer = "Exemplar Stahl GmbH";
         var (orgId, orderId) = await SeedSplitBuyerOrderAsync(buyer);
 
         var storage = new CapturingFileStorage();

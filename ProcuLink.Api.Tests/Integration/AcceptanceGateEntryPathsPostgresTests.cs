@@ -181,7 +181,7 @@ public sealed class AcceptanceGateEntryPathsPostgresTests(PostgresContainerFixtu
     public async Task EmailIngestOrder_isRefused()
     {
         var order = await SeedBlockedOrderAsync("email-ingest",
-            sourceFileKey: "ingress/email/po.csv", inboundSenderDomain: "acme.com");
+            sourceFileKey: "ingress/email/po.csv", inboundSenderDomain: "acme.example");
         AssertRefused(await SendThroughTheJobAsync(order));
     }
 
@@ -199,7 +199,7 @@ public sealed class AcceptanceGateEntryPathsPostgresTests(PostgresContainerFixtu
         {
             ("browser send",     await SendThroughTheControllerAsync(await SeedBlockedOrderAsync("agree-browser"))),
             ("REST ingress",     await SendThroughTheJobAsync(await SeedBlockedOrderAsync("agree-rest", sourceFileKey: "ingress/rest/po.csv"))),
-            ("inbound email",    await SendThroughTheJobAsync(await SeedBlockedOrderAsync("agree-email", inboundSenderDomain: "acme.com"))),
+            ("inbound email",    await SendThroughTheJobAsync(await SeedBlockedOrderAsync("agree-email", inboundSenderDomain: "acme.example"))),
         };
 
         var statuses = outcomes.Select(o => o.Result.Status).Distinct().ToList();

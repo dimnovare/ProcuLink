@@ -266,24 +266,24 @@ public class CxmlTransformServiceTests
     {
         var svc   = new CxmlTransformService();
         var order = BuildOrder();
-        // REDACTED-PARTY-shaped address data.
-        order.ShipToName       = "REDACTED-PARTY";
-        order.ShipToDeliverTo  = "REDACTED-NAME";
-        order.ShipToStreet     = "REDACTED-ADDRESS)";
-        order.ShipToCity       = "REDACTED-ADDRESS";
+        // Exemple-shaped address data.
+        order.ShipToName       = "Usine EXEMPLE de la REDACTED-PARTY";
+        order.ShipToDeliverTo  = "Testperson Alex";
+        order.ShipToStreet     = "12 rue des Essais B12-3 (CTX_0000)";
+        order.ShipToCity       = "VILLE-EXEMPLE";
         order.ShipToPostalCode = "63040";
         order.ShipToCountry    = "FRANCE";
-        order.ShipToPhone      = "REDACTED-PHONE";
-        order.BillToName       = "REDACTED-PARTY";
+        order.ShipToPhone      = "33100000000";
+        order.BillToName       = "EXEMPLE Comptabilite Fournisseurs";
         order.BillToDeliverTo  = "Service Comptable";
-        order.BillToStreet     = "REDACTED-ADDRESS";
-        order.BillToCity       = "REDACTED-ADDRESS";
+        order.BillToStreet     = "Place des Essais Nord";
+        order.BillToCity       = "VILLE-EXEMPLE";
         order.BillToPostalCode = "63000";
         order.BillToCountry    = "FRANCE";
-        order.BillToPhone      = "REDACTED-PHONE";
-        order.ContactName      = "REDACTED-NAME";
-        order.ContactEmail     = "redacted@example.invalid";
-        order.ContactPhone     = "REDACTED-PHONE";
+        order.BillToPhone      = "33100000001";
+        order.ContactName      = "Testperson Alex";
+        order.ContactEmail     = "alex.testperson@buyer.example.com";
+        order.ContactPhone     = "33100000000";
 
         var xml = await ReadContentAsString(
             await svc.TransformAsync(order, OutputFormat.CXml, CancellationToken.None));
@@ -296,33 +296,33 @@ public class CxmlTransformServiceTests
 
         // ShipTo/Address/Name with xml:lang="en".
         var shipName = shipAddress.Elements().First(e => e.Name.LocalName == "Name");
-        shipName.Value.Should().Be("REDACTED-PARTY");
+        shipName.Value.Should().Be("Usine EXEMPLE de la REDACTED-PARTY");
         shipName.Attribute(xmlNs + "lang")?.Value.Should().Be("en");
 
         // ShipTo/Address/PostalAddress/{DeliverTo,Street,City,PostalCode,Country}.
         var postal = shipAddress.Elements().First(e => e.Name.LocalName == "PostalAddress");
-        postal.Elements().First(e => e.Name.LocalName == "DeliverTo").Value.Should().Be("REDACTED-NAME");
-        postal.Elements().First(e => e.Name.LocalName == "Street").Value.Should().Be("REDACTED-ADDRESS)");
-        postal.Elements().First(e => e.Name.LocalName == "City").Value.Should().Be("REDACTED-ADDRESS");
+        postal.Elements().First(e => e.Name.LocalName == "DeliverTo").Value.Should().Be("Testperson Alex");
+        postal.Elements().First(e => e.Name.LocalName == "Street").Value.Should().Be("12 rue des Essais B12-3 (CTX_0000)");
+        postal.Elements().First(e => e.Name.LocalName == "City").Value.Should().Be("VILLE-EXEMPLE");
         postal.Elements().First(e => e.Name.LocalName == "PostalCode").Value.Should().Be("63040");
         postal.Elements().First(e => e.Name.LocalName == "Country").Value.Should().Be("FRANCE");
 
         // ShipTo/Address/Phone/TelephoneNumber/Number.
         var shipNumber = shipAddress.Descendants().First(e => e.Name.LocalName == "Number");
-        shipNumber.Value.Should().Be("REDACTED-PHONE");
+        shipNumber.Value.Should().Be("33100000000");
 
         // BillTo present with its own address name.
         var billTo = doc.Descendants()
             .First(e => string.Equals(e.Name.LocalName, "BillTo", StringComparison.OrdinalIgnoreCase));
         billTo.Descendants().First(e => e.Name.LocalName == "Name").Value
-            .Should().Be("REDACTED-PARTY");
+            .Should().Be("EXEMPLE Comptabilite Fournisseurs");
 
         // Contact/{Name,Email,Phone}.
         var contact = doc.Descendants()
             .First(e => string.Equals(e.Name.LocalName, "Contact", StringComparison.OrdinalIgnoreCase));
-        contact.Elements().First(e => e.Name.LocalName == "Name").Value.Should().Be("REDACTED-NAME");
-        contact.Elements().First(e => e.Name.LocalName == "Email").Value.Should().Be("redacted@example.invalid");
-        contact.Descendants().First(e => e.Name.LocalName == "Number").Value.Should().Be("REDACTED-PHONE");
+        contact.Elements().First(e => e.Name.LocalName == "Name").Value.Should().Be("Testperson Alex");
+        contact.Elements().First(e => e.Name.LocalName == "Email").Value.Should().Be("alex.testperson@buyer.example.com");
+        contact.Descendants().First(e => e.Name.LocalName == "Number").Value.Should().Be("33100000000");
 
         // Position: ShipTo / BillTo / Contact sit AFTER <Total> and BEFORE the first <ItemOut>.
         var totalIdx   = xml.IndexOf("<Total", StringComparison.Ordinal);
