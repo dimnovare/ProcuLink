@@ -227,7 +227,7 @@ public class DataRetentionServiceTests
 
         result.InboundSenderDomainsScrubbed.Should().Be(1);
         (await db.PurchaseOrders.SingleAsync(o => o.Id == expired)).InboundSenderDomain.Should().BeNull();
-        (await db.PurchaseOrders.SingleAsync(o => o.Id == recent)).InboundSenderDomain.Should().Be("acme.com");
+        (await db.PurchaseOrders.SingleAsync(o => o.Id == recent)).InboundSenderDomain.Should().Be("acme.example");
     }
 
     [Fact]
@@ -269,7 +269,7 @@ public class DataRetentionServiceTests
         var result = await CreateService(db, new DataRetentionOptions { Enabled = false }).RunAsync(default);
 
         result.InboundSenderDomainsScrubbed.Should().Be(0);
-        (await db.PurchaseOrders.SingleAsync(o => o.Id == orderId)).InboundSenderDomain.Should().Be("acme.com");
+        (await db.PurchaseOrders.SingleAsync(o => o.Id == orderId)).InboundSenderDomain.Should().Be("acme.example");
     }
 
     [Fact]
@@ -300,7 +300,7 @@ public class DataRetentionServiceTests
             Currency = "EUR",
             Status = OrderStatusConstants.Ready,
             OrderDate = DateOnly.FromDateTime(DateTime.UtcNow),
-            InboundSenderDomain = "acme.com",
+            InboundSenderDomain = "acme.example",
             InboundSenderDomainCapturedAt = capturedAt,
             CreatedAt = capturedAt,
             UpdatedAt = capturedAt,

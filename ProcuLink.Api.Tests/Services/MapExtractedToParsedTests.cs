@@ -13,17 +13,17 @@ public class MapExtractedToParsedTests
         var extracted = new ExtractedOrder(
             "PO1", new DateTime(2026, 6, 12), "Acme Buyer", "EUR",
             new[] { new ExtractedOrderLine(1, "B1", "Widget", 2m, "PC", 5m, 10m, 0m, null,
-                ManufacturerPartNumber: "MPN-9", Recipient: "redacted@example.invalid") },
-            Parties: new[] { new ExtractedParty("shipTo", Name: "Acme DC", City: "Linz", Vat: "ATU1") },
-            ContactEmail: "redacted@example.invalid", Incoterms: "DDP");
+                ManufacturerPartNumber: "MPN-9", Recipient: "ops@buyer.example") },
+            Parties: new[] { new ExtractedParty("shipTo", Name: "Acme DC", City: "Teststadt", Vat: "ATU1") },
+            ContactEmail: "buyer@acme.example", Incoterms: "DDP");
 
         var parsed = OrderIngestionService.MapExtractedToParsedForTest(extracted);
 
         Assert.Equal("DDP", parsed.Incoterms);
-        Assert.Equal("redacted@example.invalid", parsed.ContactEmail);
+        Assert.Equal("buyer@acme.example", parsed.ContactEmail);
         Assert.Single(parsed.Parties!);
         Assert.Equal("ATU1", parsed.Parties![0].Vat);
         Assert.Equal("MPN-9", parsed.Lines[0].ManufacturerPartNumber);
-        Assert.Equal("redacted@example.invalid", parsed.Lines[0].Recipient);
+        Assert.Equal("ops@buyer.example", parsed.Lines[0].Recipient);
     }
 }

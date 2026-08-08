@@ -8,8 +8,8 @@ using ProcuLink.Transform.Output;
 namespace ProcuLink.Transform.Tests.Output;
 
 /// <summary>
-/// The Gjensidige bug: a PO from a buyer that is NOT REDACTED-PARTY was routed to a cXML supplier whose
-/// configured From identity is REDACTED-PARTY's VatNr (REDACTED-TAXID). The cXML From/Identity is the
+/// The Testforsikring bug: a PO from a buyer that is NOT Exemple was routed to a cXML supplier whose
+/// configured From identity is Exemple's VatNr (FR99000000000). The cXML From/Identity is the
 /// BUYER's identity, so a different buyer must NOT inherit the configured From's VatNr. These tests
 /// pin:
 /// <list type="bullet">
@@ -63,22 +63,22 @@ public class CxmlTransformServiceBuyerTaxAndLineTaxTests
     [Fact]
     public async Task BuyerTaxId_Present_BecomesFromIdentity_KeepingConfiguredFromDomain()
     {
-        // Supplier connection configured with REDACTED-PARTY's From identity (the wrong-buyer scenario).
+        // Supplier connection configured with Exemple's From identity (the wrong-buyer scenario).
         var creds = new CxmlCredentialConfig(
-            FromDomain: "NetworkId", FromIdentity: "REDACTED-TAXID",
+            FromDomain: "NetworkId", FromIdentity: "FR99000000000",
             ToDomain: "NetworkId", ToIdentity: "REDACTED-NETWORK-ID",
             SenderDomain: "NetworkId", SenderIdentity: "REDACTED-NETWORK-ID",
             SenderSharedSecret: null);
 
         var order = BuildOrder();
-        order.BuyerTaxId = "REDACTED-TAXID"; // a DIFFERENT buyer (Gjensidige org number).
+        order.BuyerTaxId = "NO999000000"; // a DIFFERENT buyer (Testforsikring org number).
 
         var xml = await RenderAsync(order, creds);
 
         var from = ReadFrom(xml);
-        from.Identity.Should().Be("REDACTED-TAXID", "the From identity is the order's buyer tax id");
+        from.Identity.Should().Be("NO999000000", "the From identity is the order's buyer tax id");
         from.Domain.Should().Be("NetworkId", "the configured From domain is preserved");
-        xml.Should().NotContain("REDACTED-TAXID", "the configured From VatNr must not leak for a different buyer");
+        xml.Should().NotContain("FR99000000000", "the configured From VatNr must not leak for a different buyer");
         // To / Sender are unaffected.
         XDocument.Parse(xml).Descendants("To").Single().Descendants("Identity").Single().Value.Should().Be("REDACTED-NETWORK-ID");
     }
@@ -88,12 +88,12 @@ public class CxmlTransformServiceBuyerTaxAndLineTaxTests
     {
         // No cXML credentials at all (legacy GUID path), but the order carries a buyer tax id.
         var order = BuildOrder();
-        order.BuyerTaxId = "REDACTED-TAXID";
+        order.BuyerTaxId = "NO999000000";
 
         var xml = await RenderAsync(order, creds: null);
 
         var from = ReadFrom(xml);
-        from.Identity.Should().Be("REDACTED-TAXID");
+        from.Identity.Should().Be("NO999000000");
         from.Domain.Should().Be("NetworkId", "a tax-id identity is a NetworkId, not the legacy OrgId domain");
         xml.Should().NotContain(OrgId.ToString(), "the legacy OrgId GUID must not appear once a buyer tax id is set");
     }
@@ -102,7 +102,7 @@ public class CxmlTransformServiceBuyerTaxAndLineTaxTests
     public async Task BuyerTaxId_Absent_ConfiguredFrom_IsByteIdenticalToToday()
     {
         var creds = new CxmlCredentialConfig(
-            FromDomain: "NetworkId", FromIdentity: "REDACTED-TAXID",
+            FromDomain: "NetworkId", FromIdentity: "FR99000000000",
             ToDomain: "NetworkId", ToIdentity: "REDACTED-NETWORK-ID",
             SenderDomain: "NetworkId", SenderIdentity: "REDACTED-NETWORK-ID",
             SenderSharedSecret: null);
@@ -115,8 +115,8 @@ public class CxmlTransformServiceBuyerTaxAndLineTaxTests
         var xmlBlank = await RenderAsync(orderTaxBlank, creds);
 
         // With no buyer tax id the configured From identity is emitted, exactly as before.
-        ReadFrom(xmlNull).Should().Be(("NetworkId", "REDACTED-TAXID"));
-        ReadFrom(xmlBlank).Should().Be(("NetworkId", "REDACTED-TAXID"), "a blank buyer tax id is treated as unset");
+        ReadFrom(xmlNull).Should().Be(("NetworkId", "FR99000000000"));
+        ReadFrom(xmlBlank).Should().Be(("NetworkId", "FR99000000000"), "a blank buyer tax id is treated as unset");
     }
 
     [Fact]

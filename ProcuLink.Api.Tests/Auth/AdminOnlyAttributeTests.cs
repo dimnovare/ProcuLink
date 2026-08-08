@@ -75,7 +75,7 @@ public class AdminOnlyAttributeTests
     {
         var user = Authenticated(
             new Claim("sub", "user_tenant_member"),
-            new Claim("email", "redacted@example.invalid"));
+            new Claim("email", "member@tenant.example"));
         var ctx = BuildContext(user, adminUserIds: "user_admin_1", adminEmails: "founder@proculink.eu");
 
         new AdminOnlyAttribute().OnAuthorization(ctx);

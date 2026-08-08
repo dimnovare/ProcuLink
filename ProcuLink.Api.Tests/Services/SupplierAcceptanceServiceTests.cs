@@ -25,7 +25,7 @@ public class SupplierAcceptanceServiceTests
         var orgId = Guid.NewGuid(); var supplierId = Guid.NewGuid();
 
         var p = await svc.CreateVersionAsync(orgId, supplierId, null, "xml",
-            new[] { RequiredSupplierCode() }, "redacted@example.invalid", CancellationToken.None);
+            new[] { RequiredSupplierCode() }, "user@x.example", CancellationToken.None);
 
         Assert.Equal(1, p.VersionNo);
         Assert.Equal("draft", p.Status);

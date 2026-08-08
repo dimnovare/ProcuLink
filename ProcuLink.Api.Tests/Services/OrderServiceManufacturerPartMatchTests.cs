@@ -202,7 +202,7 @@ public class OrderServiceManufacturerPartMatchTests
     // ── The founder's case ────────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task KsbAribaPunchout_SuggestsTheSuppliersOwnCode_NotTheManufacturersPartNumber()
+    public async Task Cxml12AribaPunchout_SuggestsTheSuppliersOwnCode_NotTheManufacturersPartNumber()
     {
         var (db, orgId, supplierId) = await SeedSupplierAsync();
         await AddCatalogAsync(db, orgId, supplierId,
@@ -230,7 +230,7 @@ public class OrderServiceManufacturerPartMatchTests
     }
 
     [Fact]
-    public async Task KsbAribaPunchout_CapturesManufacturerPartNumberAndName_OnTheLine()
+    public async Task Cxml12AribaPunchout_CapturesManufacturerPartNumberAndName_OnTheLine()
     {
         var (db, orgId, supplierId) = await SeedSupplierAsync();
 
@@ -244,7 +244,7 @@ public class OrderServiceManufacturerPartMatchTests
     // ── The easy case that used to hide the bug ───────────────────────────────────────────
 
     [Fact]
-    public async Task MaerskOrder_WhereSupplierCodeEqualsManufacturerCode_StillResolvesFromTheCatalog()
+    public async Task Cxml11Order_WhereSupplierCodeEqualsManufacturerCode_StillResolvesFromTheCatalog()
     {
         var (db, orgId, supplierId) = await SeedSupplierAsync();
         await AddCatalogAsync(db, orgId, supplierId,
@@ -259,7 +259,7 @@ public class OrderServiceManufacturerPartMatchTests
     }
 
     [Fact]
-    public async Task MaerskOrder_MatchesOnTheSupplierCodeEvenWhenTheCatalogCarriesNoManufacturerPartNumber()
+    public async Task Cxml11Order_MatchesOnTheSupplierCodeEvenWhenTheCatalogCarriesNoManufacturerPartNumber()
     {
         var (db, orgId, supplierId) = await SeedSupplierAsync();
         // The catalog row has NO manufacturer part number — only the supplier code, which happens

@@ -70,7 +70,7 @@ public class AdminAllowlistTests
     [Fact]
     public void MatchingTrimsWhitespace_OnBothConfigAndInput()
     {
-        var allowlist = Make(userIds: "  user_admin_1  ,  user_admin_2 ", emails: " redacted@example.invalid ");
+        var allowlist = Make(userIds: "  user_admin_1  ,  user_admin_2 ", emails: " a@b.example , c@d.example ");
 
         allowlist.IsAdmin("user_admin_2", null).Should().BeTrue("config entries are trimmed");
         allowlist.IsAdmin("  user_admin_1  ", null).Should().BeTrue("the incoming claim value is trimmed too");

@@ -56,7 +56,7 @@ public class EmailApiDeliveryDispatcherTests
         var fake = new FakeEmailApiClient { IsConfigured = false };
         var dispatcher = MakeDispatcher(fake);
 
-        var result = await Dispatch(dispatcher, MakeConfig(new { toAddresses = "redacted@example.invalid" }));
+        var result = await Dispatch(dispatcher, MakeConfig(new { toAddresses = "a@x.example" }));
 
         result.Success.Should().BeFalse();
         result.ErrorMessage.Should().Contain("not configured");
@@ -70,11 +70,11 @@ public class EmailApiDeliveryDispatcherTests
         var fake = new FakeEmailApiClient();
         var dispatcher = MakeDispatcher(fake);
 
-        var result = await Dispatch(dispatcher, MakeConfig(new { toAddresses = "redacted@example.invalid" }), "PO-1.xml");
+        var result = await Dispatch(dispatcher, MakeConfig(new { toAddresses = "a@x.example, b@y.example" }), "PO-1.xml");
 
         result.Success.Should().BeTrue();
         fake.LastMessage.Should().NotBeNull();
-        fake.LastMessage!.To.Should().Equal("redacted@example.invalid", "redacted@example.invalid");
+        fake.LastMessage!.To.Should().Equal("a@x.example", "b@y.example");
         fake.LastMessage.Attachments.Should().ContainSingle();
         fake.LastMessage.Attachments![0].FileName.Should().Be("PO-1.xml");
         fake.LastMessage.Subject.Should().Be("Purchase Order PO-1");
@@ -87,10 +87,10 @@ public class EmailApiDeliveryDispatcherTests
         var fake = new FakeEmailApiClient();
         var dispatcher = MakeDispatcher(fake);
 
-        var result = await Dispatch(dispatcher, MakeConfig(new { toAddresses = new[] { "redacted@example.invalid" } }));
+        var result = await Dispatch(dispatcher, MakeConfig(new { toAddresses = new[] { "a@x.example" } }));
 
         result.Success.Should().BeTrue();
-        fake.LastMessage!.To.Should().Equal("redacted@example.invalid");
+        fake.LastMessage!.To.Should().Equal("a@x.example");
     }
 
     // 4. No recipients → failure, no send.
@@ -130,7 +130,7 @@ public class EmailApiDeliveryDispatcherTests
 
         var config = MakeConfig(new
         {
-            toAddresses = "redacted@example.invalid",
+            toAddresses = "a@x.example",
             subjectTemplate = "PO {poNumber}",
             replyTo = "buyer@proculink.eu",
         });
@@ -149,11 +149,11 @@ public class EmailApiDeliveryDispatcherTests
         var fake = new FakeEmailApiClient { DefaultFrom = "platform@proculink.eu" };
         var dispatcher = MakeDispatcher(fake);
 
-        await Dispatch(dispatcher, MakeConfig(new { toAddresses = "redacted@example.invalid" }));
+        await Dispatch(dispatcher, MakeConfig(new { toAddresses = "a@x.example" }));
         fake.LastMessage!.From.Should().Be("platform@proculink.eu");
 
-        await Dispatch(dispatcher, MakeConfig(new { toAddresses = "redacted@example.invalid", fromAddress = "redacted@example.invalid" }));
-        fake.LastMessage!.From.Should().Be("redacted@example.invalid");
+        await Dispatch(dispatcher, MakeConfig(new { toAddresses = "a@x.example", fromAddress = "x@x.example" }));
+        fake.LastMessage!.From.Should().Be("x@x.example");
     }
 
     // 8. A failed SendAsync result maps straight through to DeliveryResult (error + code preserved).
@@ -166,7 +166,7 @@ public class EmailApiDeliveryDispatcherTests
         };
         var dispatcher = MakeDispatcher(fake);
 
-        var result = await Dispatch(dispatcher, MakeConfig(new { toAddresses = "redacted@example.invalid" }));
+        var result = await Dispatch(dispatcher, MakeConfig(new { toAddresses = "a@x.example" }));
 
         result.Success.Should().BeFalse();
         result.ErrorMessage.Should().Be("boom");

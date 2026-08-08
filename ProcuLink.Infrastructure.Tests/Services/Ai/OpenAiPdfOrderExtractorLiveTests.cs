@@ -163,14 +163,15 @@ public class OpenAiPdfOrderExtractorLiveTests
     /// </summary>
     public static IEnumerable<object[]> PartyRoleFixtures()
     {
-        // Danfoss-shaped: Danfoss is the buyer/issuer; Markit is the supplier/recipient.
+        // DK shape, "Supplier:" label: the buyer/issuer is a third org; Markit is the
+        // supplier/recipient.
         yield return new object[]
         {
-            "Danfoss",  // expected buyer (issuer)
+            "Exemplar Valves",  // expected buyer (issuer)
             "Markit",   // expected supplier (the system-customer-like recipient)
             CreatePdf(
-                "REDACTED-PARTY",
-                "REDACTED-ADDRESS",
+                "Exemplar Valves A/S",
+                "Teststadvej 81, 6430 Teststad, Denmark",
                 "PURCHASE ORDER",
                 "PO Number: 4500123987",
                 "Order Date: 2026-04-14",
@@ -183,14 +184,15 @@ public class OpenAiPdfOrderExtractorLiveTests
                 "2     DF-SEN-022  Pressure sensor       10   PCS   18.50       185.00")
         };
 
-        // REDACTED-PARTY-shaped: REDACTED-PARTY is the buyer/issuer; Markit is the supplier.
+        // AT shape, German "Bestellung" + "Vendor / Supplier:" label: the buyer/issuer is a
+        // third org; Markit is the supplier.
         yield return new object[]
         {
-            "REDACTED-PARTY",
+            "Exemplar",
             "Markit",
             CreatePdf(
-                "REDACTED-PARTY",
-                "REDACTED-ADDRESS",
+                "Exemplar AG",
+                "Exemplar-Strasse 1, 4020 Teststadt, Austria",
                 "Bestellung / PURCHASE ORDER",
                 "PO Number: VA-2026-77120",
                 "Order Date: 2026-03-02",
@@ -203,24 +205,25 @@ public class OpenAiPdfOrderExtractorLiveTests
                 "2     VA-BLT-012  Bolt set              40   PCS   3.20        128.00")
         };
 
-        // ABB-shaped control case: ABB is the buyer/issuer; Markit is the supplier.
+        // CH control case, "Sold to / Supplier:" label: the buyer/issuer is a third org; Markit
+        // is the supplier.
         yield return new object[]
         {
-            "ABB",
+            "Exemplar Drives",
             "Markit",
             CreatePdf(
-                "REDACTED-PARTY",
-                "REDACTED-ADDRESS",
+                "Exemplar Drives Ltd",
+                "Teststrasse 44, 8050 Teststadt, Switzerland",
                 "PURCHASE ORDER",
-                "REDACTED-DOCNO",
+                "PO Number: EXD-PO-558204",
                 "Order Date: 2026-05-09",
                 "Currency: EUR",
                 "Sold to / Supplier:",
                 "REDACTED-PARTY",
                 "Tallinn, Estonia",
                 "Line  Item Code   Description           Qty  Unit  Unit Price  Amount",
-                "1     EXD-DRV-30  Motor drive REDACTED-ITEM    2    PCS   980.00      1960.00",
-                "2     EXD-CON-08  Contactor REDACTED-ITEM        15   PCS   24.00       360.00")
+                "1     EXD-DRV-30  Motor drive            2    PCS   980.00      1960.00",
+                "2     EXD-CON-08  Contactor             15    PCS   24.00       360.00")
         };
     }
 

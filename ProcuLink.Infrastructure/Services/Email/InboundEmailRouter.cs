@@ -695,7 +695,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
     };
 
     /// <summary>
-    /// The DOMAIN part of an inbound sender address — "redacted@example.invalid" ⇒ "acme.com". Returns null
+    /// The DOMAIN part of an inbound sender address — "orders@acme.example" ⇒ "acme.example". Returns null
     /// for anything that is not clearly a domain (no "@", nothing after it, no dot).
     ///
     /// <para>This method IS the privacy boundary for founder ruling D2. The local part — the half
@@ -712,7 +712,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         var at = fromEmail.LastIndexOf('@');
         if (at < 0) return null;
 
-        // A From header may arrive as a display-name form — `"Acme Orders" <redacted@example.invalid>` —
+        // A From header may arrive as a display-name form — `"Acme Orders" <orders@acme.example>` —
         // so keep only the leading run of characters that can legally appear in a host name and
         // drop the closing bracket and anything after it.
         var tail = fromEmail[(at + 1)..].Trim();

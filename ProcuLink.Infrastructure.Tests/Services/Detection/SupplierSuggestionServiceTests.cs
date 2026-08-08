@@ -376,10 +376,10 @@ public class SupplierSuggestionServiceTests
     public async Task SuggestAsync_matchesTheSuppliersPrimaryDomain()
     {
         await using var db = NewDb();
-        var acme = SeedSupplier(db, "Acme GmbH", domain: "acme.com");
+        var acme = SeedSupplier(db, "Acme GmbH", domain: "acme.example");
         await db.SaveChangesAsync();
 
-        var result = await NewService(db).SuggestAsync(Input(senderDomain: "ACME.com"), default);
+        var result = await NewService(db).SuggestAsync(Input(senderDomain: "ACME.example"), default);
 
         var only = Assert.Single(result);
         Assert.Equal(acme.Id, only.SupplierId);
@@ -396,12 +396,12 @@ public class SupplierSuggestionServiceTests
             {
                 Id = Guid.NewGuid(), OrgId = OrgId, SupplierId = acme.Id,
                 PoNumber = $"PO-{i}", Status = "delivered", Currency = "EUR",
-                InboundSenderDomain = "acme.com", InboundSenderDomainCapturedAt = DateTime.UtcNow,
+                InboundSenderDomain = "acme.example", InboundSenderDomainCapturedAt = DateTime.UtcNow,
                 CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
             });
         await db.SaveChangesAsync();
 
-        var result = await NewService(db).SuggestAsync(Input(senderDomain: "acme.com"), default);
+        var result = await NewService(db).SuggestAsync(Input(senderDomain: "acme.example"), default);
 
         var only = Assert.Single(result);
         Assert.Equal(acme.Id, only.SupplierId);
@@ -419,12 +419,12 @@ public class SupplierSuggestionServiceTests
         {
             Id = orderId, OrgId = OrgId, SupplierId = acme.Id,
             PoNumber = "PO-SELF", Status = "unrouted", Currency = "EUR",
-            InboundSenderDomain = "acme.com", InboundSenderDomainCapturedAt = DateTime.UtcNow,
+            InboundSenderDomain = "acme.example", InboundSenderDomainCapturedAt = DateTime.UtcNow,
             CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync();
 
-        var result = await NewService(db).SuggestAsync(Input(senderDomain: "acme.com", orderId: orderId), default);
+        var result = await NewService(db).SuggestAsync(Input(senderDomain: "acme.example", orderId: orderId), default);
 
         // Its own row is the only history there is — an order must not be evidence for itself.
         Assert.Empty(result);
@@ -449,11 +449,11 @@ public class SupplierSuggestionServiceTests
     public async Task SuggestAsync_neverCrossesTenants_evenOnAnExactVatMatch()
     {
         await using var db = NewDb();
-        SeedSupplier(db, "Acme GmbH", orgId: Guid.NewGuid(), vat: "EE101234567", domain: "acme.com");
+        SeedSupplier(db, "Acme GmbH", orgId: Guid.NewGuid(), vat: "EE101234567", domain: "acme.example");
         await db.SaveChangesAsync();
 
         var result = await NewService(db).SuggestAsync(
-            Input(documentSupplierName: "Acme GmbH", senderDomain: "acme.com",
+            Input(documentSupplierName: "Acme GmbH", senderDomain: "acme.example",
                   parties: new[] { new SupplierSuggestionParty("supplier", Vat: "EE101234567") }),
             default);
 
@@ -465,10 +465,10 @@ public class SupplierSuggestionServiceTests
     {
         await using var db = NewDb();
         for (var i = 0; i < 5; i++)
-            SeedSupplier(db, $"Acme {i}", domain: "acme.com");
+            SeedSupplier(db, $"Acme {i}", domain: "acme.example");
         await db.SaveChangesAsync();
 
-        var result = await NewService(db).SuggestAsync(Input(senderDomain: "acme.com"), default);
+        var result = await NewService(db).SuggestAsync(Input(senderDomain: "acme.example"), default);
 
         Assert.Equal(SupplierSuggestionScoring.MaxSuggestions, result.Count);
     }

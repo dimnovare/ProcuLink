@@ -200,7 +200,7 @@ public sealed class OpenAiEmailBodyOrderExtractor : IEmailBodyOrderExtractor
                     "(shipTo / billTo / remitTo), street, city, postal_code, country and VAT when stated. " +
                     "For EACH party you MUST capture its 'name' — the company, plant, site, store, " +
                     "warehouse or organisation name printed at or directly above that address block " +
-                    "(e.g. a delivery site like 'REDACTED-PARTY' or 'Warehouse 3 — Riga'). " +
+                    "(e.g. a delivery site like 'Usine EXEMPLE Nord-2' or 'Warehouse 3 — Riga'). " +
                     "NEVER leave a party's 'name' blank when an address is present: if only a site, " +
                     "plant, depot or building label is shown, use that label as the 'name'. The ship-to " +
                     "name is often a DIFFERENT site than the buyer's head office — extract the site name " +

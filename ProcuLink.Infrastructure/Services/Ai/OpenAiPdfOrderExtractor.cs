@@ -208,7 +208,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         // ── Party NAME is mandatory whenever an address is present ──
         "For EACH party (shipTo / billTo / remitTo) you MUST capture its 'name' — the company, " +
         "plant, site, store, warehouse or organisation name printed at or directly above that " +
-        "address block (e.g. a delivery site like 'REDACTED-PARTY' or " +
+        "address block (e.g. a delivery site like 'Usine EXEMPLE Nord-2' or " +
         "'Warehouse 3 — Riga'). NEVER leave a party's 'name' blank when an address is present: if " +
         "only a site, plant, depot or building label is shown, use that label as the 'name'. " +
         "The ship-to name is often a DIFFERENT site/plant than the buyer's head office — extract the " +
@@ -216,8 +216,8 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         "NOT leave it empty just because it differs from the buyer. Keep 'deliver_to' (an " +
         "attention / care-of PERSON at the address) SEPARATE from 'name' (the organisation / site). " +
         "Worked example — buyer 'ACME Foods SA' shipping to a plant: the shipTo party is " +
-        "{ name: 'REDACTED-PARTY', street: 'REDACTED-ADDRESS', city: " +
-        "'REDACTED-PARTY " +
+        "{ name: 'Usine EXEMPLE Nord-2', street: '12 rue des Essais', city: " +
+        "'VILLE-EXEMPLE', deliver_to: 'Goods-in dock B' } — NOT { name: 'ACME Foods SA' } and " +
         "NOT { name: '' }. " +
         "Capture the " +
         "ordering contact (name/email/phone) in 'contact'. Capture incoterms / delivery terms, " +
@@ -640,7 +640,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
 
             // Arithmetic: quantity × unit price must reconcile with the stated line amount.
             //
-            // VAT-aware (the Gjensidige bug): a common, CORRECT shape is an ex-VAT unit price
+            // VAT-aware (the VAT-inclusive line-total bug): a common, CORRECT shape is an ex-VAT unit price
             // against a VAT-inclusive line total (e.g. 3337.08 × 1.25 = 4171.35 at 25% VAT). The
             // plain qty×price check would wrongly flag that as a mismatch. So when the line carries a
             // captured tax rate OR tax amount, reconcile against the VAT-grossed-up expected total

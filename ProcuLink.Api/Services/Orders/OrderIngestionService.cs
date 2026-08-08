@@ -2399,8 +2399,8 @@ internal sealed class OrderIngestionService
     //      (org_id, supplier_id, manufacturer_part_number_normalized);
     //   2. failing that, the row's supplier CODE, compared case-insensitively but WITHOUT
     //      separator stripping. This covers the very common feed that predates manufacturer-part
-    //      support and simply resells under the manufacturer's number (the Maersk order's
-    //      "REDACTED-ORDER-DATA" is both). Separators are NOT stripped here on purpose: supplier codes
+    //      support and simply resells under the manufacturer's number (the cXML 1.1 MPN-equals
+    //      fixture's "REDACTED-ORDER-DATA" is both). Separators are NOT stripped here on purpose: supplier codes
     //      are a namespace the supplier controls, and collapsing "AB-123"/"AB123" inside it would
     //      be a real risk of matching the wrong SKU — whereas for manufacturer part numbers the
     //      punctuation genuinely is noise added by whoever re-typed it.

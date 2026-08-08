@@ -152,7 +152,7 @@ public class OrderIngestionSupplierSuggestionHookTests
 
         var result = await BuildIngestion(db, scorer).CreateStubFromParsedOrderAsync(
             orgId, supplierId: null, BodyOrder(), "email_body_nlp", CancellationToken.None,
-            inboundSenderDomain: "acme.com");
+            inboundSenderDomain: "acme.example");
 
         Assert.True(result.IsSuccess, result.Error);
         Assert.Equal(1, scorer.SuggestCalls);
@@ -179,12 +179,12 @@ public class OrderIngestionSupplierSuggestionHookTests
 
         await BuildIngestion(db, scorer).CreateStubFromParsedOrderAsync(
             orgId, supplierId: null, BodyOrder(), "email_body_nlp", CancellationToken.None,
-            inboundSenderDomain: "acme.com");
+            inboundSenderDomain: "acme.example");
 
         var input = Assert.IsType<SupplierSuggestionInput>(scorer.LastInput);
         Assert.Equal(orgId, input.OrganisationId);
         Assert.Equal("Acme GmbH", input.DocumentSupplierName);
-        Assert.Equal("acme.com", input.InboundSenderDomain);
+        Assert.Equal("acme.example", input.InboundSenderDomain);
         Assert.Equal(new[] { "WIDGET-A" }, input.LineCodes);
     }
 
@@ -236,7 +236,7 @@ public class OrderIngestionSupplierSuggestionHookTests
 
         var result = await BuildIngestion(db, new ThrowingSuggestionService()).CreateStubFromParsedOrderAsync(
             orgId, supplierId: null, BodyOrder(), "email_body_nlp", CancellationToken.None,
-            inboundSenderDomain: "acme.com");
+            inboundSenderDomain: "acme.example");
 
         Assert.True(result.IsSuccess, result.Error);
         Assert.Equal(OrderStatusConstants.Unrouted, result.Value!.Status);
@@ -281,10 +281,10 @@ public class OrderIngestionSupplierSuggestionHookTests
 
         var result = await BuildIngestion(db, null).CreateStubFromParsedOrderAsync(
             orgId, supplierId: null, BodyOrder(), "email_body_nlp", CancellationToken.None,
-            inboundSenderDomain: "WWW.Acme.COM");
+            inboundSenderDomain: "WWW.Acme.EXAMPLE");
 
         var order = await db.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == result.Value!.Id);
-        Assert.Equal("acme.com", order.InboundSenderDomain);
+        Assert.Equal("acme.example", order.InboundSenderDomain);
         Assert.NotNull(order.InboundSenderDomainCapturedAt);
     }
 

@@ -5,7 +5,7 @@ namespace ProcuLink.Api.Contracts;
 /// <param name="VatNumber">Optional VAT / tax number. Feeds supplier auto-detect's identity signal.</param>
 /// <param name="RegistrationNumber">Optional company registration / registry code.</param>
 /// <param name="EdiCode">Optional EDI routing id — GLN, ILN, Peppol participant id or scheme party code.</param>
-/// <param name="PrimaryDomain">Optional email domain the supplier sends from, e.g. "acme.com".</param>
+/// <param name="PrimaryDomain">Optional email domain the supplier sends from, e.g. "acme.example".</param>
 public record CreateSupplierRequest(
     [Required, MinLength(1), MaxLength(200)] string Name,
     [MaxLength(64)]  string? VatNumber = null,

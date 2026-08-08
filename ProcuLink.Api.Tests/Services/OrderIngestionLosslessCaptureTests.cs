@@ -94,7 +94,7 @@ public class OrderIngestionLosslessCaptureTests
         var extracted = new ExtractedOrder(
             PoNumber: "4730154181",
             OrderDate: new DateTime(2026, 6, 12),
-            BuyerName: "REDACTED-PARTY",
+            BuyerName: "Exemplar Stahl GmbH",
             Currency: "EUR",
             Lines: new[]
             {
@@ -102,15 +102,15 @@ public class OrderIngestionLosslessCaptureTests
                     LineNumber: 1, BuyerItemCode: "00010", Description: "Panasonic",
                     Quantity: 1, Unit: "ST", UnitPrice: 306.28m,
                     ManufacturerPartNumber: "SCPMX94EGK",
-                    Recipient: "redacted@example.invalid"),
+                    Recipient: "c.testperson@buyer.example.com"),
             },
-            ContactEmail: "redacted@example.invalid",
+            ContactEmail: "c.testperson@buyer.example.com",
             Incoterms: "DDP",
             Parties: new[]
             {
-                new ExtractedParty("shipTo", Name: "REDACTED-PARTY", City: "Linz", Vat: "REDACTED-TAXID"),
+                new ExtractedParty("shipTo", Name: "Exemplar Stahl GmbH", City: "Teststadt", Vat: "ATU99000000"),
             },
-            RawFields: new[] { new ExtractedRawField("EDI id", "REDACTED-TAXID") });
+            RawFields: new[] { new ExtractedRawField("EDI id", "999000111") });
 
         var svc = BuildService(db);
         var result = await svc.CreateStubFromParsedOrderAsync(orgId, supplierId, extracted, "email", CancellationToken.None);
@@ -127,25 +127,25 @@ public class OrderIngestionLosslessCaptureTests
 
         // Header lossless columns.
         Assert.Equal("DDP", order.Incoterms);
-        Assert.Equal("redacted@example.invalid", order.ContactEmail);
+        Assert.Equal("c.testperson@buyer.example.com", order.ContactEmail);
 
         // Party child row.
         var party = Assert.Single(order.Parties);
         Assert.Equal("shipTo", party.Role);
-        Assert.Equal("REDACTED-TAXID", party.Vat);
+        Assert.Equal("ATU99000000", party.Vat);
         Assert.Equal(orgId, party.OrgId);
 
         // Per-line lossless columns.
         var line = Assert.Single(order.Lines);
         Assert.Equal("SCPMX94EGK", line.ManufacturerPartNumber);
-        Assert.Equal("redacted@example.invalid", line.Recipient);
+        Assert.Equal("c.testperson@buyer.example.com", line.Recipient);
 
         // SourceCapture raw bag built from raw_fields.
         Assert.NotNull(order.SourceCapture);
         Assert.Equal(orgId, order.SourceCapture!.OrgId);
         Assert.Equal("pdf", order.SourceCapture.Format);
         Assert.NotNull(order.SourceCapture.TokensJson);
-        Assert.Contains("REDACTED-TAXID", order.SourceCapture.TokensJson!.RootElement.GetRawText());
+        Assert.Contains("999000111", order.SourceCapture.TokensJson!.RootElement.GetRawText());
         Assert.Contains("EDI id", order.SourceCapture.TokensJson.RootElement.GetRawText());
     }
 

@@ -88,7 +88,7 @@ public class SupplierAcceptanceNewOperatorsTests
     public void Not_label_passes_a_real_city()
     {
         var order = new PurchaseOrderEntity { Currency = "EUR" };
-        order.Parties.Add(new OrderParty { Role = "shipTo", City = "Linz" });
+        order.Parties.Add(new OrderParty { Role = "shipTo", City = "Teststadt" });
         var rule = Rule("order", "shipToCity", "not_label", expected: "UIDNr,City,VAT,UID");
         var results = SupplierAcceptanceService.EvaluateProfile(
             Guid.NewGuid(), order.Id, Profile(rule), order, DateTime.UtcNow);
@@ -185,7 +185,7 @@ public class SupplierAcceptanceNewOperatorsTests
     public void Vat_format_passes_a_valid_at_vat_and_fails_a_malformed_one()
     {
         var order = new PurchaseOrderEntity { Currency = "EUR" };
-        order.Parties.Add(new OrderParty { Role = "shipTo", Country = "AT", Vat = "REDACTED-TAXID" });
+        order.Parties.Add(new OrderParty { Role = "shipTo", Country = "AT", Vat = "ATU99000000" });
         var pass = SupplierAcceptanceService.EvaluateProfile(
             Guid.NewGuid(), order.Id, Profile(Rule("order", "shipToVat", "vat_format")), order, DateTime.UtcNow);
         Assert.Contains(pass, r => r.Status == "pass");

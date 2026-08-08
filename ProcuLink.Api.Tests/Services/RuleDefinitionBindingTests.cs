@@ -113,7 +113,7 @@ public class RuleDefinitionBindingTests
 
         var p = await svc.CreateVersionAsync(orgId, supplierId, null, "xml",
             new[] { new AcceptanceRuleInput("line", "supplierItemCode", "required", null, "error", true) },
-            "redacted@example.invalid", CancellationToken.None);
+            "user@x.example", CancellationToken.None);
 
         var rule = Assert.Single(p.Rules);
         Assert.NotNull(rule.RuleDefinitionId);

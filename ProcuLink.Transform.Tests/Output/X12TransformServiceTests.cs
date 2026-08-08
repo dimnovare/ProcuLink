@@ -68,9 +68,9 @@ public class X12TransformServiceTests
         // strict 850 validator rejects an orphan heading PER).
         var order = BuildOrder();
         order.BuyerName    = "";                  // → ExtractBuyerName empty → no N1*BY
-        order.ContactName  = "REDACTED-NAME";
-        order.ContactEmail = "redacted@example.invalid";
-        order.ContactPhone = "REDACTED-PHONE";
+        order.ContactName  = "Testperson Alex";
+        order.ContactEmail = "j@buyer.example.com";
+        order.ContactPhone = "33100000000";
         // no ShipToName / BillToName → no N1*ST / N1*BT
 
         var result = await new X12TransformService().TransformAsync(order, OutputFormat.X12, CancellationToken.None);
@@ -248,21 +248,21 @@ public class X12TransformServiceTests
     private static PurchaseOrderEntity BuildAddressedOrder()
     {
         var order = BuildOrder();
-        order.BuyerName        = "REDACTED-PARTY";
-        order.ContactName      = "REDACTED-NAME";
-        order.ContactEmail     = "redacted@example.invalid";
-        order.ContactPhone     = "REDACTED-PHONE";
-        order.ShipToName       = "REDACTED-PARTY";
-        order.ShipToDeliverTo  = "REDACTED-NAME";
-        order.ShipToStreet     = "REDACTED-ADDRESS";
-        order.ShipToCity       = "REDACTED-ADDRESS";
+        order.BuyerName        = "EXEMPLE Achats";
+        order.ContactName      = "Testperson Alex";
+        order.ContactEmail     = "alex.testperson@buyer.example.com";
+        order.ContactPhone     = "33100000000";
+        order.ShipToName       = "Usine EXEMPLE de la REDACTED-PARTY";
+        order.ShipToDeliverTo  = "Testperson Alex";
+        order.ShipToStreet     = "12 rue des Essais";
+        order.ShipToCity       = "VILLE-EXEMPLE";
         order.ShipToPostalCode = "63040";
         order.ShipToCountry    = "FR";
-        order.ShipToEmail      = "redacted@example.invalid";
-        order.ShipToPhone      = "REDACTED-PHONE";
-        order.BillToName       = "REDACTED-PARTY";
-        order.BillToStreet     = "REDACTED-ADDRESS";
-        order.BillToCity       = "REDACTED-ADDRESS";
+        order.ShipToEmail      = "ship@buyer.example.com";
+        order.ShipToPhone      = "33100000000";
+        order.BillToName       = "EXEMPLE Comptabilite Fournisseurs";
+        order.BillToStreet     = "Place des Essais Nord";
+        order.BillToCity       = "VILLE-EXEMPLE";
         order.BillToPostalCode = "63000";
         order.BillToCountry    = "FR";
         return order;
@@ -299,20 +299,20 @@ public class X12TransformServiceTests
         var segs = SplitSegments(edi);
 
         // Ship-to N1*ST + N3 (street) + N4 (city**postal*country) + PER*OC (ship contact).
-        segs.Should().Contain(s => s.StartsWith("REDACTED-PARTY"));
-        segs.Should().Contain(s => s.StartsWith("REDACTED-ADDRESS"));
-        segs.Should().Contain("REDACTED-ADDRESS");
-        segs.Should().Contain(s => s.StartsWith("REDACTED-TEST-DATA"));
+        segs.Should().Contain(s => s.StartsWith("N1*ST*Usine EXEMPLE de la REDACTED-PARTY"));
+        segs.Should().Contain(s => s.StartsWith("N3*12 rue des Essais"));
+        segs.Should().Contain("N4*VILLE-EXEMPLE**63040*FR");
+        segs.Should().Contain(s => s.StartsWith("PER*OC*Testperson Alex*EM*ship@buyer.example.com*TE*33100000000"));
 
         // Bill-to N1*BT + N3 + N4 (no bill contact → no PER for BT).
-        segs.Should().Contain(s => s.StartsWith("REDACTED-PARTY"));
-        segs.Should().Contain("REDACTED-ADDRESS");
+        segs.Should().Contain(s => s.StartsWith("N1*BT*EXEMPLE Comptabilite Fournisseurs"));
+        segs.Should().Contain("N4*VILLE-EXEMPLE**63000*FR");
 
         // Buyer N1*BY, name-only — no N3/N4 immediately after a BY (buyer has no postal address).
-        segs.Should().Contain(s => s.StartsWith("REDACTED-PARTY"));
+        segs.Should().Contain(s => s.StartsWith("N1*BY*EXEMPLE Achats"));
 
         // Order-level contact PER*BD from Contact*.
-        segs.Should().Contain(s => s.StartsWith("REDACTED-TEST-DATA"));
+        segs.Should().Contain(s => s.StartsWith("PER*BD*Testperson Alex*EM*alex.testperson@buyer.example.com*TE*33100000000"));
 
         // The N1 loop sits AFTER CUR and BEFORE the first PO1.
         var curIdx = edi.IndexOf("CUR*", StringComparison.Ordinal);

@@ -76,7 +76,7 @@ public sealed class BuyerTaxIdAndLineTaxPersistencePostgresTests(PostgresContain
                 CreatedAt  = now,
                 UpdatedAt  = now,
                 // The buyer's own org number (NOT the supplier connection's configured From VatNr).
-                BuyerTaxId = "REDACTED-TAXID",
+                BuyerTaxId = "NO999000000",
                 Lines =
                 {
                     new PurchaseOrderLineEntity
@@ -100,7 +100,7 @@ public sealed class BuyerTaxIdAndLineTaxPersistencePostgresTests(PostgresContain
         {
             var o = await db.PurchaseOrders.Include(x => x.Lines).AsNoTracking().SingleAsync(x => x.Id == orderId);
 
-            Assert.Equal("REDACTED-TAXID", o.BuyerTaxId);
+            Assert.Equal("NO999000000", o.BuyerTaxId);
 
             var line = Assert.Single(o.Lines);
             Assert.Equal(25m, line.TaxRate);

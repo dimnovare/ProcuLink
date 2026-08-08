@@ -81,13 +81,13 @@ public sealed class LosslessCapturePersistencePostgresTests(PostgresContainerFix
                 UpdatedAt = now,
                 // Phase 1 header lossless columns.
                 Incoterms    = "DDP",
-                ContactEmail = "redacted@example.invalid",
+                ContactEmail = "c.testperson@buyer.example.com",
                 Parties =
                 {
                     new OrderParty
                     {
                         Id = Guid.NewGuid(), OrgId = orgId, Role = "shipTo",
-                        Name = "REDACTED-PARTY", City = "Linz", Vat = "REDACTED-TAXID",
+                        Name = "Exemplar Stahl GmbH", City = "Teststadt", Vat = "ATU99000000",
                     },
                 },
                 Lines =
@@ -98,14 +98,14 @@ public sealed class LosslessCapturePersistencePostgresTests(PostgresContainerFix
                         Quantity = 1, UnitPrice = 306.28m,
                         // Phase 1 line lossless columns.
                         ManufacturerPartNumber = "SCPMX94EGK",
-                        Recipient = "redacted@example.invalid",
+                        Recipient = "c.testperson@buyer.example.com",
                     },
                 },
                 SourceCapture = new SourceCapture
                 {
                     Id = Guid.NewGuid(), OrgId = orgId, Format = "pdf", CapturedAt = now,
                     TokensJson = System.Text.Json.JsonDocument.Parse(
-                        """[{"label":"EDI id","value":"REDACTED-TAXID"}]"""),
+                        """[{"label":"EDI id","value":"999000111"}]"""),
                 },
             });
             await db.SaveChangesAsync();
@@ -123,18 +123,18 @@ public sealed class LosslessCapturePersistencePostgresTests(PostgresContainerFix
 
             // Header lossless column.
             Assert.Equal("DDP", o.Incoterms);
-            Assert.Equal("redacted@example.invalid", o.ContactEmail);
+            Assert.Equal("c.testperson@buyer.example.com", o.ContactEmail);
 
             // order_parties child row.
             var party = Assert.Single(o.Parties);
             Assert.Equal("shipTo", party.Role);
-            Assert.Equal("REDACTED-TAXID", party.Vat);
-            Assert.Equal("Linz", party.City);
+            Assert.Equal("ATU99000000", party.Vat);
+            Assert.Equal("Teststadt", party.City);
 
             // Line lossless columns.
             var line = Assert.Single(o.Lines);
             Assert.Equal("SCPMX94EGK", line.ManufacturerPartNumber);
-            Assert.Equal("redacted@example.invalid", line.Recipient);
+            Assert.Equal("c.testperson@buyer.example.com", line.Recipient);
 
             // source_captures one-per-order raw bag (jsonb round-trip — parse, don't substring).
             Assert.NotNull(o.SourceCapture);
@@ -143,7 +143,7 @@ public sealed class LosslessCapturePersistencePostgresTests(PostgresContainerFix
             using var bag = System.Text.Json.JsonDocument.Parse(o.SourceCapture.TokensJson!.RootElement.GetRawText());
             var first = bag.RootElement[0];
             Assert.Equal("EDI id", first.GetProperty("label").GetString());
-            Assert.Equal("REDACTED-TAXID", first.GetProperty("value").GetString());
+            Assert.Equal("999000111", first.GetProperty("value").GetString());
         }
     }
 }

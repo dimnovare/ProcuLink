@@ -197,23 +197,23 @@ public class UblOrderTransformServiceTests
     // ── Address + contact + buyer-name (mirrors cXML; reuses canonical fields) ──
 
     /// <summary>
-    /// REDACTED-PARTY-shaped, fully-populated address order: ship-to + bill-to + contact + buyer name.
+    /// Exemple-shaped, fully-populated address order: ship-to + bill-to + contact + buyer name.
     /// </summary>
     private static PurchaseOrderEntity BuildAddressedOrder()
     {
         var order = BuildOrder();
-        order.BuyerName        = "REDACTED-PARTY";
-        order.ContactName      = "REDACTED-NAME";
-        order.ContactEmail     = "redacted@example.invalid";
-        order.ContactPhone     = "REDACTED-PHONE";
-        order.ShipToName       = "REDACTED-PARTY";
-        order.ShipToStreet     = "REDACTED-ADDRESS)";
-        order.ShipToCity       = "REDACTED-ADDRESS";
+        order.BuyerName        = "EXEMPLE Achats";
+        order.ContactName      = "Testperson Alex";
+        order.ContactEmail     = "alex.testperson@buyer.example.com";
+        order.ContactPhone     = "33100000000";
+        order.ShipToName       = "Usine EXEMPLE de la REDACTED-PARTY";
+        order.ShipToStreet     = "12 rue des Essais B12-3 (CTX_0000)";
+        order.ShipToCity       = "VILLE-EXEMPLE";
         order.ShipToPostalCode = "63040";
         order.ShipToCountry    = "FRANCE";
-        order.BillToName       = "REDACTED-PARTY";
-        order.BillToStreet     = "REDACTED-ADDRESS";
-        order.BillToCity       = "REDACTED-ADDRESS";
+        order.BillToName       = "EXEMPLE Comptabilite Fournisseurs";
+        order.BillToStreet     = "Place des Essais Nord";
+        order.BillToCity       = "VILLE-EXEMPLE";
         order.BillToPostalCode = "63000";
         order.BillToCountry    = "FRANCE";
         return order;
@@ -241,13 +241,13 @@ public class UblOrderTransformServiceTests
     {
         var svc   = new UblOrderTransformService();
         var order = BuildOrder();
-        order.BuyerName = "REDACTED-PARTY";
+        order.BuyerName = "Exemplar Stahl GmbH";
 
         var doc = XDocument.Parse(await ReadContentAsString(
             await svc.TransformAsync(order, OutputFormat.Ubl, CancellationToken.None)));
 
         var buyerParty = doc.Descendants(Cac + "BuyerCustomerParty").Single();
-        buyerParty.Descendants(Cbc + "Name").First().Value.Should().Be("REDACTED-PARTY");
+        buyerParty.Descendants(Cbc + "Name").First().Value.Should().Be("Exemplar Stahl GmbH");
     }
 
     [Fact]
@@ -262,17 +262,17 @@ public class UblOrderTransformServiceTests
         // BuyerCustomerParty/Party/PostalAddress fed from BillTo*.
         var postal = buyerParty.Element(Cac + "PostalAddress")!;
         postal.Should().NotBeNull();
-        postal.Element(Cbc + "StreetName")!.Value.Should().Be("REDACTED-ADDRESS");
-        postal.Element(Cbc + "CityName")!.Value.Should().Be("REDACTED-ADDRESS");
+        postal.Element(Cbc + "StreetName")!.Value.Should().Be("Place des Essais Nord");
+        postal.Element(Cbc + "CityName")!.Value.Should().Be("VILLE-EXEMPLE");
         postal.Element(Cbc + "PostalZone")!.Value.Should().Be("63000");
         postal.Element(Cac + "Country")!.Element(Cbc + "IdentificationCode")!.Value.Should().Be("FRANCE");
 
         // BuyerCustomerParty/Party/Contact fed from Contact*.
         var contact = buyerParty.Element(Cac + "Contact")!;
         contact.Should().NotBeNull();
-        contact.Element(Cbc + "Name")!.Value.Should().Be("REDACTED-NAME");
-        contact.Element(Cbc + "Telephone")!.Value.Should().Be("REDACTED-PHONE");
-        contact.Element(Cbc + "ElectronicMail")!.Value.Should().Be("redacted@example.invalid");
+        contact.Element(Cbc + "Name")!.Value.Should().Be("Testperson Alex");
+        contact.Element(Cbc + "Telephone")!.Value.Should().Be("33100000000");
+        contact.Element(Cbc + "ElectronicMail")!.Value.Should().Be("alex.testperson@buyer.example.com");
     }
 
     [Fact]
@@ -286,14 +286,14 @@ public class UblOrderTransformServiceTests
 
         // Delivery/DeliveryLocation/Address fed from ShipTo*.
         var address = delivery.Element(Cac + "DeliveryLocation")!.Element(Cac + "Address")!;
-        address.Element(Cbc + "StreetName")!.Value.Should().Be("REDACTED-ADDRESS)");
-        address.Element(Cbc + "CityName")!.Value.Should().Be("REDACTED-ADDRESS");
+        address.Element(Cbc + "StreetName")!.Value.Should().Be("12 rue des Essais B12-3 (CTX_0000)");
+        address.Element(Cbc + "CityName")!.Value.Should().Be("VILLE-EXEMPLE");
         address.Element(Cbc + "PostalZone")!.Value.Should().Be("63040");
         address.Element(Cac + "Country")!.Element(Cbc + "IdentificationCode")!.Value.Should().Be("FRANCE");
 
         // Delivery/DeliveryParty/PartyName/Name fed from ShipToName.
         delivery.Element(Cac + "DeliveryParty")!.Element(Cac + "PartyName")!.Element(Cbc + "Name")!
-            .Value.Should().Be("REDACTED-PARTY");
+            .Value.Should().Be("Usine EXEMPLE de la REDACTED-PARTY");
     }
 
     // ── Required-field validation (output-format hardening) ────────────────────

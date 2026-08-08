@@ -162,10 +162,10 @@ public class UblOrderParserTests
     {
         var parser = new UblOrderParser();
         var result = await parser.ParseAsync(
-            ToStream(FullSampleUbl(buyerName: "REDACTED-PARTY")),
+            ToStream(FullSampleUbl(buyerName: "Exemplar Jaekaubandus OÜ")),
             CancellationToken.None);
 
-        result.BuyerName.Should().Be("REDACTED-PARTY");
+        result.BuyerName.Should().Be("Exemplar Jaekaubandus OÜ");
     }
 
     [Fact]

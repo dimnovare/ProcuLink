@@ -99,13 +99,13 @@ public class OpenAiPdfOrderExtractorTests
     [Fact]
     public void ValidateAndMap_PositionalIndexCode_WithRealMpn_PromotesTheRealCode()
     {
-        // Danfoss/Siemens/EXEMPLAR SEAFOOD shape: the model put the positional "Pos." index ("0001")
+        // The multi-vendor "Pos." shape: the model put the positional "Pos." index ("0001")
         // into buyer_item_code while the genuine part number sits in manufacturer_part_number.
         // The real code must win — a positional counter is not an item code.
         const string source = "0001 Samsung Galaxy A57 1 PC 1469,00 1469,00 SM-A576BZABEEE";
 
         var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
-            Confidence: 0.9, PoNumber: "PO-1", OrderDate: "", Currency: "PLN", BuyerName: "Siemens",
+            Confidence: 0.9, PoNumber: "PO-1", OrderDate: "", Currency: "PLN", BuyerName: "Exemplar Elektro",
             Lines: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(
@@ -150,7 +150,7 @@ public class OpenAiPdfOrderExtractorTests
         const string source = "0010 Some service 2 ST 376,20 752,40";
 
         var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
-            Confidence: 0.9, PoNumber: "PO-1", OrderDate: "", Currency: "EUR", BuyerName: "Rheinbahn",
+            Confidence: 0.9, PoNumber: "PO-1", OrderDate: "", Currency: "EUR", BuyerName: "Exemplar Verkehr",
             Lines: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(1, "0010", "Some service", 2, "ST", 376.20, 752.40),
@@ -188,7 +188,7 @@ public class OpenAiPdfOrderExtractorTests
     [Fact]
     public void ValidateAndMap_EuropeanRawOrderDate_IsReadDayFirst_NotMonthFirst()
     {
-        // The Rheinbahn/Siemens/REDACTED-PARTY bug: printed "12.06.2026" (12 June) but the model
+        // The day-first EU date bug: printed "12.06.2026" (12 June) but the model
         // returned an inverted ISO order_date of 2026-12-06 (6 December). When the verbatim
         // printed date is supplied it must be re-interpreted day-first for the EU document.
         const string source = "Bestelldatum 12.06.2026 Currency EUR";
@@ -196,7 +196,7 @@ public class OpenAiPdfOrderExtractorTests
         var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
             Confidence: 0.9, PoNumber: "PO-1",
             OrderDate: "2026-12-06",          // the model's WRONG month-first reading
-            Currency: "EUR", BuyerName: "Rheinbahn",
+            Currency: "EUR", BuyerName: "Exemplar Verkehr",
             Lines: new[] { new OpenAiPdfOrderExtractor.ExtractionLineDto(1, "X", "Y", 1, "PCS", 0, 0) },
             OrderDateRaw: "12.06.2026");      // the date exactly as printed
 

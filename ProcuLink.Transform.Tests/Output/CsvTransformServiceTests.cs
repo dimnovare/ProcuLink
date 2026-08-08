@@ -88,19 +88,19 @@ public class CsvTransformServiceTests
     public async Task TransformAsync_WithAddresses_PopulatesAddressColumns()
     {
         var order = BuildOrder();
-        order.ShipToName       = "REDACTED-PARTY";
-        order.ShipToStreet     = "REDACTED-ADDRESS";
-        order.ShipToCity       = "REDACTED-ADDRESS";
+        order.ShipToName       = "Usine EXEMPLE de la REDACTED-PARTY";
+        order.ShipToStreet     = "12 rue des Essais";
+        order.ShipToCity       = "VILLE-EXEMPLE";
         order.ShipToPostalCode = "63040";
         order.ShipToCountry    = "FRANCE";
-        order.BillToName       = "REDACTED-PARTY";
-        order.BillToStreet     = "REDACTED-ADDRESS";
-        order.BillToCity       = "REDACTED-ADDRESS";
+        order.BillToName       = "EXEMPLE Comptabilite Fournisseurs";
+        order.BillToStreet     = "Place des Essais Nord";
+        order.BillToCity       = "VILLE-EXEMPLE";
         order.BillToPostalCode = "63000";
         order.BillToCountry    = "FRANCE";
-        order.ContactName      = "REDACTED-NAME";
-        order.ContactEmail     = "redacted@example.invalid";
-        order.ContactPhone     = "REDACTED-PHONE";
+        order.ContactName      = "Testperson Alex";
+        order.ContactEmail     = "alex.testperson@buyer.example.com";
+        order.ContactPhone     = "33100000000";
 
         var svc  = new CsvTransformService();
         var rows = await Rows(await svc.TransformAsync(order, OutputFormat.Csv, CancellationToken.None));
@@ -108,30 +108,30 @@ public class CsvTransformServiceTests
         var cells = rows[1].Split(',');
         cells.Should().HaveCount(23);
         // ShipTo* = columns 10..14
-        cells[10].Should().Be("REDACTED-PARTY");
-        cells[11].Should().Be("REDACTED-ADDRESS");
-        cells[12].Should().Be("REDACTED-ADDRESS");
+        cells[10].Should().Be("Usine EXEMPLE de la REDACTED-PARTY");
+        cells[11].Should().Be("12 rue des Essais");
+        cells[12].Should().Be("VILLE-EXEMPLE");
         cells[13].Should().Be("63040");
         cells[14].Should().Be("FRANCE");
         // BillTo* = columns 15..19
-        cells[15].Should().Be("REDACTED-PARTY");
+        cells[15].Should().Be("EXEMPLE Comptabilite Fournisseurs");
         cells[19].Should().Be("FRANCE");
         // Contact* = columns 20..22
-        cells[20].Should().Be("REDACTED-NAME");
-        cells[21].Should().Be("redacted@example.invalid");
-        cells[22].Should().Be("REDACTED-PHONE");
+        cells[20].Should().Be("Testperson Alex");
+        cells[21].Should().Be("alex.testperson@buyer.example.com");
+        cells[22].Should().Be("33100000000");
     }
 
     [Fact]
     public async Task TransformAsync_AddressFieldWithComma_IsRfc4180Escaped()
     {
         var order = BuildOrder();
-        order.ShipToStreet = "REDACTED-ADDRESS";
+        order.ShipToStreet = "12 rue des Essais, Bldg B12";
 
         var svc  = new CsvTransformService();
         var rows = await Rows(await svc.TransformAsync(order, OutputFormat.Csv, CancellationToken.None));
 
-        rows[1].Should().Contain("\"REDACTED-ADDRESS\"");
+        rows[1].Should().Contain("\"12 rue des Essais, Bldg B12\"");
     }
 
     [Fact]

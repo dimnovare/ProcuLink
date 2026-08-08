@@ -64,7 +64,7 @@ public class SampleOrderPracticeDeliveryTests
             SupplierId           = supplier.Id,
             Protocol             = DeliveryProtocolConstants.Http,
             AutoDeliver          = true,
-            ConfigJson           = """{"url":"https://example.invalid/redacted"}""",
+            ConfigJson           = """{"url":"https://webhook.site/9a1f85b7-0000-0000-0000-000000000000/e2e-sample-xml"}""",
             EncryptedCredentials = string.Empty,
             OutputFormat         = "xml",
             CreatedAt            = DateTime.UtcNow,

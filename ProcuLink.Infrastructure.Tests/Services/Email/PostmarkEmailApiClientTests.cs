@@ -52,7 +52,7 @@ public class PostmarkEmailApiClientTests
 
         client.IsConfigured.Should().BeFalse();
 
-        var result = await client.SendAsync(SimpleMessage("redacted@example.invalid"));
+        var result = await client.SendAsync(SimpleMessage("a@x.example"));
 
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("not configured");
@@ -67,7 +67,7 @@ public class PostmarkEmailApiClientTests
 
         client.IsConfigured.Should().BeTrue();
 
-        var result = await client.SendAsync(SimpleMessage("redacted@example.invalid"));
+        var result = await client.SendAsync(SimpleMessage("a@x.example"));
 
         result.Success.Should().BeTrue();
         result.StatusCode.Should().Be(200);
@@ -81,7 +81,7 @@ public class PostmarkEmailApiClientTests
         var handler = new StubHandler(HttpStatusCode.OK, """{"ErrorCode":300,"Message":"Inactive recipient"}""");
         var client = MakeClient(Config(("Email:Postmark:ServerToken", Token)), handler);
 
-        var result = await client.SendAsync(SimpleMessage("redacted@example.invalid"));
+        var result = await client.SendAsync(SimpleMessage("a@x.example"));
 
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("Inactive recipient");
@@ -95,7 +95,7 @@ public class PostmarkEmailApiClientTests
         var handler = new StubHandler(HttpStatusCode.UnprocessableEntity, """{"ErrorCode":300,"Message":"Bad"}""");
         var client = MakeClient(Config(("Email:Postmark:ServerToken", Token)), handler);
 
-        var result = await client.SendAsync(SimpleMessage("redacted@example.invalid"));
+        var result = await client.SendAsync(SimpleMessage("a@x.example"));
 
         result.Success.Should().BeFalse();
         result.StatusCode.Should().Be(422);
@@ -124,7 +124,7 @@ public class PostmarkEmailApiClientTests
         var expectedBase64 = Convert.ToBase64String(attachmentBytes);
         var message = new EmailApiMessage(
             From: "from@proculink.eu",
-            To: new[] { "redacted@example.invalid", "redacted@example.invalid" },
+            To: new[] { "a@x.example", "b@y.example" },
             Subject: "PO 1",
             TextBody: "body",
             Attachments: new[] { new EmailApiAttachment("order.csv", "text/csv", attachmentBytes) });
@@ -138,7 +138,7 @@ public class PostmarkEmailApiClientTests
         tokenValues!.Should().ContainSingle().Which.Should().Be(Token);
 
         capture.LastBody.Should().NotBeNull();
-        capture.LastBody.Should().Contain("redacted@example.invalid");   // comma-joined recipients
+        capture.LastBody.Should().Contain("a@x.example,b@y.example");   // comma-joined recipients
         capture.LastBody.Should().Contain(expectedBase64);       // base64 of the attachment
         capture.LastBody.Should().Contain("\"MessageStream\":\"outbound\"");
     }
