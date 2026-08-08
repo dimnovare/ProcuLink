@@ -42,10 +42,16 @@ public class ApiKeyAuthHandlerTenantUnificationTests
     private const string HashSecret = "test-api-key-hash-secret-please-rotate";
     private const string RawKey     = "plk_abcdEXAMPLEKEY1234567890";
 
-    private static ProcuLinkDbContext NewDb() =>
-        new(new DbContextOptionsBuilder<ProcuLinkDbContext>()
+    /// <summary>
+    /// Options rather than a context, because the handler now takes options and opens its own
+    /// short-lived context for the key lookup: that lookup happens during authentication, before any
+    /// organisation is known, so it must not consume the request-scoped context that
+    /// TenantResolutionMiddleware later arms.
+    /// </summary>
+    private static DbContextOptions<ProcuLinkDbContext> NewDbOptions() =>
+        new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
-            .Options);
+            .Options;
 
     /// <summary>Seeds an org + an active API key whose hash matches <see cref="RawKey"/>.</summary>
     private static (Guid OrgId, Guid SupplierId) Seed(ProcuLinkDbContext db, string slug = Slug)
@@ -88,7 +94,7 @@ public class ApiKeyAuthHandlerTenantUnificationTests
     /// authenticate pipeline (Initialize → AuthenticateAsync).
     /// </summary>
     private static async Task<AuthenticateResult> AuthenticateAsync(
-        ProcuLinkDbContext db, DefaultHttpContext httpContext)
+        DbContextOptions<ProcuLinkDbContext> dbOptions, DefaultHttpContext httpContext)
     {
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -105,7 +111,7 @@ public class ApiKeyAuthHandlerTenantUnificationTests
             options.Object,
             NullLoggerFactory.Instance,
             UrlEncoder.Default,
-            db,
+            dbOptions,
             config);
 
         await handler.InitializeAsync(
@@ -128,11 +134,12 @@ public class ApiKeyAuthHandlerTenantUnificationTests
     [Fact]
     public async Task ApiKeyAuth_PublishesInternalOrgGuid_IntoHttpContextItems()
     {
-        await using var db = NewDb();
+        var dbOptions = NewDbOptions();
+        await using var db = new ProcuLinkDbContext(dbOptions);
         var (orgId, _) = Seed(db);
 
         var ctx    = NewRequestContext();
-        var result = await AuthenticateAsync(db, ctx);
+        var result = await AuthenticateAsync(dbOptions, ctx);
 
         Assert.True(result.Succeeded);
 
@@ -149,12 +156,13 @@ public class ApiKeyAuthHandlerTenantUnificationTests
     [Fact]
     public async Task IngressController_ResolvesCorrectInternalOrg_ViaUnifiedPath()
     {
-        await using var db = NewDb();
+        var dbOptions = NewDbOptions();
+        await using var db = new ProcuLinkDbContext(dbOptions);
         var (orgId, supplierId) = Seed(db);
 
         // 1) Authenticate exactly as the framework would (handler populates Items).
         var ctx = NewRequestContext();
-        var auth = await AuthenticateAsync(db, ctx);
+        var auth = await AuthenticateAsync(dbOptions, ctx);
         Assert.True(auth.Succeeded);
         ctx.User = auth.Principal!;
 
@@ -240,12 +248,13 @@ public class ApiKeyAuthHandlerTenantUnificationTests
         // M3 regression (plan 2026-06-12): the rate limiter partitions on the `sub` claim
         // (Program.cs PartitionKey). The ApiKey principal must therefore carry a stable,
         // per-key subject — prefixed so it can never collide with a Clerk user id.
-        await using var db = NewDb();
+        var dbOptions = NewDbOptions();
+        await using var db = new ProcuLinkDbContext(dbOptions);
         Seed(db);
         var keyId = (await db.TenantApiKeys.SingleAsync()).Id;
 
         var ctx    = NewRequestContext();
-        var result = await AuthenticateAsync(db, ctx);
+        var result = await AuthenticateAsync(dbOptions, ctx);
 
         Assert.True(result.Succeeded);
         var sub = result.Principal!.FindFirst("sub")?.Value;
@@ -255,11 +264,12 @@ public class ApiKeyAuthHandlerTenantUnificationTests
     [Fact]
     public async Task IngressController_RejectsSlugMismatch_ViaUnifiedPath()
     {
-        await using var db = NewDb();
+        var dbOptions = NewDbOptions();
+        await using var db = new ProcuLinkDbContext(dbOptions);
         var (orgId, _) = Seed(db, slug: "real-slug");
 
         var ctx = NewRequestContext();
-        var auth = await AuthenticateAsync(db, ctx);
+        var auth = await AuthenticateAsync(dbOptions, ctx);
         Assert.True(auth.Succeeded);
         ctx.User = auth.Principal!;
 

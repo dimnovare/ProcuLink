@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using ProcuLink.Api.Jobs;
 using ProcuLink.Core.Services.Email;
+using ProcuLink.Infrastructure.Tenancy;
 
 namespace ProcuLink.Api.Controllers;
 
@@ -60,6 +61,14 @@ public sealed class InboundEmailController : ControllerBase
     /// temporarily unable to accept orders (422).
     /// </remarks>
     [HttpPost("postmark")]
+    [CrossOrganisationRead(
+        "Postmark inbound webhook: the organisation is derived from the RECIPIENT address by " +
+        "IInboundEmailRouter, never from the caller. The endpoint authenticates with a shared token " +
+        "rather than an ASP.NET auth scheme, so today no tenant resolves and the router's reads are " +
+        "unfiltered by accident. A request that did arrive with a valid bearer token would arm the " +
+        "context, and inbound mail for every other tenant would stop routing while the endpoint " +
+        "kept answering 200 — which is exactly how Postmark is told the message was handled. " +
+        "Declared so the safety is deliberate rather than incidental.")]
     [EnableRateLimiting("upload")]
     [Consumes("application/json")]
     [ProducesResponseType(StatusCodes.Status200OK)]

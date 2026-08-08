@@ -21,10 +21,33 @@ public class TenantResolutionMiddlewareProvisionThrottleTests
 {
     private const int MaxProvisionsPerWindow = 5; // mirrors the middleware constant
 
-    private static ProcuLinkDbContext NewDb() =>
-        new(new DbContextOptionsBuilder<ProcuLinkDbContext>()
+    private static DbContextOptions<ProcuLinkDbContext> NewOptions() =>
+        new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
-            .Options);
+            .Options;
+
+    /// <summary>
+    /// Runs the middleware exactly as the pipeline does: with a FRESH, never-queried
+    /// request-scoped context. The middleware arms that context with ScopeToOrganisation at the
+    /// end of InvokeAsync, and that refuses a context which has already resolved its model by
+    /// running a query — so the request context can never double as a seed or assert context.
+    /// </summary>
+    private static async Task RunAsync(
+        TenantResolutionMiddleware middleware,
+        HttpContext ctx,
+        DbContextOptions<ProcuLinkDbContext> options,
+        FakeAnalyticsService analytics)
+    {
+        await using var requestDb = new ProcuLinkDbContext(options);
+        await middleware.InvokeAsync(ctx, requestDb, analytics, options);
+    }
+
+    /// <summary>Counts organisations on a separate, unscoped context over the same store.</summary>
+    private static async Task<int> CountOrgsAsync(DbContextOptions<ProcuLinkDbContext> options)
+    {
+        await using var db = new ProcuLinkDbContext(options);
+        return await db.Organisations.CountAsync();
+    }
 
     private static HttpContext NewRequest(string ip, string orgId, string sub)
     {
@@ -42,17 +65,17 @@ public class TenantResolutionMiddlewareProvisionThrottleTests
     [Fact]
     public async Task NormalFirstLogin_FromOneIp_StillProvisions()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var analytics = new FakeAnalyticsService();
         var middleware = new TenantResolutionMiddleware(
             next: _ => Task.CompletedTask,
             logger: NullLogger<TenantResolutionMiddleware>.Instance);
 
         var ctx = NewRequest("203.0.113.7", "org_NEWUSER", "user_NEWUSER");
-        await middleware.InvokeAsync(ctx, db, analytics);
+        await RunAsync(middleware, ctx, options, analytics);
 
         // One org created, one org_created event — behaviour unchanged for a real new user.
-        Assert.Equal(1, await db.Organisations.CountAsync());
+        Assert.Equal(1, await CountOrgsAsync(options));
         Assert.Single(analytics.CapturedEvents);
         Assert.True(ctx.Items.ContainsKey(CurrentTenantService.Items.OrganisationId));
     }
@@ -60,7 +83,7 @@ public class TenantResolutionMiddlewareProvisionThrottleTests
     [Fact]
     public async Task ScriptFarmingTrials_FromOneIp_IsThrottledAfterCap()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var analytics = new FakeAnalyticsService();
         // Single middleware instance so the in-memory window persists across requests,
         // mirroring the UseMiddleware<> singleton in production.
@@ -74,18 +97,18 @@ public class TenantResolutionMiddlewareProvisionThrottleTests
         for (var i = 0; i < MaxProvisionsPerWindow + 4; i++)
         {
             var ctx = NewRequest(attackerIp, $"org_FARM_{i}", $"user_FARM_{i}");
-            await middleware.InvokeAsync(ctx, db, analytics);
+            await RunAsync(middleware, ctx, options, analytics);
         }
 
         // Only the cap is honoured despite many distinct identities from one IP.
-        Assert.Equal(MaxProvisionsPerWindow, await db.Organisations.CountAsync());
+        Assert.Equal(MaxProvisionsPerWindow, await CountOrgsAsync(options));
         Assert.Equal(MaxProvisionsPerWindow, analytics.CapturedEvents.Count);
     }
 
     [Fact]
     public async Task ThrottledRequest_FailsClosed_NoTenantResolved_PipelineContinues()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var analytics = new FakeAnalyticsService();
         var nextCalls = 0;
         var middleware = new TenantResolutionMiddleware(
@@ -98,12 +121,12 @@ public class TenantResolutionMiddlewareProvisionThrottleTests
         for (var i = 0; i < MaxProvisionsPerWindow; i++)
         {
             var ok = NewRequest(attackerIp, $"org_OK_{i}", $"user_OK_{i}");
-            await middleware.InvokeAsync(ok, db, analytics);
+            await RunAsync(middleware, ok, options, analytics);
         }
 
         // The next distinct identity is throttled.
         var blocked = NewRequest(attackerIp, "org_BLOCKED", "user_BLOCKED");
-        await middleware.InvokeAsync(blocked, db, analytics);
+        await RunAsync(middleware, blocked, options, analytics);
 
         // No tenant resolved for the throttled request, but the pipeline still ran
         // (downstream [Authorize] / tenant-scoped controllers fail closed).
@@ -111,13 +134,13 @@ public class TenantResolutionMiddlewareProvisionThrottleTests
         // next() invoked once per request (5 provisioned + 1 throttled = 6).
         Assert.Equal(MaxProvisionsPerWindow + 1, nextCalls);
         // No extra org / event for the throttled call.
-        Assert.Equal(MaxProvisionsPerWindow, await db.Organisations.CountAsync());
+        Assert.Equal(MaxProvisionsPerWindow, await CountOrgsAsync(options));
     }
 
     [Fact]
     public async Task DifferentIps_EachGetOwnBudget_NotThrottledAcrossIps()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var analytics = new FakeAnalyticsService();
         var middleware = new TenantResolutionMiddleware(
             next: _ => Task.CompletedTask,
@@ -128,15 +151,15 @@ public class TenantResolutionMiddlewareProvisionThrottleTests
         for (var i = 0; i < MaxProvisionsPerWindow; i++)
         {
             var a = NewRequest("203.0.113.10", $"org_A_{i}", $"user_A_{i}");
-            await middleware.InvokeAsync(a, db, analytics);
+            await RunAsync(middleware, a, options, analytics);
         }
         for (var i = 0; i < MaxProvisionsPerWindow; i++)
         {
             var b = NewRequest("203.0.113.11", $"org_B_{i}", $"user_B_{i}");
-            await middleware.InvokeAsync(b, db, analytics);
+            await RunAsync(middleware, b, options, analytics);
         }
 
-        Assert.Equal(MaxProvisionsPerWindow * 2, await db.Organisations.CountAsync());
+        Assert.Equal(MaxProvisionsPerWindow * 2, await CountOrgsAsync(options));
     }
 
     [Fact]
@@ -147,7 +170,7 @@ public class TenantResolutionMiddlewareProvisionThrottleTests
         // accumulate forever — the per-key sliding window pruned timestamps but never the
         // dictionary keys themselves. The periodic sweep must reclaim entries whose window
         // has fully aged out so the store cannot grow without limit.
-        await using var db = NewDb();
+        var options = NewOptions();
         var analytics = new FakeAnalyticsService();
 
         var clock = new DateTime(2026, 6, 7, 12, 0, 0, DateTimeKind.Utc);
@@ -165,7 +188,7 @@ public class TenantResolutionMiddlewareProvisionThrottleTests
             // Distinct, valid IPv4 addresses → distinct throttle keys.
             var ip = $"10.{(i >> 16) & 0xFF}.{(i >> 8) & 0xFF}.{i & 0xFF}";
             var ctx = NewRequest(ip, $"org_FLOOD_{i}", $"user_FLOOD_{i}");
-            await middleware.InvokeAsync(ctx, db, analytics);
+            await RunAsync(middleware, ctx, options, analytics);
         }
 
         Assert.True(
@@ -181,7 +204,7 @@ public class TenantResolutionMiddlewareProvisionThrottleTests
         {
             var ip = $"10.{(i >> 16) & 0xFF}.{(i >> 8) & 0xFF}.{i & 0xFF}";
             var ctx = NewRequest(ip, $"org_FLOOD2_{i}", $"user_FLOOD2_{i}");
-            await middleware.InvokeAsync(ctx, db, analytics);
+            await RunAsync(middleware, ctx, options, analytics);
         }
 
         // The store must NOT retain the original ~600 expired entries on top of the new
@@ -197,7 +220,7 @@ public class TenantResolutionMiddlewareProvisionThrottleTests
     [Fact]
     public async Task WindowReopens_AfterRollingWindowElapses()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var analytics = new FakeAnalyticsService();
 
         var clock = new DateTime(2026, 6, 7, 12, 0, 0, DateTimeKind.Utc);
@@ -212,22 +235,22 @@ public class TenantResolutionMiddlewareProvisionThrottleTests
         for (var i = 0; i < MaxProvisionsPerWindow; i++)
         {
             var ctx = NewRequest(ip, $"org_T0_{i}", $"user_T0_{i}");
-            await middleware.InvokeAsync(ctx, db, analytics);
+            await RunAsync(middleware, ctx, options, analytics);
         }
-        Assert.Equal(MaxProvisionsPerWindow, await db.Organisations.CountAsync());
+        Assert.Equal(MaxProvisionsPerWindow, await CountOrgsAsync(options));
 
         // Immediately after, the next is throttled.
         var blocked = NewRequest(ip, "org_T0_BLOCKED", "user_T0_BLOCKED");
-        await middleware.InvokeAsync(blocked, db, analytics);
-        Assert.Equal(MaxProvisionsPerWindow, await db.Organisations.CountAsync());
+        await RunAsync(middleware, blocked, options, analytics);
+        Assert.Equal(MaxProvisionsPerWindow, await CountOrgsAsync(options));
 
         // Advance past the rolling window — the old timestamps age out.
         clock = clock.AddMinutes(11);
 
         var afterWindow = NewRequest(ip, "org_T1", "user_T1");
-        await middleware.InvokeAsync(afterWindow, db, analytics);
+        await RunAsync(middleware, afterWindow, options, analytics);
 
-        Assert.Equal(MaxProvisionsPerWindow + 1, await db.Organisations.CountAsync());
+        Assert.Equal(MaxProvisionsPerWindow + 1, await CountOrgsAsync(options));
         Assert.True(afterWindow.Items.ContainsKey(CurrentTenantService.Items.OrganisationId));
     }
 }

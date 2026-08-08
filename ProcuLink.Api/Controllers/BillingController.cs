@@ -8,6 +8,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Tenancy;
 
 namespace ProcuLink.Api.Controllers;
 
@@ -199,6 +200,13 @@ public sealed class BillingController : ControllerBase
 
     [HttpPost("webhook")]
     [AllowAnonymous]
+    [CrossOrganisationRead(
+        "Stripe webhook: the organisation is named by the event payload (customer/subscription id), " +
+        "never by the caller. Stripe presents no bearer token, so today no tenant resolves and the " +
+        "reads are unfiltered by accident. [AllowAnonymous] does not stop the JWT handler from " +
+        "populating User, so a request that did arrive with a valid token would arm the context and " +
+        "apply the subscription change against the wrong organisation's orders — silently, with a " +
+        "200 back to Stripe. Declared so the safety is deliberate rather than incidental.")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Webhook(CancellationToken ct)

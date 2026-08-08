@@ -18,15 +18,24 @@ namespace ProcuLink.Api.Tests.Middleware;
 /// </summary>
 public class TenantResolutionMiddlewareSubFallbackTests
 {
-    private static ProcuLinkDbContext NewDb() =>
-        new(new DbContextOptionsBuilder<ProcuLinkDbContext>()
+    private static DbContextOptions<ProcuLinkDbContext> NewOptions() =>
+        new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
-            .Options);
+            .Options;
+
+    /// <summary>
+    /// A context over the test's single in-memory store. The context handed to InvokeAsync and
+    /// the one the assertions query are separate instances: the middleware arms the request
+    /// context with ScopeToOrganisation at the end of InvokeAsync, and that refuses a context
+    /// which has already resolved its model by running a query.
+    /// </summary>
+    private static ProcuLinkDbContext NewDb(DbContextOptions<ProcuLinkDbContext> options) =>
+        new(options);
 
     [Fact]
     public async Task InvokeAsync_SubOnly_NoOrgIdClaim_DoesNotProvision_FailsClosed()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var analytics = new FakeAnalyticsService();
         var middleware = new TenantResolutionMiddleware(
             next: _ => Task.CompletedTask,
@@ -38,7 +47,12 @@ public class TenantResolutionMiddlewareSubFallbackTests
             new Claim("sub", "user_LONELY"),
         }, authenticationType: "test"));
 
-        await middleware.InvokeAsync(ctx, db, analytics);
+        await using (var requestDb = NewDb(options))
+        {
+            await middleware.InvokeAsync(ctx, requestDb, analytics, options);
+        }
+
+        await using var db = NewDb(options);
 
         Assert.Equal(0, await db.Organisations.CountAsync());
         Assert.Empty(analytics.CapturedEvents);
@@ -48,7 +62,7 @@ public class TenantResolutionMiddlewareSubFallbackTests
     [Fact]
     public async Task InvokeAsync_NonOrgPrefixedTenantKey_DoesNotProvision()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var analytics = new FakeAnalyticsService();
         var middleware = new TenantResolutionMiddleware(
             next: _ => Task.CompletedTask,
@@ -61,7 +75,12 @@ public class TenantResolutionMiddlewareSubFallbackTests
             new Claim("sub", "user_X"),
         }, authenticationType: "test"));
 
-        await middleware.InvokeAsync(ctx, db, analytics);
+        await using (var requestDb = NewDb(options))
+        {
+            await middleware.InvokeAsync(ctx, requestDb, analytics, options);
+        }
+
+        await using var db = NewDb(options);
 
         Assert.Equal(0, await db.Organisations.CountAsync());
         Assert.False(ctx.Items.ContainsKey(CurrentTenantService.Items.OrganisationId));
@@ -70,7 +89,7 @@ public class TenantResolutionMiddlewareSubFallbackTests
     [Fact]
     public async Task InvokeAsync_RealOrgId_StillProvisions()
     {
-        await using var db = NewDb();
+        var options = NewOptions();
         var analytics = new FakeAnalyticsService();
         var middleware = new TenantResolutionMiddleware(
             next: _ => Task.CompletedTask,
@@ -84,7 +103,12 @@ public class TenantResolutionMiddlewareSubFallbackTests
             new Claim("sub", "user_abc"),
         }, authenticationType: "test"));
 
-        await middleware.InvokeAsync(ctx, db, analytics);
+        await using (var requestDb = NewDb(options))
+        {
+            await middleware.InvokeAsync(ctx, requestDb, analytics, options);
+        }
+
+        await using var db = NewDb(options);
 
         Assert.Equal(1, await db.Organisations.CountAsync());
         Assert.True(ctx.Items.ContainsKey(CurrentTenantService.Items.OrganisationId));
