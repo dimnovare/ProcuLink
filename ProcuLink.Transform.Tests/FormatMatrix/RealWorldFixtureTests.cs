@@ -8,9 +8,14 @@ namespace ProcuLink.Transform.Tests.FormatMatrix;
 
 /// <summary>
 /// Tests against the real-world XML fixtures committed in RealWorldFixtures/.
-/// Each fixture is a sanitized (PII-removed) copy of a real PO that arrived in
-/// the founder's inbox.  The fixtures are embedded resources so they are
-/// hermetic and version-controlled.
+/// Each fixture is a de-identified copy of a real PO that arrived in the founder's
+/// inbox.  The fixtures are embedded resources so they are hermetic and
+/// version-controlled.
+///
+/// Naming rule: fixture file names, and the test names below, describe the FORMAT,
+/// the DIALECT and the SHAPE being pinned — never the trading party the document
+/// came from. This repository is public, so a file name is as readable as its
+/// contents. Enforced by Architecture/FixtureNamingGuardTests.
 ///
 /// What is tested here (deterministic, no network):
 ///   1. Parser routing — content-sniffing correctly identifies cXML vs IDoc.
@@ -117,9 +122,9 @@ public class RealWorldFixtureTests
     // ════════════════════════════════════════════════════════════════════════
 
     [Fact]
-    public async Task REDACTED_TEST_NAME()
+    public async Task RealWorld_cXML_PL_SingleLine_PLN_Unicode()
     {
-        // Real Nestlé PL cXML: 1 line, PLN currency, Polish unicode (Dodatkowa słuch).
+        // Real Polish-instance cXML: 1 line, PLN currency, Polish unicode (Dodatkowa słuch).
         await AssertRealWorldFixture(
             resourceName:       "rw_cxml_pl_singleline_pln_unicode.xml",
             expectedParserType: typeof(CxmlOrderParser),
@@ -129,9 +134,9 @@ public class RealWorldFixtureTests
     }
 
     [Fact]
-    public async Task REDACTED_TEST_NAME()
+    public async Task RealWorld_cXML_ES_Coupa_SingleLine_EUR_WithDeploymentMode()
     {
-        // Sanitized Nasdaq/Coupa cXML from Spain: 1 line, EUR, distributor context.
+        // De-identified Coupa-dialect cXML from Spain: 1 line, EUR, distributor context.
         // The real file had no <Request deploymentMode> — that case is separately tested.
         await AssertRealWorldFixture(
             resourceName:       "rw_cxml_es_coupa_with_deploymentmode.xml",
@@ -142,10 +147,10 @@ public class RealWorldFixtureTests
     }
 
     [Fact]
-    public async Task REDACTED_TEST_NAME()
+    public async Task RealWorld_cXML_PL_TwoLines_PLN_NoDTD()
     {
-        // Real DPD PL cXML: 2 lines, PLN, original had a <!DOCTYPE> in it.
-        // The sanitized copy strips the DOCTYPE so our parser doesn't reject it
+        // Real Polish-instance cXML: 2 lines, PLN, original had a <!DOCTYPE> in it.
+        // The de-identified copy strips the DOCTYPE so our parser doesn't reject it
         // (DtdProcessing.Prohibit). The test also validates the 2-line total reconciles.
         await AssertRealWorldFixture(
             resourceName:       "rw_cxml_pl_2lines_pln_no_dtd.xml",
@@ -173,12 +178,12 @@ public class RealWorldFixtureTests
     }
 
     [Fact]
-    public async Task REDACTED_TEST_NAME()
+    public async Task RealWorld_cXML_NoDeploymentMode_NowParses()
     {
-        // The real Nasdaq file has <Request> with no deploymentMode attribute (common in
+        // The captured file has <Request> with no deploymentMode attribute (common in
         // Coupa tenants) and a <!DOCTYPE> header. Both used to make CxmlOrderParser throw —
         // this fixture documented that gap. It is now CLOSED: deploymentMode defaults to
-        // "production" and the DOCTYPE is tolerated (XXE-safe), so a genuine Nasdaq/Coupa
+        // "production" and the DOCTYPE is tolerated (XXE-safe), so a genuine Coupa-dialect
         // OrderRequest parses end to end.
         using var stream = LoadFixture("rw_cxml_es_coupa_no_deploymentmode.xml");
         var factory = Factory();
@@ -197,7 +202,7 @@ public class RealWorldFixtureTests
     // ════════════════════════════════════════════════════════════════════════
 
     [Fact]
-    public async Task REDACTED_TEST_NAME()
+    public async Task RealWorld_IDoc_ES_NumericCurcy704_ResolvesToEUR()
     {
         // Real SAP IDoc from Spain: CURCY=704 (numeric SAP-internal code) + SUNIT=EUR.
         // The parser must prefer SUNIT (alphabetic ISO) over CURCY (numeric). This is a
@@ -221,9 +226,9 @@ public class RealWorldFixtureTests
     }
 
     [Fact]
-    public async Task RealWorld_IDoc_ArayMond_IT_FiveLines_EUR_LineAmountsReconcile()
+    public async Task RealWorld_IDoc_IT_FiveLines_EUR_LineAmountsReconcile()
     {
-        // Real REDACTED-NAME IDoc from Italy: 5 lines, EUR, long Italian descriptions.
+        // Real IDoc from Italy: 5 lines, EUR, long Italian descriptions.
         // Line amounts (NETWR) are explicitly stated; this test verifies
         // qty × unitPrice ≈ NETWR within €0.01 for every line.
         using var stream = LoadFixture("rw_idoc_it_5lines_netwr_reconcile.xml");
@@ -257,7 +262,7 @@ public class RealWorldFixtureTests
     }
 
     [Fact]
-    public async Task REDACTED_TEST_NAME()
+    public async Task RealWorld_IDoc_FR_TwoLines_EUR()
     {
         await AssertRealWorldFixture(
             resourceName:       "rw_idoc_fr_2lines_eur.xml",

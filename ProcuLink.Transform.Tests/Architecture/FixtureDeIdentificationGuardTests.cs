@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using FluentAssertions;
@@ -26,6 +25,12 @@ namespace ProcuLink.Transform.Tests.Architecture;
 /// Failures name the file, the line and the class — never the value. This repository is public
 /// and CI logs are public with it; a guard that prints the leak to prove the leak has not
 /// removed it. Open the named file locally to see what tripped.
+///
+/// This guard only reads what is INSIDE a fixture. Its sibling
+/// <see cref="FixtureNamingGuardTests"/> polices the same corpus's PATHS, because on a public
+/// repository a file name leaks just as effectively as a file body — and this guard, written from
+/// a content instance, could not see that. Both draw their corpus from <see cref="FixtureCorpus"/>
+/// so the two cannot drift apart.
 /// </summary>
 public class FixtureDeIdentificationGuardTests
 {
@@ -184,12 +189,12 @@ public class FixtureDeIdentificationGuardTests
 
     private static FixtureScan ScanTrackedFixtures()
     {
-        var repoRoot = FindRepoRoot();
+        var repoRoot = FixtureCorpus.FindRepoRoot();
         var violations = new List<string>();
         var scannedFiles = 0;
         long scannedBytes = 0;
 
-        foreach (var relative in TrackedFixtureFiles(repoRoot))
+        foreach (var relative in FixtureCorpus.TrackedFixtureFiles(repoRoot))
         {
             var absolute = Path.Combine(repoRoot, relative.Replace('/', Path.DirectorySeparatorChar));
             if (!File.Exists(absolute))
@@ -219,70 +224,4 @@ public class FixtureDeIdentificationGuardTests
         return new FixtureScan(repoRoot, scannedFiles, scannedBytes, violations);
     }
 
-    /// <summary>
-    /// Tracked files whose *directory* path contains a segment ending in "Fixtures". Derived
-    /// from git rather than typed out here — a hand-maintained list is how the next fixture
-    /// directory gets added without the guard noticing.
-    /// </summary>
-    private static IReadOnlyList<string> TrackedFixtureFiles(string repoRoot)
-    {
-        var psi = new ProcessStartInfo("git", "ls-files -z")
-        {
-            WorkingDirectory = repoRoot,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-
-        using var proc = Process.Start(psi)
-            ?? throw new InvalidOperationException("could not start git to enumerate tracked fixtures");
-
-        var stdout = proc.StandardOutput.ReadToEnd();
-        var stderr = proc.StandardError.ReadToEnd();
-        proc.WaitForExit();
-
-        if (proc.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"`git ls-files` failed in {repoRoot}: {stderr}");
-        }
-
-        return stdout
-            .Split('\0', StringSplitOptions.RemoveEmptyEntries)
-            .Where(IsUnderFixturesDirectory)
-            .OrderBy(p => p, StringComparer.Ordinal)
-            .ToList();
-    }
-
-    private static bool IsUnderFixturesDirectory(string relativePath)
-    {
-        var segments = relativePath.Split('/');
-        for (var i = 0; i < segments.Length - 1; i++) // directory segments only
-        {
-            if (segments[i].EndsWith("Fixtures", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "ProcuLink.slnx")))
-            {
-                return dir.FullName;
-            }
-
-            dir = dir.Parent;
-        }
-
-        throw new InvalidOperationException(
-            $"could not find ProcuLink.slnx walking up from {AppContext.BaseDirectory}");
-    }
 }

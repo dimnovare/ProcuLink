@@ -55,7 +55,7 @@ Is it sellable today? To a design partner who tolerates founder involvement, yes
 
 **Why choose it over the alternatives.** Over spreadsheets: the knowledge persists and the audit trail exists. Over custom scripts: no engineer owns it, and a business user can change a mapping. Over an EDI provider (SPS, TrueCommerce, OpenText): those are quote-only, implementation-led, and priced per trading partner — they cannot economically onboard a supplier who just wants a CSV by email. Over Zapier/Make/n8n: those have no canonical order model, no item-code map, no per-attempt evidence, no supplier-format library — you would be rebuilding ProcuLink badly. Over Boomi/MuleSoft: an order of magnitude more money and a developer.
 
-**One inconvenient finding you should sit with.** The refutation pass on the market track surfaced this: the only two real customer purchase orders in the repository — added on `origin/main` in `63b89b5` (#73) — are `real-cxml-1.2-ariba-punchout-mpn-differs.xml` ("Ariba / KSB → Markit") and `real-cxml-1.1-mpn-equals-supplier-part.xml`. Both are orders **received by** the ProcuLink user, not sent by them. Your own test corpus describes an inbound, supplier-side workflow. Either the fixtures are mislabelled convenience data, or your actual first customer's job is the mirror image of the documented ICP. That is worth resolving before another six weeks of outbound-only work, and I could not resolve it from the repos.
+**One inconvenient finding you should sit with.** The refutation pass on the market track surfaced this: the only two real customer purchase orders in the repository — added on `origin/main` in `63b89b5` (#73) — are `real-cxml-1.2-ariba-punchout-mpn-differs.xml` (an Ariba PunchOut order) and `real-cxml-1.1-mpn-equals-supplier-part.xml`. Both are orders **received by** the ProcuLink user, not sent by them. Your own test corpus describes an inbound, supplier-side workflow. Either the fixtures are mislabelled convenience data, or your actual first customer's job is the mirror image of the documented ICP. That is worth resolving before another six weeks of outbound-only work, and I could not resolve it from the repos.
 
 ## 3. Whose life it improves
 
@@ -170,7 +170,7 @@ Webhook ingress cannot be enabled: `Organisation.WebhookSecretEncrypted` has a d
 | XLSX | ✓ | ✗ | LLM-primary; deterministic fallback has the locale bug + no NeedsReview contract |
 | Text PDF | ✓ | ✗ | LLM primary, regex fallback. Line regex cannot express a grouped EU number — matching lines silently dropped |
 | Scanned PDF | ~ vision | ✗ | Every line review-flagged. Correct behaviour, honestly stated |
-| Generic XML / cXML 1.2 | ✓ | ✓ | Real fixtures: Coupa, Nasdaq, DPD, Nestlé, KSB/Ariba, Maersk |
+| Generic XML / cXML 1.2 | ✓ | ✓ | Real fixtures: Coupa and Ariba dialects, PL/ES instances, PunchOut and direct-MPN shapes |
 | UBL 2.1 Order | ✓ | ✓ | Stamps Peppol BIS 3 conformance IDs on a non-BIS-conformant document `[unverified P1]` |
 | Peppol BIS Order 3 | ~ | ~ | Correctly marked partial in the catalogue |
 | EDIFACT ORDERS | ~ | ✗ | No output transformer. Honestly marked |
