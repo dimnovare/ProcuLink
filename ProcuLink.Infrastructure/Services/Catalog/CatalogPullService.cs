@@ -90,9 +90,9 @@ public class CatalogPullService : ICatalogPullService
     internal TimeSpan OverallDeadline { get; set; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
-    /// Widened deadline for slow vendor / http feeds (plan 2026-07-02 5.3): Logicom's paginated
-    /// crawl (fresh token per page) and 100MEGA's ~160 s server-side generation both need well
-    /// over the 5-minute default. Internal test seam.
+    /// Widened deadline for slow vendor / http feeds (plan 2026-07-02 5.3): a paginated
+    /// token-per-page API crawl and a large XML feed's ~160 s server-side generation both need
+    /// well over the 5-minute default. Internal test seam.
     /// </summary>
     internal TimeSpan VendorDeadline { get; set; } = TimeSpan.FromMinutes(15);
 
@@ -327,7 +327,7 @@ public class CatalogPullService : ICatalogPullService
         }
 
         // H3: one overall deadline for guard + connect + download + parse. Vendor fetchers (slow
-        // paginated APIs like Logicom / a slow-generating https feed like 100MEGA) get a widened
+        // paginated token-per-page APIs / a slow-generating large https feed) get a widened
         // deadline (plan 2026-07-02 5.3) since a full-catalog crawl legitimately takes longer.
         var deadline = (isVendor || isHttp) && OverallDeadline < VendorDeadline ? VendorDeadline : OverallDeadline;
         using var deadlineCts = new CancellationTokenSource(deadline);

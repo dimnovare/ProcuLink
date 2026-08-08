@@ -8,14 +8,14 @@ namespace ProcuLink.Transform.Catalog;
 /// XML + CIF catalog parsers (plan 2026-07-02 D2/D3, Phase 3). Two XML strategies plus CIF:
 ///  • <see cref="ParseCxmlIndexAsync"/> — the cXML Index / catalog standard (bare
 ///    <c>&lt;Index&gt;</c> or SOAP-wrapped). Fixed, deterministic element→field mapping.
-///  • <see cref="ParseGenericXmlAsync"/> — vendor XML (100MEGA <c>StoItem</c>, Jarltech
-///    pricelist): finds the most frequent repeating element, flattens its scalar child
+///  • <see cref="ParseGenericXmlAsync"/> — vendor XML (attribute-style <c>StoItem</c> exports,
+///    element-style pricelists): finds the most frequent repeating element, flattens its scalar child
 ///    elements + attributes into a header/row table, then runs the SAME alias + per-source
 ///    mapping the CSV path uses.
 ///  • <see cref="ParseCifAsync"/> — Ariba CIF 3.0 text (header block → <c>FIELDNAMES:</c> →
 ///    <c>DATA</c> … <c>ENDOFDATA</c>, quoted-field aware).
 ///
-/// STREAMING is load-bearing: 100MEGA's real StoItemBase feed is ~174 MB. Both XML parsers use
+/// STREAMING is load-bearing: the largest real <c>StoItemBase</c> feed is ~174 MB. Both XML parsers use
 /// a forward-only <see cref="XmlReader"/> (never <c>XDocument</c>/<c>XmlDocument</c>, which would
 /// materialize a multi-hundred-MB DOM) and skip large sub-trees they don't map. DTD/XXE is
 /// disabled the same way as <see cref="DtdSafeXmlLoader"/> (DtdProcessing.Prohibit, no resolver).
@@ -200,7 +200,7 @@ public static partial class SupplierCatalogFileParser
         }
     }
 
-    // ── Generic repeating-element XML (100MEGA StoItem, Jarltech) ───────────────
+    // ── Generic repeating-element XML (attribute-style StoItem, element-style rows) ───────────────
 
     /// <summary>
     /// Generic vendor-XML parser (D2). Two passes over the (buffered) stream:
@@ -208,8 +208,8 @@ public static partial class SupplierCatalogFileParser
     ///  2. for each occurrence flatten its ATTRIBUTES + scalar CHILD elements into a name→value
     ///     row, union the names as the header, then run the SAME alias + per-source override
     ///     mapping the CSV path uses.
-    /// Streaming (XmlReader), row-capped, skips non-scalar children (nested trees like 100MEGA's
-    /// <c>&lt;ImgGal&gt;</c>). <c>Format="xml"</c>. Honest by construction: the test-fetch report
+    /// Streaming (XmlReader), row-capped, skips non-scalar children (nested trees like the
+    /// <c>&lt;ImgGal&gt;</c> galleries). <c>Format="xml"</c>. Honest by construction: the test-fetch report
     /// shows exactly which flattened columns mapped; an un-flattenable feed yields 0 rows + the
     /// detected columns, never silent garbage.
     /// </summary>
@@ -265,7 +265,8 @@ public static partial class SupplierCatalogFileParser
     /// <summary>
     /// First pass: the "row" element name. Counted per DEPTH, and the winner is the most frequent
     /// element (≥2 occurrences) at the SHALLOWEST depth that has a repeating element — i.e. the
-    /// record rows, not their nested children. This is what makes 100MEGA work: <c>StoItem</c> is a
+    /// record rows, not their nested children. This is what makes the large attribute-style XML feed
+    /// work: <c>StoItem</c> is a
     /// direct child of the root <c>&lt;Result&gt;</c>, whereas the far-more-numerous <c>ImgGal</c> /
     /// category nodes are nested deeper, so a naive "globally most frequent" would pick the wrong
     /// element. Scans a bounded number of element starts so a pathological document can't make this
@@ -336,7 +337,7 @@ public static partial class SupplierCatalogFileParser
         if (outer.IsEmptyElement) return;
 
         // Isolate the row's subtree so ReadElementContentAsString on scalar children never
-        // desyncs the shared reader. rootDepth+1 children only; nested trees (100MEGA <ImgGal>)
+        // desyncs the shared reader. rootDepth+1 children only; nested trees (e.g. <ImgGal>)
         // are skipped rather than recursed into.
         using var reader = outer.ReadSubtree();
         reader.Read(); // onto the row element itself

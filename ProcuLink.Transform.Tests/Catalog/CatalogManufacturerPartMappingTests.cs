@@ -63,9 +63,9 @@ public class CatalogManufacturerPartMappingTests
     }
 
     [Fact]
-    public async Task ParseCsv_JarltechShape_OriginalArtNoIsTheMpn_ArtnumIsTheSupplierCode()
+    public async Task ParseCsv_DistributorOwnCodeShape_OriginalArtNoIsTheMpn_ArtnumIsTheSupplierCode()
     {
-        // Jarltech's price feed (measured 2026-07-24): ARTNUM is Jarltech's OWN code and
+        // A measured distributor price feed (2026-07-24): ARTNUM is the distributor's OWN code and
         // ORIGINAL_ART_NO is the manufacturer part — getting these the wrong way round files
         // every supplier code as an MPN.
         //

@@ -56,7 +56,7 @@ public class FixtureNamingGuardTests
         "realworldfixtures", "po", "templates",
 
         // Document formats and standards.
-        "cxml", "idoc", "orders", "csv", "json", "xml", "excel", "cif", "samrs", "soap",
+        "cxml", "idoc", "orders", "csv", "json", "xml", "excel", "cif", "soap",
         "stoitembase", "ubl", "edifact",
 
         // Platform / ERP dialects that ProcuLink publicly supports. A dialect is a format,
@@ -84,8 +84,11 @@ public class FixtureNamingGuardTests
     /// <summary>
     /// Normalises one raw token for vocabulary lookup: lower-cased, ASCII digits removed.
     /// Returns <c>null</c> for a token that is purely numeric (or empty), which is always allowed.
-    /// Digit-stripping does not open a hole — "3M" normalises to "m" and "nestle2" to "nestle",
-    /// and neither is in the vocabulary.
+    /// Digit-stripping does not open a hole — a two-character company name like "7Q" normalises to
+    /// "q", and "inventedfoods2" to "inventedfoods", and neither is in the vocabulary. (The
+    /// examples here are invented on purpose: a doc comment that illustrated the rule with the
+    /// real company names this guard exists to remove would be committing them in order to
+    /// explain why they must not be committed.)
     /// </summary>
     internal static string? Normalise(string token)
     {

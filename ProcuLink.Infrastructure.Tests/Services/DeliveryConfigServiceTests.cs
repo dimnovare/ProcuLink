@@ -349,14 +349,14 @@ public class DeliveryConfigServiceTests
         var supplierId = Guid.NewGuid();
 
         var saved = await service.UpsertAsync(orgId, supplierId, CxmlReq(new CxmlCredentialsInput(
-            FromDomain: "NetworkId", FromIdentity: "REDACTED-NETWORK-ID",
-            ToDomain: "NetworkId", ToIdentity: "REDACTED-NETWORK-ID",
-            SenderDomain: "NetworkId", SenderIdentity: "REDACTED-NETWORK-ID",
+            FromDomain: "NetworkId", FromIdentity: "TESTBUYER_SE",
+            ToDomain: "NetworkId", ToIdentity: "TESTSUPPLIER_SE",
+            SenderDomain: "NetworkId", SenderIdentity: "TESTBUYER_SE",
             SenderSharedSecret: "top-secret")), default);
 
         saved.CxmlCredentials.Should().NotBeNull();
-        saved.CxmlCredentials!.FromIdentity.Should().Be("REDACTED-NETWORK-ID");
-        saved.CxmlCredentials.ToIdentity.Should().Be("REDACTED-NETWORK-ID");
+        saved.CxmlCredentials!.FromIdentity.Should().Be("TESTBUYER_SE");
+        saved.CxmlCredentials.ToIdentity.Should().Be("TESTSUPPLIER_SE");
         saved.CxmlCredentials.SenderDomain.Should().Be("NetworkId");
         saved.CxmlCredentials.HasSharedSecret.Should().BeTrue();
 
@@ -368,7 +368,7 @@ public class DeliveryConfigServiceTests
             CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierDeliveryCxmlSecret, supplierId))
             .Should().Be("top-secret");
         saved.ToString().Should().NotContain("top-secret");
-        row.CxmlConfigJson.Should().Contain("REDACTED-NETWORK-ID").And.NotContain("top-secret");
+        row.CxmlConfigJson.Should().Contain("TESTBUYER_SE").And.NotContain("top-secret");
     }
 
     [Fact]
@@ -380,12 +380,12 @@ public class DeliveryConfigServiceTests
         var supplierId = Guid.NewGuid();
 
         await service.UpsertAsync(orgId, supplierId, CxmlReq(new CxmlCredentialsInput(
-            "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "shh")), default);
+            "NetworkId", "TESTBUYER_SE", "NetworkId", "TESTSUPPLIER_SE", "NetworkId", "TESTBUYER_SE", "shh")), default);
 
         var fetched = await service.GetAsync(orgId, supplierId, default);
 
         fetched!.CxmlCredentials.Should().NotBeNull();
-        fetched.CxmlCredentials!.FromIdentity.Should().Be("REDACTED-NETWORK-ID");
+        fetched.CxmlCredentials!.FromIdentity.Should().Be("TESTBUYER_SE");
         fetched.CxmlCredentials.HasSharedSecret.Should().BeTrue();
         fetched.ToString().Should().NotContain("shh");
     }
@@ -399,7 +399,7 @@ public class DeliveryConfigServiceTests
         var supplierId = Guid.NewGuid();
 
         await service.UpsertAsync(orgId, supplierId, CxmlReq(new CxmlCredentialsInput(
-            "NetworkId", "REDACTED-NETWORK-ID", null, null, null, null,
+            "NetworkId", "TESTBUYER_SE", null, null, null, null,
             SenderSharedSecret: null,
             DtdSystemId: "http://xml.cxml.org/schemas/cXML/1.2.024/cXML.dtd",
             DtdPublicId: "-//cXML//DTD cXML 1.2.024//EN")), default);
@@ -420,7 +420,7 @@ public class DeliveryConfigServiceTests
         var supplierId = Guid.NewGuid();
 
         await service.UpsertAsync(orgId, supplierId, CxmlReq(new CxmlCredentialsInput(
-            "NetworkId", "REDACTED-NETWORK-ID", null, null, null, null, "shh")), default);
+            "NetworkId", "TESTBUYER_SE", null, null, null, null, "shh")), default);
 
         var fetched = await service.GetAsync(orgId, supplierId, default);
 
@@ -438,12 +438,12 @@ public class DeliveryConfigServiceTests
         var supplierId = Guid.NewGuid();
 
         await service.UpsertAsync(orgId, supplierId, CxmlReq(new CxmlCredentialsInput(
-            "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "first-secret")), default);
+            "NetworkId", "TESTBUYER_SE", "NetworkId", "TESTSUPPLIER_SE", "NetworkId", "TESTBUYER_SE", "first-secret")), default);
         var before = (await db.SupplierDeliveryConfigs.SingleAsync()).EncryptedCxmlSharedSecret;
 
         // Re-save with identities edited but NO secret (write-only leave-blank-to-keep).
         await service.UpsertAsync(orgId, supplierId, CxmlReq(new CxmlCredentialsInput(
-            "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID",
+            "NetworkId", "TESTBUYER_DK", "NetworkId", "TESTSUPPLIER_DK", "NetworkId", "TESTBUYER_DK",
             SenderSharedSecret: null)), default);
 
         var after = await db.SupplierDeliveryConfigs.SingleAsync();
@@ -452,7 +452,7 @@ public class DeliveryConfigServiceTests
             after.EncryptedCxmlSharedSecret!,
             CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierDeliveryCxmlSecret, supplierId))
             .Should().Be("first-secret");
-        after.CxmlConfigJson.Should().Contain("REDACTED-NETWORK-ID"); // identities still updated
+        after.CxmlConfigJson.Should().Contain("TESTBUYER_DK"); // identities still updated
     }
 
     [Fact]
@@ -464,15 +464,15 @@ public class DeliveryConfigServiceTests
         var supplierId = Guid.NewGuid();
 
         await service.UpsertAsync(orgId, supplierId, CxmlReq(new CxmlCredentialsInput(
-            "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "secret")), default);
+            "NetworkId", "TESTBUYER_SE", "NetworkId", "TESTSUPPLIER_SE", "NetworkId", "TESTBUYER_SE", "secret")), default);
 
         await service.UpsertAsync(orgId, supplierId, CxmlReq(new CxmlCredentialsInput(
-            "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID",
+            "NetworkId", "TESTBUYER_SE", "NetworkId", "TESTSUPPLIER_SE", "NetworkId", "TESTBUYER_SE",
             SenderSharedSecret: "")), default);
 
         var fetched = await service.GetAsync(orgId, supplierId, default);
         fetched!.CxmlCredentials!.HasSharedSecret.Should().BeFalse();
-        fetched.CxmlCredentials.FromIdentity.Should().Be("REDACTED-NETWORK-ID");
+        fetched.CxmlCredentials.FromIdentity.Should().Be("TESTBUYER_SE");
     }
 
     [Fact]
@@ -484,7 +484,7 @@ public class DeliveryConfigServiceTests
         var supplierId = Guid.NewGuid();
 
         await service.UpsertAsync(orgId, supplierId, CxmlReq(new CxmlCredentialsInput(
-            "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "secret")), default);
+            "NetworkId", "TESTBUYER_SE", "NetworkId", "TESTSUPPLIER_SE", "NetworkId", "TESTBUYER_SE", "secret")), default);
 
         // A normal save WITHOUT a cXML block (e.g. editing the URL) must not wipe cXML credentials.
         await service.UpsertAsync(orgId, supplierId,
@@ -492,7 +492,7 @@ public class DeliveryConfigServiceTests
 
         var fetched = await service.GetAsync(orgId, supplierId, default);
         fetched!.CxmlCredentials.Should().NotBeNull();
-        fetched.CxmlCredentials!.FromIdentity.Should().Be("REDACTED-NETWORK-ID");
+        fetched.CxmlCredentials!.FromIdentity.Should().Be("TESTBUYER_SE");
         fetched.CxmlCredentials.HasSharedSecret.Should().BeTrue();
     }
 

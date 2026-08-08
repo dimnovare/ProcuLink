@@ -71,7 +71,7 @@ function cxml({ orderID, currency = "EUR", deployment = "production", total, lin
 <cXML payloadID="edge-${orderID}@proculink.test" timestamp="2026-06-08T10:00:00+00:00" version="1.2.044">
   <Header>
     <From><Credential domain="NetworkId"><Identity>EDGE_BUYER</Identity></Credential></From>
-    <To><Credential domain="NetworkId"><Identity>REDACTED-NETWORK-ID</Identity></Credential></To>
+    <To><Credential domain="NetworkId"><Identity>TESTSUPPLIER_EE</Identity></Credential></To>
     <Sender><Credential domain="NetworkId"><Identity>EDGE_BUYER</Identity><SharedSecret>x</SharedSecret></Credential><UserAgent>EdgeGen</UserAgent></Sender>
   </Header>
   <Request deploymentMode="${deployment}">
@@ -374,7 +374,7 @@ emit("cxml-21-zero-neg-qty.xml",
     { format: "cxml", case: "200 lines", expect: "parse", lines: 200 });
 }
 
-// 23. cXML non-EUR currency (PLN, like real Nestle POs)
+// 23. cXML non-EUR currency (PLN, as seen on real PL purchase orders)
 emit("cxml-23-pln-currency.xml",
   cxml({ orderID: "CX-PLN", currency: "PLN", total: "295.02", lines: [
     { line: 10, qty: "1.0", sku: "29048107", price: "295.02", desc: "Gigaset 550 HX — Dodatkowa słuch", uom: "EA" },

@@ -550,7 +550,7 @@ public sealed class SupplierSuggestionPostgresTests : IClassFixture<SupplierSugg
         Catalog(other.Id, "NOTHING-ALIKE");
 
         var order = AddOrder(db, orgId, status: OrderStatusConstants.Parsing, supplierId: null,
-            senderDomain: "example.invalid");
+            senderDomain: "distributor.example");
         order.SourceFileKey = $"orders/{order.Id}/AUTODETECT-1.csv";
         await db.SaveChangesAsync();
 

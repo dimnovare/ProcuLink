@@ -109,7 +109,7 @@ public class SupplierCatalogFileParserTests
     // The price parse is now locale-tolerant (last of '.'/',' is the decimal separator).
     // This CORRECTS the earlier invariant-only behaviour that silently turned the EU
     // comma-decimal "9,99" into 999 — a real data-integrity bug for distributor feeds
-    // (REDACTED-PARTY ships prices like "674,68"). Full coverage in CatalogFormatAndMappingTests.
+    // (EU feeds ship prices like "674,68"). Full coverage in CatalogFormatAndMappingTests.
 
     [Theory]
     [InlineData("0.04", "0.04")]

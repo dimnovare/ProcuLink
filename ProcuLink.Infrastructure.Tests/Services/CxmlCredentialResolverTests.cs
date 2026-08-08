@@ -43,16 +43,16 @@ public class CxmlCredentialResolverTests
 
         await new DeliveryConfigService(db, encryption).UpsertAsync(orgId, supplierId, CxmlReq(
             new CxmlCredentialsInput(
-                "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "shared-secret")),
+                "NetworkId", "TESTBUYER_SE", "NetworkId", "TESTSUPPLIER_SE", "NetworkId", "TESTBUYER_SE", "shared-secret")),
             default);
 
         var resolved = await new CxmlCredentialResolver(db, encryption).ResolveAsync(orgId, supplierId, default);
 
         resolved.Should().NotBeNull();
         resolved!.FromDomain.Should().Be("NetworkId");
-        resolved.FromIdentity.Should().Be("REDACTED-NETWORK-ID");
-        resolved.ToIdentity.Should().Be("REDACTED-NETWORK-ID");
-        resolved.SenderIdentity.Should().Be("REDACTED-NETWORK-ID");
+        resolved.FromIdentity.Should().Be("TESTBUYER_SE");
+        resolved.ToIdentity.Should().Be("TESTSUPPLIER_SE");
+        resolved.SenderIdentity.Should().Be("TESTBUYER_SE");
         resolved.SenderSharedSecret.Should().Be("shared-secret"); // decrypted
     }
 
@@ -90,7 +90,7 @@ public class CxmlCredentialResolverTests
         var supplierId = Guid.NewGuid();
 
         await new DeliveryConfigService(db, encryption).UpsertAsync(Guid.NewGuid(), supplierId, CxmlReq(
-            new CxmlCredentialsInput("NetworkId", "REDACTED-NETWORK-ID", null, null, null, null, null)), default);
+            new CxmlCredentialsInput("NetworkId", "TESTBUYER_SE", null, null, null, null, null)), default);
 
         var resolved = await new CxmlCredentialResolver(db, encryption)
             .ResolveAsync(Guid.NewGuid(), supplierId, default); // different org
@@ -109,7 +109,7 @@ public class CxmlCredentialResolverTests
 
         await new DeliveryConfigService(db, encryption).UpsertAsync(orgId, supplierId, CxmlReq(
             new CxmlCredentialsInput(
-                "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID",
+                "NetworkId", "TESTBUYER_SE", "NetworkId", "TESTSUPPLIER_SE", "NetworkId", "TESTBUYER_SE",
                 SenderSharedSecret: null,
                 DtdSystemId: "http://xml.cxml.org/schemas/cXML/1.2.024/cXML.dtd",
                 DtdPublicId: "-//cXML//DTD cXML 1.2.024//EN")),
@@ -154,7 +154,7 @@ public class CxmlCredentialResolverTests
 
         await new DeliveryConfigService(db, encryption).UpsertAsync(orgId, supplierId, CxmlReq(
             new CxmlCredentialsInput(
-                "NetworkId", "REDACTED-NETWORK-ID", null, null, null, null,
+                "NetworkId", "TESTBUYER_SE", null, null, null, null,
                 SenderSharedSecret: null,
                 DtdSystemId: "http://example.test/cXML.dtd",
                 DtdPublicId: "-//X//Y//EN")),
@@ -178,7 +178,7 @@ public class CxmlCredentialResolverTests
         var supplierId = Guid.NewGuid();
 
         await new DeliveryConfigService(db, encryption).UpsertAsync(orgId, supplierId, CxmlReq(
-            new CxmlCredentialsInput("NetworkId", "REDACTED-NETWORK-ID", null, null, null, null, null)), default);
+            new CxmlCredentialsInput("NetworkId", "TESTBUYER_SE", null, null, null, null, null)), default);
 
         var resolved = await new CxmlCredentialResolver(db, encryption).ResolveAsync(orgId, supplierId, default);
 

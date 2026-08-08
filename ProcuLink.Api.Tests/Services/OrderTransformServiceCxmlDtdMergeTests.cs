@@ -144,9 +144,9 @@ public class OrderTransformServiceCxmlDtdMergeTests
         new DeliveryConfigService(db, enc).UpsertAsync(orgId, supplierId,
             new UpsertDeliveryConfigRequest("http", false, "{\"url\":\"https://supplier.example/cxml\"}", null, "cxml",
                 new CxmlCredentialsInput(
-                    FromDomain: "NetworkId", FromIdentity: "REDACTED-NETWORK-ID",
-                    ToDomain: "NetworkId", ToIdentity: "REDACTED-NETWORK-ID",
-                    SenderDomain: "NetworkId", SenderIdentity: "REDACTED-NETWORK-ID",
+                    FromDomain: "NetworkId", FromIdentity: "TESTBUYER_SE",
+                    ToDomain: "NetworkId", ToIdentity: "TESTSUPPLIER_SE",
+                    SenderDomain: "NetworkId", SenderIdentity: "TESTBUYER_SE",
                     SenderSharedSecret: null,
                     DtdSystemId: dtdSystemId, DtdPublicId: dtdPublicId)),
             default);

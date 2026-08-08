@@ -127,7 +127,7 @@ public class CxmlTransformServiceDtdTests
         // fields) to the exact same config that simply never knew about a DTD. This pins that adding
         // the DTD fields is byte-inert when unused.
         var noDtd = new CxmlCredentialConfig(
-            "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", null);
+            "NetworkId", "TESTBUYER_SE", "NetworkId", "TESTSUPPLIER_SE", "NetworkId", "TESTBUYER_SE", null);
 
         var withNullDtd = noDtd with { DtdSystemId = null, DtdPublicId = null };
 
@@ -201,7 +201,7 @@ public class CxmlTransformServiceDtdTests
         // A DOCTYPE pointing at an external SYSTEM id must not break parsing (DTD is not resolved
         // when ProhibitDtd/DtdProcessing default applies in XDocument.Parse, which permits the node).
         var creds = new CxmlCredentialConfig(
-            "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", null)
+            "NetworkId", "TESTBUYER_SE", "NetworkId", "TESTSUPPLIER_SE", "NetworkId", "TESTBUYER_SE", null)
         {
             DtdSystemId = DtdUri,
         };

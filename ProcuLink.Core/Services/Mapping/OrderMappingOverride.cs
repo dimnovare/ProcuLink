@@ -55,8 +55,8 @@ public record OrderMappingOverride
     /// Optional WHOLE-DOCUMENT Scriban template (heart-piece-flex flexible mapping — template mode).
     /// When present and non-blank, the transform renders this single template string against the
     /// canonical order to produce the ENTIRE output document, instead of building it field-by-field
-    /// from <see cref="Output"/>. This lets a supplier's exact required structure (e.g. an Ingram
-    /// Micro-style nested JSON with a <c>lines</c> array) be expressed directly:
+    /// from <see cref="Output"/>. This lets a supplier's exact required structure (e.g. a
+    /// distributor-style nested JSON with a <c>lines</c> array) be expressed directly:
     /// <code>
     /// {"customerOrderNumber":"{{ OrderNr }}","shipToInfo":{"city":"{{ ShippingAddress.City }}"},
     ///  "lines":[{{ for Line in Lines }}{"quantity":{{ Line.Qty }}}{{ if !for.last }},{{ end }}{{ end }}]}

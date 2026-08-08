@@ -16,7 +16,7 @@ namespace ProcuLink.Api.Tests.Controllers;
 /// Tests for the TEMPLATE-AWARE branch of POST /api/orders/{id}/mapping-override/preview
 /// (branch auto/be-template-preview). The action renders a DRAFT whole-document Scriban template
 /// without saving / transforming:
-///   • a draft template (the founder's Ingram-Micro-style example) renders to <c>{ ok:true, output, contentType }</c>;
+///   • a draft template (the founder's distributor-style example) renders to <c>{ ok:true, output, contentType }</c>;
 ///   • a draft with no explicit content type defaults to <c>application/json</c>;
 ///   • a custom <c>OutputTemplateContentType</c> is echoed back;
 ///   • a bad template returns HTTP 200 with <c>{ ok:false, error }</c> (NOT 400/500) so the editor shows it inline;
@@ -27,11 +27,11 @@ namespace ProcuLink.Api.Tests.Controllers;
 /// </summary>
 public class OrdersTemplatePreviewTests
 {
-    // The exact Ingram-Micro-style example the founder gave (mirrors the Transform unit test).
-    private const string IngramTemplate =
+    // The exact distributor-style example the founder gave (mirrors the Transform unit test).
+    private const string DistributorJsonTemplate =
         "{\"customerOrderNumber\":\"{{OrderNr}}\"," +
         "\"lines\":[{{ for Line in Lines }}{\"customerLineNumber\":\"{{Line.LineNr}}\"," +
-        "\"ingramPartNumber\":\"{{Line.DistributorPid}}\"," +
+        "\"distributorPartNumber\":\"{{Line.DistributorPid}}\"," +
         "\"quantity\":{{Line.Qty}}," +
         "\"unitPrice\":{{Line.OrderedPrice}}}{{ if !for.last }},{{ end }}{{ end }}]}";
 
@@ -115,15 +115,15 @@ public class OrdersTemplatePreviewTests
     private static object? Prop(object value, string name) =>
         value.GetType().GetProperty(name)?.GetValue(value);
 
-    // ── Test 1: draft Ingram template renders to { ok:true, output, contentType } ──
+    // ── Test 1: draft distributor template renders to { ok:true, output, contentType } ──
 
     [Fact]
-    public async Task Preview_DraftIngramTemplate_RendersOkTrueWithOutput()
+    public async Task Preview_DraftDistributorTemplate_RendersOkTrueWithOutput()
     {
         var (controller, orgId, db, _) = BuildController();
         var orderId = SeedResolvedOrder(db, orgId);
 
-        var draft = new OrderMappingOverride { OutputTemplate = IngramTemplate };
+        var draft = new OrderMappingOverride { OutputTemplate = DistributorJsonTemplate };
 
         var result = await controller.PreviewMappingOverride(orderId, draft, "csv", ct: CancellationToken.None);
 
@@ -140,9 +140,9 @@ public class OrdersTemplatePreviewTests
         root.GetProperty("customerOrderNumber").GetString().Should().Be("PO-9001");
         var lines = root.GetProperty("lines");
         lines.GetArrayLength().Should().Be(2);
-        lines[0].GetProperty("ingramPartNumber").GetString().Should().Be("SUP-1");
+        lines[0].GetProperty("distributorPartNumber").GetString().Should().Be("SUP-1");
         lines[0].GetProperty("quantity").GetDecimal().Should().Be(3m);
-        lines[1].GetProperty("ingramPartNumber").GetString().Should().Be("SUP-2");
+        lines[1].GetProperty("distributorPartNumber").GetString().Should().Be("SUP-2");
     }
 
     // ── Test 2: explicit content type is echoed back ──────────────────────────────

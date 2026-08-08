@@ -32,7 +32,8 @@
     <PackageReference Include="Scriban" Version="7.2.4" />
     <PackageReference Include="SharpCompress" Version="0.49.1" />
     <!-- Legacy code pages (windows-1252, etc.) for distributor catalog feeds shipped in a
-         non-UTF-8 encoding (e.g. Also/Actebis is cp1252). MIT / Microsoft — no licence concern.
+         non-UTF-8 encoding (e.g. a tab-delimited feed shipped as cp1252). MIT / Microsoft — no
+         licence concern.
          Registered on demand by SupplierCatalogFileParser.ResolveEncoding. -->
     <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
   </ItemGroup>

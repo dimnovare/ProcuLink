@@ -11,7 +11,7 @@ namespace ProcuLink.Transform.Output;
 /// WHOLE-DOCUMENT Scriban template output mode (heart-piece-flex flexible mapping — template mode).
 /// Renders ONE supplier-authored Scriban template string against the canonical order to produce the
 /// entire output document. This is the most flexible mapping surface: a supplier's exact required
-/// structure (e.g. an REDACTED-NAME-style nested JSON with a <c>lines</c> array and <c>for.last</c>
+/// structure (e.g. a distributor-style nested JSON with a <c>lines</c> array and <c>for.last</c>
 /// comma handling) is written directly as a template, instead of being assembled field-by-field from
 /// an <see cref="OutputMappingConfig"/>.
 ///

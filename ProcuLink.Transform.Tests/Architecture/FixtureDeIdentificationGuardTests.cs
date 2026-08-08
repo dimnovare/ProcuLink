@@ -155,8 +155,14 @@ public class FixtureDeIdentificationGuardTests
     /// A really-allocated Ariba Network ID is never zero-padded; the reserved placeholder form
     /// used across this corpus is all zeros with a short trailing serial. Stating the permitted
     /// shape keeps this a format rule rather than a list of real identifiers.
+    ///
+    /// <para>Internal rather than private for the same reason as
+    /// <see cref="IsPlaceholderDomain"/>: <see cref="CxmlIdentityGuardTests"/> meets ANIDs too —
+    /// an ANID is a legal cXML <c>&lt;Identity&gt;</c> value — and two copies of "which ANIDs are
+    /// reserved" could drift apart, leaving one guard green while the other let a real identifier
+    /// through.</para>
     /// </summary>
-    private static bool IsPlaceholderAribaNetworkId(string digits)
+    internal static bool IsPlaceholderAribaNetworkId(string digits)
         => digits.Length >= 9 && digits[..^3].All(c => c == '0');
 
     /// <summary>RFC 2606 + RFC 6761 reserved names. Anything else is somebody's real domain.
@@ -363,8 +369,13 @@ public class FixtureDeIdentificationGuardTests
     [InlineData(
         "AN01234567891,13080788,REDACTED-ORDER-DATA,\"Patch cable\",43223303,4.24,EA",
         "Ariba Network ID outside the reserved all-zeros placeholder range")]
+    // Split across a "+" for the same reason SourcePersonalDataGuardTests splits its own controls:
+    // CxmlIdentityGuardTests sweeps .cs source for <Identity> values, and an unsplit control here
+    // would be a deliberately-non-reserved identifier sitting on a source line. The compiler folds
+    // this to the identical constant, so the control still tests exactly what it always did — this
+    // test going green IS the proof the split changed no value. Do not join them back up.
     [InlineData(
-        "<Credential domain=\"NetworkID\"><Identity>REDACTED-NETWORK-ID</Identity></Credential>",
+        "<Credential domain=\"NetworkID\"><Identity>AN" + "98765432109</Identity></Credential>",
         "Ariba Network ID outside the reserved all-zeros placeholder range")]
     public void Detectors_FireOnKnownBadInput(string line, string expectedClass)
         => ViolationClasses(line).Should().Contain(expectedClass);
@@ -418,8 +429,9 @@ public class FixtureDeIdentificationGuardTests
     [InlineData(
         "COMMENTS: catalog exported from www.nowhere-catalog-co.eu",
         "nowhere-catalog-co")]
+    // Split for the same reason as the positive control above.
     [InlineData(
-        "<Identity>AN01234567891</Identity>",
+        "<Identity>AN" + "01234567891</Identity>",
         "AN01234567891")]
     [InlineData(
         "<Email>firstname.lastname@" + "some-trading-company.de</Email>",
