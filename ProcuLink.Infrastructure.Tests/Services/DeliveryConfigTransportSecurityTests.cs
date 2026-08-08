@@ -275,7 +275,7 @@ public class DeliveryConfigTransportSecurityTests
             DeliveryProtocolConstants.Http, false,
             "{\"url\":\"https://supplier.example/orders\"}", null, "cxml",
             new CxmlCredentialsInput(
-                "NetworkId", "REDACTED-NETWORK-ID", null, null, null, null,
+                "NetworkId", "TESTBUYER_SE", null, null, null, null,
                 SenderSharedSecret: null,
                 DtdSystemId: "http://xml.cxml.org/schemas/cXML/1.2.024/cXML.dtd",
                 DtdPublicId: "-//cXML//DTD cXML 1.2.024//EN")), default);

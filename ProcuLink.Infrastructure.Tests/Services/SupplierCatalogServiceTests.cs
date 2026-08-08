@@ -290,11 +290,11 @@ public class SupplierCatalogServiceTests
         var supplierId = Guid.NewGuid();
         var svc = new SupplierCatalogService(db);
 
-        var supplier = new Supplier { Id = supplierId, OrgId = orgId, Name = "Ingram" };
+        var supplier = new Supplier { Id = supplierId, OrgId = orgId, Name = "Exemplar" };
         db.Suppliers.Add(supplier);
         await db.SaveChangesAsync();
 
-        supplier.Name = "REDACTED-NAME"; // pending, uncommitted change on a tracked entity
+        supplier.Name = "Exemplar Distribution"; // pending, uncommitted change on a tracked entity
 
         var drafts = Enumerable.Range(0, 12_000).Select(i => Draft($"BULK-{i:D6}", $"Product {i}"));
         await svc.UpsertManyAsync(orgId, supplierId, drafts, CancellationToken.None);
@@ -305,9 +305,9 @@ public class SupplierCatalogServiceTests
         db.Entry(supplier).State.Should().NotBe(EntityState.Detached,
             "the upsert must only release the rows it touched, never the whole change tracker");
 
-        supplier.Name = "REDACTED-NAME EU"; // a second edit, made after the upsert returned
+        supplier.Name = "Exemplar Distribution EU"; // a second edit, made after the upsert returned
         await db.SaveChangesAsync();
-        (await db.Suppliers.SingleAsync(s => s.Id == supplierId)).Name.Should().Be("REDACTED-NAME EU");
+        (await db.Suppliers.SingleAsync(s => s.Id == supplierId)).Name.Should().Be("Exemplar Distribution EU");
     }
 
     // ── Manufacturer part number (MPN) ──────────────────────────────────────────

@@ -6,7 +6,7 @@ namespace ProcuLink.Transform.Catalog;
 
 /// <summary>
 /// Transparent ZIP unwrap for catalog pulls (plan 2026-07-02 D1). Several real distributor feeds
-/// ship the catalog inside a ZIP (Ingram <c>PRICE.ZIP</c>→PRICE.TXT, Also
+/// ship the catalog inside a ZIP (<c>PRICE.ZIP</c>→PRICE.TXT,
 /// <c>pricelist-1.txt.zip</c>→a .txt). The pull pipeline calls <see cref="TryUnwrap"/> AFTER the
 /// SHA-256 hash (so <c>LastFileHash</c> unchanged-skip stays over the transported bytes) and
 /// BEFORE parsing; the returned inner file name drives extension routing.

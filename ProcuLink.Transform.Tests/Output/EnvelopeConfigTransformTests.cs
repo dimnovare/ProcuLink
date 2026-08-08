@@ -172,18 +172,18 @@ public class EnvelopeConfigTransformTests
         {
             Cxml = new CxmlEnvelope
             {
-                FromDomain     = "NetworkId", FromIdentity   = "REDACTED-NETWORK-ID",
-                ToDomain       = "NetworkId", ToIdentity     = "REDACTED-NETWORK-ID",
-                SenderDomain   = "NetworkId", SenderIdentity = "REDACTED-NETWORK-ID",
+                FromDomain     = "NetworkId", FromIdentity   = "TESTBUYER_SE",
+                ToDomain       = "NetworkId", ToIdentity     = "TESTSUPPLIER_SE",
+                SenderDomain   = "NetworkId", SenderIdentity = "TESTBUYER_SE",
             },
         };
 
         var xml = await ReadAsString(
             await svc.TransformAsync(BuildOrder(), OutputFormat.CXml, CancellationToken.None, envelope));
 
-        ReadCredential(xml, "From").Should().Be(("NetworkId", "REDACTED-NETWORK-ID"));
-        ReadCredential(xml, "To").Should().Be(("NetworkId", "REDACTED-NETWORK-ID"));
-        ReadCredential(xml, "Sender").Should().Be(("NetworkId", "REDACTED-NETWORK-ID"));
+        ReadCredential(xml, "From").Should().Be(("NetworkId", "TESTBUYER_SE"));
+        ReadCredential(xml, "To").Should().Be(("NetworkId", "TESTSUPPLIER_SE"));
+        ReadCredential(xml, "Sender").Should().Be(("NetworkId", "TESTBUYER_SE"));
 
         // The internal GUIDs must NOT leak into the Header.
         var header = XDocument.Parse(xml).Descendants("Header").Single().ToString();

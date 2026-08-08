@@ -111,9 +111,9 @@ public class CxmlCredentialTransformTests
         await new DeliveryConfigService(db, encryption).UpsertAsync(orgId, supplierId,
             new UpsertDeliveryConfigRequest("http", false, "{\"url\":\"https://supplier.example/cxml\"}", null, "cxml",
                 new CxmlCredentialsInput(
-                    FromDomain: "NetworkId", FromIdentity: "REDACTED-NETWORK-ID",
-                    ToDomain: "NetworkId", ToIdentity: "REDACTED-NETWORK-ID",
-                    SenderDomain: "NetworkId", SenderIdentity: "REDACTED-NETWORK-ID",
+                    FromDomain: "NetworkId", FromIdentity: "TESTBUYER_SE",
+                    ToDomain: "NetworkId", ToIdentity: "TESTSUPPLIER_SE",
+                    SenderDomain: "NetworkId", SenderIdentity: "TESTBUYER_SE",
                     SenderSharedSecret: "wire-secret")),
             default);
 
@@ -127,8 +127,8 @@ public class CxmlCredentialTransformTests
 
         // From / To / Sender now carry the configured NetworkId identities…
         Assert.Contains("<Credential domain=\"NetworkId\">", cxml);
-        Assert.Contains("<Identity>REDACTED-NETWORK-ID</Identity>", cxml);
-        Assert.Contains("<Identity>REDACTED-NETWORK-ID</Identity>", cxml);
+        Assert.Contains("<Identity>TESTBUYER_SE</Identity>", cxml);
+        Assert.Contains("<Identity>TESTSUPPLIER_SE</Identity>", cxml);
         Assert.Contains("<SharedSecret>wire-secret</SharedSecret>", cxml);
 
         // …and the internal GUIDs / legacy domains the founder complained about are GONE.
@@ -191,7 +191,7 @@ public class CxmlCredentialTransformTests
             OrgId = orgId,
             SupplierId = supplierId,
             Protocol = "http",
-            CxmlConfigJson = """{"fromDomain":"NetworkId","fromIdentity":"REDACTED-NETWORK-ID"}""",
+            CxmlConfigJson = """{"fromDomain":"NetworkId","fromIdentity":"TESTBUYER_SE"}""",
             EncryptedCxmlSharedSecret = encryption.Encrypt(
                 "wire-secret",
                 CredentialScope.ForSupplier(orgId, CredentialPurpose.SupplierDeliveryCxmlSecret, otherSupplierId)),

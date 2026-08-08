@@ -27,8 +27,8 @@ public static partial class SupplierCatalogFileParser
 {
     /// <summary>
     /// Maximum accepted DATA rows (excluding the header) per catalog file. Raised
-    /// 50k → 200k (plan 2026-07-02 P0.8) to admit real distributor feeds: REDACTED-NAME
-    /// ships 72,349 lines and 100MEGA 33,633; 200k covers every measured feed with headroom.
+    /// 50k → 200k (plan 2026-07-02 P0.8) to admit real distributor feeds: the largest measured
+    /// feeds ship 72,349 and 33,633 lines; 200k covers every measured feed with headroom.
     /// </summary>
     public const int MaxCatalogRows = 200_000;
 
@@ -93,8 +93,8 @@ public static partial class SupplierCatalogFileParser
             ["mfgpartnumber"] = "manufacturer_part_number",
             ["oem_part"] = "manufacturer_part_number",
             ["oem_part_number"] = "manufacturer_part_number",
-            // Jarltech's price feed (measured 2026-07-24): ARTNUM is Jarltech's own code,
-            // ORIGINAL_ART_NO is the manufacturer part.
+            // A measured distributor price feed (2026-07-24): ARTNUM is the distributor's own
+            // code, ORIGINAL_ART_NO is the manufacturer part.
             ["original_art_no"] = "manufacturer_part_number",
             ["originalartno"] = "manufacturer_part_number",
             ["original_article_number"] = "manufacturer_part_number",
@@ -109,7 +109,7 @@ public static partial class SupplierCatalogFileParser
             ["herstellerartikelnr"] = "manufacturer_part_number",
 
             // ── manufacturer / brand name (advisory, never a match predicate) ─────────────
-            ["manufacturer"] = "manufacturer_name",          // Jarltech
+            ["manufacturer"] = "manufacturer_name",          // measured distributor feed
             ["manufacturer_name"] = "manufacturer_name",
             ["manufacturername"] = "manufacturer_name",
             ["manufacturer name"] = "manufacturer_name",
@@ -249,7 +249,7 @@ public static partial class SupplierCatalogFileParser
 
     /// <summary>
     /// Locale-tolerant decimal parse for catalog prices (plan 2026-07-02, locale-bug memory).
-    /// Real EU distributor feeds ship comma decimals (REDACTED-PARTY <c>674,68</c>); invariant
+    /// Real EU distributor feeds ship comma decimals (e.g. <c>674,68</c>); invariant
     /// <see cref="System.Globalization.NumberStyles.Any"/> would read that as <c>67468</c>
     /// (comma = thousands). Heuristic: the LAST of <c>. ,</c> is the decimal separator, the
     /// other is grouping — so <c>1.234,56</c>→1234.56, <c>1,234.56</c>→1234.56,
@@ -334,7 +334,7 @@ public static partial class SupplierCatalogFileParser
     /// <summary>
     /// Picks the delimiter for a CSV line by counting <c>; \t ,</c> OUTSIDE quoted fields and
     /// choosing the most frequent (tab &gt; semicolon &gt; comma on ties, favouring the less
-    /// ambiguous separators). Counting outside quotes fixes the Also/Actebis case: a tab-delimited
+    /// ambiguous separators). Counting outside quotes fixes the tab-delimited cp1252 feed case: a
     /// line whose data contains a stray comma no longer mis-detects as comma-delimited. A line with
     /// none of them → comma (a single-column file).
     /// </summary>
@@ -393,8 +393,8 @@ public static partial class SupplierCatalogFileParser
     /// map keys are matched against a column two ways so the SAME map serves headered AND
     /// headerless feeds:
     ///  • by header NAME (case-insensitive, trimmed) — for feeds with a header row;
-    ///  • by 0-based column INDEX (a numeric key, e.g. <c>"3"</c>) — for the headerless feeds
-    ///    (Ingram, Also) whose columns are positional. A numeric override key wins for that index.
+    ///  • by 0-based column INDEX (a numeric key, e.g. <c>"3"</c>) — for the headerless positional
+    ///    feeds whose columns are positional. A numeric override key wins for that index.
     /// Only canonical targets (<see cref="CanonicalFields"/>) are honored; the first mapping to a
     /// given canonical field wins (so an explicit override still can't double-map).
     /// </summary>
@@ -443,8 +443,8 @@ public static partial class SupplierCatalogFileParser
     /// CSV parser with an optional per-source column mapping and encoding (plan 2026-07-02).
     /// Quoted-field aware (<see cref="SplitDelimitedLine"/> — D6 bug fix). Headerless feeds:
     /// when <paramref name="overrides"/> carries the sentinel <c>__noheader__=true</c>, the
-    /// first line is treated as DATA (positional mapping only) — for the Ingram/Also feeds that
-    /// ship no header row. Otherwise the first line is the header (existing contract).
+    /// first line is treated as DATA (positional mapping only) — for the headerless positional
+    /// feeds that ship no header row. Otherwise the first line is the header (existing contract).
     /// </summary>
     public static async Task<CatalogFileParseResult> ParseCsvAsync(
         Stream stream, CancellationToken ct,
@@ -452,7 +452,7 @@ public static partial class SupplierCatalogFileParser
     {
         var drafts = new List<SupplierProduct>();
 
-        // Per-source encoding hint (__encoding__ sentinel) — e.g. Also/Actebis ships cp1252.
+        // Per-source encoding hint (__encoding__ sentinel) — e.g. a tab-delimited feed ships cp1252.
         // Explicit `encoding` argument wins; otherwise resolve the sentinel; default UTF-8.
         var effectiveEncoding = encoding ?? ResolveEncoding(overrides) ?? System.Text.Encoding.UTF8;
         using var reader = new StreamReader(stream, effectiveEncoding,
@@ -675,7 +675,7 @@ public static partial class SupplierCatalogFileParser
                     if (name.Length == 0) continue;
                     if (headerSeen.Add(name)) headerOrder.Add(name);
 
-                    // Per-source override wins over the global aliases (REDACTED-PARTY enabler: {"Id":"code",…}).
+                    // Per-source override wins over the global aliases (named-key JSON enabler: {"Id":"code",…}).
                     string? canonical = null;
                     if (overrides is not null && overrides.TryGetValue(name, out var ov)
                         && CanonicalFields.Contains(ov))

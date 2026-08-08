@@ -5,7 +5,7 @@ namespace ProcuLink.Core.Services;
 ///
 /// Threaded into <see cref="ITransformService.TransformAsync"/> so a generated cXML
 /// <c>&lt;Header&gt;</c> carries the supplier's REAL cXML network credentials (e.g. a Coupa
-/// <c>NetworkId</c> identity such as <c>REDACTED-NETWORK-ID</c> / <c>REDACTED-NETWORK-ID</c>) instead of
+/// <c>NetworkId</c> identity such as <c>TESTBUYER_SE</c> / <c>TESTSUPPLIER_SE</c>) instead of
 /// ProcuLink's internal <c>OrgId</c> / <c>SupplierId</c> GUIDs — which is what an
 /// unconfigured connection emits today and what the founder sees on the wire.
 ///

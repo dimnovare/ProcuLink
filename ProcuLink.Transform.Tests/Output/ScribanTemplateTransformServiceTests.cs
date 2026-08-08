@@ -11,7 +11,7 @@ namespace ProcuLink.Transform.Tests.Output;
 /// <summary>
 /// Tests for the WHOLE-DOCUMENT Scriban template output mode
 /// (<see cref="ScribanTemplateTransformService"/> + <see cref="ScribanOrderModel"/>):
-///   • the founder's Ingram-Micro-style nested JSON renders correctly, including the Lines loop
+///   • the founder's distributor-style nested JSON renders correctly, including the Lines loop
 ///     and <c>for.last</c> comma handling;
 ///   • the documented aliases (OrderNr / DistributorPid / OrderedPrice / Qty) resolve;
 ///   • ShippingAddress populates from custom fields and from CanonicalJson;
@@ -69,21 +69,21 @@ public class ScribanTemplateTransformServiceTests
         return reader.ReadToEnd();
     }
 
-    // The exact Ingram-Micro-style example the founder gave.
-    private const string IngramTemplate =
+    // The exact distributor-style example the founder gave.
+    private const string DistributorJsonTemplate =
         "{\"customerOrderNumber\":\"{{OrderNr}}\"," +
         "\"notes\":\"Order for {{ShippingAddress.Company}}\"," +
         "\"shipToInfo\":{\"contact\":\"{{ShippingAddress.FirstName}} {{ShippingAddress.LastName}}\"," +
         "\"city\":\"{{ShippingAddress.City}}\"}," +
         "\"lines\":[{{ for Line in Lines }}{\"customerLineNumber\":\"{{Line.LineNr}}\"," +
-        "\"ingramPartNumber\":\"{{Line.DistributorPid}}\"," +
+        "\"distributorPartNumber\":\"{{Line.DistributorPid}}\"," +
         "\"quantity\":{{Line.Qty}}," +
         "\"unitPrice\":{{Line.OrderedPrice}}}{{ if !for.last }},{{ end }}{{ end }}]}";
 
-    // ── The headline test: the founder's Ingram example renders to valid JSON ──
+    // ── The headline test: the founder's distributor example renders to valid JSON ──
 
     [Fact]
-    public void IngramExample_RendersValidNestedJson_WithLinesLoopAndForLastComma()
+    public void DistributorJsonExample_RendersValidNestedJson_WithLinesLoopAndForLastComma()
     {
         var canonical = JsonDocument.Parse("""
             {
@@ -96,7 +96,7 @@ public class ScribanTemplateTransformServiceTests
             }
             """);
         var order = BuildOrder(canonicalJson: canonical);
-        var @override = new OrderMappingOverride { OutputTemplate = IngramTemplate };
+        var @override = new OrderMappingOverride { OutputTemplate = DistributorJsonTemplate };
 
         var result = new ScribanTemplateTransformService().Build(order, @override);
         var text   = ReadText(result);
@@ -115,12 +115,12 @@ public class ScribanTemplateTransformServiceTests
 
         var l1 = linesEl[0];
         l1.GetProperty("customerLineNumber").GetString().Should().Be("1");
-        l1.GetProperty("ingramPartNumber").GetString().Should().Be("SUP-1");
+        l1.GetProperty("distributorPartNumber").GetString().Should().Be("SUP-1");
         l1.GetProperty("quantity").GetDecimal().Should().Be(3m);
         l1.GetProperty("unitPrice").GetDecimal().Should().Be(10m);
 
         var l2 = linesEl[1];
-        l2.GetProperty("ingramPartNumber").GetString().Should().Be("SUP-2");
+        l2.GetProperty("distributorPartNumber").GetString().Should().Be("SUP-2");
         l2.GetProperty("unitPrice").GetDecimal().Should().Be(5.5m);
 
         // Content type defaults to JSON; extension follows.
@@ -140,7 +140,7 @@ public class ScribanTemplateTransformServiceTests
                 NeedsReview = false, Confidence = 1.0f,
             },
         });
-        var @override = new OrderMappingOverride { OutputTemplate = IngramTemplate };
+        var @override = new OrderMappingOverride { OutputTemplate = DistributorJsonTemplate };
 
         var text = ReadText(new ScribanTemplateTransformService().Build(order, @override));
 

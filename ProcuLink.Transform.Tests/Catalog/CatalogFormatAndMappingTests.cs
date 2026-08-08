@@ -50,11 +50,11 @@ public class CatalogFormatAndMappingTests
         d.Price.Should().Be(12.50m);
     }
 
-    // ── Locale-tolerant decimals (REDACTED-PARTY comma-decimal, memory locale bug) ───
+    // ── Locale-tolerant decimals (EU comma-decimal, memory locale bug) ───
 
     [Theory]
     [InlineData("0.04", 0.04)]
-    [InlineData("674,68", 674.68)]     // EU comma decimal (REDACTED-PARTY) — the bug this fixes
+    [InlineData("674,68", 674.68)]     // EU comma decimal — the bug this fixes
     [InlineData("1.234,56", 1234.56)]  // EU thousands.decimal
     [InlineData("1,234.56", 1234.56)]  // US thousands.decimal
     [InlineData("9,99", 9.99)]         // lone comma with 2 decimals → decimal, not 999
@@ -64,22 +64,22 @@ public class CatalogFormatAndMappingTests
         SupplierCatalogFileParser.ParseCatalogDecimal(raw).Should().Be((decimal)expected);
     }
 
-    // ── Per-source column mapping: named (REDACTED-PARTY) ──────────────────────────────
+    // ── Per-source column mapping: named (named-key JSON feed) ────────────────
 
     [Fact]
-    public async Task ParseJson_SamrsFixture_ZeroRowsWithoutMapping()
+    public async Task ParseJson_NamedKeyJsonFixture_ZeroRowsWithoutMapping()
     {
-        var result = await SupplierCatalogFileParser.ParseJsonAsync(Open("redacted-fixture"), CancellationToken.None);
+        var result = await SupplierCatalogFileParser.ParseJsonAsync(Open("json-catalog-sample.json"), CancellationToken.None);
         // "Id"/"Name"/"Price" are not global aliases → no code column → nothing usable.
         result.Drafts.Should().BeEmpty();
         result.HeaderColumns.Should().Contain("Id").And.Contain("Name").And.Contain("Price");
     }
 
     [Fact]
-    public async Task ParseJson_SamrsFixture_MapsWithOverrides()
+    public async Task ParseJson_NamedKeyJsonFixture_MapsWithOverrides()
     {
         var overrides = new Dictionary<string, string> { ["Id"] = "code", ["Name"] = "name", ["Price"] = "price" };
-        var result = await SupplierCatalogFileParser.ParseJsonAsync(Open("redacted-fixture"), CancellationToken.None, overrides);
+        var result = await SupplierCatalogFileParser.ParseJsonAsync(Open("json-catalog-sample.json"), CancellationToken.None, overrides);
         result.Drafts.Should().HaveCount(5);
         var first = result.Drafts[0];
         first.Code.Should().Be("923");
@@ -87,18 +87,18 @@ public class CatalogFormatAndMappingTests
         first.Price.Should().Be(73250m);
     }
 
-    // ── Per-source column mapping: positional (Ingram/Also headerless CSV) ────
+    // ── Per-source column mapping: positional (headerless CSV feeds) ──────────
 
     [Fact]
     public async Task ParseCsv_PositionalMapping_HeaderlessComma()
     {
-        // Ingram-shape: comma-delimited, NO header. Map by index; first line is DATA.
+        // Headerless positional shape: comma-delimited, NO header. Map by index; first line is DATA.
         var csv = "C,CAT,B793,0710193,DESC,DESC2,NMS,GS108UK,00000017.87,0,Y\n" +
                   "C,CAT,B793,0710342,DESC,DESC2,NMS,GS105UK,00000013.75,0,Y\n";
         var overrides = new Dictionary<string, string>
         {
             ["__noheader__"] = "true",
-            ["3"] = "code",     // Ingram SKU
+            ["3"] = "code",     // distributor SKU
             ["7"] = "external_id",
             ["8"] = "price",
         };
@@ -110,9 +110,9 @@ public class CatalogFormatAndMappingTests
     }
 
     [Fact]
-    public async Task ParseCsv_PositionalMapping_TabDelimitedCp1252_Also()
+    public async Task ParseCsv_PositionalMapping_TabDelimitedCp1252()
     {
-        // Also/Actebis-shape: tab-delimited, cp1252, NO header.
+        // Headerless positional shape: tab-delimited, cp1252, NO header.
         var line = "1009318\tREDACTED-PARTYID\tPrint\tSupplies\tPapers\tEPSON paper\t0\t36.65\tC13S041068\tEPSON\n";
         var overrides = new Dictionary<string, string>
         {
@@ -130,9 +130,9 @@ public class CatalogFormatAndMappingTests
     }
 
     [Fact]
-    public async Task ParseCsv_NamedMapping_REDACTED-PARTY()
+    public async Task ParseCsv_NamedMapping_SemicolonDelimitedHeader()
     {
-        // REDACTED-PARTY-shape: ';'-delimited, header present, comma-decimal price.
+        // ';'-delimited named-column shape: header present, comma-decimal price.
         var csv = "ProductId;ReferenceNo;EAN;Manufacturer;Price_B2B_Regular\n" +
                   "6480518;REDACTED-ITEM;;Microsoft;674,68\n";
         var overrides = new Dictionary<string, string>
@@ -205,12 +205,12 @@ public class CatalogFormatAndMappingTests
         result.Drafts.Should().HaveCount(2);
     }
 
-    // ── Generic repeating-element XML (100MEGA StoItem) ───────────────────────
+    // ── Generic repeating-element XML (attribute-style StoItem) ───────────────
 
     [Fact]
     public async Task ParseGenericXml_StoItem_FlattensAttributes()
     {
-        // 100MEGA: fields are attributes on the repeating <StoItem>. Map PriceDea→price and
+        // Attribute-style feed: fields are attributes on the repeating <StoItem>. Map PriceDea→price and
         // EAN→barcode explicitly (Code2 also aliases to barcode globally, so the EAN override
         // must win — proves overrides pre-empt aliases).
         var overrides = new Dictionary<string, string> { ["PriceDea"] = "price", ["EAN"] = "barcode" };
@@ -234,7 +234,7 @@ public class CatalogFormatAndMappingTests
     [Fact]
     public void DetectDelimiter_TabWithStrayComma_PicksTab()
     {
-        // Also/Actebis regression: a tab-delimited line whose data contains a comma must still
+        // Tab-delimited-feed regression: a tab-delimited line whose data contains a comma must still
         // detect tab (highest count outside quotes), not comma.
         SupplierCatalogFileParser.DetectDelimiter("a\tb, still b\tc\td").Should().Be('\t');
         SupplierCatalogFileParser.DetectDelimiter("code;name;price").Should().Be(';');
@@ -244,7 +244,7 @@ public class CatalogFormatAndMappingTests
     [Fact]
     public async Task ParseGenericXml_PicksShallowestRepeatingElement_NotNestedChildren()
     {
-        // 100MEGA regression: the record element (<item>, a direct child of root) must win even
+        // Attribute-style-feed regression: the record element (<item>, a direct child of root) must win even
         // though the nested <img> gallery children are far more numerous.
         var xml = "<root>"
                 + "<item sku=\"A-1\"><name>Widget</name><gallery><img u=\"1\"/><img u=\"2\"/><img u=\"3\"/></gallery></item>"
@@ -300,7 +300,7 @@ public class CatalogFormatAndMappingTests
     }
 
     [Fact]
-    public async Task ParseGenericXml_JarltechShape_MapsNameAndPrice()
+    public async Task ParseGenericXml_ElementStyleShape_MapsNameAndPrice()
     {
         // Real feed shape (14,713 items): <priceinfo> → repeating <item> with scalar children.
         // SHORT_EN and YOUR_PRICE_NET sit at odd positions, so the drop hit exactly name+price.
@@ -401,7 +401,7 @@ public class CatalogFormatAndMappingTests
     {
         var overrides = new Dictionary<string, string> { ["Id"] = "code", ["Name"] = "name", ["Price"] = "price" };
         var result = await SupplierCatalogFileParser.ParseAutoAsync(
-            Open("redacted-fixture"), contentType: null, fileName: null, CancellationToken.None, overrides);
+            Open("json-catalog-sample.json"), contentType: null, fileName: null, CancellationToken.None, overrides);
         result.Format.Should().Be("json");
         result.Drafts.Should().HaveCount(5);
     }

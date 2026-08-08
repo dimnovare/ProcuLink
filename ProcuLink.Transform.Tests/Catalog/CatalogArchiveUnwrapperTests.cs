@@ -8,7 +8,7 @@ namespace ProcuLink.Transform.Tests.Catalog;
 
 /// <summary>
 /// Tests for the transparent ZIP unwrap (plan 2026-07-02 Phase 1). Real feeds ship the catalog
-/// inside a ZIP (Ingram PRICE.ZIP, Also pricelist-1.txt.zip). xlsx (also a zip) must NOT be
+/// inside a ZIP (PRICE.ZIP, pricelist-1.txt.zip). xlsx (also a zip) must NOT be
 /// unwrapped, and the decompress copy must be bomb-bounded (never trusting declared sizes).
 /// </summary>
 public class CatalogArchiveUnwrapperTests

@@ -71,7 +71,7 @@ function cxml({ orderID, currency = "EUR", deployment = "production", total, lin
 <cXML payloadID="edge-${orderID}@proculink.test" timestamp="2026-06-08T10:00:00+00:00" version="1.2.044">
   <Header>
     <From><Credential domain="NetworkId"><Identity>EDGE_BUYER</Identity></Credential></From>
-    <To><Credential domain="NetworkId"><Identity>REDACTED-NETWORK-ID</Identity></Credential></To>
+    <To><Credential domain="NetworkId"><Identity>TESTSUPPLIER_EE</Identity></Credential></To>
     <Sender><Credential domain="NetworkId"><Identity>EDGE_BUYER</Identity><SharedSecret>x</SharedSecret></Credential><UserAgent>EdgeGen</UserAgent></Sender>
   </Header>
   <Request deploymentMode="${deployment}">

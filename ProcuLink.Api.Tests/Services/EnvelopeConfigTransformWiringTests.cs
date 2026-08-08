@@ -181,9 +181,9 @@ public class EnvelopeConfigTransformWiringTests
         {
             Cxml = new CxmlEnvelope
             {
-                FromDomain = "NetworkId", FromIdentity = "REDACTED-NETWORK-ID",
-                ToDomain = "NetworkId", ToIdentity = "REDACTED-NETWORK-ID",
-                SenderDomain = "NetworkId", SenderIdentity = "REDACTED-NETWORK-ID",
+                FromDomain = "NetworkId", FromIdentity = "TESTBUYER_SE",
+                ToDomain = "NetworkId", ToIdentity = "TESTSUPPLIER_SE",
+                SenderDomain = "NetworkId", SenderIdentity = "TESTBUYER_SE",
             },
         };
         var (orgId, orderId) = await SeedOrderAsync(db, OutputFormat.CXml, envelope);
@@ -194,8 +194,8 @@ public class EnvelopeConfigTransformWiringTests
         Assert.True(result.IsSuccess, result.Error);
         var cxml = Encoding.UTF8.GetString(captured()!);
 
-        Assert.Contains("<Identity>REDACTED-NETWORK-ID</Identity>", cxml);
-        Assert.Contains("<Identity>REDACTED-NETWORK-ID</Identity>", cxml);
+        Assert.Contains("<Identity>TESTBUYER_SE</Identity>", cxml);
+        Assert.Contains("<Identity>TESTSUPPLIER_SE</Identity>", cxml);
         Assert.DoesNotContain($"<Identity>{orgId}</Identity>", cxml);
         Assert.DoesNotContain("domain=\"OrgId\"", cxml);
     }

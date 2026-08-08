@@ -86,19 +86,19 @@ public class CxmlTransformServiceCredentialTests
     public async Task ConfiguredCredentials_HeaderCarriesRealNetworkIds_NotGuids()
     {
         var creds = new CxmlCredentialConfig(
-            FromDomain: "NetworkId", FromIdentity: "REDACTED-NETWORK-ID",
-            ToDomain: "NetworkId", ToIdentity: "REDACTED-NETWORK-ID",
-            SenderDomain: "NetworkId", SenderIdentity: "REDACTED-NETWORK-ID",
+            FromDomain: "NetworkId", FromIdentity: "TESTBUYER_SE",
+            ToDomain: "NetworkId", ToIdentity: "TESTSUPPLIER_SE",
+            SenderDomain: "NetworkId", SenderIdentity: "TESTBUYER_SE",
             SenderSharedSecret: "s3cr3t-shared");
 
         var xml = await RenderAsync(creds);
 
-        ReadCredential(xml, "From").Should().Be(("NetworkId", "REDACTED-NETWORK-ID", (string?)null));
-        ReadCredential(xml, "To").Should().Be(("NetworkId", "REDACTED-NETWORK-ID", (string?)null));
+        ReadCredential(xml, "From").Should().Be(("NetworkId", "TESTBUYER_SE", (string?)null));
+        ReadCredential(xml, "To").Should().Be(("NetworkId", "TESTSUPPLIER_SE", (string?)null));
 
         var sender = ReadCredential(xml, "Sender");
         sender.Domain.Should().Be("NetworkId");
-        sender.Identity.Should().Be("REDACTED-NETWORK-ID");
+        sender.Identity.Should().Be("TESTBUYER_SE");
         sender.SharedSecret.Should().Be("s3cr3t-shared");
 
         // The founder's actual bug: the internal GUIDs must NOT leak into the From/To identities.
@@ -111,7 +111,7 @@ public class CxmlTransformServiceCredentialTests
     public async Task ConfiguredCredentials_WithoutSharedSecret_EmitsNoSharedSecretElement()
     {
         var creds = new CxmlCredentialConfig(
-            "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID",
+            "NetworkId", "TESTBUYER_SE", "NetworkId", "TESTSUPPLIER_SE", "NetworkId", "TESTBUYER_SE",
             SenderSharedSecret: null);
 
         var xml = await RenderAsync(creds);
@@ -126,14 +126,14 @@ public class CxmlTransformServiceCredentialTests
     public async Task PartialConfig_OnlyFrom_ToAndSenderFallBackToLegacy()
     {
         var creds = new CxmlCredentialConfig(
-            FromDomain: "NetworkId", FromIdentity: "REDACTED-NETWORK-ID",
+            FromDomain: "NetworkId", FromIdentity: "TESTBUYER_SE",
             ToDomain: null, ToIdentity: null,
             SenderDomain: null, SenderIdentity: null,
             SenderSharedSecret: null);
 
         var xml = await RenderAsync(creds);
 
-        ReadCredential(xml, "From").Should().Be(("NetworkId", "REDACTED-NETWORK-ID", (string?)null));
+        ReadCredential(xml, "From").Should().Be(("NetworkId", "TESTBUYER_SE", (string?)null));
         ReadCredential(xml, "To").Should().Be(("SupplierId", SupplierId.ToString(), (string?)null)); // legacy
         ReadCredential(xml, "Sender").Identity.Should().Be("proculink");                              // legacy
     }
@@ -142,9 +142,9 @@ public class CxmlTransformServiceCredentialTests
     public async Task ConfiguredIdentity_BlankDomain_DefaultsToNetworkId()
     {
         var creds = new CxmlCredentialConfig(
-            FromDomain: "", FromIdentity: "REDACTED-NETWORK-ID",
-            ToDomain: null, ToIdentity: "REDACTED-NETWORK-ID",
-            SenderDomain: "   ", SenderIdentity: "REDACTED-NETWORK-ID",
+            FromDomain: "", FromIdentity: "TESTBUYER_SE",
+            ToDomain: null, ToIdentity: "TESTSUPPLIER_SE",
+            SenderDomain: "   ", SenderIdentity: "TESTBUYER_SE",
             SenderSharedSecret: null);
 
         var xml = await RenderAsync(creds);
@@ -158,11 +158,11 @@ public class CxmlTransformServiceCredentialTests
     public async Task ConfiguredValues_AreTrimmed()
     {
         var creds = new CxmlCredentialConfig(
-            "  NetworkId ", "  REDACTED-NETWORK-ID  ", "NetworkId", "REDACTED-NETWORK-ID", "NetworkId", "REDACTED-NETWORK-ID", null);
+            "  NetworkId ", "  TESTBUYER_SE  ", "NetworkId", "TESTSUPPLIER_SE", "NetworkId", "TESTBUYER_SE", null);
 
         var xml = await RenderAsync(creds);
 
-        ReadCredential(xml, "From").Should().Be(("NetworkId", "REDACTED-NETWORK-ID", (string?)null));
+        ReadCredential(xml, "From").Should().Be(("NetworkId", "TESTBUYER_SE", (string?)null));
     }
 
     // ── Unrouted order (null SupplierId) — preview must stay DTD-valid ──────────

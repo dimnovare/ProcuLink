@@ -66,8 +66,8 @@ public class CxmlTransformServiceBuyerTaxAndLineTaxTests
         // Supplier connection configured with Exemple's From identity (the wrong-buyer scenario).
         var creds = new CxmlCredentialConfig(
             FromDomain: "NetworkId", FromIdentity: "FR99000000000",
-            ToDomain: "NetworkId", ToIdentity: "REDACTED-NETWORK-ID",
-            SenderDomain: "NetworkId", SenderIdentity: "REDACTED-NETWORK-ID",
+            ToDomain: "NetworkId", ToIdentity: "TESTSUPPLIER_SE",
+            SenderDomain: "NetworkId", SenderIdentity: "TESTBUYER_SE",
             SenderSharedSecret: null);
 
         var order = BuildOrder();
@@ -80,7 +80,7 @@ public class CxmlTransformServiceBuyerTaxAndLineTaxTests
         from.Domain.Should().Be("NetworkId", "the configured From domain is preserved");
         xml.Should().NotContain("FR99000000000", "the configured From VatNr must not leak for a different buyer");
         // To / Sender are unaffected.
-        XDocument.Parse(xml).Descendants("To").Single().Descendants("Identity").Single().Value.Should().Be("REDACTED-NETWORK-ID");
+        XDocument.Parse(xml).Descendants("To").Single().Descendants("Identity").Single().Value.Should().Be("TESTSUPPLIER_SE");
     }
 
     [Fact]
@@ -103,8 +103,8 @@ public class CxmlTransformServiceBuyerTaxAndLineTaxTests
     {
         var creds = new CxmlCredentialConfig(
             FromDomain: "NetworkId", FromIdentity: "FR99000000000",
-            ToDomain: "NetworkId", ToIdentity: "REDACTED-NETWORK-ID",
-            SenderDomain: "NetworkId", SenderIdentity: "REDACTED-NETWORK-ID",
+            ToDomain: "NetworkId", ToIdentity: "TESTSUPPLIER_SE",
+            SenderDomain: "NetworkId", SenderIdentity: "TESTBUYER_SE",
             SenderSharedSecret: null);
 
         var orderNoTax = BuildOrder();                 // BuyerTaxId == null

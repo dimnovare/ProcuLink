@@ -85,9 +85,10 @@ public class SupplierCatalogSource
     /// <summary>
     /// Optional per-source column mapping (plan 2026-07-02 D3): a flat JSON object
     /// <c>{"sourceColumn":"canonicalField"}</c> checked BEFORE the global aliases. Enables feeds
-    /// whose headers don't alias-match (REDACTED-PARTY <c>{"Id":"code",…}</c>, REDACTED-PARTY named columns) and
-    /// headerless feeds via numeric keys + the <c>"__noheader__":"true"</c> / <c>"__encoding__"</c>
-    /// directives (Ingram/Also positional, cp1252). Not a secret — echoed back in responses.
+    /// whose headers don't alias-match (named-key JSON <c>{"Id":"code",…}</c>, ';'-delimited
+    /// named columns) and headerless feeds via numeric keys + the <c>"__noheader__":"true"</c> /
+    /// <c>"__encoding__"</c> directives (headerless positional CSV, cp1252). Not a secret —
+    /// echoed back in responses.
     /// </summary>
     public string? ColumnMappingJson { get; set; }
 

@@ -42,7 +42,7 @@ namespace ProcuLink.Transform.Output;
 /// <para><b>Network credentials:</b> the <c>From</c> / <c>To</c> / <c>Sender</c> credentials are
 /// configurable per supplier connection via <paramref name="cxmlCredentials"/>. When a credential
 /// is configured the Header carries the supplier's REAL cXML network identity (e.g. a Coupa
-/// <c>NetworkId</c> such as <c>REDACTED-NETWORK-ID</c> / <c>REDACTED-NETWORK-ID</c>) plus, for the Sender, a
+/// <c>NetworkId</c> such as <c>TESTBUYER_SE</c> / <c>TESTSUPPLIER_SE</c>) plus, for the Sender, a
 /// <c>&lt;SharedSecret&gt;</c>. When it is not configured (null config or a blank identity) the
 /// credential falls back to the legacy GUID identity shown above, so an unconfigured supplier is
 /// byte-identical to the pre-feature output.</para>

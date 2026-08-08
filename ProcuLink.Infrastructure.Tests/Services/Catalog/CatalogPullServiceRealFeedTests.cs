@@ -121,7 +121,7 @@ public class CatalogPullServiceRealFeedTests
         second.Status.Should().Be("unchanged"); // hash over the transported (zip) bytes is stable
     }
 
-    // ── Phase 2.4: column mapping applied end-to-end (REDACTED-PARTY-shape JSON) ────────
+    // ── Phase 2.4: column mapping applied end-to-end (named-key JSON shape) ────
 
     [Fact]
     public async Task Pull_JsonWithColumnMapping_MapsNonAliasFields()
