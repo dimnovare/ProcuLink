@@ -29,9 +29,13 @@
   <ItemGroup>
     <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
     <!-- Real-distributor catalog fixtures (plan 2026-07-02), trimmed + de-identified.
-         "De-identified" is enforced, not asserted: Architecture\FixtureDeIdentificationGuardTests
-         sweeps every tracked fixture in the repository and fails on an email address outside the
-         RFC 2606 / RFC 6761 reserved names, an absolute local filesystem path, or a file:// URI. -->
+         "De-identified" is enforced, not asserted, in two directions:
+           • CONTENTS — Architecture\FixtureDeIdentificationGuardTests sweeps every tracked fixture
+             in the repository and fails on an email address outside the RFC 2606 / RFC 6761
+             reserved names, an absolute local filesystem path, or a file:// URI.
+           • NAMES — Architecture\FixtureNamingGuardTests sweeps the same corpus's PATHS and fails
+             on any directory or file-name token outside the approved format/dialect/shape
+             vocabulary. This repository is public, so a file name is as readable as its contents. -->
     <None Include="Catalog\Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
     <EmbeddedResource Include="FormatMatrix\RealWorldFixtures\*.xml" />
   </ItemGroup>

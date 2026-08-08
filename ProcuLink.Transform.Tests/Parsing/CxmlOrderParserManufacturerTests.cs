@@ -7,13 +7,13 @@ namespace ProcuLink.Transform.Tests.Parsing;
 /// Manufacturer-part extraction from real customer purchase orders.
 ///
 /// The two fixtures are a deliberate pair (see the comment header inside each file):
-///  • <c>real-cxml-1.2-ariba-punchout-mpn-differs.xml</c> — a PUNCHOUT order where <c>SupplierPartID</c> is the
-///    buying network's internal id and resolves against nothing in the supplier's catalog. Here
-///    the manufacturer part is the ONLY usable key, and it is a completely different string from
-///    the buyer item code.
-///  • <c>real-cxml-1.1-mpn-equals-supplier-part.xml</c> — the easy case, where the two are the SAME string.
-///    On its own it makes the old blind "echo the MPN back as the supplier code" shortcut look
-///    correct, which is exactly why it must never be tested alone.
+///  • <c>real-cxml-1.2-ariba-punchout-mpn-differs.xml</c> — a PUNCHOUT order where
+///    <c>SupplierPartID</c> is the buying network's internal id and resolves against nothing in
+///    the supplier's catalog. Here the manufacturer part is the ONLY usable key, and it is a
+///    completely different string from the buyer item code.
+///  • <c>real-cxml-1.1-mpn-equals-supplier-part.xml</c> — the easy case, where the two are the
+///    SAME string. On its own it makes the old blind "echo the MPN back as the supplier code"
+///    shortcut look correct, which is exactly why it must never be tested alone.
 /// </summary>
 public class CxmlOrderParserManufacturerTests
 {
@@ -27,7 +27,7 @@ public class CxmlOrderParserManufacturerTests
     }
 
     [Fact]
-    public async Task ParseAsync_KsbAribaPunchout_KeepsBuyerCodeAndManufacturerPartSeparate()
+    public async Task ParseAsync_AribaPunchout_KeepsBuyerCodeAndManufacturerPartSeparate()
     {
         var result = await ParseFixtureAsync("real-cxml-1.2-ariba-punchout-mpn-differs.xml");
 
@@ -41,7 +41,7 @@ public class CxmlOrderParserManufacturerTests
     }
 
     [Fact]
-    public async Task ParseAsync_MaerskOrder_ManufacturerPartEqualsBuyerCode_AndBrandIsAbsent()
+    public async Task ParseAsync_DirectOrder_ManufacturerPartEqualsBuyerCode_AndBrandIsAbsent()
     {
         var result = await ParseFixtureAsync("real-cxml-1.1-mpn-equals-supplier-part.xml");
 

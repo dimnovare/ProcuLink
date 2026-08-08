@@ -13,20 +13,21 @@ using ProcuLink.Transform.Parsing;
 namespace ProcuLink.Api.Tests.Services;
 
 /// <summary>
-/// Manufacturer part number as a first-class matching key, driven by two REAL customer purchase
-/// orders (sanitised — see the fixture headers).
+/// Manufacturer part number as a first-class matching key, driven by two REAL purchase orders
+/// (de-identified — see the fixture headers).
 ///
 /// The founder's case: a punchout order's <c>&lt;SupplierPartID&gt;</c> is the buying network's own
 /// internal id and resolves against nothing. The only usable key is
 /// <c>&lt;ManufacturerPartID&gt;</c>. Before this change the service simply ECHOED that part number
-/// back as the supplier item code at 0.95 confidence — which looks right in the Maersk fixture
-/// (where the two identifiers happen to be the same string) and is flatly wrong in the KSB/Ariba
-/// one (where "REDACTED-ORDER-DATA" is REDACTED-PARTY's number, not something the supplier sells under).
+/// back as the supplier item code at 0.95 confidence — which looks right in the MPN-equals fixture
+/// (where the two identifiers happen to be the same string) and is flatly wrong in the Ariba
+/// punchout one (where "REDACTED-ORDER-DATA" is REDACTED-PARTY's number, not something the supplier sells
+/// under).
 ///
 /// What is asserted here:
-///   • KSB/Ariba (REDACTED-PARTY): the manufacturer part number is LOOKED UP in the catalog and the
-///     suggestion is the supplier's OWN code for that product — never the manufacturer's;
-///   • Maersk: the same path still works when supplier code == manufacturer code;
+///   • Ariba punchout (REDACTED-PARTY): the manufacturer part number is LOOKED UP in the catalog and
+///     the suggestion is the supplier's OWN code for that product — never the manufacturer's;
+///   • MPN-equals: the same path still works when supplier code == manufacturer code;
 ///   • normalisation: a feed that prints the part number without separators still matches;
 ///   • ambiguity: one manufacturer part under two supplier codes suggests NOTHING rather than
 ///     guessing;
@@ -40,8 +41,8 @@ public class OrderServiceManufacturerPartMatchTests
     private const string SupplierCodeForREDACTED-PARTYScanner = "REDACTED-ITEM";
     private const string REDACTED-PARTYManufacturerPart = "REDACTED-ORDER-DATA";
 
-    // Maersk's line: supplier part id and manufacturer part id are the SAME string.
-    private const string MaerskSharedPartNumber = "REDACTED-ORDER-DATA";
+    // The MPN-equals fixture's line: supplier part id and manufacturer part id are the SAME string.
+    private const string SharedSupplierAndManufacturerPart = "REDACTED-ORDER-DATA";
 
     private static ProcuLinkDbContext NewDb() =>
         new(new DbContextOptionsBuilder<ProcuLinkDbContext>()
@@ -247,12 +248,12 @@ public class OrderServiceManufacturerPartMatchTests
     {
         var (db, orgId, supplierId) = await SeedSupplierAsync();
         await AddCatalogAsync(db, orgId, supplierId,
-            (MaerskSharedPartNumber, "Zebra ZT410 300 dpi printhead", MaerskSharedPartNumber, "Zebra"));
+            (SharedSupplierAndManufacturerPart, "Zebra ZT410 300 dpi printhead", SharedSupplierAndManufacturerPart, "Zebra"));
 
         var svc = Build(db, UnresolvedMappingsMock().Object, DecoyAiMock().Object);
         var line = await IngestSingleLineAsync(svc, db, orgId, supplierId, "real-cxml-1.1-mpn-equals-supplier-part.xml");
 
-        Assert.Equal(MaerskSharedPartNumber, line.AiSuggestedSupplierItemCode);
+        Assert.Equal(SharedSupplierAndManufacturerPart, line.AiSuggestedSupplierItemCode);
         Assert.Contains("catalog", line.AiSuggestionProvenance!, StringComparison.OrdinalIgnoreCase);
         Assert.True(line.NeedsReview);
     }
@@ -264,12 +265,12 @@ public class OrderServiceManufacturerPartMatchTests
         // The catalog row has NO manufacturer part number — only the supplier code, which happens
         // to equal it. This is the common shape of a distributor feed that predates MPN support.
         await AddCatalogAsync(db, orgId, supplierId,
-            (MaerskSharedPartNumber, "Zebra ZT410 300 dpi printhead", null, null));
+            (SharedSupplierAndManufacturerPart, "Zebra ZT410 300 dpi printhead", null, null));
 
         var svc = Build(db, UnresolvedMappingsMock().Object, DecoyAiMock().Object);
         var line = await IngestSingleLineAsync(svc, db, orgId, supplierId, "real-cxml-1.1-mpn-equals-supplier-part.xml");
 
-        Assert.Equal(MaerskSharedPartNumber, line.AiSuggestedSupplierItemCode);
+        Assert.Equal(SharedSupplierAndManufacturerPart, line.AiSuggestedSupplierItemCode);
         Assert.Contains("catalog", line.AiSuggestionProvenance!, StringComparison.OrdinalIgnoreCase);
     }
 

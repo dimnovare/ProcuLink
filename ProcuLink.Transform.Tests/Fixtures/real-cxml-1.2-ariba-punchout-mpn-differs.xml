@@ -1,19 +1,21 @@
-<!-- Real customer purchase order (Ariba / KSB → Markit, captured 2026-07-13), sanitised for the repo:
-     <SharedSecret> redacted, and the named REDACTED-ORDER-DATA' e-mail addresses / phone numbers replaced
-     with placeholders. Company names, item codes and money are VERBATIM — they are the test signal.
+<!-- Real-world purchase order (cXML 1.2, Ariba PUNCHOUT dialect, captured 2026-07-13), de-identified
+     for the repo: every trading-party name, network identity, postal address, internal system id,
+     requisition number and customer id is a placeholder. Item codes, quantities, currency and money
+     are VERBATIM — they are the test signal, and nothing that carries them identifies anybody.
 
      Why this fixture exists: the order came through a PUNCHOUT session, so the buyer's
      <SupplierPartID> ("29954596") is the buying network's own internal id and resolves against
      nothing in the supplier's catalog. The only usable key is
      <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID> + <ManufacturerName>REDACTED-PARTY</ManufacturerName>.
      Blindly echoing the manufacturer part number back as the supplier item code is WRONG here —
-     it has to be looked up in the catalog and translated into the supplier's own code. -->
+     it has to be looked up in the catalog and translated into the supplier's own code.
+     Pair it with real-cxml-1.1-mpn-equals-supplier-part.xml, the easy case where the two match. -->
 <!DOCTYPE cXML SYSTEM "http://xml.cxml.org/schemas/cXML/1.2.069/cXML.dtd"[]>
 <cXML payloadID="1784010704800.1757656243.000016630@example.invalid" timestamp="2026-07-13T23:31:44-07:00" version="1.2.069" xml:lang="en-US">
   <Header>
     <From>
       <Credential domain="NetworkId">
-        <Identity>REDACTED-NETWORK-ID</Identity>
+        <Identity>AN00000000001</Identity>
       </Credential>
       <Credential domain="SystemID">
         <Identity>CHILD1</Identity>
@@ -21,24 +23,24 @@
     </From>
     <To>
       <Credential domain="NetworkId">
-        <Identity>REDACTED-NETWORK-ID</Identity>
+        <Identity>an00000000002</Identity>
       </Credential>
       <Credential domain="internalsupplierid">
-        <Identity>REDACTED-NETWORK-ID</Identity>
+        <Identity>0000000001</Identity>
       </Credential>
       <Credential domain="buyersystemid">
-        <Identity>REDACTED-NETWORK-ID</Identity>
+        <Identity>0000000001</Identity>
       </Credential>
       <Credential domain="sap">
-        <Identity>REDACTED-NETWORK-ID</Identity>
+        <Identity>0000000001</Identity>
       </Credential>
       <Correspondent preferredLanguage="de-DE">
         <Contact role="correspondent">
-          <Name xml:lang="de">REDACTED-PARTY</Name>
+          <Name xml:lang="de">Example Supplier B2B GmbH</Name>
           <PostalAddress name="Standardwert">
-            <Street>REDACTED-ADDRESS</Street>
-            <City>Köln</City>
-            <PostalCode>50672</PostalCode>
+            <Street>Beispielring 85-87</Street>
+            <City>Example Höfe</City>
+            <PostalCode>00000</PostalCode>
             <Country isoCountryCode="DE">Deutschland</Country>
           </PostalAddress>
           <Email name="work" preferredLang="de-DE">support@example.invalid</Email>
@@ -69,14 +71,14 @@
         </Total>
         <ShipTo>
           <Address addressID="1440" isoCountryCode="DE">
-            <Name xml:lang="en">REDACTED-PARTY</Name>
+            <Name xml:lang="en">Buyer Service GmbH</Name>
             <PostalAddress name="Standardwert">
               <DeliverTo>Ship-To Contact</DeliverTo>
-              <DeliverTo>REDACTED-PARTY</DeliverTo>
-              <Street>REDACTED-ADDRESS</Street>
-              <City>Bremen</City>
+              <DeliverTo>Buyer Service GmbH</DeliverTo>
+              <Street>Grünenbeispiel 104-107</Street>
+              <City>Example Stadt</City>
               <State>04</State>
-              <PostalCode>28199</PostalCode>
+              <PostalCode>00000</PostalCode>
               <Country isoCountryCode="DE">Deutschland</Country>
             </PostalAddress>
             <Email name="Standardwert" preferredLang="de-DE">shipto@example.invalid</Email>
@@ -98,12 +100,12 @@
         </ShipTo>
         <BillTo>
           <Address addressID="1140" isoCountryCode="DE">
-            <Name xml:lang="en">REDACTED-PARTY</Name>
+            <Name xml:lang="en">Buyer Service GmbH</Name>
             <PostalAddress name="Standardwert">
-              <Street>Westring 7-Tor 2-WE 2</Street>
-              <City>Frankenthal</City>
+              <Street>Beispielwestring 7-Tor 2-WE 2</Street>
+              <City>Example Dorf</City>
               <State>07</State>
-              <PostalCode>67227</PostalCode>
+              <PostalCode>00000</PostalCode>
               <Country isoCountryCode="DE">Deutschland</Country>
             </PostalAddress>
             <Phone name="work">
@@ -131,8 +133,8 @@
 Comment Type: Terms and Conditions
 Body:COMPLIANCE: Standard buyer compliance terms (redacted for the fixture).
 </Comments>
-        <Extrinsic name="CompanyCode">1009</Extrinsic>
-        <Extrinsic name="PUName">REDACTED-SYSTEM</Extrinsic>
+        <Extrinsic name="CompanyCode">1000</Extrinsic>
+        <Extrinsic name="PUName">PU_1000</Extrinsic>
         <Extrinsic name="LegalConditions">Terms &amp; conditions: standard purchase conditions (redacted for the fixture).</Extrinsic>
         <Extrinsic name="InvoicingConditions">Invoicing address (redacted for the fixture).</Extrinsic>
       </OrderRequestHeader>
@@ -154,7 +156,7 @@ Body:COMPLIANCE: Standard buyer compliance terms (redacted for the fixture).
           <LeadTime>3</LeadTime>
           <Extrinsic name="Req. Line No.">1</Extrinsic>
           <Extrinsic name="Requester">Requester Name</Extrinsic>
-          <Extrinsic name="PR No.">REDACTED-DOCNO</Extrinsic>
+          <Extrinsic name="PR No.">PR000001</Extrinsic>
           <Extrinsic name="incoTerm"></Extrinsic>
           <Extrinsic name="incoTermLocation"></Extrinsic>
           <Extrinsic name="QuoteReference"></Extrinsic>
@@ -163,5 +165,5 @@ Body:COMPLIANCE: Standard buyer compliance terms (redacted for the fixture).
       </ItemOut>
     </OrderRequest>
   </Request>
-  <EDICustomerID>00000000-0000-0000-0000-000000000000</EDICustomerID>
+  <EDICustomerID>00000000-0000-4000-8000-000000000002</EDICustomerID>
 </cXML>

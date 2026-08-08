@@ -23,10 +23,10 @@ public class ProductKeyNormalizerTests
 
     [Theory]
     // Real MPNs from the cXML order fixtures in Fixtures/.
-    [InlineData("REDACTED-ORDER-DATA", "QBT2500BKBTK1")]  // real-cxml-1.2-ariba-punchout-mpn-differs.xml (REDACTED-PARTY)
+    [InlineData("REDACTED-ORDER-DATA", "QBT2500BKBTK1")]  // real-cxml-1.2-ariba-punchout-mpn-differs.xml
     [InlineData("qbt2500 bk btk1", "QBT2500BKBTK1")]  // same part, ERP-export spelling
-    [InlineData("REDACTED-ORDER-DATA", "P1058930010")]       // real-cxml-1.1-mpn-equals-supplier-part.xml (Zebra)
-    [InlineData("REDACTED-ORDER-DATA", "MWR23SA")]               // cxml-coupa-orderrequest-sek.cxml (Apple)
+    [InlineData("REDACTED-ORDER-DATA", "P1058930010")]       // real-cxml-1.1-mpn-equals-supplier-part.xml
+    [InlineData("REDACTED-ORDER-DATA", "MWR23SA")]               // cxml-coupa-orderrequest-sek.cxml
     // Nothing comparable survives → null, never "".
     [InlineData(null, null)]
     [InlineData("", null)]
