@@ -281,7 +281,7 @@ public class OrderIngestionSupplierSuggestionHookTests
 
         var result = await BuildIngestion(db, null).CreateStubFromParsedOrderAsync(
             orgId, supplierId: null, BodyOrder(), "email_body_nlp", CancellationToken.None,
-            inboundSenderDomain: "WWW.Acme.COM");
+            inboundSenderDomain: "WWW.Acme.EXAMPLE");
 
         var order = await db.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == result.Value!.Id);
         Assert.Equal("acme.example", order.InboundSenderDomain);

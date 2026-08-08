@@ -379,7 +379,7 @@ public class SupplierSuggestionServiceTests
         var acme = SeedSupplier(db, "Acme GmbH", domain: "acme.example");
         await db.SaveChangesAsync();
 
-        var result = await NewService(db).SuggestAsync(Input(senderDomain: "ACME.com"), default);
+        var result = await NewService(db).SuggestAsync(Input(senderDomain: "ACME.example"), default);
 
         var only = Assert.Single(result);
         Assert.Equal(acme.Id, only.SupplierId);

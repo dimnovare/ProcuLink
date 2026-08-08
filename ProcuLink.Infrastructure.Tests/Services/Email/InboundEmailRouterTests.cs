@@ -1140,7 +1140,7 @@ public class InboundEmailRouterTests
     [Theory]
     [InlineData("orders@acme.example", "acme.example")]
     [InlineData("Orders@ACME.eXaMpLe", "acme.example")]
-    [InlineData("\"Acme Orders\" <orders@mail.acme.example>", "example.invalid")]
+    [InlineData("\"Acme Orders\" <orders@mail.acme.example>", "mail.acme.example")]
     [InlineData("a.person+tag@acme.example", "acme.example")]
     public void ExtractSenderDomain_keepsOnlyTheDomain(string from, string expected)
     {
