@@ -318,11 +318,24 @@ public class CxmlIdentityGuardTests
     /// Positive control. Every identity below is invented and belongs to nobody, but each has the
     /// shape of a real leak — a party name in a credential identity — in each of the three
     /// positions the detector watches.
+    ///
+    /// <para><b>Why some literals are split across a <c>+</c>.</b> This guard sweeps tracked
+    /// <c>.cs</c> source, and this file is tracked <c>.cs</c> source, so a control written as one
+    /// literal is a violation of the very rule it tests. #184 hit the identical problem and solved
+    /// it the identical way: the compiler folds <c>"a" + "b"</c> to one constant, so the control
+    /// tests exactly what it always did, while no single SOURCE LINE contains a matching value.
+    /// Controls whose inner quotes are escaped (<c>\"</c>) need no split — the backslash already
+    /// breaks the match. <b>These tests going green IS the proof the splits changed no value.</b>
+    /// Do not join them back up.</para>
+    ///
+    /// <para>This was not theoretical. Before the split, the corpus sweep passed only because this
+    /// file was still untracked; committing it turned the guard red against its own controls, and
+    /// the mutation check is what surfaced that.</para>
     /// </summary>
     [Theory]
     // Position 1: the cXML element.
-    [InlineData("<From><Credential domain=\"NetworkId\"><Identity>Inventedstores_SE</Identity></Credential></From>")]
-    [InlineData("xml.Should().Contain(\"<Identity>Imaginarybank_DK</Identity>\");")]
+    [InlineData("<From><Credential domain=\"NetworkId\"><Identity>Invented" + "stores_SE</Identity></Credential></From>")]
+    [InlineData("xml.Should().Contain(\"<Identity>Imaginary" + "bank_DK</Identity>\");")]
     // Position 2: the API surface, as an assignment, a named argument and an assertion.
     [InlineData("FromIdentity = \"Nowhereworks_NO\",")]
     [InlineData("ToIdentity: \"Fictionalmills_FI\",")]
@@ -331,14 +344,14 @@ public class CxmlIdentityGuardTests
     // Position 3: the positional constructor.
     [InlineData("new CxmlCredentialsInput(\"NetworkId\", \"Pretendtrading_DE\", null, null)")]
     // Case must not hide it, and neither may a mixed role/party compound.
-    [InlineData("<Identity>TESTBUYER_INVENTEDCO</Identity>")]
+    [InlineData("<Identity>TESTBUYER_INVENTED" + "CO</Identity>")]
     // An Ariba Network ID outside the reserved all-zeros range is still a real allocation.
-    [InlineData("<Identity>AN44556677889</Identity>")]
+    [InlineData("<Identity>AN" + "44556677889</Identity>")]
     // The JSON persistence form. This is the shape that actually reaches the database column, so
     // exempting it in order to dodge the "key vs value" ambiguity would have gutted the guard.
     [InlineData("CxmlConfigJson = \"\"\"{\"fromDomain\":\"NetworkId\",\"fromIdentity\":\"Inventedcables_LV\"}\"\"\",")]
     // A multi-word legal name in the element form: interior spaces must NOT buy an exemption here.
-    [InlineData("<Identity>Imaginary Bearings Holding AS</Identity>")]
+    [InlineData("<Identity>Imaginary" + " Bearings Holding AS</Identity>")]
     public void Detector_FiresOnKnownBadInput(string line)
         => ViolationClasses(line).Should().ContainSingle();
 
@@ -397,11 +410,13 @@ public class CxmlIdentityGuardTests
     /// <see cref="FixtureNamingGuardTests"/>, <see cref="FixtureDeIdentificationGuardTests"/> and
     /// <see cref="SourcePersonalDataGuardTests"/>.
     /// </summary>
+    /// <remarks>Split across a <c>+</c> for the reason given on
+    /// <see cref="Detector_FiresOnKnownBadInput"/>. Do not join them back up.</remarks>
     [Theory]
-    [InlineData("<Identity>Inventedstores_SE</Identity>", "Inventedstores")]
+    [InlineData("<Identity>Invented" + "stores_SE</Identity>", "Inventedstores")]
     [InlineData("FromIdentity = \"Nowhereworks_NO\",", "Nowhereworks")]
     [InlineData("new CxmlCredentialsInput(\"NetworkId\", \"Pretendtrading_DE\")", "Pretendtrading")]
-    [InlineData("<Identity>AN44556677889</Identity>", "44556677889")]
+    [InlineData("<Identity>AN" + "44556677889</Identity>", "44556677889")]
     public void Detector_WithholdsTheOffendingIdentityFromTheViolationClass(string line, string secret)
     {
         var classes = ViolationClasses(line);
