@@ -1,14 +1,132 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using ProcuLink.Core.Entities;
+using ProcuLink.Infrastructure.Tenancy;
 
 namespace ProcuLink.Infrastructure;
 
 public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
 {
     public ProcuLinkDbContext(DbContextOptions<ProcuLinkDbContext> options) : base(options) { }
+
+    // ── Organisation query filters ───────────────────────────────────────────
+    // Global query filters make org scoping the model's default (see
+    // Tenancy/OrgQueryFilters.cs). The filter reads ScopedOrganisationId at query time, so a
+    // context is UNSCOPED until something arms it.
+    //
+    // Unscoped is the default deliberately, and it is the behaviour this codebase had before the
+    // filters existed: the ~320 explicit `.Where(x => x.OrgId == orgId)` clauses remain and are
+    // still the active control. Defaulting to ARMED would have been wrong in both directions —
+    //
+    //   * Fail-closed-silently is the worse failure. A cross-org sweep that suddenly matches no
+    //     rows looks like a clean run, not an outage. The Worker runs 13 such sweeps (billing
+    //     reconciliation, stuck/stranded/SLA detection, IMAP+SFTP+S3 polling, retention, alerting)
+    //     and every one of them would have reported success over an empty set.
+    //
+    //   * Several API paths legitimately read across organisations WITH a tenant resolved —
+    //     AdminController's cross-org aggregates over PurchaseOrders and Suppliers, and
+    //     OpsHealthService's cross-tenant health counts behind OpsController. Arming the filter
+    //     for every request would silently truncate those to the caller's own org.
+    //
+    // Arming is therefore explicit and greppable at the call site, never ambient: grep for
+    // ScopeToOrganisation( and UseCrossOrganisationScope( to see every decision.
+    private Guid? _scopedOrgId;
+
+    /// <summary>
+    /// The organisation this context is scoped to, or null when it is unscoped and the
+    /// organisation query filters are inert. Read by the filter predicate on every query.
+    /// </summary>
+    public Guid? ScopedOrganisationId => _scopedOrgId;
+
+    /// <summary>
+    /// The reason recorded by the most recent <see cref="UseCrossOrganisationScope"/> call, or
+    /// null. Carried for diagnostics so an unscoped context can say why it is unscoped.
+    /// </summary>
+    public string? CrossOrganisationReason { get; private set; }
+
+    /// <summary>
+    /// Arms the organisation query filters: from this point every query against an org-scoped
+    /// entity is restricted to <paramref name="orgId"/>, whether or not the caller wrote an
+    /// explicit <c>.Where</c> clause.
+    /// </summary>
+    /// <remarks>
+    /// Safe to call repeatedly with the same id. Changing the scope mid-context is refused rather
+    /// than silently honoured, because entities already tracked from the previous organisation
+    /// would stay in the change tracker and be returned from tracked queries without ever going
+    /// back to the database — a filter bypass that would look like a normal read.
+    /// </remarks>
+    public ProcuLinkDbContext ScopeToOrganisation(Guid orgId)
+    {
+        if (orgId == Guid.Empty)
+            throw new ArgumentException(
+                "Cannot scope a DbContext to Guid.Empty — an empty organisation id would match " +
+                "no rows and read as a clean, empty result rather than as the error it is.",
+                nameof(orgId));
+
+        if (_scopedOrgId is { } existing && existing != orgId)
+            throw new InvalidOperationException(
+                $"This DbContext is already scoped to organisation {existing} and cannot be " +
+                $"re-scoped to {orgId}. Entities tracked under the previous scope would survive " +
+                "in the change tracker and be served from it. Use a new DbContext (or a new DI " +
+                "scope) per organisation.");
+
+        _scopedOrgId = orgId;
+        CrossOrganisationReason = null;
+
+        // Resolve the model NOW, with the scope already set, so this context binds to the FILTERED
+        // model (see OrgScopeModelCacheKeyFactory). The model is resolved once per instance, so a
+        // context that has already run a query is stuck on the unfiltered model — and would then
+        // read every organisation's rows while looking, at the call site, exactly like a scoped
+        // one. That is the silent fail-open this check exists to make loud.
+        if (Model.FindEntityType(typeof(PurchaseOrderEntity))?.GetQueryFilter() is null)
+            throw new InvalidOperationException(
+                "ScopeToOrganisation was called after this DbContext had already resolved its " +
+                "model, so the organisation query filters are NOT applied to it and every query " +
+                "would read across tenants. Scope the context before its first query — typically " +
+                "immediately after it is resolved from DI.");
+
+        return this;
+    }
+
+    /// <summary>
+    /// Installs the model-cache split that gives scoped and unscoped contexts different models.
+    /// Done here rather than at the AddDbContext call sites so both hosts (API and Worker) and
+    /// every test that news up a context get it without a registration each.
+    /// </summary>
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+    {
+        base.OnConfiguring(optionsBuilder);
+        optionsBuilder.ReplaceService<IModelCacheKeyFactory, OrgScopeModelCacheKeyFactory>();
+    }
+
+    /// <summary>
+    /// Declares that this context intentionally reads across organisations, leaving the
+    /// organisation query filters inert.
+    /// </summary>
+    /// <remarks>
+    /// This does not change behaviour — an unscoped context is already unfiltered — but it makes
+    /// the intent explicit and greppable at the call site instead of relying on the reader to
+    /// notice that nothing armed the scope. Cross-organisation work must still scope its own
+    /// writes; the filter never protected those.
+    /// </remarks>
+    public ProcuLinkDbContext UseCrossOrganisationScope(string reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+            throw new ArgumentException(
+                "A cross-organisation scope must state why it reads across tenants.",
+                nameof(reason));
+
+        if (_scopedOrgId is { } existing)
+            throw new InvalidOperationException(
+                $"This DbContext is scoped to organisation {existing}; it cannot also declare a " +
+                "cross-organisation scope. Use a separate DbContext for cross-tenant work.");
+
+        CrossOrganisationReason = reason;
+        return this;
+    }
 
     public DbSet<Organisation> Organisations => Set<Organisation>();
     public DbSet<DataProtectionKey> DataProtectionKeys => Set<DataProtectionKey>();
@@ -1748,6 +1866,20 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasIndex(x => new { x.OrgId, x.OrderId, x.OccurredAt })
              .HasDatabaseName("IX_po_passport_events_org_id_order_id_occurred_at");
         });
+
+        // ── Organisation query filters ───────────────────────────────────────
+        // LAST, deliberately: this walks every entity type configured above and attaches the
+        // org filter to each one that carries an organisation column. Running it here means a
+        // new entity is covered as soon as it is mapped, with nothing extra to remember.
+        // Entities with no org column must be declared in OrgQueryFilters.DeclaredUnscoped;
+        // OrgQueryFilterCoverageTests fails the build otherwise.
+        //
+        // Only for a SCOPED context. OrgScopeModelCacheKeyFactory keeps the scoped and unscoped
+        // models in separate cache entries, so an unscoped context (every Worker sweep, migration
+        // bootstrap, tenant resolution, and API-key lookup) gets a model with no filters at all
+        // and emits exactly the SQL it emitted before this existed.
+        if (_scopedOrgId is not null)
+            OrgQueryFilters.Apply(modelBuilder, this);
     }
 
     private static JsonDocument? ParseJsonDoc(string? v) =>

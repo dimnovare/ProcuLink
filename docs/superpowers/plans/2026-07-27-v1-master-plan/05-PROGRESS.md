@@ -758,10 +758,12 @@ enforces nothing."
 
 Resolved from the repo rather than escalated. The two real customer purchase orders say it outright:
 
-- `real-cxml-1.1-mpn-equals-supplier-part.xml` — `<From><Identity>REDACTED-NETWORK-ID</Identity></From>`,
-  `<To><Identity>REDACTED-NETWORK-ID</Identity></To>`.
-- `real-cxml-1.2-ariba-punchout-mpn-differs.xml` — KSB → Markit, through an **Ariba PunchOut session**. Its own header
-  comment says the buyer's `<SupplierPartID>` "resolves against" our catalog.
+- `real-cxml-1.1-mpn-equals-supplier-part.xml` — its `<From>` identity is a third-party buyer and its
+  `<To>` identity is the ProcuLink customer. (Both are placeholders as of the 2026-08-08 rename packet;
+  they were the parties' real network identities when this entry was written.)
+- `real-cxml-1.2-ariba-punchout-mpn-differs.xml` — a third-party buyer to the same customer, through an
+  **Ariba PunchOut session**. Its own header comment says the buyer's `<SupplierPartID>` "resolves
+  against" our catalog.
 
 **Markit is the ProcuLink customer, and Markit RECEIVES these orders from its own buyers.** That is the
 supplier / INBOUND side — the mirror image of this plan's documented ICP ("buyer/procurement teams sending

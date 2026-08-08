@@ -1,30 +1,36 @@
-<!-- Real customer purchase order (Maersk → Markit, captured 2026-07-22), sanitised for the repo:
-     <SharedSecret> redacted, and the named REDACTED-ORDER-DATA' e-mail addresses / phone numbers replaced
-     with placeholders. Company names, item codes and money are VERBATIM — they are the test signal.
+<!-- Real-world purchase order (cXML 1.1, captured 2026-07-22), de-identified for the repo:
+     every trading-party name, network identity, postal address, site code and customer id is a
+     placeholder. Item codes, quantities, currency and money are VERBATIM — they are the test signal,
+     and nothing in this file that carries them identifies anybody.
 
      Why this fixture exists: here the buyer's <SupplierPartID> and the <ManufacturerPartID> are the
      SAME string ("REDACTED-ORDER-DATA"). This is the easy case that made the old blind "suggest the MPN as
-     the supplier code" shortcut look correct. Pair it with real-cxml-1.2-ariba-punchout-mpn-differs.xml, where they
-     are completely different, to see why manufacturer part number has to be a real lookup key. -->
+     the supplier code" shortcut look correct. Pair it with
+     real-cxml-1.2-ariba-punchout-mpn-differs.xml, where they are completely different, to see why
+     manufacturer part number has to be a real lookup key.
+
+     Shape that is deliberately preserved: a <!DOCTYPE> header, a <Street> line that crams a company
+     name and the whole address into one element, and a ";"-delimited <Street> on the BillTo side.
+     Both are real formatting habits of cXML 1.1 senders and both must survive parsing. -->
 <!DOCTYPE cXML SYSTEM "http://xml.cXML.org/schemas/cXML/1.1.010/cXML.dtd"[]>
-<cXML payloadID="0000000000.0@example.invalid" xml:lang="en-US" timestamp="2026-07-22T12:57:01+01:00">
+<cXML payloadID="1784725021790@buyer.example" xml:lang="en-US" timestamp="2026-07-22T12:57:01+01:00">
   <Header>
     <From>
       <Credential domain="NetworkId">
-        <Identity>REDACTED-NETWORK-ID</Identity>
+        <Identity>Buyer_EU</Identity>
       </Credential>
     </From>
     <To>
       <Credential domain="NetworkId">
-        <Identity>REDACTED-NETWORK-ID</Identity>
+        <Identity>Supplier_EU</Identity>
       </Credential>
     </To>
     <Sender>
       <Credential domain="NetworkId">
-        <Identity>REDACTED-NETWORK-ID</Identity>
+        <Identity>Buyer_EU</Identity>
         <SharedSecret>REDACTED</SharedSecret>
       </Credential>
-      <UserAgent>REDACTED-NAME</UserAgent>
+      <UserAgent>Buyer Procurement User</UserAgent>
     </Sender>
   </Header>
   <Request>
@@ -35,13 +41,13 @@
         </Total>
         <ShipTo>
           <Address>
-            <Name xml:lang="en">REDACTED-PARTY</Name>
+            <Name xml:lang="en">Buyer Logistics &amp; Services Germany A/S &amp; Co.KG</Name>
             <PostalAddress name="default">
               <DeliverTo>Ship-To Contact</DeliverTo>
-              <DeliverTo>REDACTED-SITE</DeliverTo>
-              <Street>REDACTED-PARTY</Street>
-              <City>Duisburg</City>
-              <PostalCode>47179</PostalCode>
+              <DeliverTo>DESITE01-Example City</DeliverTo>
+              <Street>Buyer Forwarding Germany GmbH, Example Strasse 40, Example City, 00000, Germany</Street>
+              <City>Example City</City>
+              <PostalCode>00000</PostalCode>
               <Country isoCountryCode="DE">Germany</Country>
             </PostalAddress>
             <Email name="default">shipto@example.invalid</Email>
@@ -54,13 +60,13 @@
         </ShipTo>
         <BillTo>
           <Address>
-            <Name xml:lang="en">REDACTED-PARTY</Name>
-            <SiteCode>REDACTED-SITE</SiteCode>
+            <Name xml:lang="en">Buyer Logistics &amp; Services Germany A/S &amp; Co.KG</Name>
+            <SiteCode>DESITE34</SiteCode>
             <PostalAddress name="default">
               <DeliverTo>Bill-To Contact</DeliverTo>
-              <Street>REDACTED-ADDRESS</Street>
-              <City>Hamburg</City>
-              <PostalCode>20095</PostalCode>
+              <Street>Example Building ;  Example Wall 7 ; 00000 Example Town ; Germany</Street>
+              <City>Example Town</City>
+              <PostalCode>00000</PostalCode>
               <Country isoCountryCode="DE">Germany</Country>
             </PostalAddress>
             <Email name="default">billto@example.invalid</Email>
@@ -89,5 +95,5 @@
       </ItemOut>
     </OrderRequest>
   </Request>
-  <EDICustomerID>00000000-0000-0000-0000-000000000000</EDICustomerID>
+  <EDICustomerID>00000000-0000-4000-8000-000000000001</EDICustomerID>
 </cXML>
