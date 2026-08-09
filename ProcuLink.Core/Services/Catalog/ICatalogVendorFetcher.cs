@@ -5,8 +5,8 @@ namespace ProcuLink.Core.Services.Catalog;
 
 /// <summary>
 /// A vendor-specific catalog fetcher (plan 2026-07-02 D4). Some distributor APIs use auth /
-/// pagination too exotic for the generic <c>http</c> path + <c>HttpAuthApplier</c> (Logicom's
-/// per-call 2FA AES signatures). Rather than a scripted-connector sandboxing liability, each such
+/// pagination too exotic for the generic <c>http</c> path + <c>HttpAuthApplier</c> (per-call 2FA
+/// AES signatures, for one). Rather than a scripted-connector sandboxing liability, each such
 /// vendor gets a dedicated fetcher, resolved by <see cref="Protocol"/>. A fetcher returns the SAME
 /// <see cref="VendorFetchResult"/> byte shape the file/http channels produce, so the pull
 /// pipeline's hash-skip, byte/row caps, parsing, honesty report, and error sanitisation all apply
@@ -15,7 +15,7 @@ namespace ProcuLink.Core.Services.Catalog;
 /// </summary>
 public interface ICatalogVendorFetcher
 {
-    /// <summary>The <c>SupplierCatalogSource.Protocol</c> value this fetcher handles (e.g. "logicom").</summary>
+    /// <summary>The <c>SupplierCatalogSource.Protocol</c> value this fetcher handles (e.g. "aes2fa").</summary>
     string Protocol { get; }
 
     /// <summary>

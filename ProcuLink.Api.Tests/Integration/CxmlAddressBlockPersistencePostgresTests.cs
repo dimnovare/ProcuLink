@@ -76,11 +76,11 @@ public sealed class CxmlAddressBlockPersistencePostgresTests(PostgresContainerFi
                 CreatedAt  = now,
                 UpdatedAt  = now,
                 // Exemple-shaped ship-to + bill-to (denormalised cXML address columns).
-                ShipToName       = "Usine EXEMPLE de la REDACTED-PARTY",
+                ShipToName       = "Usine EXEMPLE Sud-3",
                 ShipToDeliverTo  = "Testperson Alex",
                 ShipToStreet     = "12 rue des Essais B12-3 (CTX_0000)",
                 ShipToCity       = "VILLE-EXEMPLE",
-                ShipToPostalCode = "63040",
+                ShipToPostalCode = "99040",
                 ShipToCountry    = "FRANCE",
                 ShipToEmail      = "ship@buyer.example.com",
                 ShipToPhone      = "33100000000",
@@ -88,7 +88,7 @@ public sealed class CxmlAddressBlockPersistencePostgresTests(PostgresContainerFi
                 BillToDeliverTo  = "Service Comptable",
                 BillToStreet     = "Place des Essais Nord",
                 BillToCity       = "VILLE-EXEMPLE",
-                BillToPostalCode = "63000",
+                BillToPostalCode = "99000",
                 BillToCountry    = "FRANCE",
                 BillToEmail      = "compta@buyer.example.com",
                 BillToPhone      = "33100000001",
@@ -100,11 +100,11 @@ public sealed class CxmlAddressBlockPersistencePostgresTests(PostgresContainerFi
         {
             var o = await db.PurchaseOrders.AsNoTracking().SingleAsync(x => x.Id == orderId);
 
-            Assert.Equal("Usine EXEMPLE de la REDACTED-PARTY", o.ShipToName);
+            Assert.Equal("Usine EXEMPLE Sud-3", o.ShipToName);
             Assert.Equal("Testperson Alex", o.ShipToDeliverTo);
             Assert.Equal("12 rue des Essais B12-3 (CTX_0000)", o.ShipToStreet);
             Assert.Equal("VILLE-EXEMPLE", o.ShipToCity);
-            Assert.Equal("63040", o.ShipToPostalCode);
+            Assert.Equal("99040", o.ShipToPostalCode);
             Assert.Equal("FRANCE", o.ShipToCountry);
             Assert.Equal("ship@buyer.example.com", o.ShipToEmail);
             Assert.Equal("33100000000", o.ShipToPhone);
@@ -113,7 +113,7 @@ public sealed class CxmlAddressBlockPersistencePostgresTests(PostgresContainerFi
             Assert.Equal("Service Comptable", o.BillToDeliverTo);
             Assert.Equal("Place des Essais Nord", o.BillToStreet);
             Assert.Equal("VILLE-EXEMPLE", o.BillToCity);
-            Assert.Equal("63000", o.BillToPostalCode);
+            Assert.Equal("99000", o.BillToPostalCode);
             Assert.Equal("FRANCE", o.BillToCountry);
             Assert.Equal("compta@buyer.example.com", o.BillToEmail);
             Assert.Equal("33100000001", o.BillToPhone);

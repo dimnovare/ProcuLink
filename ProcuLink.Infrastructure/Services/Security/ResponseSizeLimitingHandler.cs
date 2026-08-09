@@ -22,7 +22,7 @@ namespace ProcuLink.Infrastructure.Services.Security;
 /// legitimately receives is an S3 ingress object, capped at
 /// <c>IngressLimits.MaxFileBytes</c> (10 MB). Everything else on the transport is far smaller —
 /// delivery and ERP acknowledgements are a few hundred bytes to a few KB, an OAuth token response
-/// is a small JSON document, and a Logicom catalog page is a couple of MB.
+/// is a small JSON document, and a vendor catalog page is a couple of MB.
 /// </para>
 ///
 /// <para>

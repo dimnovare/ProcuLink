@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Threading.RateLimiting;
 using Hangfire;
 using Hangfire.PostgreSql;
@@ -641,7 +641,7 @@ builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogSourceSetting
                            ProcuLink.Infrastructure.Services.Catalog.CatalogSourceSettingsService>();
 // Vendor catalog fetchers (plan 2026-07-02 D4) — resolved by protocol inside CatalogPullService.
 builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogVendorFetcher,
-                           ProcuLink.Infrastructure.Services.Catalog.LogicomQuickConnectFetcher>();
+                           ProcuLink.Infrastructure.Services.Catalog.Aes2faSignedCatalogFetcher>();
 
 // PDF rasterizer for the vision fallback (scanned/no-text PDFs). Self-contained
 // PDFium + SkiaSharp natives — no extra system packages on the Debian base.

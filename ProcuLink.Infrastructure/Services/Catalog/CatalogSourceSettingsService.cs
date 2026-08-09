@@ -70,7 +70,7 @@ public sealed class CatalogSourceSettingsService : ICatalogSourceSettingsService
 
         var protocol = request.Protocol.Trim().ToLowerInvariant();
         var isHttp = protocol is "http" or "https";
-        var isVendor = protocol is "logicom"; // vendor-fetcher protocols (URL + encrypted vendor creds)
+        var isVendor = protocol is "aes2fa"; // vendor-fetcher protocols (URL + encrypted vendor creds)
         var isUrlBased = isHttp || isVendor;
 
         source.Protocol = protocol;
@@ -84,7 +84,7 @@ public sealed class CatalogSourceSettingsService : ICatalogSourceSettingsService
 
         if (isVendor)
         {
-            // Vendor fetcher (e.g. logicom): URL + encrypted vendor-credential envelope. Clears
+            // Vendor fetcher (e.g. aes2fa): URL + encrypted vendor-credential envelope. Clears
             // the file-channel columns and the http auth-method (auth is inside the vendor creds).
             source.Url = request.Url?.Trim();
             source.Host = string.Empty;
@@ -331,7 +331,7 @@ public sealed class CatalogSourceSettingsService : ICatalogSourceSettingsService
     {
         if (cfg is null) return null; // keep whatever is stored
 
-        if (protocol == "logicom")
+        if (protocol == "aes2fa")
         {
             var complete = !string.IsNullOrWhiteSpace(cfg.CustomerId)
                 && !string.IsNullOrWhiteSpace(cfg.ConsumerKey)
@@ -341,7 +341,7 @@ public sealed class CatalogSourceSettingsService : ICatalogSourceSettingsService
 
             return System.Text.Json.JsonSerializer.Serialize(new
             {
-                type = "logicom_quickconnect",
+                type = "aes2fa_signed",
                 customerId = cfg.CustomerId!.Trim(),
                 consumerKey = cfg.ConsumerKey!.Trim(),
                 consumerSecret = cfg.ConsumerSecret!.Trim(),

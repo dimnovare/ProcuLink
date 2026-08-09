@@ -141,7 +141,7 @@ public class CorpusExtractionShapeTests
             PoNumber: "E032180",
             OrderDate: "2026-06-12",
             Currency: "EUR",
-            BuyerName: "Manufacture Exemple des Pneumatiques",
+            BuyerName: "Manufacture Exemple de Composants",
             Lines: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(

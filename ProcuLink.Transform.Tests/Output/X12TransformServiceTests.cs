@@ -252,18 +252,18 @@ public class X12TransformServiceTests
         order.ContactName      = "Testperson Alex";
         order.ContactEmail     = "alex.testperson@buyer.example.com";
         order.ContactPhone     = "33100000000";
-        order.ShipToName       = "Usine EXEMPLE de la REDACTED-PARTY";
+        order.ShipToName       = "Usine EXEMPLE Sud-3";
         order.ShipToDeliverTo  = "Testperson Alex";
         order.ShipToStreet     = "12 rue des Essais";
         order.ShipToCity       = "VILLE-EXEMPLE";
-        order.ShipToPostalCode = "63040";
+        order.ShipToPostalCode = "99040";
         order.ShipToCountry    = "FR";
         order.ShipToEmail      = "ship@buyer.example.com";
         order.ShipToPhone      = "33100000000";
         order.BillToName       = "EXEMPLE Comptabilite Fournisseurs";
         order.BillToStreet     = "Place des Essais Nord";
         order.BillToCity       = "VILLE-EXEMPLE";
-        order.BillToPostalCode = "63000";
+        order.BillToPostalCode = "99000";
         order.BillToCountry    = "FR";
         return order;
     }
@@ -299,14 +299,14 @@ public class X12TransformServiceTests
         var segs = SplitSegments(edi);
 
         // Ship-to N1*ST + N3 (street) + N4 (city**postal*country) + PER*OC (ship contact).
-        segs.Should().Contain(s => s.StartsWith("N1*ST*Usine EXEMPLE de la REDACTED-PARTY"));
+        segs.Should().Contain(s => s.StartsWith("N1*ST*Usine EXEMPLE Sud-3"));
         segs.Should().Contain(s => s.StartsWith("N3*12 rue des Essais"));
-        segs.Should().Contain("N4*VILLE-EXEMPLE**63040*FR");
+        segs.Should().Contain("N4*VILLE-EXEMPLE**99040*FR");
         segs.Should().Contain(s => s.StartsWith("PER*OC*Testperson Alex*EM*ship@buyer.example.com*TE*33100000000"));
 
         // Bill-to N1*BT + N3 + N4 (no bill contact → no PER for BT).
         segs.Should().Contain(s => s.StartsWith("N1*BT*EXEMPLE Comptabilite Fournisseurs"));
-        segs.Should().Contain("N4*VILLE-EXEMPLE**63000*FR");
+        segs.Should().Contain("N4*VILLE-EXEMPLE**99000*FR");
 
         // Buyer N1*BY, name-only — no N3/N4 immediately after a BY (buyer has no postal address).
         segs.Should().Contain(s => s.StartsWith("N1*BY*EXEMPLE Achats"));

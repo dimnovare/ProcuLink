@@ -19,7 +19,17 @@ public class SupplierCatalogSource
     public Guid OrgId { get; set; }
     public Guid SupplierId { get; set; }
 
-    /// <summary>'sftp' | 'ftp' | 'ftps' | 'http' | 'https' | 'logicom' (vendor fetcher).</summary>
+    /// <summary>
+    /// 'sftp' | 'ftp' | 'ftps' | 'http' | 'https' | 'aes2fa' (vendor fetcher).
+    ///
+    /// <para><b>PERSISTED DISCRIMINATOR.</b> This column value is the key
+    /// <c>CatalogPullService</c> resolves an <c>ICatalogVendorFetcher</c> by, so a row already in
+    /// the database decides at runtime which code runs. Changing a token here without a data
+    /// migration orphans every existing row carrying the old one — the lookup misses and the
+    /// source falls through to the file/http branch whose columns were cleared when it was saved.
+    /// The vocabulary is a transport or an auth MECHANISM, never a vendor's name: this repository
+    /// is public and the protocol token would otherwise publish who we pull catalogs from.</para>
+    /// </summary>
     public string Protocol { get; set; } = "sftp";
 
     /// <summary>Host for sftp/ftp/ftps. Unused for http/https (the full URL is in <see cref="Url"/>).</summary>

@@ -219,10 +219,10 @@ public class OrdersControllerPhase4DtoTests
             OutboundArtifacts = new List<OutboundArtifact>(),
             // Buyer tax id + extracted ship-to / bill-to / contact.
             BuyerTaxId       = "NO999000000",
-            ShipToName       = "Usine EXEMPLE de la REDACTED-PARTY",
+            ShipToName       = "Usine EXEMPLE Sud-3",
             ShipToStreet     = "12 rue des Essais",
             ShipToCity       = "VILLE-EXEMPLE",
-            ShipToPostalCode = "63040",
+            ShipToPostalCode = "99040",
             ShipToCountry    = "FRANCE",
             BillToName       = "EXEMPLE Comptabilite Fournisseurs",
             ContactName      = "Testperson Alex",
@@ -255,7 +255,7 @@ public class OrdersControllerPhase4DtoTests
         var dto = Assert.IsType<OrderDto>(ok.Value);
 
         Assert.Equal("NO999000000", dto.BuyerTaxId);
-        Assert.Equal("Usine EXEMPLE de la REDACTED-PARTY", dto.ShipToName);
+        Assert.Equal("Usine EXEMPLE Sud-3", dto.ShipToName);
         Assert.Equal("VILLE-EXEMPLE", dto.ShipToCity);
         Assert.Equal("EXEMPLE Comptabilite Fournisseurs", dto.BillToName);
         Assert.Equal("Testperson Alex", dto.ContactName);

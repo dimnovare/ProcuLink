@@ -557,7 +557,9 @@ public class CatalogPullService : ICatalogPullService
     // ── Vendor fetcher channel (plan 2026-07-02 D4/6.2) ────────────────────────
 
     /// <summary>
-    /// Runs a registered <see cref="ICatalogVendorFetcher"/> (e.g. Logicom). Same security
+    /// Runs a registered <see cref="ICatalogVendorFetcher"/> (e.g. the <c>aes2fa</c> one). The
+    /// dictionary key is <c>source.Protocol</c> — a PERSISTED value — so renaming a fetcher's
+    /// protocol token without migrating the column orphans every row already carrying it. Same security
     /// controls as the http path: SSRF-validate the source URL up front, decrypt the write-only
     /// vendor-credential envelope, hand the fetcher the SSRF-guarded <c>delivery</c> client. The
     /// fetcher returns the SAME byte shape as the file/http channels, so hash-skip, unwrap, caps,
