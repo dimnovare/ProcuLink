@@ -67,6 +67,13 @@ tmp*
 # Local design reference handoff — not product code
 docs/design_handoff_proculink_redesign/
 
+# Operator-local notes. THIS REPOSITORY IS PUBLIC — anything committed under docs/ is
+# world-readable, including in CI logs, forever, and a later history rewrite does not
+# recall copies. Keep here anything that is useful to run the business but unsafe to
+# publish: live QA transcripts, vendor endpoints and credential context, production
+# record ids, customer document corpora. Nothing in here is tracked.
+docs/private/
+
 # Live prod-test scratch fixtures (uncommitted working harness)
 .live-fixtures/
 
