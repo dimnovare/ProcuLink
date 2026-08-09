@@ -27,7 +27,7 @@ never crashes the transform — it surfaces as a clear validation failure and th
 un-transformed (never delivered from a broken template). The same review guard the fixed transforms
 enforce (`NeedsReview` / missing `SupplierItemCode`) still blocks the transform.
 
-### Real example (REDACTED-NAME-style nested JSON)
+### Real example (distributor-style nested JSON)
 
 ```scriban
 {"customerOrderNumber":"{{OrderNr}}",
@@ -35,7 +35,7 @@ enforce (`NeedsReview` / missing `SupplierItemCode`) still blocks the transform.
  "shipToInfo":{"contact":"{{ShippingAddress.FirstName}} {{ShippingAddress.LastName}}",
                "city":"{{ShippingAddress.City}}"},
  "lines":[{{ for Line in Lines }}{"customerLineNumber":"{{Line.LineNr}}",
-   "ingramPartNumber":"{{Line.DistributorPid}}",
+   "distributorPartNumber":"{{Line.DistributorPid}}",
    "quantity":{{Line.Qty}},
    "unitPrice":{{Line.OrderedPrice}}}{{ if !for.last }},{{ end }}{{ end }}]}
 ```
@@ -86,7 +86,7 @@ Usage: `{{ ShippingAddress.City }}`, `{{ ShippingAddress.Company }}`, …
 | `LineNr` | number | `LineNumber` | **Alias** of `LineNumber`. |
 | `LineNumber` | number | `LineNumber` | Canonical name. |
 | `SupplierItemCode` | string | `SupplierItemCode` | Resolved item code. |
-| `DistributorPid` | string | `SupplierItemCode` | **Alias** (Ingram-style name). |
+| `DistributorPid` | string | `SupplierItemCode` | **Alias** (distributor-style name). |
 | `BuyerItemCode` | string | `BuyerItemCode` | The buyer's own code. |
 | `Description` | string | `Description` | `""` if absent. |
 | `Qty` | number | `Quantity` | **Alias** of `Quantity`. |

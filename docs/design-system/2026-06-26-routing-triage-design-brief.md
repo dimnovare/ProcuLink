@@ -83,7 +83,7 @@ The hardest, most valuable moment: **two or more suppliers fit** (shared layout,
 ### Screen 4 — Channel → supplier setup
 Where the user wires a channel once. Keep the simple case one line:
 - **Simple:** "Files from this SFTP folder → {supplier}." A picker. Done. (This is today's `DefaultSupplierId`, made legible.)
-- **Sub-folder fan-out:** "Each sub-folder is a supplier" → map `/acme/ → Acme`, `/gjensidige/ → Northwind`.
+- **Sub-folder fan-out:** "Each sub-folder is a supplier" → map `/acme/ → Acme`, `/northwind/ → Northwind`.
 - **Content routing (the new mode):** "**Let ProcuLink route by what's in the order**" → orders land in the Routing Inbox at their confidence tier instead of being force-assigned. Explain the trade plainly: *"We'll match each order to a supplier and ask you when we're not sure."*
 - Show the channel's **health** quietly: last poll, last file, last successful route, and any rejected/held items.
 

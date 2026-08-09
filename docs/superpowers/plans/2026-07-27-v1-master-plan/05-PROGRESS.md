@@ -765,7 +765,7 @@ Resolved from the repo rather than escalated. The two real customer purchase ord
   **Ariba PunchOut session**. Its own header comment says the buyer's `<SupplierPartID>` "resolves
   against" our catalog.
 
-**Markit is the ProcuLink customer, and Markit RECEIVES these orders from its own buyers.** That is the
+**The reseller is the ProcuLink customer, and the reseller RECEIVES these orders from its own buyers.** That is the
 supplier / INBOUND side — the mirror image of this plan's documented ICP ("buyer/procurement teams sending
 purchase orders OUT to many suppliers").
 
@@ -788,12 +788,12 @@ catalogue.
 - All marketing copy is written outbound-first throughout.
 
 **FOUNDER DECISION REQUIRED before WP-25/WP-26 merge — this is the one thing here only you can settle:**
-is Markit representative of the customers you intend to sell to, or a first customer who happens to run the
+is the reseller representative of the customers you intend to sell to, or a first customer who happens to run the
 mirror flow? If the former, the vocabulary work must be direction-aware before it lands, not after.
 
-### 2026-07-30 — RETRACTION: the ICP conclusion was wrong. Markit is the founder's EMPLOYER.
+### 2026-07-30 — RETRACTION: the ICP conclusion was wrong. The reseller is the founder's EMPLOYER.
 
-I concluded from two fixtures that Markit is the ProcuLink customer and therefore the real ICP is inbound.
+I concluded from two fixtures that the reseller is the ProcuLink customer and therefore the real ICP is inbound.
 **The fixture quotes were exact; the inference was wrong.** Retracted in full. Caught by the execution session.
 
 **The evidence I did not check, every piece verified first-hand now:**
@@ -833,7 +833,7 @@ as a side effect of fixture archaeology. No marketing copy changes on this eithe
 
 | Claim | Verdict | The unchecked step |
 |---|---|---|
-| "Markit is the ProcuLink customer, so the ICP is inbound" | **RETRACTED** | Fixtures read; **who owns the receiving end never checked.** The answer was in my own shell prompt |
+| "The reseller is the ProcuLink customer, so the ICP is inbound" | **RETRACTED** | Fixtures read; **who owns the receiving end never checked.** The answer was in my own shell prompt |
 
 Five findings have now failed the same way: **two true facts with one unchecked step between them.**
 Registry and filesystem but not the renderer. Dev config but not prod. Frontend links but not backend callers.
@@ -875,7 +875,7 @@ gone and nobody notices until a supplier signs up.
 - Countervailing fact, weighed and accepted: our only real test documents are inbound, so the outbound path
   has **zero real customer documents**. That is a live testing gap, tracked separately — it does not change
   the positioning, but it does mean outbound quality rests on synthetic fixtures.
-- And the conflict that mattered most: **Markit is the founder's employer**, an IT reseller. Selling
+- And the conflict that mattered most: **the reseller is the founder's employer**, an IT reseller and a real trading party. Selling
   supplier-side software to its peers is selling to its competitors.
 
 

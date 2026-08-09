@@ -48,7 +48,7 @@ Seven surfaces need design work, not just implementation. Each brief below is wr
 ## DB-2 — The Output Designer
 **Feeds:** WP-15, WP-16 · **This is the product's differentiator. Treat it as the flagship screen.**
 
-**The job to be done.** "My supplier REDACTED-PARTY needs a CSV with *these* columns in *this* order, with their item codes, dates as DD/MM/YYYY, CRLF line endings, and a total line only when the order is over €5,000. I want to set that up once and never think about it again."
+**The job to be done.** "My supplier Contoso needs a CSV with *these* columns in *this* order, with their item codes, dates as DD/MM/YYYY, CRLF line endings, and a total line only when the order is over €5,000. I want to set that up once and never think about it again."
 
 **What exists today and works — keep it.**
 - A visual tree editor over an `OutputNode` AST: nesting, repeating line groups, XML attributes, custom element names.
