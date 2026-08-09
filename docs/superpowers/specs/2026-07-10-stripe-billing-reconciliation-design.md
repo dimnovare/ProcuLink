@@ -20,8 +20,8 @@ There is **no reconciliation** against Stripe as source of truth. Proven consequ
   on a paid tier forever.
 - **P2** — persisted `StripeSubscriptionId`/`StripeCustomerId` are trusted unconditionally; a
   test-mode or already-deleted subscription keeps its paid plan because live webhooks never
-  fire for it. Real prod example: org `75abde9a` has `plan='growth'` with Stripe ids that both
-  404 on the live `sk_live` key.
+  fire for it. Observed in production: an org carrying a paid plan whose stored Stripe customer
+  and subscription ids both 404 against the live key.
 
 ## Goal
 
@@ -206,7 +206,7 @@ Fake transport returns a canned `Subscription` (status + price id) or throws a c
 ## Out of scope / non-goals
 - No dispatcher/child fan-out (single sweep is adequate; trivial to convert later if org count grows).
 - No change to webhook handlers' observable behaviour (only the mapping extraction, proven by tests).
-- Does not hard-clean org `75abde9a` (separate task); reconciliation will downgrade it after grace.
+- Does not hard-clean the affected org (separate task); reconciliation will downgrade it after grace.
 - No real Stripe calls in tests; **no execution against prod** — deploy is founder-gated.
 
 ## Risk & safety

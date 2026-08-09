@@ -33,7 +33,7 @@ Three invariants the whole design must protect:
 
 **One line:** ProcuLink turns a messy purchase order (any format) into the *exact* file a specific supplier accepts, validates it in plain language, previews the real output, sends it, and **learns the setup** so the next order from that buyer→supplier pair flows through with near-zero clicks.
 
-**Who it replaces (north-star scenario).** A real customer receives a PDF purchase order from a buyer (e.g. REDACTED-PARTY, Gjensidige). Today they run **three tools**: DocParser (PDF→flat XML) → Altova MapForce (a hand-built mapping → cXML) → an admin screen (credentials, send). ProcuLink collapses all three into **one flow**: drop the PDF → it reads it → confirm a couple of item codes → see the exact cXML → send. **The design's job is to make that three-tool, EDI-expert chain feel like dropping a file and pressing Send.**
+**Who it replaces (north-star scenario).** A real customer receives a PDF purchase order from a large industrial or insurance buyer. Today they run **three tools**: DocParser (PDF→flat XML) → Altova MapForce (a hand-built mapping → cXML) → an admin screen (credentials, send). ProcuLink collapses all three into **one flow**: drop the PDF → it reads it → confirm a couple of item codes → see the exact cXML → send. **The design's job is to make that three-tool, EDI-expert chain feel like dropping a file and pressing Send.**
 
 ### 3a. The pipeline (every order)
 `Read → Understand (the received order) → Map to the supplier's shape → Validate → Fix exceptions → Preview the real output → Send → Learn.`

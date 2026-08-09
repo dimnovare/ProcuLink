@@ -60,7 +60,8 @@ export function WireTopology({
   wires,
   width = 1280,
   height = 600,
-  title = "Order topology",
+  // "Order topology" was purged from user-facing copy; the shipped heading is "Orders".
+  title = "Orders",
   subtitle,
   onWireClick,
 }: WireTopologyProps) {

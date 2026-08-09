@@ -835,8 +835,9 @@ never checked, and one was my own error. Corrected in place, each with its evide
 
 ## Snapshot (2026-07-24) — routing/catalog/ops wave queued
 
-- **Active queue: `docs/prompts/2026-07-24-open-queue-handover.md`** — 9 parallel chip
-  items (FE: assign-supplier UI [doc: `2026-07-24-assign-supplier-ui.md`], navbar dedup,
+- **Active queue** (handover prompt deleted 2026-08-09 — it was a spent situational
+  queue carrying live production identifiers; see the docs purge PR) — 9 parallel chip
+  items (FE: assign-supplier UI, navbar dedup,
   catalog-picker scale, marketing SEO; BE: email-park-unrouted, row-cap raise,
   Responses `store:false`, webhook log level, supplier-auto-detect SPEC; OPS: live
   inbound-email e2e, prod vendor-feed test) + founder actions. Chips run **Opus 4.8

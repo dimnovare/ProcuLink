@@ -1,7 +1,7 @@
 # PROCULINK — FABLE-5 PRODUCTION PUSH — MASTER PROMPT
 
 > **How to use:** paste this entire document as the opening prompt of a fresh Claude Code
-> (Fable 5) session in `C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink`. Everything below is
+> (Fable 5) session in a checkout of this repository. Everything below is
 > the instruction set. It was generated 2026-07-02 from a live scan of both repos — the
 > inventories in Appendix A are verified ground truth as of that date, not aspiration.
 
@@ -84,18 +84,18 @@ deleted docs; this prompt's appendices replace them as capability ground truth.
 
 | Thing | Value |
 |---|---|
-| Backend repo | `C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink` (.NET 8, `ProcuLink.slnx`) |
-| Frontend repo | `C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink` (Next.js 15, bun) |
+| Backend repo | this repository (.NET 8, `ProcuLink.slnx`) |
+| Frontend repo | the `project-proculink` repository (Next.js 15, bun) |
 | Prod frontend | https://proculink.eu (Vercel, auto-deploy from FE `main`) |
-| Prod API | Railway service `ProcuLink` (auto-deploy from BE `main`); Worker = `aware-amazement` (MANDATORY for parse/deliver — nothing moves without it) |
-| Prod DB | Neon Postgres · Storage: Cloudflare R2 `proculink` (private, pre-signed only) |
+| Prod API | Railway (auto-deploy from BE `main`); a separate Worker service is MANDATORY for parse/deliver — nothing moves without it |
+| Prod DB | Neon Postgres · Storage: Cloudflare R2 (private, pre-signed only) |
 | Local API | `http://localhost:5223` · Scalar: `/scalar` · Hangfire: `/hangfire` · local PG on :5435 |
 | Local live QA | `PROCULINK_QA_BYPASS_AUTH=true` + `ASPNETCORE_ENVIRONMENT=Development` + valid `Delivery__EncryptionKey` (32-byte base64); Worker must run |
-| Railway CLI | linked, project `lucid-generosity` |
-| Auth | Clerk production instance (clerk.proculink.eu); founder provides login for browser testing |
+| Railway CLI | linked; ask the founder for the project name |
+| Auth | Clerk production instance; founder provides login for browser testing |
 | Inbound email | `{slug}@orders.proculink.eu` (CF MX → Postmark webhook) — proven live |
 | Cloudflare DNS | edit ONLY via scoped API token (dashboard SPA won't render in the browser tool) |
-| Test org | "Dim's Organization" = test org with admin override; personal-workspace-d3be also used in past tests |
+| Test org | ask the founder for the current test org and its admin override — org names and tenant slugs are deliberately not recorded in this public repository |
 
 **Browser testing:** use the Claude-in-Chrome MCP tools (`mcp__claude-in-chrome__*`) against
 production. To upload a local file through the prod browser, use the proven recipe: inject the
@@ -110,9 +110,10 @@ the preview tools / Playwright, not screenshots-by-hand.
 - Email delivery: send to a founder-controlled mailbox AND a disposable inbox; verify subject/body templates and attachment integrity. Postmark is in Test/pending-approval mode — confirm current approval status first; if still test-mode, verify via Postmark activity log.
 - ERP connectors (erp_erply / erp_directo): no sandbox creds available → test-fire against a webhook.site endpoint standing in for the ERP URL where the connector shape allows; otherwise verify request-shape via unit/integration tests and mark the channel "config-verified, no live ERP sandbox" honestly in the report.
 - S3/R2 ingress: use a dedicated prefix in the founder's R2 (S3 creds recipe: token id + SHA256(token value)).
-- Test documents: generate realistic fixtures per format from the parser specs (Appendix A);
-  a 12-PO real-world corpus exists in `~/Downloads` (see memory) and the founder can supply
-  real Markit POs/catalogues on request — ask early, don't block on it.
+- Test documents: generate realistic fixtures per format from the parser specs (Appendix A).
+  The founder can supply a real-world PO/catalogue corpus on request — ask early, don't block
+  on it. Keep any such corpus out of the repository: it is real counterparty data, and this
+  repository is public.
 
 ---
 
