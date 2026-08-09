@@ -461,7 +461,7 @@ The panel's action area is a three-step strip, not a button row.
 Step 1 ─ what we know
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Ask BoltWorks BV whether they have this order:                             │
-│    PO REDACTED-PHONE  ·  ordered 14 Jul 2026  ·  9 lines  ·  € 12,408.00        │  ← mono, selectable
+│    PO 9900000001  ·  ordered 14 Jul 2026  ·  9 lines  ·  € 12,408.00        │  ← mono, selectable
 │    Sent from ProcuLink at 09:14, 27 Jul 2026                                │  ← from the last attempt time
 │                                                              [ Copy details ]│
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -501,7 +501,7 @@ Behaviour:
 
 Same three steps, stacked, inside the `What happens next` disclosure's sibling — **not** inside it. The resolution strip is always visible; only the diagnosis collapses.
 
-- Step 1 becomes a two-line block: `PO REDACTED-PHONE · € 12,408.00` / `Sent 27 Jul, 09:14`, plus a 48px **`Copy details`** button (a phone call is the action; getting the numbers onto the clipboard is the enabler).
+- Step 1 becomes a two-line block: `PO 9900000001 · € 12,408.00` / `Sent 27 Jul, 09:14`, plus a 48px **`Copy details`** button (a phone call is the action; getting the numbers onto the clipboard is the enabler).
 - Step 2 radios: 48px rows, 20px controls, full-width tap targets, `--surface` on `--surface-2` when selected.
 - Step 3 action: 48px, full width.
 - The revealed consequence line sits directly above its button so it cannot be scrolled past.

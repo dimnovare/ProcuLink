@@ -3875,7 +3875,7 @@ nor an enum member, so both are blind to it. "Audit log" on Growth lived there.
 
 **Dismissed after investigation — do not re-open.** The org's `orderLimit: 100000` /
 `supplierLimit: 30` on Growth is the designed admin override (`AdminDtos.cs:68-69`,
-`AdminController.cs:378-403`), not a billing failure. "Good morning, Dim" is a **founder-approved
+`AdminController.cs:378-403`), not a billing failure. "Good morning, <first name>" is a **founder-approved
 mock (2026-07)** per `DashboardContextLine.tsx:3` — CLAUDE.md §12's anti-pattern entry is stale
 and is being corrected; the greeting stays. `DXOH` twice in the supplier list is an initials
 avatar, not a supplier code. The duplicate-PO orders are correct two-format test ingests, and
