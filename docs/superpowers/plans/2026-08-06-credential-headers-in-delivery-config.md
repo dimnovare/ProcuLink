@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-06-credential-headers-in-delivery-config-design.md`
 
-**Worktree:** `C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\cred-headers`
+**Worktree:** `%USERPROFILE%\source\repos\ProcuLink\.claude\worktrees\cred-headers`
 **Branch:** `security/refuse-credential-headers-in-delivery-config`, based on `security/validate-revision-delivery-config` (PR #157, **open**) — not `main`.
 
 ## Global Constraints

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Next.js 15 App Router, TypeScript, Tailwind, shadcn/ui, TanStack Query v5, **bun** (never npm/yarn).
 
-**Worktree:** `C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink\.claude\worktrees\park-ui` (branch `claude/delivery-unconfirmed-ui`, off `origin/main` @ `62fa95c`).
+**Worktree:** `%USERPROFILE%\source\repos\project-proculink\.claude\worktrees\park-ui` (branch `claude/delivery-unconfirmed-ui`, off `origin/main` @ `62fa95c`).
 
 ---
 

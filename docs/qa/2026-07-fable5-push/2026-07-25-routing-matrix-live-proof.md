@@ -17,20 +17,21 @@ per-request Clerk JWT pulled inside the page, no secret ever printed.
 
 | Channel | Doc type | Routing mode | Expected supplier | Actual supplier | Order id | Verdict |
 |---|---|---|---|---|---|---|
-| Browser upload | CSV | explicit `supplierId` form field | ROUTETEST Supplier A | **ROUTETEST Supplier A** | `00000000-0000-0000-0000-000000000000` | ✅ PROD |
-| REST ingress (`plk_` key) | JSON body | supplier by **NAME** string | ROUTETEST Supplier B | **ROUTETEST Supplier B** | `00000000-0000-0000-0000-000000000000` | ✅ PROD |
-| Inbound email | CSV attachment | org default supplier **set** | ROUTETEST Supplier A | **ROUTETEST Supplier A** | `00000000-0000-0000-0000-000000000000` | ✅ PROD |
-| Inbound email | CSV attachment | org default **cleared** | `unrouted` / "Needs supplier" | **ProcuLink Sample Supplier** (oldest active) | `00000000-0000-0000-0000-000000000000` | ❌ PROD — **F1** |
-| Inbound email | CSV attachment | org with **zero** suppliers | `unrouted` | **`unrouted`, supplier NULL** | `00000000-0000-0000-0000-000000000000` | ✅ LOCAL |
-| assign-supplier (resolve the park) | — | operator picks supplier B | Supplier B, re-parsed | **Supplier B, `pending_review`** | `75990fa2-…` (same order) | ✅ LOCAL |
-| Inbound email, 2nd doc, **same layout** | CSV attachment | fingerprint binding? | (nothing — suggest-only at best) | **routed to A (oldest), fingerprint ignored** | `00000000-0000-0000-0000-000000000000` | ⚠️ LOCAL — **F2/F3** |
+| Browser upload | CSV | explicit `supplierId` form field | ROUTETEST Supplier A | **ROUTETEST Supplier A** | `0…001` | ✅ PROD |
+| REST ingress (`plk_` key) | JSON body | supplier by **NAME** string | ROUTETEST Supplier B | **ROUTETEST Supplier B** | `0…002` | ✅ PROD |
+| Inbound email | CSV attachment | org default supplier **set** | ROUTETEST Supplier A | **ROUTETEST Supplier A** | `0…003` | ✅ PROD |
+| Inbound email | CSV attachment | org default **cleared** | `unrouted` / "Needs supplier" | **ProcuLink Sample Supplier** (oldest active) | `0…004` | ❌ PROD — **F1** |
+| Inbound email | CSV attachment | org with **zero** suppliers | `unrouted` | **`unrouted`, supplier NULL** | `0…005` | ✅ LOCAL |
+| assign-supplier (resolve the park) | — | operator picks supplier B | Supplier B, re-parsed | **Supplier B, `pending_review`** | `0…005` (same order) | ✅ LOCAL |
+| Inbound email, 2nd doc, **same layout** | CSV attachment | fingerprint binding? | (nothing — suggest-only at best) | **routed to A (oldest), fingerprint ignored** | `0…006` | ⚠️ LOCAL — **F2/F3** |
 | SFTP pull | CSV | `SftpIngressConfig.DefaultSupplierId` | configured default | **configured default** | n/a (test asserts the id) | ✅ LOCAL |
 | S3 / R2 pull | CSV | `S3IngressConfig.DefaultSupplierId` | configured default | **configured default** | n/a | ✅ LOCAL |
 | IMAP pull | CSV attachment | `email_config.defaultSupplierId` | configured default | **configured default** | n/a | ✅ LOCAL — after **F4** fix |
 
-PROD = production `proculink.eu` / `api.proculink.eu`, org **Dim's Organization**
-(`00000000-0000-0000-0000-000000000000`, slug `personal-workspace-d3be`), plan `growth`,
-`accountStatus=active`. LOCAL = local API + Worker + Postgres `:5435`, org `qa-local-bde8`.
+Order ids are stand-ins (`0…001` … `0…006`); the same stand-in means the same order. Real ids are
+not recorded here — this repository is public. PROD = production `proculink.eu` / `api.proculink.eu`,
+the founder's own organisation, plan `growth`, `accountStatus=active`. LOCAL = local API + Worker +
+Postgres `:5435`, a throwaway local org.
 
 ---
 
@@ -45,7 +46,7 @@ PROD = production `proculink.eu` / `api.proculink.eu`, org **Dim's Organization*
 > pinned as a permanent default. See the STATUS.md entry of the same date for the full count.
 
 **Measured on production.** With the org's default supplier cleared, a purchase order emailed to
-`redacted@example.invalid` did **not** park. It was attributed to
+the org's own `{slug}@orders.proculink.eu` inbound address did **not** park. It was attributed to
 **ProcuLink Sample Supplier** — a counterparty nobody chose — and went straight to
 `pending_review` as a normal, actionable order.
 
@@ -68,8 +69,8 @@ Consequences worth stating plainly:
   `S3IngressService.cs:387`, `EmailPollOrgJob.cs:366` — null means unrouted, full stop). Email is
   the odd one out, and it is the only push channel that reaches the park at all.
 - The fallback is silent. There is no audit row saying "we guessed"; the order looks identically
-  routed to one the operator chose. Prior evidence of it firing unnoticed is already on prod:
-  `REDACTED-ITEM` and `REDACTED-ITEM` (2026-07-24) both sit on ProcuLink Sample Supplier.
+  routed to one the operator chose. Prior evidence of it firing unnoticed is already on prod: two
+  orders from the 2026-07-24 run both sit on ProcuLink Sample Supplier.
 
 Not fixed here — a routing-semantics change with a live blast radius needs its own RED-first PR
 and a founder call on the tradeoff (silently guessing vs. parking mail for a human). The
@@ -84,7 +85,7 @@ exact endpoint the UI calls. The order routed correctly. The layout binding did 
 |---|---|
 | `SchemaFingerprints.SupplierIdsCsv` | **empty** — B never recorded |
 | `SampleSupplierName` | NULL |
-| Worker log | `Schema fingerprint recording failed for order 75990fa2-… (non-fatal)` |
+| Worker log | `Schema fingerprint recording failed for order 0…005 (non-fatal)` |
 | Exception | `DbUpdateConcurrencyException: expected to affect 1 row(s), but actually affected 0 row(s)` |
 | Thrown from | `SchemaFingerprintService.LearnSupplierFromCorrectionAsync` line 182 (its `SaveChangesAsync`) |
 | Swallowed at | `ParseOrderJob.cs:150-153` (`catch … LogWarning`, non-fatal by design) |
@@ -106,7 +107,7 @@ fallback to **Supplier A**, and its first-parse insert bound **A** to the layout
 now holds the supplier a fallback guessed and has dropped the one a human chose:
 
 ```
-ParseSuccessCount = 2   SupplierIdsCsv = d887a145…(A)   SampleSupplierName = NULL
+ParseSuccessCount = 2   SupplierIdsCsv = <id of supplier A>   SampleSupplierName = NULL
 ```
 
 Every real unrouted order is file-backed (it arrived as an attachment or a pull file), so this is
@@ -149,13 +150,13 @@ throws a named error, so a future regression reads "the poll imported the attach
 instead of an NRE two frames deep. **No production defect here** — real `IStubOrderCreator`
 implementations always return a `Result`.
 
-## F5 (doc correction) — "Dim's Organization" and `personal-workspace-d3be` are the same org
+## F5 (doc correction) — the display name and the DB slug belong to the same org
 
 The OPS-2 re-run recorded them as different organisations and concluded the frozen org "is not a
-membership of this user, so it cannot be driven from here". The Email-intake tab shows Dim's
-Organization's inbound address as **`redacted@example.invalid`** — the DB
-`Organisation.Slug` is `personal-workspace-d3be`, and the Clerk slug
-(`dim-s-organization-1780257540541354125`) is a different string for the same row. One org, frozen
+membership of this user, so it cannot be driven from here". The Email-intake tab shows the org's
+inbound address as **`{slug}@orders.proculink.eu`**, built from the DB `Organisation.Slug`.
+The Clerk slug for the same row is a **different string**, derived from the display name, so the
+two read as two tenants and are one row — frozen
 by the Stripe cancel that morning and un-frozen by the Growth checkout that evening.
 
 Practical cost: the REST-ingress POST first returned a bodiless **403** because the Clerk slug was
@@ -186,7 +187,7 @@ confirmed "all sent to the same ROUTETEST Supplier A".
 
 **Prod email.** Real mail via the Postmark `/email` API using the server token read out of Railway
 into an env var (`railway variables --json` → `node -e` → `$PM_TOKEN`; never echoed, never written
-to the repo). Both messages were accepted (`MessageID 0e8886b2-…`, `b3d792b4-…`) and the order
+to the repo). Both messages were accepted (Postmark returned a `MessageID` for each) and the order
 existed **~3 s later** — MX → Postmark inbound → CF verify-Worker → API is healthy.
 
 **Local pull channels.** `PROCULINK_LIVE_ENDPOINT_TESTS=1` plus per-channel env, against
@@ -214,39 +215,23 @@ docker run -d --name plk-rt-sftp -p 2222:22 -v "<seed>/sftp-upload:/home/testuse
 dotnet test ProcuLink.Infrastructure.Tests --filter "FullyQualifiedName~Live_SftpIngress|FullyQualifiedName~Live_S3Ingress"
 ```
 
-The only surviving copy of the wider harness recipe is in deleted git objects —
-`git show 5ec9ec2:docs/live-endpoint-test-fires.md` (removed by the 2026-07-02 docs purge).
-
 ---
 
 ## Test data created — for founder cleanup
 
-Every order below is test data. Nothing was delivered: both ROUTETEST suppliers were created fresh
-with **no delivery config**, so no PO could leave the building.
+Everything this run created is test data. Nothing was delivered: both ROUTETEST suppliers were
+created fresh with **no delivery config**, so no PO could leave the building. Identifiers are
+deliberately not recorded here — this repository is public. Find the residue by its `ROUTETEST`
+prefix.
 
-**Production — org Dim's Organization.** Suppliers (2, moved the org to 25/30):
+**Production.** 2 test suppliers, both named "delete me", which moved the org to 25/30; and 4 test
+orders, all with `ROUTETEST` PO numbers (one per push channel, two for email). Already cleaned up,
+no action needed: both API keys created for the REST test are **revoked**, and
+`settings/email → defaultSupplierId` is back to **null**, its value at the start of the run. IMAP
+polling was never enabled.
 
-| Supplier | Id |
-|---|---|
-| ROUTETEST Supplier A (delete me) | `00000000-0000-0000-0000-000000000000` |
-| ROUTETEST Supplier B (delete me) | `00000000-0000-0000-0000-000000000000` |
-
-Orders (4):
-
-| PO number | Order id |
-|---|---|
-| ROUTETEST-UPLOAD-A | `00000000-0000-0000-0000-000000000000` |
-| ROUTETEST-REST-B | `00000000-0000-0000-0000-000000000000` |
-| ROUTETEST-EMAIL-1 | `00000000-0000-0000-0000-000000000000` |
-| ROUTETEST-EMAIL-2 | `00000000-0000-0000-0000-000000000000` |
-
-Already cleaned up, no action needed: both API keys created for the REST test are **revoked**
-(`plk_aZrI…`, `plk_oqOx…`), and `settings/email → defaultSupplierId` is back to **null**, its
-value at the start of the run. IMAP polling was never enabled.
-
-**Local (`proculink_dev`, throwaway).** Org `00000000-0000-0000-0000-000000000000`
-(`qa-local-bde8`); suppliers `d887a145…` (A) and `5e7c3251…` (B); orders `75990fa2…` and
-`bc66d7c8…`. Its `supplier_limit_override`/`order_limit_override` were raised to get past the
+**Local (`proculink_dev`, throwaway).** One throwaway org, two suppliers and two orders, all on the
+local Postgres. Its `supplier_limit_override`/`order_limit_override` were raised to get past the
 Pilot cap of 1 supplier. Containers `plk-rt-sftp` / `plk-rt-minio` and network `plk-rt-net` were
 removed at the end of the run.
 

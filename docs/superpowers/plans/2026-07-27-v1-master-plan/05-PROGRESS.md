@@ -797,7 +797,7 @@ I concluded from two fixtures that Markit is the ProcuLink customer and therefor
 **The fixture quotes were exact; the inference was wrong.** Retracted in full. Caught by the execution session.
 
 **The evidence I did not check, every piece verified first-hand now:**
-- **The founder's own Windows home directory is `C:\Users\Dmitri.REDACTED-PARTY\`** — a domain-joined account on a
+- **The founder's own Windows home directory is `%USERPROFILE%\`** — a domain-joined account on a
   `REDACTED-PARTY` domain. Markit is his **employer**. I typed that path in every shell command in this session.
 - ProcuLink's operating entity is **Diip Solutions OÜ**, registry 17527757 (`src/lib/legal-entity.ts`).
 - **`example.invalid` is a live Estonian IT/electronics reseller** — the catalog fixtures carry its real product

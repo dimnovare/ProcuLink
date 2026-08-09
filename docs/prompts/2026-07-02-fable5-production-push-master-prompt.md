@@ -43,7 +43,7 @@ rotation, or genuine scope changes.
    - `ui-ux-pro-max` + `frontend-design` + `web-design-guidelines` + `design-review` for all UI work.
    - `/code-review` (or the code-review skill) at the end of every task group, before merging.
    - `caveman` mode for chat responses (token efficiency); write code/commits/PRs/docs normally.
-3. **Frontend repo:** `C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink` — Next.js 15 App
+3. **Frontend repo:** `%USERPROFILE%\source\repos\project-proculink` — Next.js 15 App
    Router, **bun only** (never npm/yarn), `@clerk/nextjs`, TanStack Query in client components,
    no react-router, no Vite. Backend: .NET 8, EF Core (no raw SQL), every query org-scoped
    (`.Where(x => x.OrganisationId == organisationId)`), Hangfire jobs idempotent.

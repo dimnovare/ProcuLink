@@ -16,7 +16,7 @@
 - **No raw SQL** — EF Core only.
 - **Worker process never sets `StripeConfiguration.ApiKey`** — the service MUST build its own `StripeClient` from `Stripe:SecretKey` (never rely on the process-global), else Stripe 401s in the Worker.
 - Downgrade decisions (locked): frozen **Pilot + `read_only`**; **3-day** confirmed-missing grace via new nullable column; clear **`StripeSubscriptionId` + `StripePriceId`**, keep `StripeCustomerId`, set status `canceled`; cadence **daily 02:00 UTC** (`0 2 * * *`).
-- Work happens in the worktree `C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\.claude\worktrees\practical-swartz-03868d` — NOT the main checkout.
+- Work happens in the worktree `%USERPROFILE%\source\repos\ProcuLink\.claude\worktrees\practical-swartz-03868d` — NOT the main checkout.
 - Spec: `docs/superpowers/specs/2026-07-10-stripe-billing-reconciliation-design.md`.
 
 ---
@@ -937,7 +937,7 @@ Expected: PASS — new suites + `BillingControllerTests` all green. (Known-noise
 
 - [ ] **Step 3: Confirm no stray edits in the main checkout**
 
-Run: `git -C "C:/Users/Dmitri.REDACTED-PARTY/source/repos/ProcuLink" status --short`
+Run: `git -C "%USERPROFILE%/source/repos/ProcuLink" status --short`
 Expected: empty (all work is in the worktree).
 
 - [ ] **Step 4: Push the branch and check CI** (local green ≠ CI green — Windows dev, Linux CI)

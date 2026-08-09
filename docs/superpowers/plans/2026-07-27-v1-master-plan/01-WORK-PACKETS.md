@@ -2,7 +2,7 @@
 
 Every packet is self-contained: an agent should be able to execute it from this entry plus the named files, without re-exploring the repo. That is deliberate — re-exploration is where the token budget goes.
 
-**Repo shorthand:** `BE` = `C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink` · `FE` = `C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink`
+**Repo shorthand:** `BE` = `%USERPROFILE%\source\repos\ProcuLink` · `FE` = `%USERPROFILE%\source\repos\project-proculink`
 
 **Every packet carries, without exception:**
 - a RED-first test that fails before the change and passes after (R2)

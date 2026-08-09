@@ -69,7 +69,8 @@ bytes read back and compared.
 
 1. **SFTP delivery works.** This is the channel's first end-to-end proof with a receiver-side hash.
    The 2026-07-02 live matrix recorded it as `PARTIAL / BLOCKED — needs external infra`
-   (`docs/qa/2026-07-fable5-push/findings.md:62-69`). It is no longer unproven.
+   (that findings log has since been deleted — it carried live counterparty data).
+   It is no longer unproven.
 2. **The server's identity is not part of the decision.** Between run 1 and run 2 the peer's public
    key changed completely. The dispatcher returned the same success, wrote no warning, and — because
    these runs used password authentication, as a supplier-issued SFTP account usually does — **handed

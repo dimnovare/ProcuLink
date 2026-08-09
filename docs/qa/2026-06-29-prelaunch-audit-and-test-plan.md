@@ -42,7 +42,7 @@ _Generated 2026-06-29 from an 11-agent read-only codebase audit (Opus). Read-onl
 ## 3. What I need from you (founder prerequisite checklist)
 
 ### Prod access
-- **Confirm ASPNETCORE_ENVIRONMENT=Production on BOTH the Railway API (ProcuLink) and Worker (aware-amazement)** — Gates DevFilesController off and triggers StartupConfigurationValidator's P0 secret guards; a wrong value re-enables the dev file passthrough and disables fail-fast.
+- **Confirm ASPNETCORE_ENVIRONMENT=Production on BOTH the Railway API service and the Worker service** — Gates DevFilesController off and triggers StartupConfigurationValidator's P0 secret guards; a wrong value re-enables the dev file passthrough and disables fail-fast.
 - **Railway CLI / dashboard access to set env vars on API and Worker, and Vercel access for the frontend** — Most blockers are env/config flips (Stripe IDs, admin allowlist, video URL, PostHog) that must be applied to the live deploys.
 - **Two distinct Clerk orgs with sessions; confirm the Clerk post-signup flow forces org creation/selection** — Cross-tenant isolation tests need two orgs, and the personal-workspace 'sub' fallback can fragment a B2B team's data if org activation isn't enforced.
 
@@ -114,7 +114,7 @@ _Generated 2026-06-29 from an 11-agent read-only codebase audit (Opus). Read-onl
 
 ## Frontend MARKETING + AUTH pages (project-proculink/src/app: root landing, sign-in, sign-up, and (marketing): aup, changelog, customers, dpa, formats, help, how-it-works, one-pager, pricing, privacy, security, subprocessors, support, terms, watch, welcome)
 
-The marketing + auth surface is in strong, near-launch shape and unusually honest: pricing/one-pager/formats are all data-driven from shared single-source libs (src/lib/plans.ts, standards/catalog.ts, subprocessors.ts, legal-entity.ts) so they cannot silently drift or over-claim; legal pages (privacy/terms/dpa/aup/subprocessors/security) carry real Estonian-entity content (Diip Solutions OÜ, registry 17527757), not placeholders; the support form posts to a real backend (POST /api/support/contact via SupportController) and honestly downgrades to "email us directly" when SMTP didn't actually deliver; customers page uses explicitly-labeled "Coming soon — anonymised pilot" cards rather than fake logos; the testimonial deliberately omits a fabricated attribution. Auth uses real Clerk SignIn/SignUp with graceful "not configured" fallbacks. The main GO-LIVE risks are media/SEO config, not broken logic: (1) the committed .env hard-codes NEXT_PUBLIC_WALKTHROUGH_VIDEO_URL to an R2 asset that per project memory is "DRAFT staged not uploaded" — so /watch will render a broken/black <video> in prod instead of the friendly fallback; (2) homepage STATS counts ("9 inbound formats / 6 delivery channels") don't line up with the honest /formats catalog (10 import formats, 8 delivery methods of which several are On request) — a mild marketing over-/under-count; (3) the changelog is hardcoded static entries with plausible-but-unverifiable dates; (4) PostHog/Status-URL/Loom/book-demo env vars are blank (analytics + Status footer link + Loom path silently no-op, which is handled correctly). No dead CTAs, no Lovable/Vite residue, robots.txt correctly blocks app routes, sitemap is registry-derived.
+The marketing + auth surface is in strong, near-launch shape and unusually honest: pricing/one-pager/formats are all data-driven from shared single-source libs (src/lib/plans.ts, standards/catalog.ts, subprocessors.ts, legal-entity.ts) so they cannot silently drift or over-claim; legal pages (privacy/terms/dpa/aup/subprocessors/security) carry real Estonian-entity content (the operating company's registered name and registry number), not placeholders; the support form posts to a real backend (POST /api/support/contact via SupportController) and honestly downgrades to "email us directly" when SMTP didn't actually deliver; customers page uses explicitly-labeled "Coming soon — anonymised pilot" cards rather than fake logos; the testimonial deliberately omits a fabricated attribution. Auth uses real Clerk SignIn/SignUp with graceful "not configured" fallbacks. The main GO-LIVE risks are media/SEO config, not broken logic: (1) the committed .env hard-codes NEXT_PUBLIC_WALKTHROUGH_VIDEO_URL to an R2 asset that per project memory is "DRAFT staged not uploaded" — so /watch will render a broken/black <video> in prod instead of the friendly fallback; (2) homepage STATS counts ("9 inbound formats / 6 delivery channels") don't line up with the honest /formats catalog (10 import formats, 8 delivery methods of which several are On request) — a mild marketing over-/under-count; (3) the changelog is hardcoded static entries with plausible-but-unverifiable dates; (4) PostHog/Status-URL/Loom/book-demo env vars are blank (analytics + Status footer link + Loom path silently no-op, which is handled correctly). No dead CTAs, no Lovable/Vite residue, robots.txt correctly blocks app routes, sitemap is registry-derived.
 
 **Inventory:** 28 items — {"working":21,"mock":2,"partial":5}
 
@@ -582,7 +582,7 @@ Only nits (P2/P3): the multi-replica rate-limit caveat, and HMAC nonce replay st
 
 ## Outgoing document formats — transform/output services (ProcuLink.Transform/Output + Core ITransformService)
 
-The outbound transform layer is genuinely built, not stubbed. Six entity-based PO transformers (XML, CSV, cXML, JSON, UBL/Peppol-BIS-order, X12 850) are all real, registered as ITransformService singletons in both ProcuLink.Api/Program.cs (lines 618-623) and ProcuLink.Worker/Program.cs, and dispatched via OrderTransformService by CanTransform(effectiveFormat). Four invoice transformers (CSV/XML/JSON/PeppolBis-Billing-3.0) are registered as IInvoiceTransformService and routed by InvoiceService.ForwardAsync. On top of the fixed transforms sit three override/flexible layers, all real: MappedTransformService (native CSV+JSON from per-order OutputMappingConfig rules + manipulators + Scriban expressions + F-1 src:: source-binding + catalog injection), OutputTemplateEmitter (recursive OutputNode AST → JSON/XML/CSV; deliberately throws for cXML/UBL since a generic tree can't carry the required envelope/DOCTYPE — an offer⇔works guard), and ScribanTemplateTransformService (whole-document supplier-authored Scriban template, sandboxed, never throws to the pipeline). Format selection per supplier is driven by SupplierDeliveryConfig.OutputFormat (DeliveryConfigEditor select offers exactly csv/xml/cxml/ubl/x12/json + "not set→XML"; backend AllowedOutputFormats = {xml,csv,cxml,json,ubl,x12}), and a pinned ConnectionRevision.OutputFormat takes precedence at transform time. cXML carries configurable From/To/Sender credentials, ShipTo/BillTo/Contact address blocks, per-line Tax, and configurable DOCTYPE (T7) with verbatim-injection safety guards — byte-identical to pre-feature output when unconfigured, and the project memory records a real REDACTED-PARTY PDF→cXML MapForce-parity proof. UBL emits Peppol BIS order-only 3.0 identifiers. X12 850 emits a balanced ISA/GS/ST envelope with delimiter sanitization (no escape mechanism in X12). offer⇔works is clean: the ONLY format the marketing /formats page does NOT mark "live" outbound is EDIFACT ORDERS (tagged "onRequest"), and correctly there is no outbound EDIFACT transformer and no EDIFACT option in the delivery-config UI. Three enum values (UblOrder, X12_850, EdifactOrders) are conformance/detection-profile identifiers only (used by FormatDetectorService / conformance), NOT routed to any transformer and NOT reachable from delivery config. A full in×out matrix test suite (FullInOutMatrixTests, InOutMatrixTheoryTests, OutCoverageMatrixTests, HighVolumeMatrixTests, NumericTokenSafetyMatrixTests) exists in the primary checkout. Key honest gaps: UBL/X12/cXML SellerSupplierParty still emits the supplier GUID as the party name (placeholder, not real supplier metadata); PeppolBis invoice ships a lightweight mandatory-field checker, NOT full EN16931/Schematron conformance (self-documented); and AS2/AS4/PEPPOL-AP transport is partner-wrap "onRequest" only.
+The outbound transform layer is genuinely built, not stubbed. Six entity-based PO transformers (XML, CSV, cXML, JSON, UBL/Peppol-BIS-order, X12 850) are all real, registered as ITransformService singletons in both ProcuLink.Api/Program.cs (lines 618-623) and ProcuLink.Worker/Program.cs, and dispatched via OrderTransformService by CanTransform(effectiveFormat). Four invoice transformers (CSV/XML/JSON/PeppolBis-Billing-3.0) are registered as IInvoiceTransformService and routed by InvoiceService.ForwardAsync. On top of the fixed transforms sit three override/flexible layers, all real: MappedTransformService (native CSV+JSON from per-order OutputMappingConfig rules + manipulators + Scriban expressions + F-1 src:: source-binding + catalog injection), OutputTemplateEmitter (recursive OutputNode AST → JSON/XML/CSV; deliberately throws for cXML/UBL since a generic tree can't carry the required envelope/DOCTYPE — an offer⇔works guard), and ScribanTemplateTransformService (whole-document supplier-authored Scriban template, sandboxed, never throws to the pipeline). Format selection per supplier is driven by SupplierDeliveryConfig.OutputFormat (DeliveryConfigEditor select offers exactly csv/xml/cxml/ubl/x12/json + "not set→XML"; backend AllowedOutputFormats = {xml,csv,cxml,json,ubl,x12}), and a pinned ConnectionRevision.OutputFormat takes precedence at transform time. cXML carries configurable From/To/Sender credentials, ShipTo/BillTo/Contact address blocks, per-line Tax, and configurable DOCTYPE (T7) with verbatim-injection safety guards — byte-identical to pre-feature output when unconfigured, and the project memory records a real customer's PDF→cXML MapForce-parity proof. UBL emits Peppol BIS order-only 3.0 identifiers. X12 850 emits a balanced ISA/GS/ST envelope with delimiter sanitization (no escape mechanism in X12). offer⇔works is clean: the ONLY format the marketing /formats page does NOT mark "live" outbound is EDIFACT ORDERS (tagged "onRequest"), and correctly there is no outbound EDIFACT transformer and no EDIFACT option in the delivery-config UI. Three enum values (UblOrder, X12_850, EdifactOrders) are conformance/detection-profile identifiers only (used by FormatDetectorService / conformance), NOT routed to any transformer and NOT reachable from delivery config. A full in×out matrix test suite (FullInOutMatrixTests, InOutMatrixTheoryTests, OutCoverageMatrixTests, HighVolumeMatrixTests, NumericTokenSafetyMatrixTests) exists in the primary checkout. Key honest gaps: UBL/X12/cXML SellerSupplierParty still emits the supplier GUID as the party name (placeholder, not real supplier metadata); PeppolBis invoice ships a lightweight mandatory-field checker, NOT full EN16931/Schematron conformance (self-documented); and AS2/AS4/PEPPOL-AP transport is partner-wrap "onRequest" only.
 
 **Inventory:** 19 items — {"working":15,"partial":3,"stub":1}
 
@@ -881,7 +881,7 @@ The commercial/security spine is real, cohesive, and the strongest part of the c
 - **[BAT-01] Brand-new signup auto-creates org with 14-day pilot trial** _(first-time · env: prod)_
   - Steps: (1) From the marketing site, click Sign up and complete Clerk signup as a first-time user with no prior org (2) After landing in the app, make any authenticated API call (the dashboard loads /api/billing/status automatically) (3) Open Settings → Billing
   - Expected: An Organisation row is auto-provisioned on first authenticated request (TenantResolutionMiddleware) with Plan=pilot, AccountStatus=trialing, TrialEndsAt = now+14 days; Billing tab shows Pilot, ~14 days left, 0/20 orders, 0/1 suppliers; org_created analytics event fires
-  - Prereq: Live Clerk instance (golden-alpaca-43) + deployed API/frontend; a fresh Clerk identity
+  - Prereq: Live Clerk instance (the org's own instance slug) + deployed API/frontend; a fresh Clerk identity
 - **[BAT-02] Uploading past the pilot 20-order cap returns 429 with honest copy** _(error · env: local)_
   - Steps: (1) Run local stack with PROCULINK_QA_BYPASS_AUTH=true and a valid Delivery:EncryptionKey (2) Create/seed an org on pilot and upload 20 non-sample orders (or admin-lower the cap) (3) Attempt a 21st upload via POST /api/orders/upload
   - Expected: HTTP 429 with body { error: "order_limit_reached" (or "pilot_expired" if past 14 days), plan: "pilot", limit: 20, upgradeUrl: "/settings" }; sample orders never count toward the cap
@@ -922,7 +922,7 @@ The commercial/security spine is real, cohesive, and the strongest part of the c
 **Area prerequisites:**
 - Stripe TEST-mode account with: Stripe:SecretKey, Stripe:WebhookSecret, and price IDs GrowthPriceId/OperationsPriceId/IntegrationPriceId/DistributorPriceId (monthly required; *YearlyPriceId optional for the annual toggle). API will NOT boot in Production without SecretKey + WebhookSecret (they are required keys).
 - A reachable Stripe webhook endpoint (stripe CLI `stripe listen --forward-to .../api/billing/webhook` locally, or the deployed URL registered in the Stripe dashboard) to verify checkout.session.completed / subscription.updated / subscription.deleted / invoice.created.
-- Live Clerk instance (Authority golden-alpaca-43.clerk.accounts.dev in dev) + Clerk frontend origins added to the API's authorized-parties config so azp validation passes.
+- Live Clerk instance (Authority `<instance-slug>.clerk.accounts.dev` in dev) + Clerk frontend origins added to the API's authorized-parties config so azp validation passes.
 - Delivery:EncryptionKey = real 32-byte base64 (NOT all-zero), Security:ApiKeyHashSecret ≥16 chars, and DataProtection:EncryptionKey set — all enforced at Production startup.
 - Admin:UserIds and/or Admin:Emails populated for any verification of the admin override / MRR / invoice surface (otherwise every /api/admin/* returns 403 by design).
 - For local quota/cap testing: Postgres on :5435, PROCULINK_QA_BYPASS_AUTH=true in Development, a running Worker (the API hosts no Hangfire jobs), and the ability to backdate TrialStartedAt / seed orders.
@@ -975,7 +975,7 @@ The commercial/security spine is real, cohesive, and the strongest part of the c
 | P3 | IMAP default-supplier model means a single polled mailbox attributes ALL imported attachments to one DefaultSupplierId regardless of who actually sent the PO; same for SFTP/S3. Until content routing is live this can mis-attribute orders if multiple suppliers email/drop into one channel. Functional, but a correctness footgun for multi-supplier setups. | `EmailPollOrgJob.cs:99-105 / InboundEmailRouter.cs:144-157 / SftpIngressService.cs:71-82` |
 | P3 | ERP connectors (Erply/Directo) have NO up-front OutboundRequestGuard.ValidateAsync pre-check; they rely entirely on the connect-time guarded primary handler attached to the named 'delivery' HttpClient. This is defended (ErpConnectorSsrfTests proves the block at connect) and equivalent in outcome, but it is an asymmetry vs HttpDeliveryDispatcher's belt-and-braces (pre-check + connect-time). If a future host ever registers the 'delivery' client WITHOUT ConfigurePrimaryHttpMessageHandler, the ERP connectors would silently lose SSRF protection with no per-call guard to catch it. | `ProcuLink.Infrastructure/Services/Erp/ErplyConnector.cs:68 ; DirectoConnector.cs:65 ; relies on ProcuLink.Api/Program.cs:369-374 + ProcuLink.Worker/Program.cs:148-154` |
 | P3 | FTPS AllowInvalidCertificate=true and (separately) SFTP not validating host keys means an operator opt-in or default disables MITM protection on the transport. AllowInvalidCertificate is a per-supplier conscious escape hatch (documented) but is silently accepted from config JSON; SFTP via SSH.NET connects without pinning/verifying a known host key, so a MITM on the SFTP path is not detected. Acceptable for go-live if documented, but worth surfacing to the operator in the UI. | `ProcuLink.Infrastructure/Services/Dispatchers/FtpsDeliveryDispatcher.cs:179 ; SftpDeliveryDispatcher.cs:62-75 (BuildConnectionInfo, no host-key callback)` |
-| P3 → **LIVE, not conditional** (WP-21, 2026-07-31) | Test-fire uses the LIVE supplier delivery config (DeliveryService.TestFireAsync), NOT the pinned connection revision used by real order delivery (ResolveEffectiveDeliveryConfigAsync). This entry was written conditionally — "when Connections:RevisionAuthority is on" — and the condition is **met**: `Connections__RevisionAuthority = true` on both Railway services (`ProcuLink` and `aware-amazement`), verified 2026-07-27 and re-verified 2026-07-31. So a successful test-fire CAN today validate a different (live-edited) channel than the one a pinned order will actually deliver over, giving a false-positive 'it works'. Read the deployed value from `GET /health/ready` (`revisionAuthority`), never from an appsettings file. | `ProcuLink.Infrastructure/Services/DeliveryService.cs:370 (TestFireAsync) vs :323 (ResolveEffectiveDeliveryConfigAsync)` ; `docs/ops/revision-authority-production-smoke.md` |
+| P3 → **LIVE, not conditional** (WP-21, 2026-07-31) | Test-fire uses the LIVE supplier delivery config (DeliveryService.TestFireAsync), NOT the pinned connection revision used by real order delivery (ResolveEffectiveDeliveryConfigAsync). This entry was written conditionally — "when Connections:RevisionAuthority is on" — and the condition is **met**: `Connections__RevisionAuthority = true` on both Railway services (the API service and the Worker service), verified 2026-07-27 and re-verified 2026-07-31. So a successful test-fire CAN today validate a different (live-edited) channel than the one a pinned order will actually deliver over, giving a false-positive 'it works'. Read the deployed value from `GET /health/ready` (`revisionAuthority`), never from an appsettings file. | `ProcuLink.Infrastructure/Services/DeliveryService.cs:370 (TestFireAsync) vs :323 (ResolveEffectiveDeliveryConfigAsync)` ; `docs/ops/revision-authority-production-smoke.md` |
 | P3 | SMTP/SFTP/FTPS only re-validate the host immediately before connect (ValidateHostAsync) and cannot pin the validated IP (library re-resolves by hostname for host-key/TLS-SNI). A DNS-rebind between ValidateHostAsync and the library's own resolution remains a (narrow) TOCTOU window for these three channels — strictly narrower protection than the HTTP path which pins the IP. Documented in code comments; founder should accept the residual risk for these channels. | `ProcuLink.Infrastructure/Services/Dispatchers/SmtpDeliveryDispatcher.cs:134 ; FtpsDeliveryDispatcher.cs:119 ; SftpDeliveryDispatcher.cs:70` |
 | P3 | Process-local in-memory rate limiters and the trial-farming provision throttle are correct for a single API replica only; scaling the API horizontally multiplies effective limits by replica count and resets the anti-farming window per replica. Documented as scale-gated, but a launch that scales replicas without a shared (Redis) store weakens abuse protection. Not a correctness hole at current single-replica deploy. | `ProcuLink.Api/Program.cs:245-260; ProcuLink.Api/Middleware/TenantResolutionMiddleware.cs:60-318` |
 | P3 | Personal-workspace fallback: when a Clerk session has no active org_id, the middleware falls back to the user 'sub' as the tenant key and labels it 'Personal workspace'. This is intentional but means a user who never activates a Clerk org silently gets a separate tenant from their org colleagues; for a B2B procurement team this could fragment data across per-user workspaces if Clerk org activation isn't enforced in the signup flow. Verify the Clerk post-signup flow forces org selection/creation. | `ProcuLink.Api/Middleware/TenantResolutionMiddleware.cs:95-104` |
@@ -1010,231 +1010,9 @@ _Total test scenarios: 134. Total risks: 47. Areas mapped: 9 (parser/extraction-
 **Key findings:** (1) loud failures on malformed XML/EDI (throws `*ParseException`), graceful empty on malformed CSV/XLSX; (2) cXML/UBL XXE-protected via `DtdSafeXmlLoader`; (3) PDF is the one parser that genuinely needs **real founder sample PDFs** for regex/layout tuning; (4) the #1 product-heart test = run the ~12-PO real corpus (in your Downloads) through every parser to catch silent numeric corruption (prior 10×/100× EU-locale bugs lived here). This regression run is the single most important pre-launch test and needs a local build harness.
 
 ---
-# 9. LIVE PROD TEST RESULTS (2026-06-29, "Dim's Organization")
+# 9. Live production QA transcript — REMOVED 2026-08-09
 
-Driven via Claude-in-Chrome against https://proculink.eu (API api.proculink.eu). Org has an admin override (orders 13/100000, suppliers 11/30, trial→2027) so quota was a non-issue.
+Sections 9 and 10 held a live production QA transcript. They were removed on 2026-08-09 because this repository is public and that transcript carried live operational data. Two findings other documents rely on are preserved here, in class terms only:
 
-## 9.1 Incoming-format matrix — upload→parse (PASS 7/7)
-| Format | File | Result | Lines | Numerics |
-|---|---|---|---|---|
-| CSV | redacted-fixture | ✅ parsed, €665.50, math reconciles | 3 | qty/price exact |
-| CSV EU-locale (`;` + `12,50`) | redacted-fixture | ✅ parsed | 2 | **unitPrice 12.5 / 0.45 — NO 10×/100× corruption** |
-| cXML 1.2 | redacted-fixture | ✅ parsed (pending_review) | 2 | ✓ |
-| UBL 2.1 | redacted-fixture | ✅ parsed | 2 | ✓ |
-| X12 850 | redacted-fixture | ✅ parsed (content-sniff routed) | 2 | ✓ |
-| EDIFACT ORDERS | redacted-fixture | ✅ parsed (content-sniff routed) | 2 | ✓ |
-| SAP IDoc ORDERS05 | redacted-fixture | ✅ parsed (root routed) | 2 | ✓ |
-| JSON (file upload) | redacted-fixture | ✅ **correctly rejected 400** "Supported formats: CSV, XLSX, PDF, XML, EDI" (JSON is REST-ingress only) | — | — |
-| XLSX | — | ⏳ NOT TESTED (needs ClosedXML-built or real sample; openpyxl fails on prod) | | |
-| PDF (text + scanned) | — | ⏳ NOT TESTED (needs real founder PDFs for regex/AI extraction) | | |
-
-**Bonus:** cross-order code-learning verified — an EDIFACT order carrying only a buyer code auto-resolved `REDACTED-ITEM→REDACTED-ITEM` from a mapping entered earlier on another order (`needsReview:false`). Learn loop is live.
-
-## 9.2 Outgoing-format matrix — transform/preview (PASS 6/6)
-Via `POST /api/orders/{id}/mapping-override/preview?format=X&honorFormat=true` on resolved PO-TEST-001:
-| Format | Result |
-|---|---|
-| CSV | ✅ valid (`PoNumber,OrderDate,Currency,…`) |
-| XML | ✅ valid (`<PurchaseOrder>…`, LineTotal 312.50 = 25×12.50) |
-| JSON | ✅ valid (`{"poNumber":"PO-TEST-001",…}`) |
-| X12 850 | ✅ valid (`ISA*00*…ZZ*PROCULINK…`) |
-| UBL 2.1 | ✅ valid (`<Order xmlns:cac=…`, 2608 B) |
-| cXML 1.2 | ✅ valid (`<cXML>`+OrderRequest+ItemOut, 2142 B, DOCTYPE off by default) |
-| EDIFACT | ✅ correctly NOT offered (no transformer; honest) |
-
-## 9.3 Money path (PO-TEST-001, CSV)
-parse ✅ → format-detect ✅ (CSV 65%) → validate ✅ (blocked 3 lines "Needs a supplier code", plain language, no blind send) → inline resolve ✅ (counter decremented, status→Normalized/Ready) → transform ✅ (**artifact format = csv**, the supplier's configured format) → deliver ❌ **honest fail** "HTTP delivery configuration is invalid" (demo supplier has no real endpoint; org-wide Delivered=0 — no successful live delivery yet).
-
-## 9.4 Bugs found live
-| ID | Sev | Bug | Evidence |
-|---|---|---|---|
-| PREVIEW-STALE | P2 (UX/trust) | Active preview tab does NOT refresh when line-review state clears — shows "Cannot transform: lines 1,2,3 still need review / (no preview)" even after status flips to "Ready to send". Refreshes only on format-tab switch. Contradicts order state. | Resolved all 3 lines → header "Ready to send" but CSV preview still "(no preview)"; clicking XML tab forced a valid render. |
-| REDACTED-ITEM | P2 (trust) | Send confirmation modal shows the **last-previewed** format ("FORMAT: XML / deliver the transformed XML order") instead of the supplier's actual delivery format (CSV). **Backend delivers correct CSV** (artifact verified `format:"csv"`), so it's a misleading label, not data corruption — but a confirmation dialog that misstates the outgoing format erodes trust. | Supplier config `outputFormat:"csv"`; modal said XML after previewing XML; delivered artifact was csv. |
-| DETECT-CONFIDENCE-LOW | P3 | Clean 3-line CSV detected at only "CSV · 65%" confidence. Cosmetic but undersells. | Upload preview chip. |
-
-## 9.5 Still to test (this session)
-- **Successful delivery** end-to-end (needs a valid receiver — will stand up webhook.site) + verify received bytes per format + the REDACTED-ITEM acceptance gap.
-- **PDF** (text + scanned/OCR) and **XLSX** parse — need real sample files.
-- Flagged-page spot-checks: /library/rules (dead control), /watch (video), /drafts, connectors Add/Connect, admin Stripe /test/ link.
-- Error/edge: scanned-PDF OCR path, navigate-away mid-send.
-- Non-HTTP delivery (SFTP/FTPS/SMTP/Erply/Directo), inbound email/IMAP/SFTP/S3 — all need founder-supplied endpoints/creds.
-
-## 9.6 Outbound delivery PROVEN (HTTP)
-Created throwaway supplier "ZZ Webhook Test" → `PUT delivery-config {protocol:http, configJson:{url:webhook.site}, outputFormat:csv}` (200) → `POST test-fire` → **`{success:true, responseCode:200}`**. webhook.site received `POST`, `content-type: text/csv`, 27-byte body `test,from\nproculink,true`. **Outbound HTTP delivery works end-to-end on prod.** (Confirms the earlier honest delivery_failed was solely the demo supplier's empty endpoint.)
-
-- **EGRESS-GEO (P3 note):** the outbound POST egressed from **152.55.184.78 (Durham, NC, US)**. Despite EU-residency positioning the delivery egress IP geolocates to the US — verify against the GDPR/EU-data-residency claims (a supplier's server logs will show a US source IP). Likely Railway/Cloudflare egress; confirm region.
-- **REDACTED-ITEM (P2, code-confirmed):** not re-demonstrated live, but `HttpDeliveryDispatcher` success = `IsSuccessStatusCode`, so a supplier returning 200 with a rejection body would be marked delivered. The positive path is now proven; the NACK gap remains per audit §risks.
-- **Test data created this session (to purge):** supplier "ZZ Webhook Test (delete me)" (id 074cbc15…) + orders PO-TEST-001/002/CXML/UBL/X12/EDI/IDOC. Purge via `POST /api/admin/organisations/{id}/orders/bulk-erase` (filter) or per-order delete — pending user OK.
-
-## 9.7 Audit corrections from live testing
-- **/library/rules — DOWNGRADE P1→P3.** The shipped page is honestly framed: header "A catalog of the checks you want to run · Enforcement is configured per supplier", plus a blue banner "**This is a catalog, not a gate. … not enforced automatically — set up the checks that actually hold or block an order on each supplier's Validation rules tab**", and each rule shows "Recommended enforcement (per supplier)". This is NOT a silent dead control — it explicitly tells the user enforcement lives on the supplier Validation tab. Go-live blocker #6 is largely already addressed by copy. (Residual: a user could still miss the banner; and leftover junk test rule "asd/REDACTED-ITEM" should be deleted.)
-
-- **/watch video — BLOCKER #5 CONFIRMED LIVE.** `walkthrough-poster.jpg` loads (1920px) so the page shows a still frame, but `walkthrough.mp4` (`https://assets.proculink.eu/marketing/walkthrough.mp4`) never loads — fresh `<video>` load test timed out at `readyState:0/networkState:2` after 9s. A visitor clicking play gets a dead player. FIX: upload the MP4 to the R2 public bucket, OR blank `NEXT_PUBLIC_WALKTHROUGH_VIDEO_URL` so the "coming shortly" fallback renders.
-- **admin Stripe links** (blocker #4) not re-tested live (requires admin allowlist, which is unconfigured) — remains a code fact: `admin/page.tsx:38` hardcodes `dashboard.stripe.com/test/`.
-
-## 9.8 Fix PRs opened this session (PR-only, awaiting founder merge/deploy)
-- **SFTP/S3 parse-enqueue (P1, GO-LIVE blocker #1):** https://github.com/dimnovare/ProcuLink/pull/4 — 27/27 ingress tests pass.
-- **Admin Stripe links → live (blocker #4):** https://github.com/dimnovare/project-proculink/pull/4 — env-driven `NEXT_PUBLIC_STRIPE_DASHBOARD_BASE`, defaults live.
-- **Homepage stat counts:** https://github.com/dimnovare/project-proculink/pull/5 — inbound 9→10 (matches /formats; out 6 & channels 6 already correct).
-- **/bridge cold-auth gate:** https://github.com/dimnovare/project-proculink/pull/6 — `useQueriesEnabled()` on the 4 ungated dashboard queries.
-
-## 9.9 HELD patches (apply on feat/design-system-v1 to avoid WIP collision)
-- **REDACTED-ITEM** — `OrderWorkshop.tsx:358`: send-confirmation should use `orderDeliveryFormat(order)` (already imported, line 37) not `outputArtifactType(order.artifacts)`.
-- **PREVIEW-STALE** — `MapperPreviewPane.tsx`: add order review signal (`order.status` / unresolved-line count) to the preview effect deps so resolving a line re-fires the preview (currently only fires on format-tab switch).
-
-## 9.10 Remaining = founder-blocked (inputs requested)
-- PDF (text + scanned) & XLSX parse — need real sample files.
-- Full Stripe money path — need TEST keys + price IDs + webhook (set on Railway).
-- Admin surface — need founder Clerk email in `Admin__Emails`.
-- Non-HTTP delivery (SFTP/FTPS/SMTP/Erply/Directo) + inbound (Postmark email / IMAP / REDACTED-ITEM pull) — need endpoints/creds.
-- EGRESS-GEO: confirm delivery egress region vs EU-residency claim.
-
-## 9.11 REAL PO files — local parser test (PDF + XLSX) — 2026-06-29
-Tested the actual `XlsxOrderParser` + `PdfOrderParser` (deterministic paths) against 4 real founder files on disk.
-
-**Results — deterministic parsers FAIL on these real files:**
-| File | Parser path | Result |
-|---|---|---|
-| Rheinbahn PDF (German) | regex (no-key fallback) | PO/date/buyer empty; 1 garbage line (`code='ST' qty=1 price=752.40 desc='376,20 EUR'`). German "Bestellnummer/Bestelldatum" labels not matched. |
-| 226131000790 PDF | regex fallback | PO = a sentence fragment; 0 lines. |
-| Rheinbahn XLSX | XlsxOrderParser | Currency=EUR ✓; **0 line data** (code/qty/price blank). |
-| 226131000790 XLSX | XlsxOrderParser | Currency=PLN ✓; **0 line data**. |
-
-**PDF:** regex fail is EXPECTED — prod uses text→LLM (handles German/arbitrary layout); regex is only the no-OpenAI-key fallback. The LLM path was NOT exercised (no local key; prod byte-upload blocked by tooling). **Must verify the prod LLM path** (founder uploads via prod UI, or supply OpenAI key for local full-pipeline test).
-
-**XLSX — REAL GAP (high confidence):** the Markit XLSX export is NOT a simple header+rows table. It is a labeled/sectioned schema:
-`PurchaseOrderNr`, `BillToName`, `BillToVatNr`, `Currency`, `Totals TotalWoVAT/TotalVAT/TotalWVAT`, and a Lines section `Lines LineNr / Lines ManufPN / Lines ProductName / Lines Quantity / Lines PriceWoVAT`.
-`XlsxOrderParser` assumes row1=headers with aliases (`PoNumber`/`Quantity`/`UnitPrice`/`BuyerItemCode`) → it maps almost nothing (only literal "Currency"). **Same parser runs on prod (no LLM layer for XLSX) → same zero-line result on prod.** If these XLSX exports are an ingestion target, XLSX PO ingestion is effectively broken for this real-world format. ACTION: confirm whether this XLSX schema is an inbound target; if yes, add a labeled/sectioned-schema reader (or an XLSX→LLM extraction path like PDF) + a Markit-export adapter.
-- Side note: redacted-fixture stores `PurchaseOrderDate=2026-12-06` while the PO is dated 12.06.2026 (June 12) — the export wrote DD/MM as ISO (Dec 6) — a date-format bug in the upstream export to watch for.
-
-## 9.12 PROD upload of real files (founder-uploaded via UI) — 2026-06-29
-| File | Path | Prod result |
-|---|---|---|
-| redacted-fixture | text→LLM | ✅ PERFECT: PO 226131000790, buyer "DNV Poland Sp. z o.o.", PLN, 2 lines (REDACTED-ITEM Logitech Ergo Wave Keys 246.94; REDACTED-ITEM Logitech Lift Mouse 169.25) |
-| redacted-fixture (Rheinbahn, German) | text→LLM | ✅ PO 11421247, 1 line, EUR |
-| redacted-fixture | XlsxOrderParser | ❌ PO# not extracted (auto-gen), 2 lines but **qty=0/price=0/code=''/desc=''** |
-| redacted-fixture | XlsxOrderParser | ❌ same — empty lines |
-
-**Verdict:** PDF text→LLM extraction is EXCELLENT on real multi-language customer PDFs (the product's core strength, confirmed). **XLSX ingestion is broken for the real labeled Markit export schema** — offer⇔works violation. Recommend routing XLSX through the same LLM extraction as PDF (xlsx→text/markdown→LLM) or a labeled-schema reader.
-
-## 9.13 SMTP delivery — Railway egress block (P1 infra)
-Wired a test supplier to Ethereal SMTP (smtp.ethereal.email:587) + test-fire → **"SMTP delivery timed out"** (responseCode null). HTTP delivery (443) works from the same host, so this is almost certainly **Railway blocking outbound SMTP ports (25/465/587)** — standard PaaS anti-spam policy. CONSEQUENCE: the SMTP delivery channel (offered in DeliveryConfigEditor) does NOT work on the current Railway deploy. FIX: deliver email via an HTTP email API (Postmark/SendGrid/Mailgun REST over 443) rather than raw SMTP, or use a relay on an allowed port. Verify before offering SMTP delivery to a customer.
-
-## 9.14 Channel-test plan (free services)
-- HTTP delivery: ✅ proven (webhook.site).
-- SMTP delivery: ❌ Railway port block (above).
-- SFTP delivery: testable via a free instant SFTP (e.g. sftpcloud.io) — also probes whether Railway allows port-22 egress.
-- FTPS delivery: needs a public explicit-TLS FTPS server (harder to source free).
-- Erply/Directo: HTTP/443-based (egress OK) — need a sandbox account (Erply free demo).
-- Inbound REST API: testable now (create plk_ key + POST JSON to /api/ingress/{slug}/orders).
-- Inbound email (Postmark): founder has Postmark — set inbound webhook → /api/inbound-email/postmark + Inbound__Postmark__WebhookToken.
-- Inbound IMAP: Ethereal IMAP (imap.ethereal.email:993) possible if Railway allows 993 + org on Integration plan.
-- Inbound SFTP/S3 pull: blocked on PR#4 (parse-enqueue) + no config UI (DB-only).
-
-## 9.15 Channel + commercial progress (cont.)
-- **Admin allowlist:** ✅ set `Admin__Emails=redacted@example.invalid` on Railway (ProcuLink) + verified — `GET /api/admin/organisations` → 200. Blocker #3 resolved.
-- **Inbound REST API:** ✅ WORKS end-to-end. Created `plk_` key (`POST /api/api-keys {label}`) → `GET /api/ingress/{slug}/ping` 200 → `POST /api/ingress/{slug}/orders` (X-ProcuLink-Key, JSON body {OrderNumber,Currency,SupplierId,Lines[]}) → **200, order created, status ready, 2 lines**. (A dangling QA API key `plk_7oiH…` remains — revoke on request.)
-- **PERSONAL-WORKSPACE FALLBACK — confirmed live (raise to P2):** the founder's own session resolves to backend org slug `personal-workspace-d3be` (name "Personal workspace"), NOT a real org — every backend org in the admin list is a per-user "Personal workspace". The UI shows "Dim's Organization" (a Clerk org) but no active Clerk org is set, so `TenantResolutionMiddleware` falls back to the per-user `sub` workspace. For a B2B team this means each member silently gets a SEPARATE workspace (data fragmentation) unless the Clerk post-signup flow forces org creation/selection. Fix before onboarding multi-member teams.
-- **Stripe sandbox surfaced:** founder opened Stripe TEST account `acct_1TbeHmLMyzXaWowf` ("ProcuLink sandbox") with price IDs visible (price_1TdQaC…, _1TdQZW…, _1TdQYn…, _1TdQY4…, _1Tcq7Y…, _1TbeYf…, _1TbeYU…, _1TbeYB…). For the local Stripe full-path test I still need the test Secret key + Webhook signing secret (founder-provided; I won't scrape secrets).
-
-## 9.16 Channel scorecard (live)
-| Channel | Dir | Result |
-|---|---|---|
-| Browser upload | in | ✅ (7 formats; XLSX schema gap) |
-| Inbound REST API | in | ✅ proven |
-| HTTP / webhook | out | ✅ proven (webhook.site 200) |
-| SMTP | out | ❌ Railway egress block (587 timeout) |
-| SFTP / FTPS | out | ⏳ pending (need public server; also probes Railway port-22/21 egress) |
-| Erply / Directo | out | ⏳ pending (need sandbox; HTTP/443 so egress OK) |
-| Inbound email (Postmark) | in | ⏳ pending (founder configures inbound webhook + token) |
-| Inbound IMAP | in | ⏳ pending (Integration plan + mailbox) |
-| Inbound SFTP/S3 pull | in | ⏳ blocked on PR#4 + no config UI |
-
-## 9.17 Stripe money path — LOCAL full-path test (test keys) — VERIFIED
-Ran a local stack (Docker PG :5435 + API, QA-bypass, founder-supplied Stripe TEST keys + 8 price IDs in env). Verified webhooks with synthetic Stripe-signed events (no card entry needed).
-- **Checkout session creation + plan→price mapping: 8/8 CORRECT.** Each plan × {monthly,yearly} POST /api/billing/checkout created a Stripe session whose actual line-item price (read back from Stripe) matched the expected price ID exactly (growth/operations/integration/distributor, both intervals).
-- **`checkout.session.completed` webhook → plan unlock:** HTTP 200; org flipped pilot→**operations**, account_status→**active**, StripeCustomerId + billing email persisted.
-- **`customer.subscription.updated` webhook → price→plan mapping:** HTTP 200; org → **integration** (mapped from the event's price id), subscription_status=active.
-- **Signature verification:** HMAC-SHA256 `Stripe-Signature` validated; a wrong/old api_version is rejected (400).
-- ⏳ NOT run: overage at `invoice.created` (needs over-quota org + test clock) and customer portal (needs a real customer) — both unit-tested in repo; recommend a Stripe test-clock pass before launch.
-
-### ★ CRITICAL go-live finding — webhook API version
-Stripe.net **51.1.0 expects API version `2026-04-22.dahlia`**. `EventUtility.ConstructEvent` THROWS on any other version → the webhook returns 400 → the event is dropped. **The PROD Stripe webhook endpoint (live mode) MUST be registered with API version `2026-04-22.dahlia`** (Stripe Dashboard → Developers → Webhooks → endpoint → API version), OR change the code to `ConstructEvent(..., throwOnApiVersionMismatch:false)`. Otherwise: customers pay, `checkout.session.completed` 400s, and **the plan never unlocks** — silent billing failure. Verify the live webhook endpoint's version before launch.
-
-## 9.18 XLSX→LLM extraction — PR opened
-Implemented (background agent): `.xlsx` now routes through the SAME `IStructuredOrderExtractor` (text→LLM) the PDF path uses — new `XlsxTextExtractor` renders the workbook to labeled text (preserving `PurchaseOrderNr | …`, `Lines ManufPN | …`), fed to `ExtractFromTextAsync`; deterministic `XlsxOrderParser` kept as fallback (no key / no-egress / failure). Build clean; Transform 1153 + Api 1180 + Infra 46 tests pass (10 new). Caveat: when an OpenAI key is present, .xlsx always prefers the LLM (an LLM call even for simple tables) — intended, mirrors PDF. End-to-end on the real Markit XLSX is pending deploy (local has no OpenAI key); high confidence given the same extractor nails the PDFs.
-
-## 9.19 Inbound email (Postmark) — logic PROVEN; 2 real-use gaps
-Set `Inbound__Postmark__WebhookToken` on Railway. Synthetic Postmark payload (recipient `redacted@example.invalid`, CSV attachment, `X-Postmark-Server-Token` header) → **HTTP 200, order created** (`orgId 7a3b01e1`, `createdOrderId c600eaf4`). Token auth + recipient→slug→org routing + attachment ingest all work. Token gate also correctly rejected a wrong token (401).
-- **✅ FIXED (PR#6, 2026-06-30) — webhook auth mechanism:** `InboundEmailController` now accepts the shared secret from (1) `?token=` query, (2) HTTP Basic-Auth password, (3) the legacy `X-Postmark-Server-Token` header — constant-time compared against `Inbound:Postmark:WebhookToken`. So a real Postmark inbound POST authenticates by carrying the token in the webhook URL (`…/postmark?token=<secret>` or `https://user:<secret>@host/…`). 9 controller auth tests added (accept paths + reject paths + Basic edge cases). The "header-only → non-functional" condition is resolved in code.
-- **✅ FIXED (PR#6) — addressing scheme:** the router now supports the preferred **local-part** scheme `{slug}@orders.proculink.eu` (single MX, no wildcard) via `Inbound:Postmark:InboundDomain`, alongside the legacy subdomain scheme; plus-addressing tags stripped. 3 router tests added.
-- **Remaining = founder infra only (one-time, NOT code):** (a) set the Postmark webhook URL to carry the token (`?token=` or Basic Auth); (b) MX — point `orders.proculink.eu` (local-part scheme) or `*.proculink.eu` (legacy) at Postmark and set the server's inbound domain so `OriginalRecipient` preserves the tenant address; (c) receiving org has a default supplier. Internal pipeline (auth→route→slug→org→attachment parse→order) is correct and live-proven.
-
-## 9.20 SFTP delivery — WORKS (+ Railway port-22 egress confirmed)
-Provisioned a free SFTPCloud test server (example.invalid:22), wired a prod supplier's SFTP delivery to it (configJson {host,port:22,remotePath:/proculink-test,makeDirectories:true} + credentialsJson {username,password}), test-fire → **success:true** (CSV written). First attempt failed "SFTP authentication failed" (transcribed password char wrong) — notable that auth-failure (not timeout) proves the SSH connection REACHED the server: **Railway permits outbound port 22**, unlike the blocked SMTP 587. So SFTP delivery is production-viable; SMTP delivery is not (needs HTTP email-API).
-
-## 9.21 Updated channel scorecard (live, 2026-06-29)
-| Channel | Dir | Result |
-|---|---|---|
-| Browser upload | in | ✅ proven (7 formats; XLSX schema fix PR'd) |
-| Inbound REST API | in | ✅ proven |
-| HTTP / webhook | out | ✅ proven |
-| SFTP | out | ✅ proven (Railway allows :22) |
-| SMTP | out | ❌ Railway blocks :587 — needs HTTP email-API |
-| Inbound email (Postmark) | in | ⚠️ logic ✅; real use blocked by header-auth mismatch + MX (see 9.19) |
-| FTPS | out | ⏳ need a public explicit-TLS server |
-| Erply / Directo | out | ⏳ need sandbox creds (HTTP/443 — egress fine) |
-| Inbound IMAP | in | ⏳ Integration plan + mailbox (could use Ethereal IMAP) |
-| Inbound SFTP/S3 pull | in | ⏳ blocked on PR#4 (parse-enqueue) + no config UI |
-
-## 9.22 Stripe local test stack — torn down after verification
-Core money path verified (9.17); local API + Docker Postgres torn down; the test Stripe secret lived only in the process env (never written to the repo). Re-spin in ~1 min if needed (overage/test-clock pass still recommended).
-
----
-# 10. FIXES MERGED (2026-06-30) + FOUNDER TO-DO
-
-## 10.1 Merged to main + deploying (I did these)
-| Fix | Repo / PR |
-|---|---|
-| SFTP/S3 pull → enqueue ParseOrderJob | ProcuLink #4 |
-| XLSX → LLM extraction (real exports parse) | ProcuLink #5 |
-| Postmark inbound auth: accept header / `?token=` / Basic-Auth | ProcuLink #6 |
-| Admin Stripe links → live dashboard | project-proculink #4 |
-| Homepage capability stat counts | project-proculink #5 |
-| /bridge cold-mount auth-race gate | project-proculink #6 |
-Held (apply on your design-system branch): PREVIEW-STALE + REDACTED-ITEM.
-
-## 10.2 FOUNDER TO-DO (can't be done in code / needs your access)
-1. **★ Stripe prod webhook API version = `2026-04-22.dahlia`** — Stripe Dashboard → Developers → Webhooks → your LIVE endpoint → set API version to 2026-04-22.dahlia. Confirm `Stripe__WebhookSecret` (Railway) = that live endpoint's signing secret. WITHOUT THIS: customers pay, webhooks 400, plans never unlock. Highest-priority launch gate.
-2. **Walkthrough video** — upload `walkthrough.mp4` to the R2 public bucket (assets.proculink.eu/marketing/walkthrough.mp4), OR blank `NEXT_PUBLIC_WALKTHROUGH_VIDEO_URL` in Vercel so the friendly fallback shows. (Poster already loads; only the mp4 is missing.)
-3. **Postmark inbound (real receipt):** (a) set the Postmark inbound webhook URL to carry the token: `…/api/inbound-email/postmark?token=<token>` (I set `Inbound__Postmark__WebhookToken=pminbound-qa-7f3a9c2e1b` on Railway — rotate to your own + update both). (b) MX: route `orders@{slug}.proculink.eu` → Postmark so OriginalRecipient carries the tenant (raw `@inbound.postmarkapp.com` won't). (c) receiving org on Integration plan + an inbound default supplier (Settings → Email).
-4. **SMTP delivery decision** — Railway blocks SMTP ports (587 timeout); the channel can't work as raw SMTP. Choose: (a) I build an HTTP email-API dispatcher (Postmark/SendGrid REST over 443), or (b) I remove SMTP from the offered delivery channels (honest until built).
-5. **Clerk org / personal-workspace** — enable Clerk Organizations + force org creation/selection at signup so B2B teams share one org (today each user silently gets a separate personal-workspace → fragmented data). Clerk Dashboard + a product decision.
-6. **SFTP/S3 inbound pull config UI** — parse-enqueue fixed (#4) but there is still no setup UI (rows are DB-only). If you want self-serve SFTP/S3 import, I build a settings UI (follow-up feature) — say the word.
-7. **Stripe overage** — run a Stripe test-clock pass to confirm €0.50/order overage billing at period close (only money-path piece not yet exercised).
-8. **Frontend CI is red (pre-existing)** — Playwright e2e (mock mode) fails on main independent of my changes; fix it so CI gates real regressions.
-
-## 10.3 PROD Stripe live verification (2026-06-30) — GO-LIVE READY
-- **Two Stripe accounts:** `acct_1TbeHmLMyzXaWowf` = sandbox (the test keys provided are from it); `acct_1TbeHcLSwazJxGKo` = LIVE prod account.
-- **Live webhook "sophisticated-breeze":** endpoint `https://api.proculink.eu/api/billing/webhook`, **API version `2026-04-22.dahlia`** (EXACTLY matches Stripe.net 51.1.0 — no version-mismatch 400), signing secret set, listening to 4 events, Active, 0% error. ★ Go-live blocker #1 (webhook version) is ALREADY correctly configured in prod — billing webhooks will NOT silently fail.
-- **Live checkout works:** `POST /api/billing/checkout {growth, monthly}` on prod returned a `cs_live_…` Checkout Session (HTTP 200) → the LIVE Growth price ID is configured on Railway and maps correctly (Stripe rejects session creation for an unknown/invalid price). No payment completed.
-- Combined with local verification (plan→price 8/8, checkout.completed + subscription.updated webhook handling, HMAC), the Stripe money path is go-live ready. Remaining: a Stripe test-clock pass to exercise €0.50 overage at `invoice.created` (minor; logic unit-tested).
-- Clerk dashboard was logged out — could not inspect Organizations/org-enforcement config; remains a founder item.
-
-## 10.4 FINAL STATE (2026-06-30) — all fixes merged + deploying
-**9 PRs merged this engagement:**
-- Backend (ProcuLink): #4 SFTP/S3 parse-enqueue · #5 XLSX→LLM · #6 Postmark inbound auth (header/query/basic) · #7 Postmark HTTPS email (SMTP works on Railway) · #8 SFTP/S3 config controller tests
-- Frontend (project-proculink): #4 admin Stripe live link · #5 homepage stat counts · #6 /bridge cold-auth gate · #7 send-modal true-format + preview-stale refresh
-
-**Audit corrections (better than first reported):**
-- Stripe live webhook ALREADY on API version 2026-04-22.dahlia (blocker #1 = non-issue). Live checkout creates cs_live → live prices wired.
-- SFTP/S3 ingress config API ALREADY exists (GET/PUT /api/settings/sftp + /s3, encrypted, billing-gated, FE matches) — with #4 it's now self-serve end-to-end.
-- /library/rules honestly labelled "catalog, not a gate" (not a dead control).
-
-**Founder to-do (remaining):** (2) upload walkthrough.mp4 or blank env; (3) Clerk: enable Organizations + force org at signup (dashboard was logged out — couldn't inspect); (4) set `Delivery__Smtp__PostmarkServerToken` on API+Worker to activate email delivery; (5) Postmark inbound: webhook URL `…/api/inbound-email/postmark?token=<token>` + MX `orders@{slug}.proculink.eu`→Postmark + Integration plan + inbound supplier; (6) confirm Railway+Vercel deploys; (7) Stripe overage test-clock + fix pre-existing red FE Playwright CI. Re-drag the 2 XLSX post-deploy to confirm XLSX→LLM extraction.
-
-## 10.5 Email delivery PROVEN (2026-06-30) + chip-reconciliation outcome
-- **Email delivery channel WORKS on prod.** Canonical path = chip's #13 `EmailApiDeliveryDispatcher` → `PostmarkEmailApiClient` (config key `Email:Postmark:ServerToken`). Founder set the Postmark outbound token on Railway API+Worker + verified the `proculink.eu` sender. Test-fire (email-protocol supplier) → **success:true, HTTP 200, Postmark ErrorCode 0**. (My #7 Postmark-into-SMTP was superseded by #13 — 0 trace on main; no leftover confusion.)
-- **Postmark account pending-approval caveat:** until the Postmark account is approved, sends are restricted to same-domain (proculink.eu) recipients (first test to mailinator.com → 422 pending-approval; proculink.eu retry → 200). FOUNDER ACTION: request Postmark account approval to send to arbitrary supplier domains.
-- **Clerk:** Production instance ALREADY has Organizations enabled + Membership Required + auto-create-first-org → new-signup fragmentation already prevented; nothing changed. Legacy org-less sessions (e.g. founder's personal-workspace-d3be) still resolve (backend #11 softened-resolve; verified 200). FE force-org gate = project-proculink PR#10 (held; belt-and-suspenders).
-- **Chip reconciliation:** other chips merged PRs #9–#13 to origin/main (force-org #11, email-API channel #13, FE email #9, inbound-email refinements #10/#12). Preserved 2 stranded works → wip/postmark-localpart-addressing (BE 614c67d; likely redundant vs merged #12) + wip/mapper-pane-collapse (FE, pushed). Cleaned merged/scratch branches. Backend `main` working dir left detached (ecstatic-lumiere worktree locked by another process). Security: founder pasted the Postmark token in chat → advised rotation.
+- **Egress region (P3):** the outbound egress of a production delivery was measured during that run and resolved to a US location, which does not match the EU-residency positioning. The address itself is deliberately not restated. Confirm the deploy region against the EU-data-residency claim.
+- **SMTP blocked at the platform (P1 infra):** outbound SMTP from the production host timed out on ports 25/465/587 (standard PaaS anti-spam policy) while HTTPS delivery from the same host succeeded — so email delivery must go over an HTTP email API on 443, not raw SMTP.

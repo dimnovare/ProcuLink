@@ -149,7 +149,17 @@ public class FixtureDeIdentificationGuardTests
     }
 
     private static bool IsApprovedHost(string host)
-        => host.Length == 0 || IsPlaceholderDomain(host) || StandardsHosts.Contains(host);
+        => host.Length == 0 || IsPlaceholderDomain(host) || IsStandardsHost(host);
+
+    /// <summary>
+    /// Membership of <see cref="StandardsHosts"/>, exposed for the same reason
+    /// <see cref="IsPlaceholderDomain"/> is: <see cref="DocsOperationalDataGuardTests"/> sweeps
+    /// markdown and worker source under <c>docs/</c> and meets the identical question — "is that
+    /// a specification, or is that somebody we trade with?". Two copies of the standards
+    /// vocabulary could be widened independently, leaving one guard green while the other let a
+    /// counterparty host through.
+    /// </summary>
+    internal static bool IsStandardsHost(string host) => StandardsHosts.Contains(host);
 
     /// <summary>
     /// A really-allocated Ariba Network ID is never zero-padded; the reserved placeholder form
