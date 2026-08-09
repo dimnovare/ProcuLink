@@ -88,15 +88,15 @@ public class CsvTransformServiceTests
     public async Task TransformAsync_WithAddresses_PopulatesAddressColumns()
     {
         var order = BuildOrder();
-        order.ShipToName       = "Usine EXEMPLE de la REDACTED-PARTY";
+        order.ShipToName       = "Usine EXEMPLE Sud-3";
         order.ShipToStreet     = "12 rue des Essais";
         order.ShipToCity       = "VILLE-EXEMPLE";
-        order.ShipToPostalCode = "63040";
+        order.ShipToPostalCode = "99040";
         order.ShipToCountry    = "FRANCE";
         order.BillToName       = "EXEMPLE Comptabilite Fournisseurs";
         order.BillToStreet     = "Place des Essais Nord";
         order.BillToCity       = "VILLE-EXEMPLE";
-        order.BillToPostalCode = "63000";
+        order.BillToPostalCode = "99000";
         order.BillToCountry    = "FRANCE";
         order.ContactName      = "Testperson Alex";
         order.ContactEmail     = "alex.testperson@buyer.example.com";
@@ -108,10 +108,10 @@ public class CsvTransformServiceTests
         var cells = rows[1].Split(',');
         cells.Should().HaveCount(23);
         // ShipTo* = columns 10..14
-        cells[10].Should().Be("Usine EXEMPLE de la REDACTED-PARTY");
+        cells[10].Should().Be("Usine EXEMPLE Sud-3");
         cells[11].Should().Be("12 rue des Essais");
         cells[12].Should().Be("VILLE-EXEMPLE");
-        cells[13].Should().Be("63040");
+        cells[13].Should().Be("99040");
         cells[14].Should().Be("FRANCE");
         // BillTo* = columns 15..19
         cells[15].Should().Be("EXEMPLE Comptabilite Fournisseurs");

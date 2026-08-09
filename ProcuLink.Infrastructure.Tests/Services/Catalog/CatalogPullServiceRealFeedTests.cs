@@ -1,4 +1,4 @@
-﻿using System.IO.Compression;
+using System.IO.Compression;
 using System.Net;
 using System.Text;
 using FluentAssertions;
@@ -20,7 +20,7 @@ namespace ProcuLink.Infrastructure.Tests.Services.Catalog;
 /// <summary>
 /// Pipeline tests for the real-distributor-feed additions (plan 2026-07-02): transparent ZIP
 /// unwrap inside the pull path (Phase 1.4), per-source column mapping applied end-to-end
-/// (Phase 2.4), and the Logicom vendor fetcher through the fake-HTTP seam (Phase 6.6). REAL
+/// (Phase 2.4), and the <c>aes2fa</c> vendor fetcher through the fake-HTTP seam (Phase 6.6). REAL
 /// guard, encryption, parser, and catalog sink; only the HTTP transport is faked.
 /// </summary>
 public class CatalogPullServiceRealFeedTests
@@ -156,24 +156,26 @@ public class CatalogPullServiceRealFeedTests
             .WithMessage(CatalogPullService.ErrNoCodeColumn);
     }
 
-    // ── Phase 6.6: Logicom vendor fetcher via the fake seam ───────────────────
+    // ── Phase 6.6: aes2fa vendor fetcher via the fake seam ────────────────────
 
     [Fact]
-    public async Task Pull_LogicomVendor_TokenPerPage_PaginatesAndFlattens()
+    public async Task Pull_Aes2faVendor_TokenPerPage_PaginatesAndFlattens()
     {
-        // Fake Logicom API: GenerateAccessToken → a token; GetProducts → 1 page of 2 items then end.
-        var handler = new LogicomFakeHandler();
-        var fetcher = new LogicomQuickConnectFetcher(NullLogger<LogicomQuickConnectFetcher>.Instance);
+        // Fake vendor API: GenerateAccessToken → a token; GetProducts → 1 page of 2 items then end.
+        var handler = new Aes2faVendorFakeHandler();
+        var fetcher = new Aes2faSignedCatalogFetcher(NullLogger<Aes2faSignedCatalogFetcher>.Instance);
 
         var encryption = new DeliveryEncryptionService(Config());
-        var vendorCreds = """{"type":"logicom_quickconnect","customerId":"2127","consumerKey":"CK","consumerSecret":"CS","accessTokenKey":"01234567890123456789012345678901","currency":"EUR"}""";
+        // customerId is a placeholder: the real one is the account number this org holds WITH the
+        // distributor, which is an account identifier of the same class PR #181 scrubbed.
+        var vendorCreds = """{"type":"aes2fa_signed","customerId":"CUST-TEST","consumerKey":"CK","consumerSecret":"CS","accessTokenKey":"01234567890123456789012345678901","currency":"EUR"}""";
 
         var h = await BuildAsync(
             new HttpClient(handler),
             s =>
             {
-                s.Protocol = "logicom";
-                s.Url = "https://example.invalid/redacted";
+                s.Protocol = "aes2fa";
+                s.Url = "https://vendor-api.example/api";
                 s.FileFormat = "auto";
                 s.AuthConfigEncrypted = encryption.Encrypt(
                     vendorCreds,
@@ -221,8 +223,8 @@ public class CatalogPullServiceRealFeedTests
         }
     }
 
-    /// <summary>Minimal Logicom API stub: signs in, then returns one product page then the end.</summary>
-    private sealed class LogicomFakeHandler : HttpMessageHandler
+    /// <summary>Minimal vendor API stub: signs in, then returns one product page then the end.</summary>
+    private sealed class Aes2faVendorFakeHandler : HttpMessageHandler
     {
         public int TokenCalls { get; private set; }
         private int _productCalls;

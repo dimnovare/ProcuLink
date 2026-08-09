@@ -278,18 +278,18 @@ public class JsonTransformServiceTests
         order.ContactName      = "Testperson Alex";
         order.ContactEmail     = "alex.testperson@buyer.example.com";
         order.ContactPhone     = "33100000000";
-        order.ShipToName       = "Usine EXEMPLE de la REDACTED-PARTY";
+        order.ShipToName       = "Usine EXEMPLE Sud-3";
         order.ShipToDeliverTo  = "Testperson Alex";
         order.ShipToStreet     = "12 rue des Essais B12-3 (CTX_0000)";
         order.ShipToCity       = "VILLE-EXEMPLE";
-        order.ShipToPostalCode = "63040";
+        order.ShipToPostalCode = "99040";
         order.ShipToCountry    = "FRANCE";
         order.ShipToEmail      = "ship@buyer.example.com";
         order.ShipToPhone      = "33100000000";
         order.BillToName       = "EXEMPLE Comptabilite Fournisseurs";
         order.BillToStreet     = "Place des Essais Nord";
         order.BillToCity       = "VILLE-EXEMPLE";
-        order.BillToPostalCode = "63000";
+        order.BillToPostalCode = "99000";
         order.BillToCountry    = "FRANCE";
         return order;
     }
@@ -316,11 +316,11 @@ public class JsonTransformServiceTests
         var root = doc.RootElement;
 
         var shipTo = root.GetProperty("shipTo");
-        shipTo.GetProperty("name").GetString().Should().Be("Usine EXEMPLE de la REDACTED-PARTY");
+        shipTo.GetProperty("name").GetString().Should().Be("Usine EXEMPLE Sud-3");
         shipTo.GetProperty("deliverTo").GetString().Should().Be("Testperson Alex");
         shipTo.GetProperty("street").GetString().Should().Be("12 rue des Essais B12-3 (CTX_0000)");
         shipTo.GetProperty("city").GetString().Should().Be("VILLE-EXEMPLE");
-        shipTo.GetProperty("postalCode").GetString().Should().Be("63040");
+        shipTo.GetProperty("postalCode").GetString().Should().Be("99040");
         shipTo.GetProperty("country").GetString().Should().Be("FRANCE");
         shipTo.GetProperty("email").GetString().Should().Be("ship@buyer.example.com");
         shipTo.GetProperty("phone").GetString().Should().Be("33100000000");
@@ -328,7 +328,7 @@ public class JsonTransformServiceTests
         var billTo = root.GetProperty("billTo");
         billTo.GetProperty("name").GetString().Should().Be("EXEMPLE Comptabilite Fournisseurs");
         billTo.GetProperty("street").GetString().Should().Be("Place des Essais Nord");
-        billTo.GetProperty("postalCode").GetString().Should().Be("63000");
+        billTo.GetProperty("postalCode").GetString().Should().Be("99000");
 
         var contact = root.GetProperty("contact");
         contact.GetProperty("name").GetString().Should().Be("Testperson Alex");

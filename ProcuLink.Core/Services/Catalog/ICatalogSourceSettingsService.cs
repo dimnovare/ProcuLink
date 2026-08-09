@@ -43,7 +43,7 @@ public sealed record UpsertCatalogSourceRequest(
     string? FileFormat,
     int? SyncIntervalHours,
     bool IsEnabled,
-    // http/https/logicom only (null/ignored for sftp/ftp):
+    // http/https/aes2fa only (null/ignored for sftp/ftp):
     string? Url = null,
     string? AuthMethod = null,
     CatalogHttpAuthConfig? AuthConfig = null,
@@ -51,7 +51,7 @@ public sealed record UpsertCatalogSourceRequest(
     // Per-source column mapping (plan 2026-07-02 D3): {"sourceColumn":"canonicalField"} plus the
     // "__noheader__"/"__encoding__" directives. null = keep stored, {} = clear. Not a secret.
     IReadOnlyDictionary<string, string>? ColumnMapping = null,
-    // Logicom vendor-fetcher credentials (plan 2026-07-02 D4/6.4), write-only like AuthConfig.
+    // Vendor-fetcher credentials (plan 2026-07-02 D4/6.4), write-only like AuthConfig.
     CatalogVendorConfig? VendorConfig = null,
     // sftp only. Trusted SSH host-key fingerprint(s), newline-separated, in OpenSSH's "SHA256:…"
     // form. null = keep whatever the last successful sync recorded, "" = clear so the next sync
@@ -82,10 +82,17 @@ public sealed record CatalogHttpAuthConfig(
     string? Scope = null);
 
 /// <summary>
-/// Write-only vendor-fetcher credentials for the <c>logicom</c> protocol (plan 2026-07-02 D4).
-/// Logicom's exotic 2FA AES auth deliberately bypasses <c>HttpAuthApplier</c> via the vendor
-/// fetcher seam, so its secrets ride the same AES-GCM <c>AuthConfigEncrypted</c> envelope under a
-/// <c>type="logicom_quickconnect"</c> discriminator. Never echoed back.
+/// Write-only vendor-fetcher credentials for the <c>aes2fa</c> protocol (plan 2026-07-02 D4).
+/// That vendor's exotic per-call 2FA AES auth deliberately bypasses <c>HttpAuthApplier</c> via the
+/// vendor fetcher seam, so its secrets ride the same AES-GCM <c>AuthConfigEncrypted</c> envelope
+/// under a <c>type="aes2fa_signed"</c> discriminator. Never echoed back.
+///
+/// <para><b>That <c>type</c> value is persisted but NOTHING READS IT.</b> It is written by
+/// <c>CatalogSourceSettingsService.BuildVendorConfigJson</c> and never inspected —
+/// <c>Aes2faSignedCatalogFetcher.ReadCreds</c> reads only the credential fields. So it is a
+/// discriminator by intent, not by enforcement: renaming it changes what NEW envelopes carry and
+/// cannot orphan an existing one. Do not read this comment as a claim that the shape is
+/// validated; if that validation is ever wanted it has to be written.</para>
 /// </summary>
 public sealed record CatalogVendorConfig(
     string? CustomerId = null,

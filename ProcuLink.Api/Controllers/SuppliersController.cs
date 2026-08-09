@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -1036,10 +1036,10 @@ public class SuppliersController : ControllerBase
         if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
 
         var protocol = request.Protocol?.Trim().ToLowerInvariant();
-        if (protocol is not ("sftp" or "ftp" or "ftps" or "http" or "https" or "logicom"))
-            return BadRequest(new { error = "Protocol must be one of: sftp, ftp, ftps, http, https, logicom." });
+        if (protocol is not ("sftp" or "ftp" or "ftps" or "http" or "https" or "aes2fa"))
+            return BadRequest(new { error = "Protocol must be one of: sftp, ftp, ftps, http, https, aes2fa." });
 
-        var isVendor = protocol is "logicom";
+        var isVendor = protocol is "aes2fa";
         var isHttp = protocol is "http" or "https";
         var isUrlBased = isHttp || isVendor;
 
@@ -1104,7 +1104,7 @@ public class SuppliersController : ControllerBase
                         return BadRequest(new { error = tokenPolicy.ErrorCode, message = tokenPolicy.Message });
                 }
             }
-            else if (protocol == "logicom")
+            else if (protocol == "aes2fa")
             {
                 // Vendor creds required — either provided now, or kept from a previous save.
                 var current = await settings.GetAsync(orgId, id, ct);
@@ -1115,7 +1115,7 @@ public class SuppliersController : ControllerBase
                     && !string.IsNullOrWhiteSpace(vc.AccessTokenKey);
                 var kept = request.VendorConfig is null && current?.HasAuthConfig == true;
                 if (!provided && !kept)
-                    return BadRequest(new { error = "Logicom requires CustomerID, ConsumerKey, ConsumerSecret, and AccessTokenKey." });
+                    return BadRequest(new { error = "The aes2fa vendor fetcher requires CustomerID, ConsumerKey, ConsumerSecret, and AccessTokenKey." });
             }
         }
         else

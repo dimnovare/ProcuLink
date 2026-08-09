@@ -206,15 +206,15 @@ public class UblOrderTransformServiceTests
         order.ContactName      = "Testperson Alex";
         order.ContactEmail     = "alex.testperson@buyer.example.com";
         order.ContactPhone     = "33100000000";
-        order.ShipToName       = "Usine EXEMPLE de la REDACTED-PARTY";
+        order.ShipToName       = "Usine EXEMPLE Sud-3";
         order.ShipToStreet     = "12 rue des Essais B12-3 (CTX_0000)";
         order.ShipToCity       = "VILLE-EXEMPLE";
-        order.ShipToPostalCode = "63040";
+        order.ShipToPostalCode = "99040";
         order.ShipToCountry    = "FRANCE";
         order.BillToName       = "EXEMPLE Comptabilite Fournisseurs";
         order.BillToStreet     = "Place des Essais Nord";
         order.BillToCity       = "VILLE-EXEMPLE";
-        order.BillToPostalCode = "63000";
+        order.BillToPostalCode = "99000";
         order.BillToCountry    = "FRANCE";
         return order;
     }
@@ -264,7 +264,7 @@ public class UblOrderTransformServiceTests
         postal.Should().NotBeNull();
         postal.Element(Cbc + "StreetName")!.Value.Should().Be("Place des Essais Nord");
         postal.Element(Cbc + "CityName")!.Value.Should().Be("VILLE-EXEMPLE");
-        postal.Element(Cbc + "PostalZone")!.Value.Should().Be("63000");
+        postal.Element(Cbc + "PostalZone")!.Value.Should().Be("99000");
         postal.Element(Cac + "Country")!.Element(Cbc + "IdentificationCode")!.Value.Should().Be("FRANCE");
 
         // BuyerCustomerParty/Party/Contact fed from Contact*.
@@ -288,12 +288,12 @@ public class UblOrderTransformServiceTests
         var address = delivery.Element(Cac + "DeliveryLocation")!.Element(Cac + "Address")!;
         address.Element(Cbc + "StreetName")!.Value.Should().Be("12 rue des Essais B12-3 (CTX_0000)");
         address.Element(Cbc + "CityName")!.Value.Should().Be("VILLE-EXEMPLE");
-        address.Element(Cbc + "PostalZone")!.Value.Should().Be("63040");
+        address.Element(Cbc + "PostalZone")!.Value.Should().Be("99040");
         address.Element(Cac + "Country")!.Element(Cbc + "IdentificationCode")!.Value.Should().Be("FRANCE");
 
         // Delivery/DeliveryParty/PartyName/Name fed from ShipToName.
         delivery.Element(Cac + "DeliveryParty")!.Element(Cac + "PartyName")!.Element(Cbc + "Name")!
-            .Value.Should().Be("Usine EXEMPLE de la REDACTED-PARTY");
+            .Value.Should().Be("Usine EXEMPLE Sud-3");
     }
 
     // ── Required-field validation (output-format hardening) ────────────────────

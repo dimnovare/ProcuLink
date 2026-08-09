@@ -112,11 +112,11 @@ public class InCoverageMatrixTests
             new(2, "BUY-日本", "ネットワークケーブル", 2m, "EA", 9.00m),
             new(3, "BUY-emoji", "Mouse 🖱️ ergonomic", 1m, "EA", 49.31m),
         };
-        var bytes = Csv("PO-Ünïcödé", "EUR", "Société Générale Łódź", lines);
+        var bytes = Csv("PO-Ünïcödé", "EUR", "Société Exemple Łódź", lines);
         var order = await new CsvOrderParser().ParseAsync(ToStream(bytes), CancellationToken.None);
 
         order.PoNumber.Should().Be("PO-Ünïcödé");
-        order.BuyerName.Should().Be("Société Générale Łódź");
+        order.BuyerName.Should().Be("Société Exemple Łódź");
         order.Lines[1].Description.Should().Be("ネットワークケーブル");
         order.Lines[2].Description.Should().Be("Mouse 🖱️ ergonomic");
     }

@@ -267,18 +267,18 @@ public class CxmlTransformServiceTests
         var svc   = new CxmlTransformService();
         var order = BuildOrder();
         // Exemple-shaped address data.
-        order.ShipToName       = "Usine EXEMPLE de la REDACTED-PARTY";
+        order.ShipToName       = "Usine EXEMPLE Sud-3";
         order.ShipToDeliverTo  = "Testperson Alex";
         order.ShipToStreet     = "12 rue des Essais B12-3 (CTX_0000)";
         order.ShipToCity       = "VILLE-EXEMPLE";
-        order.ShipToPostalCode = "63040";
+        order.ShipToPostalCode = "99040";
         order.ShipToCountry    = "FRANCE";
         order.ShipToPhone      = "33100000000";
         order.BillToName       = "EXEMPLE Comptabilite Fournisseurs";
         order.BillToDeliverTo  = "Service Comptable";
         order.BillToStreet     = "Place des Essais Nord";
         order.BillToCity       = "VILLE-EXEMPLE";
-        order.BillToPostalCode = "63000";
+        order.BillToPostalCode = "99000";
         order.BillToCountry    = "FRANCE";
         order.BillToPhone      = "33100000001";
         order.ContactName      = "Testperson Alex";
@@ -296,7 +296,7 @@ public class CxmlTransformServiceTests
 
         // ShipTo/Address/Name with xml:lang="en".
         var shipName = shipAddress.Elements().First(e => e.Name.LocalName == "Name");
-        shipName.Value.Should().Be("Usine EXEMPLE de la REDACTED-PARTY");
+        shipName.Value.Should().Be("Usine EXEMPLE Sud-3");
         shipName.Attribute(xmlNs + "lang")?.Value.Should().Be("en");
 
         // ShipTo/Address/PostalAddress/{DeliverTo,Street,City,PostalCode,Country}.
@@ -304,7 +304,7 @@ public class CxmlTransformServiceTests
         postal.Elements().First(e => e.Name.LocalName == "DeliverTo").Value.Should().Be("Testperson Alex");
         postal.Elements().First(e => e.Name.LocalName == "Street").Value.Should().Be("12 rue des Essais B12-3 (CTX_0000)");
         postal.Elements().First(e => e.Name.LocalName == "City").Value.Should().Be("VILLE-EXEMPLE");
-        postal.Elements().First(e => e.Name.LocalName == "PostalCode").Value.Should().Be("63040");
+        postal.Elements().First(e => e.Name.LocalName == "PostalCode").Value.Should().Be("99040");
         postal.Elements().First(e => e.Name.LocalName == "Country").Value.Should().Be("FRANCE");
 
         // ShipTo/Address/Phone/TelephoneNumber/Number.

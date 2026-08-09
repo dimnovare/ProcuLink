@@ -15,14 +15,23 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 > four packets**. `04-CAPABILITY-TRUTH-LEDGER.md` is the new source of truth for what we may
 > claim; it also lists the audit findings that were **refuted** — do not re-open those.
 
+> **Naming convention — this repository is PUBLIC.** No real trading counterparty is named in
+> this file. The distributors whose catalog feeds we pull are **vendor A–F**; buyers whose real
+> POs became sanitised fixtures are **buyer A/B**. Each letter is exactly one real company and
+> the mapping is stable for the whole file — two letters are never the same company, and one
+> letter is never two. Live identifiers (payment-processor account, auth org id/slug, tenant
+> slug and its inbound address, coupon/promo codes, mail message and queue ids, hosting project
+> and service names, vendor feed filenames and service banners, real PO/invoice numbers) are
+> described by their role instead of quoted — look them up in the relevant dashboard.
+
 ---
 
 ## Snapshot (2026-07-31) — revision authority is ON in production, and now says so out loud
 
 **The correction first.** The 2026-07-27 audit filed a P0: "revision authority is off in
 production — the entire versioning/reproducibility story is inert where it matters." That finding
-is **REFUTED**. `Connections__RevisionAuthority = true` on **both** Railway services — `ProcuLink`
-(API) and `aware-amazement` (Worker) — verified 2026-07-27 and re-verified 2026-07-31. The audit
+is **REFUTED**. `Connections__RevisionAuthority = true` on **both** Railway services — the API
+service and the Worker service — verified 2026-07-27 and re-verified 2026-07-31. The audit
 read `ProcuLink.Api/appsettings.Development.json:46` and inferred the deployed value; it never read
 the deployed environment. **The versioning subsystem is not being retired.**
 
@@ -249,7 +258,7 @@ exercised by real merge traffic in both repos. **No main-push run has been cance
   - **The expand migration `20260730094527_Wave1RetireDeadSubsystems` is absent from `main`.**
     It exists only on the PR branch. (Do not be fooled by `20260531090840_Wave1SecurityIndexes`,
     which is unrelated and from May.)
-  - **Both services run `cd7feba`** — API `ProcuLink` and Worker `aware-amazement`, both
+  - **Both services run `cd7feba`** — the API service and the Worker service, both
     `SUCCESS`, deployed within 1s of each other. Neither carries #75.
 - **Dropping the column today would break production immediately — not merely during a deploy
   window.** Because the expand half never landed, the live build still *maps* the property:
@@ -377,16 +386,17 @@ exercised by real merge traffic in both repos. **No main-push run has been cance
 ## Snapshot (2026-07-27) — manufacturer part number is a real matching key (BE PR, OPEN)
 
 - **`feat/manufacturer-part-matching`, PR open, not merged.** Two real customer POs (sanitised,
-  now fixtures) drove it: a punchout Ariba/KSB order whose `SupplierPartID` is the buying
-  network's internal id and whose only usable key is `<ManufacturerPartID>REDACTED-ORDER-DATA`
-  (REDACTED-PARTY). The resolver used to **echo that part number back as the supplier item code at
-  0.95** — right by luck in the Maersk order (where the two identifiers are the same string),
-  wrong in the punchout one, and it bypassed the catalog allow-list. `SupplierProduct` now has
+  now fixtures) drove it: a punchout Ariba order from buyer A, whose `SupplierPartID` is the
+  buying network's internal id and whose only usable key is the `<ManufacturerPartID>` element —
+  the manufacturer's own part number. The resolver used to **echo that part number back as the
+  supplier item code at 0.95** — right by luck in buyer B's order (where the two identifiers are
+  the same string), wrong in the punchout one, and it bypassed the catalog allow-list.
+  `SupplierProduct` now has
   `manufacturer_part_number` (+ a normalised key column and index) and `manufacturer_name`; an
   unresolved line falls back to an exact manufacturer-part lookup and suggests the supplier's
   OWN code. Suggest-only; an ambiguous part number (two supplier codes) suggests nothing.
 - **Import alias `manufacturer part id` was retargeted** from `external_id` (the idempotent
-  re-sync key) to the new field; Jarltech's `ORIGINAL_ART_NO` / `MANUFACTURER` now land properly.
+  re-sync key) to the new field; vendor A's `ORIGINAL_ART_NO` / `MANUFACTURER` now land properly.
   `CanonicalFields` had **two hand-copied duplicates** (`SuppliersController`,
   `CatalogSourceSettingsService`) that would have 400'd / silently dropped the new targets —
   both now derive from the parser's list.
@@ -555,24 +565,24 @@ never checked, and one was my own error. Corrected in place, each with its evide
 | Claim | Reality (measured 2026-07-26) |
 |---|---|
 | **P0** CF Email Routing broken, support@ mail lost | **Resolved** — 12/12 rules Active; 30-day log = 15 received / **15 forwarded** / 0 failures |
-| **P0** founder org frozen `read_only`, ingest dead | **Resolved** — `personal-workspace-d3be` is `plan=growth, accountStatus=active` |
+| **P0** founder org frozen `read_only`, ingest dead | **Resolved** — the production org is `plan=growth, accountStatus=active` |
 | #57 Worker "STILL NEEDS A HAND-REDEPLOY" | **Already deployed** — non-Postmark IP gets **503** (was 403); health + site both 200, so not a coincidental outage |
 | OpenAI "DPA presumably unsigned" | **Signed** — Ironclad *"Complete — DPA (Diip Solutions OÜ and OpenAI)"* to `legal@` |
-| OPS-2 blocked on a plan bump + Logicom creds | **Both done** — org on Growth; 14,713 rows synced |
+| OPS-2 blocked on a plan bump + vendor B creds | **Both done** — org on Growth; 14,713 rows synced |
 | CLEANUP-1: delete two BE branches | **Already gone** from the remote |
 | Merge queue: FE #29, BE #45 | **Both merged** |
 
-- **My own error, corrected:** OPS-2's docs claimed the frozen `personal-workspace-d3be` was
-  *a different org, unreachable from the browser session*. **There is only one org.** The
-  **Clerk** slug (`dim-s-organization-…`) and the **ProcuLink DB** slug
-  (`personal-workspace-d3be`, `7a3b01e1-…`) name the same tenant — admin
+- **My own error, corrected:** OPS-2's docs claimed the frozen production org was
+  *a different org, unreachable from the browser session*. **There is only one org.** Its
+  **Clerk** slug (auto-derived from the founder's personal name) and its **ProcuLink DB** slug
+  and org id name the same tenant — admin
   `GET /api/admin/organisations` shows it holding exactly the 23 suppliers that work created.
   **Never infer org identity from a Clerk slug; match on DB slug or org id.** The conclusion
   built on it survives: the org read `trialing` when measured, so the **plan tier** really was
   the blocker, which is why raising it to Growth unblocked the sync.
 - ⚠️ **New standing hazard from that same fact:** the live Growth subscription sits on the
-  **primary production org** — the one receiving real mail at
-  `redacted@example.invalid`. **Cancelling it re-freezes real order
+  **primary production org** — the one receiving real mail at its
+  `{slug}@orders.proculink.eu` inbound address. **Cancelling it re-freezes real order
   ingest**, not a throwaway workspace. Plan the exit before ending it.
 - **Persona/OpenAI verification is NOT an email problem.** No Persona message reached
   Cloudflare at all in 30 days, while every message CF did receive was forwarded. Check which
@@ -580,7 +590,7 @@ never checked, and one was my own error. Corrected in place, each with its evide
 - **Genuinely still open:** the five vendor cred pastes (OPS-2's last piece), OpenAI EU
   project + ZDR + org verification, config gaps (`NEXT_PUBLIC_BOOK_DEMO_URL`, status page,
   subprocessors, cookie banner), OPS-3's CSP/Sentry sweep, cred rotation, and the
-  order-review-screen typeahead (untested — needs a Jarltech PO on prod).
+  order-review-screen typeahead (untested — needs a vendor A PO on prod).
 - **Method note worth keeping:** every one of these was a doc trusted past its expiry date.
   Cheap live probes settled them in minutes — a `curl` for the Worker, the CF activity log for
   mail, `GET /api/admin/organisations` for org state. Re-measure before re-planning.
@@ -608,7 +618,8 @@ never checked, and one was my own error. Corrected in place, each with its evide
   "the fingerprint suggests a supplier" is not a claim the product can make yet. **F4 (fixed
   here):** `Live_ImapIngress` has been dead since `de4ea0e` (seeded no `Supplier`, so it hit the
   unrouted branch and NRE'd on an unstubbed mock) — env-gated, so CI's "2 skipped" hid it.
-  **F5 doc fix:** "Dim's Organization" **is** `personal-workspace-d3be` (one org row, two slugs);
+  **F5 doc fix:** the Clerk org display name and the DB tenant slug are the **same** org (one
+  org row, two slugs);
   OPS-2's claim they were different orgs is wrong, and the DB slug is what
   `IngressController.cs:47-53` matches. Test data to delete: 2 ROUTETEST suppliers + 4
   ROUTETEST- orders (ids in the doc); API keys already revoked, email default restored to null.
@@ -759,11 +770,11 @@ never checked, and one was my own error. Corrected in place, each with its evide
 
 - **BE-6 (P1) closed — the generic XML catalog parser no longer drops every second field.**
   `SupplierCatalogFileParser.FlattenElement` double-advanced the `XmlReader` per scalar child,
-  so `a,b,c,d` flattened to `[a|c]`; Jarltech's 14,713 items would have imported with no name
+  so `a,b,c,d` flattened to `[a|c]`; vendor A's 14,713 items would have imported with no name
   and no price. Fixed by the guard the cXML path already carried. 3 RED-first tests, each with
   ≥4 scalar children — the pre-existing XML fixtures topped out at 2 children, which is exactly
   why the suite never caught it. **This lifts the "do not enable element-based XML feeds" gate
-  on OPS-2** once the PR merges. Attribute feeds (100MEGA) and cXML Index were never affected.
+  on OPS-2** once the PR merges. Attribute feeds (vendor C) and cXML Index were never affected.
   **BE PR #55 — open, not merged. CI green: 3,863 passed / 0 failed / 2 skipped** (the 2 are
   the env-gated live-feed tests). Local Api.Tests skipped its 130 Postgres tests — the Docker
   Desktop engine wedged under cross-worktree Testcontainers load and the runner still printed
@@ -784,7 +795,7 @@ never checked, and one was my own error. Corrected in place, each with its evide
   Postmark message. Queue: ~~BE-6~~ (fixed, snapshot above), ~~BE-1's 422-retry
   residual~~ (fixed, #56 below), ~~the schema-fingerprint learning gap~~ (fixed, #54
   below), FE `lint:vocab` pre-existing red. Founder halves: OpenAI DPA/EU project,
-  **OPS-2's remaining five vendor cred pastes** (the Jarltech half is DONE — org is on
+  **OPS-2's remaining five vendor cred pastes** (the vendor A half is DONE — org is on
   Growth and the scheduled pull landed 14,713 rows; see the OPS-2 entry below), and —
   once the Worker 403→503 PR merges — a **hand-redeploy of the CF inbound-verify
   Worker** (nothing else ships it; see that entry below).
@@ -806,10 +817,10 @@ never checked, and one was my own error. Corrected in place, each with its evide
   `InboundEmailController`'s model (its stale "the Worker already spends 403" comment is
   corrected). Pinned by `worker.test.mjs` (8 tests, `node --test`, no deps, not in CI —
   this repo has no JS pipeline). **Cloudflare is not wired to this repo: merging changes
-  nothing until the founder redeploys** (`bunx wrangler deploy`, or dashboard →
-  `postmark-inbound-verify` → Edit code → paste → Deploy), then re-runs the README smoke
+  nothing until the founder redeploys** (`bunx wrangler deploy`, or dashboard → the
+  inbound-verify Worker → Edit code → paste → Deploy), then re-runs the README smoke
   test and confirms the refusal reads 503. No Postmark/Railway/DNS change needed; rollback
-  is the Worker's Deployments → Rollback. README also de-staled: it said "PREPARED, NOT
+  is that Worker's Deployments → Rollback. README also de-staled: it said "PREPARED, NOT
   DEPLOYED" and "API-side change NOT implemented" — both live since OPS-1.
 - **2026-07-24: inbound-webhook retry contract fixed — BE PR #56 (open), BE-1 residual
   closed.** OPS-1 measured that 422 does not stop Postmark; the documented policy is 10
@@ -960,23 +971,24 @@ never checked, and one was my own error. Corrected in place, each with its evide
   stays Information; 5 level tests pin it. `InboundEmailController` needed no change (it
   already logs only rejects/misconfig).
 - **2026-07-24 OPS-1 — live inbound-email transport PROVEN with real mail; ingest blocked.**
-  Postmark `/email` → `redacted@example.invalid` (MessageID
-  `c4fe887c-…`) delivered `250 Ok: queued as 28384453CA4`, and the API logged the routed
+  Postmark `/email` → the production org's `{slug}@orders.proculink.eu` inbound address
+  delivered `250 Ok: queued as <smtp queue id>`, and the API logged the routed
   webhook **~2 s later** — so MX → Postmark inbound → `inbound.proculink.eu` CF verify-Worker
   → API, incl. `Inbound__Postmark__ProxySecret`, are all correct end-to-end. **No order was
   created:** the founder org is `account_status=read_only` since 06:35:50 UTC (the Stripe
   cancel test's "frozen Pilot"), so `InboundEmailRouter.cs:136` refuses ingest
   (`inbound_email.rejected_read_only` ×3, 0 orders — nothing to clean up). **P0 for the
   founder:** that org's every ingest channel is dead until the status is lifted; then re-fire
-  the still-`Scheduled` message via `POST /messages/inbound/d7dcf55d-…/retry` — no resend.
+  the still-`Scheduled` message via `POST /messages/inbound/{messageId}/retry` (the id is in
+  the Postmark inbound stream) — no resend.
   Measured side-finding: **422 does not stop Postmark retrying** (3 attempts in 6 min for one
   message), so `InboundEmailController.cs:134`'s "422 keeps Postmark from retrying" comment is
   false — folded into BE-1's scope.
 - **2026-07-24 OPS-2 re-run: prod auth SOLVED, now BLOCKED on the PLAN GATE (not read-only).**
-  The founder's Chrome is signed in to prod as `redacted@example.invalid`, org **Dim's
-  Organization** (`org_3EVIvV7ecKosZoL0fvYnhLdXNow`) — the only org on that Clerk user, so
-  the frozen `personal-workspace-d3be` is not reachable and its `read_only` state is *not*
-  what blocks this item. That org is `plan=pilot`, `accountStatus=trialing`, admin-overridden
+  The founder's Chrome is signed in to prod as the founder's personal account, on the only
+  org that Clerk user has — so the org believed to be frozen is not reachable and its
+  `read_only` state is *not* what blocks this item.
+  That org is `plan=pilot`, `accountStatus=trialing`, admin-overridden
   limits (100k orders, 30 suppliers, 17 used). **Enabling a catalog source is gated on
   `BillingFeature.SftpIngestion`, whose minimum plan is Growth** (`PlanConstants.cs:286`),
   so `HasFeatureAsync` returns false on Pilot and `PUT …/catalog/source` with
@@ -990,26 +1002,27 @@ never checked, and one was my own error. Corrected in place, each with its evide
   **Prod inventory:** none of the six vendors exists as a supplier — all 18 are demo/`ZZ`-test/
   sample, and only "FastParts Inc" has any catalog source (https, disabled, no creds). So
   nothing was pre-configured and nothing could be verified by reading prod.
-  **Vendor creds recovered** from the archived audit transcript for 5 of 6 (Logicom's
+  **Vendor creds recovered** from the archived audit transcript for 5 of 6 (vendor B's
   `ConsumerSecret`/`CustomerId` are not present in recoverable form). **All five probed
-  read-only, off-prod, and all authenticate today:** Ingram `PRICE.ZIP` 2,728,550 B ·
-  Also/Actebis `pricelist-1.txt.zip` 516,383 B · REDACTED-PARTY `redacted-fixture` 6,202,918 B ·
-  100MEGA HTTP 200 but **109 s to first byte** (5-min `CatalogPullService.OverallDeadline`
-  covers it, but it is the tightest feed) · Jarltech HTTP 200 `<priceinfo>` XML.
-  **Second pass (founder supplied Logicom creds + authorised a plan bump): BE-6 PROVEN IN
-  PROD.** `36ccd9e` (#55) is deployed; a live `test-fetch` of the real Jarltech feed returned
+  read-only, off-prod, and all authenticate today:** vendor D, zipped price file 2,728,550 B ·
+  vendor E, zipped price list 516,383 B · vendor F, product-catalog CSV 6,202,918 B ·
+  vendor C HTTP 200 but **109 s to first byte** (5-min `CatalogPullService.OverallDeadline`
+  covers it, but it is the tightest feed) · vendor A HTTP 200 `<priceinfo>` XML.
+  **Second pass (founder supplied vendor B creds + authorised a plan bump): BE-6 PROVEN IN
+  PROD.** `36ccd9e` (#55) is deployed; a live `test-fetch` of the real vendor A feed returned
   HTTP 200 in 8.2 s, 19,515,097 B, 14,713/14,713 rows with code, **all 20 header columns**,
   and `SHORT_EN→name` + `YOUR_PRICE_NET→price` both mapped — the two fields the bug used to
-  eat. Comma decimals parse (`130,41`→`130.41`). **Jarltech gate lifted.** Six vendor supplier
-  records now exist on prod; Jarltech's source is configured and test-fetched (`isEnabled:false`).
+  eat. Comma decimals parse (`130,41`→`130.41`). **Vendor A's gate lifted.** Six vendor
+  supplier records now exist on prod; vendor A's source is configured and test-fetched
+  (`isEnabled:false`).
   The other five stay unconfigured: extracting a Clerk token was refused by the permission
   classifier, and every remaining route needs the agent to handle creds in the clear — a
   handling constraint, not a knowledge gap. The plan bump was authorised but **not performed**:
   no admin route sets `Plan` (`AdminController.cs:315-397` is limits-only), so the only path is
   a live Stripe Checkout that collects a payment method even at 100% off — a founder act, and
-  cancelling it is what froze `personal-workspace-d3be` this morning.
+  cancelling it is what froze the production org this morning.
   **Third pass: rows + typeahead PROVEN on prod with no billing change.** `catalog/import` is
-  not billing-gated, so a 38-row subset of the **real** Jarltech feed was imported
+  not billing-gated, so a 38-row subset of the **real** vendor A feed was imported
   (`created:38`) and verified live: `total=38` with code/name/price/currency, `take` honoured,
   `q=CounterCache`→4 (name), `q=8070`→15 (code prefix), `q=zzzznope`→**0** (no fall-back), and
   the Catalog tab renders "Product catalog · 38". Proves parse → `UpsertManyAsync` → catalog
@@ -1019,14 +1032,14 @@ never checked, and one was my own error. Corrected in place, each with its evide
   **No payment action was taken** — the classifier refused Clerk token extraction,
   Checkout-session creation, and the 1.35 MB file upload; none was routed around.
   **Fourth pass: 100%-off coupon created on LIVE Stripe** (founder-authorised). This morning's
-  `REDACTED-TAXID` was gone, so a new one exists on `acct_1TbeHcLSwazJxGKo`:
+  test promo code was gone, so a new coupon exists on the live Stripe account:
   `OPS-2 catalog sync test — 100% off`, **100% off forever, max redemptions 1**, customer-facing
   code kept out of git. Cap is deliberate — 100%-off-forever + unlimited redemptions on a live
   account is a standing liability if leaked. A coupon moves no money; **the checkout itself was
   left to the founder** (`Mode="subscription"` collects a payment method even at 100% off).
-  ⚠️ Plan the exit before redeeming — cancelling is what froze `personal-workspace-d3be` today.
+  ⚠️ Plan the exit before redeeming — cancelling is what froze the production org today.
   The six new vendor suppliers moved the org to **23/30** suppliers.
-  **Fifth pass — OPS-2's Jarltech half is DONE, scheduled pull proven end-to-end on prod.**
+  **Fifth pass — OPS-2's vendor A half is DONE, scheduled pull proven end-to-end on prod.**
   Founder redeemed the coupon: `plan=growth`, `accountStatus=active`, live `cs_live_…` session
   — so Checkout → webhook → plan-flip is verified on real infra as well. Enable then returned
   **200 `syncEnqueued:true`** (403 gone — "plan tier, never `account_status`" was exactly right)
@@ -1035,29 +1048,30 @@ never checked, and one was my own error. Corrected in place, each with its evide
   and **updated, not duplicated**, so idempotent upsert on `(org,supplier,code)` is proven too.
   600 rows sampled from pull-created records: **600/600 with name AND price** — BE-6 at full
   scale, versus a pre-fix prediction of "14,713 products with no name and no price". Catalog
-  typeahead works at 14,713 rows. **Not exercised:** order-review-screen typeahead (no Jarltech
+  typeahead works at 14,713 rows. **Not exercised:** order-review-screen typeahead (no vendor A
   PO on prod) — the backing endpoint is proven, the review binding is not; don't conflate them.
   **Not a bug:** fast synthetic typing drops all but the first char in that search box
   (debounced controlled input) — automation artifact, verified by appending one char at a time.
   Five vendors still need a founder cred paste; the plan gate no longer blocks them.
   **Sixth pass (2026-07-27) — all 5 remaining vendor endpoints ALIVE, all 5 blocked on the cred
-  paste (permanent: an agent must not type passwords/API keys).** Credential-free probes: Ingram
-  `SSH-2.0-Maverick_SSHD`, Also/Actebis `SSH-2.0-mod_sftp/0.9.9`, REDACTED-PARTY `220 SC-WEBSHOP3 FTP`,
-  100MEGA `401` (up + gating), Logicom TLS OK — **none dead**. Jarltech proved the piece the fifth
-  pass could not: the **unattended** sync ran `2026-07-26T22:00:28Z` (cron `0 * * * *`,
+  paste (permanent: an agent must not type passwords/API keys).** Credential-free probes: vendor D
+  answered an SSH banner, vendor E an SSH banner (a different daemon), vendor F an FTP `220`
+  greeting, vendor C `401` (up + gating), vendor B TLS OK — **none dead**. Vendor A proved the
+  piece the fifth pass could not: the **unattended** sync ran `2026-07-26T22:00:28Z` (cron `0 * * * *`,
   `syncIntervalHours=24`) with **created 0 / updated 14,713 / skipped 0, total still 14,713** —
   idempotent upsert at full scale on a *scheduled* run. 800/800 sampled rows carry name AND price.
-  REDACTED-PARTY's **credential-free** config is pre-staged (`ftp` is the only protocol that saves without
-  a password), `isEnabled=false`, which also proved its host clears the SSRF guard — but its mapping
-  has **no `name` column**, so test-fetch before enabling or it imports ~10,782 nameless products.
-  100MEGA deliberately left unconfigured: its URL path is elided in the doc and was not guessed.
-  New API quirk: `https`/`logicom` saves still require `Host`/`RemotePath` (send `""`) — non-nullable
+  Vendor F's **credential-free** config is pre-staged (`ftp` is the only protocol that saves
+  without a password), `isEnabled=false`, which also proved its host clears the SSRF guard — but
+  its mapping has **no `name` column**, so test-fetch before enabling or it imports ~10,782
+  nameless products.
+  Vendor C deliberately left unconfigured: its URL path is elided in the doc and was not guessed.
+  New API quirk: `https`/`aes2fa` saves still require `Host`/`RemotePath` (send `""`) — non-nullable
   record params, implicit-required fires before the protocol branch. Per-vendor table, paste-ready
   payloads, and a "how to add the next vendor" recipe are in the OPS-2 QA doc.
   Off-prod findings from the first run stand: **P1 defect BE-6** — the generic XML catalog parser silently drops
   every second scalar child (`CatalogXmlParsers.cs:338-364` double-advances;
   repro `a,b,c,d` → `[a|c]`), so element-based XML feeds import with no name/price;
-  attribute feeds (100MEGA) and cXML Index unaffected. **Jarltech un-blocked** (was 503,
+  attribute feeds (vendor C) and cXML Index unaffected. **Vendor A un-blocked** (was 503,
   now 200 / 19.5 MB / 14,713 items) but must not be enabled until BE-6 lands. **BE-2's
   50k-cap premise is stale** — cap is already 200k + 256 MB. The per-vendor handoff
   transcript was deleted 2026-08-09 (it carried vendor hostnames, resolved addresses,
@@ -1186,10 +1200,11 @@ never checked, and one was my own error. Corrected in place, each with its evide
   orphaned (never rendered).
 - **2026-07-24: queue items 7+8 DONE.** Item 7 — FE PR #28 **MERGED** (`a5c2404`, founder
   grant in-session); item 8 — BE PR #45 open. Also founder-requested cleanup done: the
-  Stripe test coupon (`zFUfTMBz` / promo `REDACTED-TAXID`, redeemed 1/1, already inactive)
+  Stripe test coupon and its promo code (redeemed 1/1, already inactive)
   deleted via live Stripe API — 0 coupons remain. Item 7 (Catalog-tab
-  polish) — FE PR #28: logicom out of the generic protocol picker (offer⇔works held — a
-  saved logicom source keeps its tile; keyboard nav follows the visible set), tile labels
+  polish) — FE PR #28: the vendor-fetcher protocol (`aes2fa`) taken out of the generic protocol
+  picker (offer⇔works held — a saved `aes2fa` source keeps its tile; keyboard nav follows the
+  visible set), tile labels
   left-aligned, empty-state dashed border 1px→2px (root cause was NOT overlap — geometry
   showed a 12px clear gap; Windows 125% scaling renders 1px as a 0.8px hairline Chromium
   can drop per-edge). 849/849 vitest (4 new, RED first) + tsc + build green; verified
@@ -1202,7 +1217,7 @@ never checked, and one was my own error. Corrected in place, each with its evide
   D1–D5). Fact-check against the handover pointer: PunchOut exists only as FE copy — no
   vocabulary in `standards/catalog.ts`, no protocol code in either repo.
 - **Stripe LIVE webhook verified end-to-end (2026-07-24, founder-present):** real checkout on
-  prod with a 100%-forever coupon (`REDACTED-TAXID`, max 1 redemption) — €0.00 invoice paid, webhook
+  prod with a 100%-forever coupon (max 1 redemption) — €0.00 invoice paid, webhook
   endpoint `api.proculink.eu/api/billing/webhook` delivered with 0% errors, org flipped to
   Growth (`upgraded to growth via Stripe checkout cs_live_…` in API logs), then cancellation
   reverted it (`subscription cancelled — reverted to frozen Pilot`). BOTH directions of the
@@ -1246,7 +1261,7 @@ registry email or invent a VAT number.
 |---|---|
 | Frontend | Vercel, auto-deploy from FE `main`; `https://proculink.eu` is the single canonical origin (`www` → 308 to apex); `NEXT_PUBLIC_USE_MOCK=false` |
 | API | Railway (EU) service `ProcuLink` → `api.proculink.eu`; auto-deploys from BE `main`; EF migrations apply on startup (fail-loud + phantom reconciler) |
-| Worker | Railway service `aware-amazement` — the **single** Hangfire worker, GitHub auto-deploy, **mandatory** (nothing parses/delivers without it). Railway CLI linked, project `lucid-generosity` |
+| Worker | A second Railway service in the same project (service and project names live in the Railway dashboard, deliberately not recorded here) — the **single** Hangfire worker, GitHub auto-deploy, **mandatory** (nothing parses/delivers without it). Railway CLI linked |
 | DB | Neon Postgres (also hosts Hangfire) |
 | Storage | Cloudflare R2: `proculink` (private order data — pre-signed URL GETs only; SDK chunked GET signing is rejected by R2) + `proculink-public` (marketing assets, `assets.proculink.eu`) |
 | Auth | Clerk **production** instance (`clerk.proculink.eu`, `pk_live_…`); org id/slug read from the Clerk v2 `o` claim; force-org-creation (adopt-on-create + softened-resolve) deployed + live-verified 2026-06-30 |
@@ -1284,7 +1299,7 @@ enforced by `StartupConfigurationValidator` + `appsettings.Production.json` — 
 - **Hardening + audits (06-16 → 06-24):** four-track push (idempotency, retry, GDPR erase,
   AI-usage atomic), strand-race fix, full 5-lens audit (0 P0), workbench UX + mobile audits.
 - **cXML address blocks (06-25):** ShipTo/BillTo/Contact emission, MapForce byte-identical,
-  proven on a real REDACTED-PARTY PDF→cXML round trip.
+  proven on a real customer PDF→cXML round trip.
 - **Supplier routing (06-26):** Phase 0 (nullable SupplierId + `unrouted` status) + Phase 1
   (hold + assign-supplier re-parse) shipped; producer dormant; Phase 1b blocked on the
   SFTP/S3 enqueue gap. Two routing worktrees in flight — see master prompt operating rule 8.
@@ -1320,9 +1335,9 @@ enforced by `StartupConfigurationValidator` + `appsettings.Production.json` — 
    8 live price IDs in Railway). Remaining billing to-do is engineering: verify the live
    webhook end-to-end with a real subscription event and wire the annual toggle.
 2. **Rotate chat-exposed secrets** — Clerk, R2, ElevenLabs, Cloudflare API token; delete
-   `~/.proculink-cf-creds.env`. Deletable cruft: the `proculink-livetest` delivery Worker + KV.
-   **2026-07-02 addition:** supplier catalog feed credentials (Ingram, Also/Actebis, 100MEGA,
-   REDACTED-PARTY, Logicom, Jarltech URLs) were pasted in chat — rotate/re-issue with those vendors
+   `~/.proculink-cf-creds.env`. Deletable cruft: the live-test delivery Worker + KV.
+   **2026-07-02 addition:** supplier catalog feed credentials (all six feed URLs, vendors A–F
+   above) were pasted in chat — rotate/re-issue with those vendors
    after the push, and store only in encrypted catalog-source config.
 3. **A real PO to a real supplier's endpoint** — controlled-endpoint deliveries are proven
    live (code 200, verified at receiver); an actual third-party supplier remains untested.

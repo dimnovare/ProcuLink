@@ -118,15 +118,15 @@ the current engine does or does NOT support.**
 
 | Family | Files | Schema | Engine support |
 |---|---|---|---|
-| **cXML 1.2** | `redacted-fixture`, `nestle 2.xml`, `new 7.xml`, `new 8.xml` | `<cXML>` OrderRequest | **Supported** by `CxmlOrderParser` |
-| **SAP IDoc ORDERS05** | `new 9.xml`, `new 710.xml`, `new 11.xml`, `new 12.xml`, `new 13.xml` | `<ORDERS05>`/`<IDOC>` E1EDK*/E1EDP* | **NOT supported** — no IDoc parser; root is not `<cXML>` nor UBL `<Order>`, so the XML branch will reject these |
+| **cXML 1.2** | 4 files — two are named after the buyer that issued them, plus `new 7.xml`, `new 8.xml` | `<cXML>` OrderRequest | **Supported** by `CxmlOrderParser` |
+| **SAP IDoc ORDERS05** | 5 files — `new 9.xml`, `new 710.xml`, `new 11.xml`, `new 12.xml`, `new 13.xml` | `<ORDERS05>`/`<IDOC>` E1EDK*/E1EDP* | **NOT supported** — no IDoc parser; root is not `<cXML>` nor UBL `<Order>`, so the XML branch will reject these |
 
 So uploading the 5 IDoc files today should produce a **reject / unsupported** outcome — that
-is expected and is itself a finding (SAP IDoc ORDERS05 is a real inbound format Markit
-receives but the engine cannot yet parse).
+is expected and is itself a finding (SAP IDoc ORDERS05 is a real inbound format the founder's
+day-job employer receives, but the engine cannot yet parse it).
 
-**22 PDFs** — real multi-language POs (DE/FR/PL/EN). One file, **`Facture redacted-fixture`,
-is a French INVOICE ("Facture"), not a purchase order** — expect the Phase-4 PO-vs-invoice
+**22 PDFs** — real multi-language POs (DE/FR/PL/EN). One file **is a French INVOICE, not a
+purchase order** — its filename starts `Facture` — so expect the Phase-4 PO-vs-invoice
 classifier to flag it or the extractor to mis-handle it; it should NOT be treated as a
-deliverable PO. **`redacted-fixture` and `orders-4300267706 (1).pdf` are byte-identical
-duplicates** (both 61003 bytes) — useful for an idempotency / dedupe check.
+deliverable PO. **Two of the PDFs are byte-identical duplicates** — the same order PDF and a
+` (1)` re-download of it, both 61003 bytes — useful for an idempotency / dedupe check.

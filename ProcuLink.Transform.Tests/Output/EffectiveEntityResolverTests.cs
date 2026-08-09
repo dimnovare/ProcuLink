@@ -76,9 +76,9 @@ public class EffectiveEntityResolverTests
         var order = BuildOrder();
         order.ContactName = "Testperson Alex"; order.ContactEmail = "j@x.example"; order.ContactPhone = "33100000000";
         order.ShipToName = "Usine EXEMPLE"; order.ShipToStreet = "12 rue des Essais"; order.ShipToCity = "VILLE-EXEMPLE";
-        order.ShipToPostalCode = "63040"; order.ShipToCountry = "FRANCE"; order.ShipToDeliverTo = "Testperson";
+        order.ShipToPostalCode = "99040"; order.ShipToCountry = "FRANCE"; order.ShipToDeliverTo = "Testperson";
         order.BillToName = "Manufacture Exemple"; order.BillToStreet = "Place des Essais"; order.BillToCity = "VILLE-EXEMPLE CEDEX";
-        order.BillToPostalCode = "63040"; order.BillToCountry = "France";
+        order.BillToPostalCode = "99040"; order.BillToCountry = "France";
 
         var effective = EffectiveEntityResolver.Resolve(order, new OrderMappingOverride());
 
@@ -88,7 +88,7 @@ public class EffectiveEntityResolverTests
         effective.ShipToName.Should().Be("Usine EXEMPLE");
         effective.ShipToStreet.Should().Be("12 rue des Essais");
         effective.ShipToCity.Should().Be("VILLE-EXEMPLE");
-        effective.ShipToPostalCode.Should().Be("63040");
+        effective.ShipToPostalCode.Should().Be("99040");
         effective.ShipToCountry.Should().Be("FRANCE");
         effective.ShipToDeliverTo.Should().Be("Testperson");
         effective.BillToName.Should().Be("Manufacture Exemple");

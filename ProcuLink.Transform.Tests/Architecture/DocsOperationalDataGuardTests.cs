@@ -251,11 +251,19 @@ public class DocsOperationalDataGuardTests
     /// </summary>
     private static readonly HashSet<string> PlatformHosts = new(StringComparer.Ordinal)
     {
-        // Source hosting and CI.
+        // Source hosting, CI and the package feed the build restores from.
         "github.com", "www.github.com", "raw.githubusercontent.com", "design-tokens.github.io",
+        "nuget.org", "api.nuget.org", "www.nuget.org",
+
+        // Schema, namespace and specification hosts reached once the fifth sibling's corpus
+        // included .csproj / launchSettings.json / CHANGELOG.md, which no earlier corpus did.
+        // Each of these is a FORMAT — an XML namespace authority, a JSON-schema registry, or a
+        // published convention — which is #179's platform-vs-counterparty rule, not an exception
+        // to it.
+        "microsoft.com", "schemastore.org", "json.schemastore.org", "keepachangelog.com",
 
         // Hosting / runtime the product is deployed on.
-        "vercel.com", "railway.app", "up.railway.app", "neon.tech", "cloudflare.com",
+        "vercel.com", "vercel.app", "railway.app", "up.railway.app", "neon.tech", "cloudflare.com",
         "dash.cloudflare.com", "developers.cloudflare.com",
 
         // Third-party services the product calls, and their documentation.
@@ -437,9 +445,22 @@ public class DocsOperationalDataGuardTests
     /// Every dotted-quad on one line whose four octets are all in range. Shared with the
     /// anti-vacuity floor for the same reason as <see cref="HostsIn"/>.
     /// </summary>
+    /// <summary>
+    /// A four-part package or assembly version is shape-identical to a dotted quad — every octet
+    /// of <c>4.0.23.3</c> is in range — so nothing about the NUMBER can tell them apart. What can
+    /// is the delimiter it sits behind: a <c>Version=</c> attribute. Found by the fifth sibling
+    /// when its corpus first reached <c>.csproj</c> files, which no earlier corpus contained.
+    /// Stripped before extraction rather than filtered afterwards, so the address rule keeps
+    /// deciding purely by RFC and never learns a second, weaker reason to say yes.
+    /// </summary>
+    private static readonly Regex VersionAttribute = new(
+        @"\b(?:[A-Za-z]*Version)\s*=\s*""?\d+(?:\.\d+){1,3}""?",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     internal static IReadOnlyList<string> AddressesIn(string line)
     {
         var found = new List<string>();
+        line = VersionAttribute.Replace(line, string.Empty);
 
         foreach (Match m in DottedQuad.Matches(line))
         {
@@ -669,7 +690,7 @@ public class DocsOperationalDataGuardTests
     // list in the class doc.
     [InlineData("SFTP mercury.invented-wholesale.de:22 / PRICE.ZIP")]
     // A scheme:// URL on a non-approved host.
-    [InlineData("pull from https://example.invalid/api")]
+    [InlineData("pull from https://feed.invented-partners.com/api")]
     // An account-keyed catalog URL — the customer id is in the path, and the host gives it away.
     [InlineData("https://www.invented-reseller.com/customer_pricelist/204109_79263.xml")]
     // host:port, the form the probes used.

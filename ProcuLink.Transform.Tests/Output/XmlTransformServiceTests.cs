@@ -50,18 +50,18 @@ public class XmlTransformServiceTests
         order.ContactName      = "Testperson Alex";
         order.ContactEmail     = "alex.testperson@buyer.example.com";
         order.ContactPhone     = "33100000000";
-        order.ShipToName       = "Usine EXEMPLE de la REDACTED-PARTY";
+        order.ShipToName       = "Usine EXEMPLE Sud-3";
         order.ShipToDeliverTo  = "Testperson Alex";
         order.ShipToStreet     = "12 rue des Essais B12-3 (CTX_0000)";
         order.ShipToCity       = "VILLE-EXEMPLE";
-        order.ShipToPostalCode = "63040";
+        order.ShipToPostalCode = "99040";
         order.ShipToCountry    = "FRANCE";
         order.ShipToEmail      = "ship@buyer.example.com";
         order.ShipToPhone      = "33100000000";
         order.BillToName       = "EXEMPLE Comptabilite Fournisseurs";
         order.BillToStreet     = "Place des Essais Nord";
         order.BillToCity       = "VILLE-EXEMPLE";
-        order.BillToPostalCode = "63000";
+        order.BillToPostalCode = "99000";
         order.BillToCountry    = "FRANCE";
         return order;
     }
@@ -128,18 +128,18 @@ public class XmlTransformServiceTests
         var header = doc.Root!.Element("Header")!;
 
         var shipTo = header.Element("ShipTo")!;
-        shipTo.Element("Name")!.Value.Should().Be("Usine EXEMPLE de la REDACTED-PARTY");
+        shipTo.Element("Name")!.Value.Should().Be("Usine EXEMPLE Sud-3");
         shipTo.Element("DeliverTo")!.Value.Should().Be("Testperson Alex");
         shipTo.Element("Street")!.Value.Should().Be("12 rue des Essais B12-3 (CTX_0000)");
         shipTo.Element("City")!.Value.Should().Be("VILLE-EXEMPLE");
-        shipTo.Element("PostalCode")!.Value.Should().Be("63040");
+        shipTo.Element("PostalCode")!.Value.Should().Be("99040");
         shipTo.Element("Country")!.Value.Should().Be("FRANCE");
         shipTo.Element("Email")!.Value.Should().Be("ship@buyer.example.com");
         shipTo.Element("Phone")!.Value.Should().Be("33100000000");
 
         var billTo = header.Element("BillTo")!;
         billTo.Element("Name")!.Value.Should().Be("EXEMPLE Comptabilite Fournisseurs");
-        billTo.Element("PostalCode")!.Value.Should().Be("63000");
+        billTo.Element("PostalCode")!.Value.Should().Be("99000");
 
         var contact = header.Element("Contact")!;
         contact.Element("Name")!.Value.Should().Be("Testperson Alex");
