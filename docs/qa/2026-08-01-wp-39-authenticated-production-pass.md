@@ -85,8 +85,8 @@ A complete new order was pushed through the full pipeline on production.
 | Deliver | **Failed** — `delivery_failed`, `failureCause: supplier_endpoint_not_found`, HTTP **404** | `GET /api/orders/{id}` + passport |
 | Failure recovery UI | WP-19 panel rendered correctly (§5) | on-screen |
 
-The delivery target was verified **before** sending to be the project's own test bin
-(`https://webhook.site/<bin-token>/<path>`), not a real supplier endpoint.
+The delivery target was verified **before** sending to be the project's own test bin on a free
+third-party webhook-bin service (`https://<bin-host>/<bin-token>/<path>`), not a real supplier endpoint.
 
 ---
 
@@ -214,8 +214,8 @@ text/plain or JSON, otherwise say the endpoint returned an HTML error page.
 ### 4.5 — P2 · The seeded demo delivery target is dead, so the sample path 404s
 
 `GET /api/suppliers/{sampleSupplierId}/delivery-config` returns `protocol: http`, `autoDeliver: true`, pointing at
-`https://webhook.site/<bin-token>/<path>`. That bin has expired — it answers
-`Error: Token "<bin-token>" not found`.
+a bin on a free third-party webhook-bin service (`https://<bin-host>/<bin-token>/<path>`). That bin
+has expired — it answers `Error: Token "<bin-token>" not found`.
 
 Any operator who follows "ProcuLink Sample Supplier" to the end of the loop today gets a 404. This is the concrete,
 current form of the audit's journey #1 complaint ("the sample cannot complete the loop its own docstring
@@ -314,7 +314,7 @@ metadata, not a global setting.
 
 ### 4.13 — P3 · Dashboard greeting violates the locked spec
 
-`/bridge` renders `Good afternoon, Dim · Saturday, August 1 · 21 blockers need you first`.
+`/bridge` renders `Good afternoon, <first name> · Saturday, August 1 · 21 blockers need you first`.
 `CLAUDE.md` §12 lists under "refuse to build": *"Good morning, Maria" greetings on the dashboard — operators want
 the queue*. The blocker count beside it is useful; the greeting is the part the spec forbids.
 
@@ -353,7 +353,7 @@ Each was checked against the exact string or HTTP behaviour the packet's diff pr
 | WP-29 | Per-row send action | `Prepare output` button on the `ready` row |
 | WP-29 | Accessible stage naming | Mobile cards render `Step 4 of 5 · Transform`, `Step 3 of 5 · Validate` |
 | WP-31 | 16 px inputs, 44 px targets at 390 px | Measured in a true 390 px viewport: `fontSize: 16px`, `height: 44px`; no horizontal overflow |
-| WP-10 | Upload redirects to the returned order id | Landed on `/inbox/b56ddb85-…`, not a hardcoded id |
+| WP-10 | Upload redirects to the returned order id | Landed on the real order's `/inbox/{id}`, not a hardcoded id |
 
 Unauthenticated sweep (separate evidence run):
 
@@ -403,12 +403,12 @@ Stated plainly so the ledger is not over-credited.
 
 ## 8. Artifacts and residue
 
-- **One order was created on production and left in a failed state:**
-  `00000000-0000-0000-0000-000000000000`, PO `WP39-QA-001`, supplier "ProcuLink Sample Supplier",
-  `status: delivery_failed`. It is clearly marked as QA data. Delete it when convenient — it currently counts
-  toward the org's inbox and the "22" order badge.
-- **One real outbound HTTP POST** was made, to the expired webhook.site test bin. It 404'd. No real supplier was
-  contacted at any point.
+- **One order was created on production and left in a failed state:** PO `WP39-QA-001`, supplier
+  "ProcuLink Sample Supplier", `status: delivery_failed` (its id is not recorded here — this repository
+  is public; find it by the PO number). It is clearly marked as QA data. Delete it when convenient — it
+  currently counts toward the org's inbox and the "22" order badge.
+- **One real outbound HTTP POST** was made, to the expired third-party test bin. It 404'd. No real supplier
+  was contacted at any point.
 - **Screenshots were captured but deliberately NOT committed.** Both repositories are public, and the captures
   contain real third-party buyer names, PO numbers, and a buyer's street address and contact name pulled from a
   real PDF. WP-39 asks for them to land in `docs/design-system/current-ui-screenshots-2026-06-26/`; doing that
@@ -434,7 +434,7 @@ Ordered by value, all small.
    runtime schema check here would have caught both.
 5. Make the Issues rail reflect a delivery failure instead of `Nothing to fix` (§4.3). This is WP-36's job.
 6. Cap and content-type-check the supplier error passthrough (§4.4).
-7. Replace the expired webhook.site demo target with an owned permanent echo endpoint (§4.5).
+7. Replace the expired third-party webhook-bin demo target with an owned permanent echo endpoint (§4.5).
 8. Drop the duplicate org read and the non-Pilot `MarkPilotExpiredIfNeededAsync` call (§4.9).
 9. Correct frontend `CLAUDE.md` §1.5: the worker gap is closed, and add "real browser session" as the working
    production-auth method (§1, §6).

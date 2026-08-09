@@ -28,10 +28,9 @@ per-request Clerk JWT pulled inside the page, no secret ever printed.
 | S3 / R2 pull | CSV | `S3IngressConfig.DefaultSupplierId` | configured default | **configured default** | n/a | ✅ LOCAL |
 | IMAP pull | CSV attachment | `email_config.defaultSupplierId` | configured default | **configured default** | n/a | ✅ LOCAL — after **F4** fix |
 
-Order ids are stand-ins (`0…001` … `0…006`); the same stand-in means the same order. Real ids are
-not recorded here — this repository is public. PROD = production `proculink.eu` / `api.proculink.eu`,
-the founder's own organisation, plan `growth`, `accountStatus=active`. LOCAL = local API + Worker +
-Postgres `:5435`, a throwaway local org.
+Order ids are stand-ins (`0…001` … `0…006`); the same stand-in means the same order, and no real id is
+recorded here. PROD = production `proculink.eu` / `api.proculink.eu`, the founder's own organisation,
+plan `growth`, `accountStatus=active`. LOCAL = local API + Worker + Postgres `:5435`, a throwaway org.
 
 ---
 
@@ -154,10 +153,10 @@ implementations always return a `Result`.
 
 The OPS-2 re-run recorded them as different organisations and concluded the frozen org "is not a
 membership of this user, so it cannot be driven from here". The Email-intake tab shows the org's
-inbound address as **`{slug}@orders.proculink.eu`**, built from the DB `Organisation.Slug`.
-The Clerk slug for the same row is a **different string**, derived from the display name, so the
-two read as two tenants and are one row — frozen
-by the Stripe cancel that morning and un-frozen by the Growth checkout that evening.
+inbound address as **`{slug}@orders.proculink.eu`**, built from the DB `Organisation.Slug`, while
+the Clerk slug for the same row is a **different string** derived from the display name. The two
+read as two tenants and are one row — frozen by the Stripe cancel that morning and un-frozen by
+the Growth checkout that evening.
 
 Practical cost: the REST-ingress POST first returned a bodiless **403** because the Clerk slug was
 used in the route. `IngressController.SlugMatchesCallerAsync:47-53` matches on the **DB** slug —

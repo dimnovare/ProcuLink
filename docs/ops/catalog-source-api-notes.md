@@ -33,7 +33,7 @@ costs a confusing round-trip if you build the payload from the controller source
    (AES-256-GCM). Omitting a secret field on a later edit is safe.
 
 5. **Credentials in the URL are rejected** — `Uri.UserInfo` → `400 credentials_in_url_not_allowed`.
-   Basic auth goes in `authConfig`, never in `https://user:pass@host/...`.
+   Basic auth goes in `authConfig`, never inside the URL itself.
 
 6. **Column-mapping targets are whitelisted**: `code, name, unit, price, currency, barcode,
    external_id`, plus the `__noheader__` / `__encoding__` directive keys (whose values are

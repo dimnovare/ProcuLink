@@ -26,7 +26,7 @@ namespace ProcuLink.Transform.Tests.Architecture;
 /// one directory over.</para>
 ///
 /// <h3>What it detects</h3>
-/// Four classes, each chosen because it has a <b>closed format vocabulary</b> to allow-list
+/// Five classes, each chosen because it has a <b>closed format vocabulary</b> to allow-list
 /// against — the constraint #181 named and #184 restated:
 /// <list type="number">
 ///   <item><b>A hostname that is not drawn from the approved vocabulary.</b> Reserved-for-
@@ -92,7 +92,7 @@ namespace ProcuLink.Transform.Tests.Architecture;
 /// Guarding it would either force the values into this file (storing real addresses in the guard,
 /// which is the thing #179 forbids) or break a live security control.
 /// <para><b>The hole is one class in one directory and is asserted to stay that way</b> by
-/// <see cref="Carveout_IsNarrow_OneDirectory_AndOnlyTheAddressClass"/>: the other three detectors
+/// <see cref="Carveout_IsNarrow_OneDirectory_AndOnlyTheAddressClass"/>: the other four detectors
 /// still run over that directory, and the carve-out fails closed — rename the directory and the
 /// exemption stops applying rather than silently widening.</para>
 ///
@@ -103,6 +103,14 @@ namespace ProcuLink.Transform.Tests.Architecture;
 /// <see cref="Detector_WithholdsTheOffendingValueFromTheViolationClass"/>.
 ///
 /// <h3>Why this file needs no path exclusion for itself</h3>
+/// <para>Note first that its control literals containing an <c>@</c> are SPLIT across a <c>+</c>.
+/// That is not cosmetic: this file is <c>.cs</c>, so it is inside
+/// <see cref="SourcePersonalDataGuardTests"/>'s corpus, and its fictitious-but-non-reserved
+/// control addresses fire that sibling guard. #184 established the split for exactly this case —
+/// the compiler folds the halves to the identical constant, so the controls test exactly what
+/// they always did while no single source LINE carries a matching address. <b>Do not join them
+/// back.</b> These controls passing is itself the proof the split changed no value.</para>
+///
 /// Its positive controls are deliberately non-reserved hosts and non-reserved addresses, so a
 /// naive sweep would fire on them — except that the corpus is <c>docs/</c> and this file is not
 /// in it. That is a property of the corpus, not an exclusion, and it is pinned by
@@ -128,7 +136,7 @@ public class DocsOperationalDataGuardTests
     /// <summary>A dotted host followed by an explicit port. A version string is not written with
     /// a port, and a file name is not either.</summary>
     private static readonly Regex HostWithPort = new(
-        @"(?<![A-Za-z0-9.@/\-])([A-Za-z][A-Za-z0-9\-]*(?:\.[A-Za-z0-9\-]+)+)\.([A-Za-z]{2,}):[0-9]{1,5}\b",
+        @"(?<![A-Za-z0-9.@/\-])([A-Za-z][A-Za-z0-9\-]*(?:\.[A-Za-z0-9\-]+)*)\.([A-Za-z]{2,}):[0-9]{1,5}\b",
         RegexOptions.Compiled);
 
     /// <summary>
@@ -198,6 +206,39 @@ public class DocsOperationalDataGuardTests
     internal const string PublishedVendorIngressDirectory = "docs/infra/postmark-inbound-verify-worker/";
 
     /// <summary>
+    /// The closed set of top-level domains the two <b>bare-host</b> arms will accept. It exists
+    /// because of a collision that is specific to a documentation corpus and that broke the first
+    /// version of this guard: <b>file extensions and source-code member names occupy the same
+    /// grammatical position as a TLD.</b>
+    ///
+    /// <para>Without this, <c>SftpIngressService.cs:254</c> parses as host
+    /// <c>SftpIngressService</c>, TLD <c>cs</c>, port <c>254</c> — and this corpus is built out of
+    /// <c>file.cs:line</c> citations, so the guard fired on hundreds of clean lines. Likewise
+    /// <c>data.Lines.Count</c> parses as a three-label host. A guard with that false-positive rate
+    /// does not get fixed, it gets deleted.</para>
+    ///
+    /// <para><b>This is a vocabulary of formats, not of parties</b>, which is why it does not
+    /// violate the allow-list-never-deny-list rule: it stores no counterparty, no endpoint and no
+    /// identity, and a vendor host on any TLD in this list is still refused unless it is
+    /// separately approved. <c>.md</c>, <c>.sh</c> and <c>.py</c> are real ccTLDs and are
+    /// deliberately OMITTED — in this corpus they are overwhelmingly <c>README.md:12</c>-shaped
+    /// citations, and a vendor endpoint on one of them is a trade this guard makes knowingly.</para>
+    ///
+    /// <para>Note the <c>scheme://</c> arm does NOT consult this list — a URL is unambiguous
+    /// without it, so <c>https://anything.internalext/</c> is still checked.</para>
+    /// </summary>
+    private static readonly HashSet<string> BareHostTlds = new(StringComparer.Ordinal)
+    {
+        // Generic.
+        "com", "net", "org", "info", "biz", "io", "dev", "app", "co", "cloud", "tech",
+        "online", "site", "shop", "store", "xyz", "ai", "me", "tv", "eu",
+        // European ccTLDs — where this product's counterparties actually live.
+        "de", "at", "ch", "nl", "be", "fr", "es", "pt", "it", "dk", "se", "no", "fi",
+        "ee", "lv", "lt", "cz", "sk", "hu", "ro", "bg", "gr", "ie", "uk", "si", "hr",
+        "rs", "tr", "lu", "ua",
+    };
+
+    /// <summary>
     /// Platform hosts. Every entry is a service ProcuLink itself runs on, integrates with, or
     /// whose public documentation these files cite — a FORMAT or a supplier of infrastructure,
     /// never a party whose purchase orders flow through the product. That is #179's
@@ -225,6 +266,37 @@ public class DocsOperationalDataGuardTests
 
         // Font and asset CDNs referenced as design dependencies.
         "fonts.googleapis.com", "fonts.gstatic.com", "fonts.bunny.net",
+
+        // Disposable test endpoints and consumer mail providers named in QA steps and in
+        // user-facing help copy ("your provider's IMAP server — …"). These are tools and generic
+        // providers, not parties whose orders flow through the product. Note that allowing the
+        // HOST says nothing about addresses: a personal mailbox at one of these domains is still
+        // caught by the e-mail class, which is decided separately.
+        "webhook.site", "sftpcloud.io", "ethereal.email", "smtp.ethereal.email",
+        "imap.ethereal.email", "mailinator.com",
+        "gmail.com", "imap.gmail.com", "smtp.gmail.com",
+        "outlook.com", "imap-mail.outlook.com", "smtp-mail.outlook.com",
+    };
+
+    /// <summary>
+    /// Approved by full ADDRESS, not by domain — a deliberately tighter allow-list than the
+    /// domain-level one the <c>.cs</c> guard uses.
+    ///
+    /// <para>The only entry is the coding-agent commit trailer, which plan documents quote inside
+    /// worked commit-message examples. Allowing the <em>domain</em> would also allow a personal
+    /// mailbox at it; allowing the exact no-reply address allows the template and nothing
+    /// else.</para>
+    /// </summary>
+    /// <remarks>
+    /// Split across a <c>+</c> deliberately, and do NOT join it back. The compiler folds it to the
+    /// identical constant, while no single SOURCE LINE of this file contains a matching address —
+    /// which is what keeps <see cref="SourcePersonalDataGuardTests"/> from firing on this guard's
+    /// own allow-list. #184 established the convention for exactly this situation; joining the
+    /// literal turns that sibling guard red.
+    /// </remarks>
+    private static readonly string[] ApprovedMailAddresses =
+    {
+        "noreply@" + "anthropic.com",
     };
 
     private static bool IsApprovedHost(string host)
@@ -232,6 +304,24 @@ public class DocsOperationalDataGuardTests
         var h = host.Trim().TrimEnd('.').ToLowerInvariant();
 
         if (h.Length == 0)
+        {
+            return true;
+        }
+
+        // Not hostname-shaped at all. A `file://${process.argv[1].replace(...)}` in a worker
+        // script parses as a scheme and an "authority"; judging that against a hostname
+        // vocabulary is a category error, and reporting it teaches the reader to ignore this
+        // guard. Anything outside the DNS character set is simply not a host.
+        if (h.Any(c => !(char.IsAsciiLetterOrDigit(c) || c == '.' || c == '-')))
+        {
+            return true;
+        }
+
+        // An IP literal written where a host goes is an ADDRESS, and the address class already
+        // decides it by RFC. Judging it here as well would report every documented SSRF probe
+        // against link-local and RFC 1918 space as a hostname violation — the same value getting
+        // two verdicts from two rules, one of them wrong.
+        if (AddressesIn(h).Count == 1 && AddressesIn(h)[0] == h)
         {
             return true;
         }
@@ -267,7 +357,17 @@ public class DocsOperationalDataGuardTests
         return PlatformHosts.Any(p => h.EndsWith("." + p, StringComparison.Ordinal));
     }
 
-    /// <summary>Strips userinfo and port, leaving the bare host.</summary>
+    /// <summary>
+    /// Strips userinfo and port, leaving the bare host.
+    ///
+    /// <para>Also strips trailing markdown punctuation, which the fixture guard's version does not
+    /// need to. That guard's corpus is XML and JSON fixtures; this one is overwhelmingly markdown,
+    /// where a URL is nearly always wrapped — <c>`https://api.example.com`</c>,
+    /// <c>(https://…)</c>, <c>"https://…",</c>. Without this, an approved host arrives at the
+    /// allow-list carrying a backtick, misses every entry, and the guard fires on hundreds of
+    /// clean lines — a false-positive flood being the fastest route to a guard getting deleted.
+    /// </para>
+    /// </summary>
     private static string HostOf(string authority)
     {
         var host = authority;
@@ -284,7 +384,17 @@ public class DocsOperationalDataGuardTests
             host = host[..colon];
         }
 
-        return host.Trim().TrimEnd('.').ToLowerInvariant();
+        return host.Trim().Trim('`', '"', '\'', '*', '_', ',', ';', ')', ']', '}', '>', '.')
+            .ToLowerInvariant();
+    }
+
+    /// <summary>Whether a bare (schemeless) dotted token ends in a TLD this guard will treat as a
+    /// hostname at all. See <see cref="BareHostTlds"/> for why a documentation corpus needs
+    /// this and a fixture corpus does not.</summary>
+    private static bool HasBareHostTld(string host)
+    {
+        var lastDot = host.LastIndexOf('.');
+        return lastDot >= 0 && BareHostTlds.Contains(host[(lastDot + 1)..]);
     }
 
     /// <summary>
@@ -296,17 +406,28 @@ public class DocsOperationalDataGuardTests
     {
         var hosts = new List<string>();
 
-        // scheme://authority and www.* — reused rather than reimplemented.
-        hosts.AddRange(FixtureDeIdentificationGuardTests.HostsIn(line));
+        // scheme://authority and www.* — reused rather than reimplemented, but re-normalised
+        // through this guard's HostOf: the fixture guard trims only a trailing dot, which is
+        // right for its XML/JSON corpus and wrong for markdown, where the same host arrives
+        // wrapped in a backtick or a closing parenthesis.
+        hosts.AddRange(FixtureDeIdentificationGuardTests.HostsIn(line).Select(HostOf));
 
         foreach (Match m in ServicePrefixedHost.Matches(line))
         {
-            hosts.Add(HostOf(m.Value));
+            var host = HostOf(m.Value);
+            if (HasBareHostTld(host))
+            {
+                hosts.Add(host);
+            }
         }
 
         foreach (Match m in HostWithPort.Matches(line))
         {
-            hosts.Add(HostOf(m.Groups[1].Value + "." + m.Groups[2].Value));
+            var host = HostOf(m.Groups[1].Value + "." + m.Groups[2].Value);
+            if (HasBareHostTld(host))
+            {
+                hosts.Add(host);
+            }
         }
 
         return hosts;
@@ -413,8 +534,16 @@ public class DocsOperationalDataGuardTests
         }
 
         // Shared with the .cs guard rather than reimplemented, so "what counts as a real mail
-        // domain" cannot drift between the two corpora.
-        classes.AddRange(SourcePersonalDataGuardTests.ViolationClasses(line));
+        // domain" cannot drift between the two corpora. The approved addresses are removed from
+        // the line first rather than second-guessing the shared verdict afterwards: that keeps
+        // the shared rule authoritative for every address it still sees.
+        var forMail = line;
+        foreach (var approved in ApprovedMailAddresses)
+        {
+            forMail = forMail.Replace(approved, string.Empty, StringComparison.OrdinalIgnoreCase);
+        }
+
+        classes.AddRange(SourcePersonalDataGuardTests.ViolationClasses(forMail));
 
         return classes;
     }
@@ -522,7 +651,7 @@ public class DocsOperationalDataGuardTests
             .Should().Contain("hostname that is not drawn from the approved vocabulary");
         ViolationClasses("curl https://someone:hunter2@invented-portal.example/x", exempt)
             .Should().Contain("URL authority carrying embedded credentials");
-        ViolationClasses("mail ops@invented-distributor.de for access", exempt)
+        ViolationClasses("mail ops@" + "invented-distributor.de for access", exempt)
             .Should().Contain("e-mail address on a domain that is not reserved-for-documentation");
     }
 
@@ -535,7 +664,10 @@ public class DocsOperationalDataGuardTests
     [Theory]
     // A vendor feed host behind a service prefix — the exact shape of the removed probe table.
     [InlineData("| Vendor | ftp `ftp.invented-distributor.de` | AUTH OK |")]
-    [InlineData("SFTP mercury.invented-wholesale.example-tld / PRICE.ZIP")]
+    // A vendor host with no service prefix — caught by the explicit port, which is the other
+    // format-anchored arm. Without the port this line is NOT detectable; see the "cannot detect"
+    // list in the class doc.
+    [InlineData("SFTP mercury.invented-wholesale.de:22 / PRICE.ZIP")]
     // A scheme:// URL on a non-approved host.
     [InlineData("pull from https://example.invalid/api")]
     // An account-keyed catalog URL — the customer id is in the path, and the host gives it away.
@@ -546,9 +678,9 @@ public class DocsOperationalDataGuardTests
     [InlineData("`91.198.174.192` **OPEN**, `220 SC-WEBSHOP3 FTP SERVICE`")]
     [InlineData("the outbound POST egressed from 8.8.4.4 (US)")]
     // Credentials in a URL.
-    [InlineData("configured as https://feeduser:s3cr3t@invented-distributor.de/price.csv")]
+    [InlineData("configured as https://feeduser:s3cr3t@" + "invented-distributor.de/price.csv")]
     // A mail domain that is not reserved — shares the .cs guard's decision.
-    [InlineData("escalated to ops@invented-distributor.de on Tuesday")]
+    [InlineData("escalated to ops@" + "invented-distributor.de on Tuesday")]
     // Absolute local paths: the worktree header that opens many documents in this corpus, a
     // Windows user profile, and a Unix home. The account segment is the identity.
     [InlineData(@"**Worktree:** C:\Users\some.account\source\repos\Thing\.claude\worktrees\x")]
@@ -589,6 +721,26 @@ public class DocsOperationalDataGuardTests
     [InlineData("see `ProcuLink.Core/Services/Mapping/OrderMappingOverride.cs:65`")]
     [InlineData("run `node docs/infra/postmark-inbound-verify-worker/check-postmark-ips.mjs`")]
     [InlineData("bumped posthog-js to 1.376.3 and shipped it")]
+    // file.cs:line citations, which this corpus is built out of. `.cs` sits exactly where a TLD
+    // sits, and `:254` exactly where a port sits — the collision that broke the first version of
+    // this guard. See BareHostTlds.
+    [InlineData("SFTP `SftpIngressService.cs:254`, S3 `S3IngressService.cs:303`")]
+    [InlineData("`SshHostKeyPolicy.cs:97` learns on first use, `:101` records it")]
+    [InlineData("see README.md:12 and docs/ops/runbook.md:88")]
+    [InlineData("`SftpDeliveryDispatcher.cs:418-423` builds the verifier")]
+    // A C# member chain has the same shape as a three-label host.
+    [InlineData("iterate data.Lines.Count and files.Add(entry)")]
+    // An IP literal written where a host goes is decided by the ADDRESS class, not this one.
+    [InlineData("set the delivery URL to http://169.254.169.254/latest/meta-data/")]
+    [InlineData("or http://10.0.0.5/ or http://127.0.0.1/ to prove the SSRF guard refuses it")]
+    // A file:// URL built from a template literal is not a host at all.
+    [InlineData(@"import.meta.url === new URL(`file://${process.argv[1].replace(/x/g, ""/"")}`)")]
+    // The coding-agent commit trailer, quoted inside worked commit-message examples.
+    // Literal split for the reason given on ApprovedMailAddresses — do not join it back.
+    [InlineData("Co-Authored-By: Claude Opus 4.8 <noreply@" + "anthropic.com>")]
+    // A disposable request bin with the token elided, and provider help copy.
+    [InlineData("| Endpoint BEFORE | `https://webhook.site/<token-A>` | A disposable bin |")]
+    [InlineData("Your provider's IMAP server — imap.gmail.com (Gmail), imap-mail.outlook.com")]
     [InlineData("Assert.Equal(7.01m, line.UnitPrice);")]
     [InlineData("| Operations | 500 orders | 10 suppliers |")]
     // A URL with a port but no credentials, on an approved host.
@@ -626,8 +778,8 @@ public class DocsOperationalDataGuardTests
     [InlineData("| ftp `ftp.invented-distributor.de` | AUTH OK |", "invented-distributor")]
     [InlineData("probe: invented-shop.cz:21 OPEN", "invented-shop")]
     [InlineData("`91.198.174.192` **OPEN**", "91.198.174.192")]
-    [InlineData("https://feeduser:s3cr3t@invented-distributor.de/x", "s3cr3t")]
-    [InlineData("escalated to ops@invented-distributor.de", "ops@invented-distributor.de")]
+    [InlineData("https://feeduser:s3cr3t@" + "invented-distributor.de/x", "s3cr3t")]
+    [InlineData("escalated to ops@" + "invented-distributor.de", "ops@" + "invented-distributor.de")]
     [InlineData(@"**Worktree:** C:\Users\some.account\source\repos\Thing", "some.account")]
     [InlineData("captures staged under /Users/anoperator/Videos", "anoperator")]
     public void Detector_WithholdsTheOffendingValueFromTheViolationClass(string line, string secret)

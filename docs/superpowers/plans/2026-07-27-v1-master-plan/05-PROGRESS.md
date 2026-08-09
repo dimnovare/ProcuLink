@@ -797,13 +797,21 @@ I concluded from two fixtures that Markit is the ProcuLink customer and therefor
 **The fixture quotes were exact; the inference was wrong.** Retracted in full. Caught by the execution session.
 
 **The evidence I did not check, every piece verified first-hand now:**
-- **The founder's own Windows home directory is `%USERPROFILE%\`** — a domain-joined account on a
-  `REDACTED-PARTY` domain. Markit is his **employer**. I typed that path in every shell command in this session.
-- ProcuLink's operating entity is **Diip Solutions OÜ**, registry 17527757 (`src/lib/legal-entity.ts`).
-- **`example.invalid` is a live Estonian IT/electronics reseller** — the catalog fixtures carry its real product
-  URLs (`https://example.invalid/ee/en/logilink-mousepad-...`, `example.invalid/images/...`).
-- "Markit" appears in **test files only** — 12 of them plus `CxmlCredentialConfig.cs`. **Nowhere** as an org,
-  tenant, or customer record.
+- **The founder's Windows home directory is a domain-joined account, and the domain segment is his
+  employer's name.** Every absolute path typed into a shell therefore carried an employer identifier,
+  which is why those paths were purged repo-wide on 2026-08-09 in favour of `%USERPROFILE%` / `$HOME`.
+  Treat any absolute local path in a committed file as an identity leak, not a formatting nit — it is
+  the one shape a party-name scrub structurally misses, and `DocsOperationalDataGuardTests` now fails
+  the build on it under `docs/`.
+- ProcuLink's operating entity is **Diip Solutions OÜ** (`src/lib/legal-entity.ts`) — own entity,
+  published on the marketing site, deliberately not scrubbed.
+- **That employer is also a live Estonian IT/electronics reseller**, i.e. a real trading party, and the
+  catalog fixtures carried its real product URLs. Its name is not recorded here: this repository is
+  public, and naming the party inside the note that exists to warn about naming the party is the
+  self-defeating shape #179 called out.
+- The same name appears in **test files only** — 12 of them plus `CxmlCredentialConfig.cs`. **Nowhere**
+  as an org, tenant, or customer record. Those `.cs` occurrences are out of this packet's scope
+  (`docs/**`) and remain on the tip.
 
 Read together: these are **real documents from the founder's day job, used as realistic test data** — the
 *convenience fixtures* branch of the audit's own question, which is the branch I did not take.

@@ -306,7 +306,7 @@ engineering call. The one-line change itself is trivial; the decision is not.
 `OutboundRequestGuard.cs:52-57` allows scheme `http`, and the ERP connectors check no scheme at all
 (`ErplyConnector.cs:39`, `DirectoConnector.cs:36`).
 
-*Failure:* an operator saves `http://erp.supplier.com/xmlcore` for Directo and the purchase order
+*Failure:* an operator saves `http://erp.supplier.example/xmlcore` for Directo and the purchase order
 **plus** `user` / `password` / `key` (`DirectoConnector.cs:49-53`) leave as a cleartext form body.
 Same for an `http://` OAuth `tokenUrl`, which sends `client_id` / `client_secret` in the clear
 (`ProcuLink.Infrastructure/Services/Security/HttpAuthApplier.cs:148-151`). Nothing warns, nothing blocks, no test catches it.
