@@ -835,8 +835,9 @@ never checked, and one was my own error. Corrected in place, each with its evide
 
 ## Snapshot (2026-07-24) — routing/catalog/ops wave queued
 
-- **Active queue: `docs/prompts/2026-07-24-open-queue-handover.md`** — 9 parallel chip
-  items (FE: assign-supplier UI [doc: `2026-07-24-assign-supplier-ui.md`], navbar dedup,
+- **Active queue** (handover prompt deleted 2026-08-09 — it was a spent situational
+  queue carrying live production identifiers; see the docs purge PR) — 9 parallel chip
+  items (FE: assign-supplier UI, navbar dedup,
   catalog-picker scale, marketing SEO; BE: email-park-unrouted, row-cap raise,
   Responses `store:false`, webhook log level, supplier-auto-detect SPEC; OPS: live
   inbound-email e2e, prod vendor-feed test) + founder actions. Chips run **Opus 4.8
@@ -1058,9 +1059,10 @@ never checked, and one was my own error. Corrected in place, each with its evide
   repro `a,b,c,d` → `[a|c]`), so element-based XML feeds import with no name/price;
   attribute feeds (100MEGA) and cXML Index unaffected. **Jarltech un-blocked** (was 503,
   now 200 / 19.5 MB / 14,713 items) but must not be enabled until BE-6 lands. **BE-2's
-  50k-cap premise is stale** — cap is already 200k + 256 MB. Handoff (per-vendor config
-  values + paste-ready read-only prod probe):
-  `docs/qa/2026-07-fable5-push/2026-07-24-ops2-vendor-feed-prod-test.md`.
+  50k-cap premise is stale** — cap is already 200k + 256 MB. The per-vendor handoff
+  transcript was deleted 2026-08-09 (it carried vendor hostnames, resolved addresses,
+  service banners and production supplier record ids); its durable half survives as
+  `docs/ops/catalog-source-api-notes.md`.
 
 ## Snapshot (2026-07-23) — delivery-reliability + UI waves shipped
 
@@ -1160,7 +1162,7 @@ never checked, and one was my own error. Corrected in place, each with its evide
   1585/1585 was re-verified before merge. Docker-wedge incident → DockerProbe chip filed.
 - **Founder gates:** sweep hand-back design call (stuck sweep returns `delivering`+fresh
   timestamp; 4 tests pin it). ~~Preimage relocation~~ DONE 2026-07-23: moved (not deleted) to
-  `C:\Users\Dmitri.REDACTED-PARTY\Documents\proculink-private\`, SHA256-verified, tree clean.
+  `%USERPROFILE%\Documents\proculink-private\`, SHA256-verified, tree clean.
 - **Ops note 2026-07-23:** GitHub Actions went silent ~07:00–08:15 UTC+3 and Vercel dropped one
   main-push webhook (recovered; interim prod deploy went out via `vercel deploy --prod`).
 - **Process rules earned this wave** (durable memory has detail): a comment that JUSTIFIES is a

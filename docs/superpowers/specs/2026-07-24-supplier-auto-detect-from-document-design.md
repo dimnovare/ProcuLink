@@ -1,7 +1,8 @@
 # Supplier auto-detect from document content — design
 
 **Date:** 2026-07-24
-**Source:** `docs/prompts/2026-07-24-open-queue-handover.md` — BE-5
+**Source:** the 2026-07-24 open-queue handover, item BE-5 (that prompt has since been
+deleted — it carried live production identifiers)
 **Status:** **DECIDED 2026-07-25, BACKEND IMPLEMENTED 2026-07-26.** P0 shipped separately
 (BE PR #54). P1 + P2 + P3 built together on the rulings below. The frontend half — supplier
 profile fields for the new identity columns, and rendering the suggestions in

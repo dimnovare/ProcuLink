@@ -39,7 +39,7 @@ each org chooses its direction (outbound "send POs to suppliers" is the default,
 ## Repository layout
 
 ```
-C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\          ← .NET solution (this repo)
+%USERPROFILE%\source\repos\ProcuLink\          ← .NET solution (this repo)
 ├── CLAUDE.md / STATUS.md
 ├── ProcuLink.slnx
 ├── ProcuLink.Api\                   ← ASP.NET Core 8 — dev :5223
@@ -51,7 +51,7 @@ C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\          ← .NET solutio
 ├── ProcuLink.Infrastructure.Tests\
 └── ProcuLink.Api.Tests\
 
-C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink\  ← Frontend
+%USERPROFILE%\source\repos\project-proculink\  ← Frontend
 GitHub: https://github.com/dimnovare/project-proculink
 Package manager: bun · Framework: Next.js 15 (App Router)
 ```
@@ -209,8 +209,8 @@ NEXT_PUBLIC_SENTRY_DSN=
 
 ## Key links
 - Frontend: https://github.com/dimnovare/project-proculink
-- Frontend local: C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink
-- Backend local: C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink
+- Frontend local: %USERPROFILE%\source\repos\project-proculink
+- Backend local: %USERPROFILE%\source\repos\ProcuLink
 - API dev: http://localhost:5223 · Scalar: /scalar · Hangfire (dev): /hangfire
 - Prod: https://proculink.eu · https://api.proculink.eu
 - Clerk: https://clerk.com · Neon: https://neon.tech · Cloudflare R2: https://dash.cloudflare.com

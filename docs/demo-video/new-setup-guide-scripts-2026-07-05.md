@@ -208,7 +208,7 @@ on code overlays of a sample CSV.
 
 Full detail: `project-proculink/scripts/demo-video/tools/PRODUCTION.md` and
 `HELP-INTEGRATION.md`. Run from the **frontend** repo root
-(`C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink`) with `ffmpeg`, `ffprobe` and
+(`%USERPROFILE%\source\repos\project-proculink`) with `ffmpeg`, `ffprobe` and
 ImageMagick (`magick`) on PATH and Playwright browsers installed.
 
 **Founder constraint (non-negotiable):** real-UI screen capture only. The founder

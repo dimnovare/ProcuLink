@@ -1,6 +1,6 @@
 # ProcuLink — Routing & Triage Redesign Brief for Claude Design
 
-*Paste this whole document into Claude Design. It is a companion to the main workbench redesign brief (2026-06-26-redesign-brief-for-claude-design.md) and covers ONE hard problem: when many orders arrive on shared channels, how does the user see, trust, and control **which supplier each order is routed to** — without ever sending to the wrong one. Written by someone who knows exactly what the engine does today and what is intended to be built, so design something buildable and honest.*
+*Paste this whole document into Claude Design. It is a companion to the main workbench redesign brief (2026-06-26-MASTER-redesign-prompt-for-claude-design.md) and covers ONE hard problem: when many orders arrive on shared channels, how does the user see, trust, and control **which supplier each order is routed to** — without ever sending to the wrong one. Written by someone who knows exactly what the engine does today and what is intended to be built, so design something buildable and honest.*
 
 ---
 
@@ -27,9 +27,9 @@ Design the **target** experience below, but know which parts are real so nothing
 - **Splitting one shared channel across many suppliers.** Today one folder = one supplier. The redesign lets a shared channel fan out to many suppliers by content.
 
 **Hard honesty rules (non-negotiable):**
-- Never present a guessed route as a fact. A medium-confidence match is **"Likely Gjensidige — confirm,"** not **"Gjensidige."**
+- Never present a guessed route as a fact. A medium-confidence match is **"Likely Northwind — confirm,"** not **"Northwind."**
 - Never auto-deliver an order whose supplier was guessed below the high-confidence bar or whose layout collides between suppliers. Those go to the human, always.
-- Always show the **evidence** behind a match ("matched on VAT REDACTED-TAXID + this layout seen 7× for Gjensidige"). A route the user can't audit is a route they won't trust.
+- Always show the **evidence** behind a match ("matched on VAT NO000000000 + this layout seen 7× for Northwind"). A route the user can't audit is a route they won't trust.
 
 ---
 
@@ -51,7 +51,7 @@ Every incoming order lands in exactly one tier. **Color + icon + word**, never c
 
 ### 2c. Learn-for-next-time (the payoff)
 When a user confirms or reassigns a route, offer to **remember** it as a rule in plain words:
-*"Remember: orders with VAT REDACTED-TAXID → Gjensidige"* or *"Files in /inbound/acme/ → Acme."*
+*"Remember: orders with VAT NO000000000 → Northwind"* or *"Files in /inbound/acme/ → Acme."*
 Under the hood this binds the supplier to the fingerprint / channel. Surface it as **one toggle**, never as "fingerprint binding." The felt result: **the second identical order routes itself and leaves the queue without a click.**
 
 ---
@@ -69,21 +69,21 @@ A single, calm, dense operational queue — **not** a dashboard of metrics. One 
 
 ### Screen 2 — The routing decision card (per order, expanded)
 When a row is opened or expanded, show the **decision** before the order content:
-- **The verdict, loud:** the supplier + tier ("Likely Gjensidige — 1 of 2 possible") and the **primary action** (Confirm / Choose supplier).
-- **The evidence list:** each signal that fired, as a plain bullet with the actual value — *"VAT on document: REDACTED-TAXID → Gjensidige," "This layout seen 7× for Gjensidige," "Item code BRACKET-S in Gjensidige's catalog."* Conflicting signals shown honestly (*"but the email came from Acme's folder"*).
+- **The verdict, loud:** the supplier + tier ("Likely Northwind — 1 of 2 possible") and the **primary action** (Confirm / Choose supplier).
+- **The evidence list:** each signal that fired, as a plain bullet with the actual value — *"VAT on document: NO000000000 → Northwind," "This layout seen 7× for Northwind," "Item code BRACKET-S in Northwind's catalog."* Conflicting signals shown honestly (*"but the email came from Acme's folder"*).
 - **Then** the received-order summary, so the user can sanity-check identity against content.
 - **Remember-this toggle** sits with the confirm action.
 
 ### Screen 3 — Disambiguation (the collision case — design this best)
 The hardest, most valuable moment: **two or more suppliers fit** (shared layout, or VAT missing). Do NOT make the user guess blind.
-- Present the **candidate suppliers side by side** (2–4), each with **its own evidence** and a confidence bar: *"Acme — matches layout (5×), but no VAT match"* vs *"Gjensidige — matches VAT + layout (7×)."*
+- Present the **candidate suppliers side by side** (2–4), each with **its own evidence** and a confidence bar: *"Acme — matches layout (5×), but no VAT match"* vs *"Northwind — matches VAT + layout (7×)."*
 - One click selects; immediately offer **"Always route this layout/VAT to {chosen} for next time"** (with a quiet note that a shared layout alone isn't enough to auto-route, which is why it asked).
 - If genuinely undecidable, let the user **open the document** inline to read the supplier name, then pick.
 
 ### Screen 4 — Channel → supplier setup
 Where the user wires a channel once. Keep the simple case one line:
 - **Simple:** "Files from this SFTP folder → {supplier}." A picker. Done. (This is today's `DefaultSupplierId`, made legible.)
-- **Sub-folder fan-out:** "Each sub-folder is a supplier" → map `/acme/ → Acme`, `/gjensidige/ → Gjensidige`.
+- **Sub-folder fan-out:** "Each sub-folder is a supplier" → map `/acme/ → Acme`, `/northwind/ → Northwind`.
 - **Content routing (the new mode):** "**Let ProcuLink route by what's in the order**" → orders land in the Routing Inbox at their confidence tier instead of being force-assigned. Explain the trade plainly: *"We'll match each order to a supplier and ask you when we're not sure."*
 - Show the channel's **health** quietly: last poll, last file, last successful route, and any rejected/held items.
 

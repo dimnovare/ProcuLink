@@ -1,7 +1,7 @@
 # ProcuLink — Fable-5 production push — FINAL REPORT
 
 **Date:** 2026-07-02 · **Executed by:** Claude Fable 5 (autonomous) · **Prompt:** `docs/prompts/2026-07-02-fable5-production-push-master-prompt.md`
-**Full findings log:** `docs/qa/2026-07-fable5-push/findings.md` · **Catalog probes:** `catalog-probes.md`
+**Full findings log and catalog probes:** both deleted 2026-08-09 — they carried real counterparty names, live vendor endpoints and production record ids on a public repository.
 
 ---
 
@@ -19,7 +19,7 @@ The engine, the full document/transport/feature matrix, and the UI are productio
 - 3 extraction-quality issues found and **fixed this session** (buyer-party attribution, positional-vs-MPN item code, EU date-locale inversion) with deterministic guards + prompt hardening.
 
 ### Delivery
-- **HTTP end-to-end PROVEN:** Danfoss XLSX → resolve → XML transform → HTTP-delivered → real formatted XML verified byte-for-byte at the receiver (header/ship-to/bill-to/contact/lines).
+- **HTTP end-to-end PROVEN:** a real customer XLSX → resolve → XML transform → HTTP-delivered → real formatted XML verified byte-for-byte at the receiver (header/ship-to/bill-to/contact/lines).
 - All **6 output formats** HTTP-transport-tested (200). Output-format correctness backed by 1,190 green Transform unit tests.
 - SFTP/FTPS/ERP dispatchers run with honest validation (need real endpoints); email blocked by the Postmark gate.
 
@@ -30,7 +30,7 @@ The engine, the full document/transport/feature matrix, and the UI are productio
 
 ### Real distributor catalog feeds (new this session)
 6 of 7 working through the real C# parsers (127k+ rows parsed live):
-Ingram 72,350 · Also/Actebis 8,950 · REDACTED-PARTY 10,782 · 100MEGA 33,633 · REDACTED-PARTY 1,365 · **Logicom 2FA cracked** (live-verified). Jarltech blocked (their origin returns 503 — honest, not faked). New: transparent ZIP unwrap, cXML-Index / generic-XML / CIF-3.0 parsers, per-source column mapping, vendor-fetcher seam, and a catalog comma-decimal 100× price-corruption bug fixed.
+per-feed row counts 72,350 · 33,633 · 10,782 · 8,950 · 1,365, plus one feed whose **2FA login was cracked** (live-verified). The seventh is blocked (that vendor's origin returns 503 — honest, not faked). Vendor names are withheld: this repository is public. New: transparent ZIP unwrap, cXML-Index / generic-XML / CIF-3.0 parsers, per-source column mapping, vendor-fetcher seam, and a catalog comma-decimal 100× price-corruption bug fixed.
 
 ### UI
 - Static audit of 45 routes + 83 components: **0 P0/P1**, no dead controls, no native confirm, comprehensive states, good a11y (3 P2 mock-data items, all gated to empty in prod).
@@ -53,8 +53,8 @@ Ingram 72,350 · Also/Actebis 8,950 · REDACTED-PARTY 10,782 · 100MEGA 33,633 �
 - Merged worktrees cleaned; founder's `routing-phase0/1` worktrees left intact.
 - **Post-deploy live smoke: GREEN** (on the NEW deployment, Railway `7b85acfb` SUCCESS 12:11:45 + Vercel `beeab98`):
   - `/health/ready`: Healthy — DB, **migrations (incl. new AddCatalogColumnMapping)**, storage, worker beating.
-  - Full order flow: Danfoss PDF order → resolve → transform → **delivered** (artifact produced) on the new build.
-  - **New catalog engine live-verified on prod**: REDACTED-PARTY JSON feed configured with per-source column mapping (`Id→code, Name→name, Price→price, EAN→barcode`) → test-fetch **ok, 1,365 rows with codes**, sample row correct (REDACTED-ORDER-DATA, barcode REDACTED-PARTYID).
+  - Full order flow: a real customer PDF order → resolve → transform → **delivered** (artifact produced) on the new build.
+  - **New catalog engine live-verified on prod**: one distributor JSON feed configured with per-source column mapping (`Id→code, Name→name, Price→price, EAN→barcode`) → test-fetch **ok, 1,365 rows with codes**, sample row correct (name, code and barcode all populated).
   - GitHub CI on FE main `beeab98`: **SUCCESS** (build + Playwright e2e; first green main CI in 5 pushes).
   - proculink.eu returns 200 on the new Vercel build.
 
@@ -62,15 +62,15 @@ Ingram 72,350 · Also/Actebis 8,950 · REDACTED-PARTY 10,782 · 100MEGA 33,633 �
 
 ## Residual risk / honest limitations
 - **SFTP/FTPS/ERP delivery** not completed live (no external server / ERP sandbox) — dispatchers verified to run + validate.
-- **Jarltech** catalog feed blocked (vendor origin 503).
+- **One** catalog feed blocked (vendor origin 503).
 - **Postmark** outbound blocked pending account approval.
 - **Validation block-on-fail** and **AI accept + calibration curve** not live-exercised (low priority; unit-tested).
 - Extraction prompt changes can't be behaviorally proven without live OpenAI calls; the deterministic guards (date/item-code/buyer) are unit-tested and are the guarantee.
 
 ## Founder-only launch gates (cannot be done in code)
 1. **Postmark account approval** — unblocks outbound customer email (verified today: cross-domain send → 412).
-2. **Catalog credentials** — Also/Actebis password + REDACTED-PARTY price-list creds (partial pickup); Jarltech retry when their origin recovers.
+2. **Catalog credentials** — two feeds still need vendor-supplied credentials (a password and a price-list login, both partial pickup); retry the blocked feed when that vendor's origin recovers.
 3. **Book-demo URL** (Cal.com/Calendly) for the /watch CTA; optional status-page URL for the footer link.
-4. **Rotate secrets** used in testing — the 6 catalog feed credentials + any chat-exposed keys; delete `~/.proculink-cf-creds.env`.
+4. **Rotate every credential used during testing**, and delete any local credentials file created for it.
 5. **One real PO to one real supplier endpoint** (controlled-endpoint deliveries proven; a genuine third party remains).
-6. **Empty slug** on the growth/active org `75abde9a` — its `/api/ingress/{slug}` URLs are unusable until a slug is generated (self-heals on next login; verify).
+6. **Empty slug** on one growth/active org — its `/api/ingress/{slug}` URLs are unusable until a slug is generated (self-heals on next login; verify).

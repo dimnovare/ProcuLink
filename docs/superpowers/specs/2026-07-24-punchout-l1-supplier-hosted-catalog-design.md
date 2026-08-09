@@ -7,14 +7,14 @@
 (a local product list per supplier); the question is whether ProcuLink should also
 support the L1 model, where the supplier hosts the catalog and the cart comes back.
 **Priority:** unscheduled. No customer has asked for it yet; the trigger would be a
-supplier (distributor-style: Ingram/Also/Logicom class) that offers PunchOut but no
-catalog file/feed.
+broadline IT distributor that offers PunchOut but no catalog file/feed.
 
 ## What L1 PunchOut is, against what we have
 
 Today a supplier's catalog is **local data**: `SupplierProduct` rows per (org, supplier)
 (`ProcuLink.Core/Entities/SupplierProduct.cs:14`), filled by manual CSV/XLSX import or a
-scheduled pull (`SupplierCatalogSource.cs:16` — sftp/ftp/ftps/http/https/logicom). The AI
+scheduled pull (`SupplierCatalogSource.cs:16` — sftp/ftp/ftps/http/https, plus one
+vendor-specific pull protocol). The AI
 mapping suggestion path is deliberately **catalog-grounded**: a suggested supplier code
 that is not a real catalog row is discarded, never surfaced (allow-list guard, pinned by
 `OpenAiMappingServiceTests.cs:236,252,272`).

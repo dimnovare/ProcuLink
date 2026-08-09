@@ -4,6 +4,31 @@
 for Claude Code/Codex so agents do not need to load the full design-system folder
 unless the task requires it.
 
+## ⚠️ Vocabulary correction — read before writing any user-facing string
+
+The founder **purged** the bridge-metaphor words from all user-facing copy. `dock`,
+`crossing`, `lane`, `spine` and "Cross the bridge" survive **only** as code identifiers,
+CSS/design tokens, component names and route names — **never in text a user reads.**
+
+Several files in this folder predate that decision and still present the purged wording as
+prescribed UI copy — `07-content.md`, `10-claude-code-brief.md`, `01-foundations.md`,
+`03-typography.md`, `09-trust-rules.md`, `05-components.md`, `06-motion.md` and
+`showcase.html`. **Where any of them disagrees with this section, this section wins.**
+Do not "restore" the purged vocabulary on the authority of those files.
+
+Shipped copy, for the avoidance of doubt:
+
+| Surface | Ship this | Not this |
+|---|---|---|
+| Order detail primary action | **Send to supplier** | "Cross the bridge →" |
+| Dashboard heading | **Orders** | "Order topology" |
+| A single PO transit | **order** | "crossing" |
+| A supplier/buyer endpoint | **supplier** / **buyer** | "dock" |
+| A buyer↔supplier pairing | **supplier flow** | "lane" |
+| The normalized order model | **canonical PO model** | "spine" |
+
+Stage labels are unchanged: *Parse · Normalize · Validate · Transform · Deliver*.
+
 ## Source Of Truth
 
 The locked design direction is **Direction 4 - The Bridge Layer**, supported by

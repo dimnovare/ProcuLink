@@ -765,7 +765,7 @@ Resolved from the repo rather than escalated. The two real customer purchase ord
   **Ariba PunchOut session**. Its own header comment says the buyer's `<SupplierPartID>` "resolves
   against" our catalog.
 
-**Markit is the ProcuLink customer, and Markit RECEIVES these orders from its own buyers.** That is the
+**The reseller is the ProcuLink customer, and the reseller RECEIVES these orders from its own buyers.** That is the
 supplier / INBOUND side — the mirror image of this plan's documented ICP ("buyer/procurement teams sending
 purchase orders OUT to many suppliers").
 
@@ -788,22 +788,30 @@ catalogue.
 - All marketing copy is written outbound-first throughout.
 
 **FOUNDER DECISION REQUIRED before WP-25/WP-26 merge — this is the one thing here only you can settle:**
-is Markit representative of the customers you intend to sell to, or a first customer who happens to run the
+is the reseller representative of the customers you intend to sell to, or a first customer who happens to run the
 mirror flow? If the former, the vocabulary work must be direction-aware before it lands, not after.
 
-### 2026-07-30 — RETRACTION: the ICP conclusion was wrong. Markit is the founder's EMPLOYER.
+### 2026-07-30 — RETRACTION: the ICP conclusion was wrong. The reseller is the founder's EMPLOYER.
 
-I concluded from two fixtures that Markit is the ProcuLink customer and therefore the real ICP is inbound.
+I concluded from two fixtures that the reseller is the ProcuLink customer and therefore the real ICP is inbound.
 **The fixture quotes were exact; the inference was wrong.** Retracted in full. Caught by the execution session.
 
 **The evidence I did not check, every piece verified first-hand now:**
-- **The founder's own Windows home directory is `C:\Users\Dmitri.REDACTED-PARTY\`** — a domain-joined account on a
-  `REDACTED-PARTY` domain. Markit is his **employer**. I typed that path in every shell command in this session.
-- ProcuLink's operating entity is **Diip Solutions OÜ**, registry 17527757 (`src/lib/legal-entity.ts`).
-- **`example.invalid` is a live Estonian IT/electronics reseller** — the catalog fixtures carry its real product
-  URLs (`https://example.invalid/ee/en/logilink-mousepad-...`, `example.invalid/images/...`).
-- "Markit" appears in **test files only** — 12 of them plus `CxmlCredentialConfig.cs`. **Nowhere** as an org,
-  tenant, or customer record.
+- **The founder's Windows home directory is a domain-joined account, and the domain segment is his
+  employer's name.** Every absolute path typed into a shell therefore carried an employer identifier,
+  which is why those paths were purged repo-wide on 2026-08-09 in favour of `%USERPROFILE%` / `$HOME`.
+  Treat any absolute local path in a committed file as an identity leak, not a formatting nit — it is
+  the one shape a party-name scrub structurally misses, and `DocsOperationalDataGuardTests` now fails
+  the build on it under `docs/`.
+- ProcuLink's operating entity is **Diip Solutions OÜ** (`src/lib/legal-entity.ts`) — own entity,
+  published on the marketing site, deliberately not scrubbed.
+- **That employer is also a live Estonian IT/electronics reseller**, i.e. a real trading party, and the
+  catalog fixtures carried its real product URLs. Its name is not recorded here: this repository is
+  public, and naming the party inside the note that exists to warn about naming the party is the
+  self-defeating shape #179 called out.
+- The same name appears in **test files only** — 12 of them plus `CxmlCredentialConfig.cs`. **Nowhere**
+  as an org, tenant, or customer record. Those `.cs` occurrences are out of this packet's scope
+  (`docs/**`) and remain on the tip.
 
 Read together: these are **real documents from the founder's day job, used as realistic test data** — the
 *convenience fixtures* branch of the audit's own question, which is the branch I did not take.
@@ -825,7 +833,7 @@ as a side effect of fixture archaeology. No marketing copy changes on this eithe
 
 | Claim | Verdict | The unchecked step |
 |---|---|---|
-| "Markit is the ProcuLink customer, so the ICP is inbound" | **RETRACTED** | Fixtures read; **who owns the receiving end never checked.** The answer was in my own shell prompt |
+| "The reseller is the ProcuLink customer, so the ICP is inbound" | **RETRACTED** | Fixtures read; **who owns the receiving end never checked.** The answer was in my own shell prompt |
 
 Five findings have now failed the same way: **two true facts with one unchecked step between them.**
 Registry and filesystem but not the renderer. Dev config but not prod. Frontend links but not backend callers.
@@ -867,7 +875,7 @@ gone and nobody notices until a supplier signs up.
 - Countervailing fact, weighed and accepted: our only real test documents are inbound, so the outbound path
   has **zero real customer documents**. That is a live testing gap, tracked separately — it does not change
   the positioning, but it does mean outbound quality rests on synthetic fixtures.
-- And the conflict that mattered most: **Markit is the founder's employer**, an IT reseller. Selling
+- And the conflict that mattered most: **the reseller is the founder's employer**, an IT reseller and a real trading party. Selling
   supplier-side software to its peers is selling to its competitors.
 
 
@@ -3867,7 +3875,7 @@ nor an enum member, so both are blind to it. "Audit log" on Growth lived there.
 
 **Dismissed after investigation — do not re-open.** The org's `orderLimit: 100000` /
 `supplierLimit: 30` on Growth is the designed admin override (`AdminDtos.cs:68-69`,
-`AdminController.cs:378-403`), not a billing failure. "Good morning, Dim" is a **founder-approved
+`AdminController.cs:378-403`), not a billing failure. "Good morning, <first name>" is a **founder-approved
 mock (2026-07)** per `DashboardContextLine.tsx:3` — CLAUDE.md §12's anti-pattern entry is stale
 and is being corrected; the greeting stays. `DXOH` twice in the supplier list is an initials
 avatar, not a supplier code. The duplicate-PO orders are correct two-format test ingests, and

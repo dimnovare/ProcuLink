@@ -21,7 +21,7 @@ apart from one injected iframe, removed afterwards.
 
 These were changed since WP-39 and are confirmed live:
 
-- **WP-36's failure panel is real and good.** Order `b56ddb85-…` (`delivery_dead_letter`) renders
+- **WP-36's failure panel is real and good.** The order WP-39 left failed (`delivery_dead_letter`) renders
   "We stopped trying to reach this supplier", a plain explanation of the retry exhaustion, two
   concrete actions ("Start sending again", "Check the delivery settings"), and the honest caveat
   "If nothing has changed at the supplier's end, this will probably fail the same way". It also
@@ -43,8 +43,9 @@ These were changed since WP-39 and are confirmed live:
 
 ### F1 (HIGH) — the operator is shown raw HTML as the reason their order failed, still
 
-Production order `00000000-0000-0000-0000-000000000000` renders this **on screen**, inside the
-failure panel, as the explanation of why the order failed:
+The production order left failed by WP-39 (PO `WP39-QA-001`; its id is not recorded here — this
+repository is public) renders this **on screen**, inside the failure panel, as the explanation of
+why the order failed:
 
 ```
 HTTP 404: supplier endpoint returned an error. Response summary: <!-- Tip: Set the Accept
@@ -139,8 +140,8 @@ Also `"1 active suppliers"` — plural agreement.
 
 ### F6 (LOW, feature gap, not a regression) — nothing warns that two orders are the same PO
 
-Three orders in the queue are REDACTED-PARTY PO `REDACTED-PHONE` (pdf, xlsx, pdf); three further pairs
-exist for DNV Poland, REDACTED-PARTY and LähiTapiola. **These are correct.** They are deliberate
+Several orders in the queue are real customer documents ingested more than once — one PO appears
+three times (pdf, xlsx, pdf), and three further pairs exist. **These are correct.** They are deliberate
 two-format test ingests uploaded seconds apart, and WP-22 dedupes one inbound *document*, so two
 different documents rightly produce two orders.
 
@@ -156,12 +157,12 @@ Recording these so nobody pays for them twice:
   bug: `OrderLimitOverride` / `SupplierLimitOverride` are a designed admin feature
   (`AdminDtos.cs:68-69`, `AdminController.cs:378-403`, with an `EffectiveOrderLimit`). This looked
   like a P0 billing failure and is a comped internal account.
-- **"Good morning, Dim" on the dashboard.** CLAUDE.md §12 lists dashboard greetings as an
+- **The dashboard greets the operator by first name.** CLAUDE.md §12 lists dashboard greetings as an
   anti-pattern to refuse to build, but `DashboardContextLine.tsx:3` records it as a
   **founder-approved mock (2026-07)**, shipped with tests. The rule is stale, not the feature.
   CLAUDE.md §12 is being corrected; the greeting stays.
-- **Duplicate supplier codes `DXOH`.** Those are initials avatars concatenated into `innerText`,
-  not supplier codes.
+- **Repeated four-letter "supplier codes" in the suppliers list.** Those are initials avatars
+  concatenated into `innerText`, not supplier codes.
 - **`Needs you 0` on mobile.** A load-time zero-state that resolves to 23; re-read after settling
   shows the correct number.
 

@@ -24,7 +24,7 @@ phase text in this file if there is a mismatch.
 ## Repository layout
 
 ```
-C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\          ← .NET solution
+%USERPROFILE%\source\repos\ProcuLink\          ← .NET solution
 ├── AGENTS.md
 ├── ProcuLink.slnx
 ├── ProcuLink.Api\                   ← ASP.NET Core 8 — dev :5223
@@ -33,7 +33,7 @@ C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\          ← .NET solutio
 ├── ProcuLink.Transform\             ← CSV/XLSX parsers + XML/CSV transform
 └── ProcuLink.Worker\                ← Hangfire jobs host (Phase 3+)
 
-C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink\  ← Frontend
+%USERPROFILE%\source\repos\project-proculink\  ← Frontend
 GitHub: https://github.com/dimnovare/project-proculink
 Package manager: bun
 Framework: Next.js 15 (App Router)
@@ -95,7 +95,7 @@ a new visual direction.
 in `project-proculink`. If Codex is about to generate a component, say
 "use /frontend-design guidance for this" to make it explicit.
 
-**Design source of truth:** `C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink\docs\design-system`.
+**Design source of truth:** `%USERPROFILE%\source\repos\ProcuLink\docs\design-system`.
 Read `00-agent-quick-brief.md` first, then only the specific design files needed
 for the current task. The locked direction is Direction 4 - The Bridge Layer,
 supported by Direction 3 - System Identity.
@@ -489,8 +489,8 @@ NEXT_PUBLIC_SENTRY_DSN=
 
 ## Key links
 - Frontend: https://github.com/dimnovare/project-proculink
-- Frontend local: C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink
-- Backend local: C:\Users\Dmitri.REDACTED-PARTY\source\repos\ProcuLink
+- Frontend local: %USERPROFILE%\source\repos\project-proculink
+- Backend local: %USERPROFILE%\source\repos\ProcuLink
 - API dev: http://localhost:5223
 - Scalar UI: http://localhost:5223/scalar
 - Hangfire dashboard (dev): http://localhost:5223/hangfire

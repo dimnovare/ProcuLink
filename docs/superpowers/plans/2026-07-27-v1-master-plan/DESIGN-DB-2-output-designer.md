@@ -119,8 +119,8 @@ Dialog/page width `min(1320px, 96vw)`, height `min(92vh, 980px)`. Today's 1100px
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │ ▌ A  HEADER  (navy #0B1A2F, 56px)                                                      │
-│ ▌ Output layout          ● Every REDACTED-PARTY order ▾    What does REDACTED-PARTY need?          │
-│ ▌ The file REDACTED-PARTY receives                        [ CSV ][ XML ][ JSON ]   ✕ Close   │
+│ ▌ Output layout          ● Every Contoso order ▾    What does Contoso need?          │
+│ ▌ The file Contoso receives                        [ CSV ][ XML ][ JSON ]   ✕ Close   │
 │ ▌                                                   A standard document (cXML…)        │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
 │ ▌ B  CONTEXT BAR  (white, 44px, only when it has something to say)                     │
@@ -128,13 +128,13 @@ Dialog/page width `min(1320px, 96vw)`, height `min(92vh, 980px)`. Today's 1100px
 ├──────────────────────────────┬───────────────────────┬─────────────────────────────────┤
 │ C  LAYOUT            520px   │ D  DETAILS      380px │ E  OUTPUT              380px    │
 │                              │                       │ (dark #0B1626)                  │
-│ Columns · 11                 │ quantity              │ WHAT REDACTED-PARTY RECEIVES · live   │
+│ Columns · 11                 │ quantity              │ WHAT CONTOSO RECEIVES · live   │
 │                              │ Value                 │ CSV · text/csv · 412 bytes      │
 │ ⠿ {} order                   │                       │ [Copy] [Download] [⏎ Show]      │
 │   ⠿ 1 val orderNumber        │ Name in the file      │                                 │
 │      ← PoNumber → PO-88421   │ [ quantity          ] │ order_no;item;qty;price         │
-│   ⠿ 2 val orderDate          │ Exactly as REDACTED-PARTY   │ PO-88421;WRT-8891;10;12.50      │
-│      ← OrderDate → 15/06/26  │ spelled it.           │ PO-88421;REDACTED-ITEM;4;89.00       │
+│   ⠿ 2 val orderDate          │ Exactly as Contoso   │ PO-88421;CTS-8891;10;12.50      │
+│      ← OrderDate → 15/06/26  │ spelled it.           │ PO-88421;CTS-2214;4;89.00       │
 │      ⟦Date · EU⟧             │                       │                                 │
 │   ⠿ [] lines  repeats/line   │ Comes from            │                                 │
 │     ⠿ {} line                │ [ Quantity        ▾ ] │                                 │
@@ -158,7 +158,7 @@ Dialog/page width `min(1320px, 96vw)`, height `min(92vh, 980px)`. Today's 1100px
 │ F  PROBLEMS STRIP (48px)  ✓ This layout will produce a valid file.                     │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
 │ G  FOOTER (64px)  Saving for every order also applies to this one.                     │
-│                        [Cancel]  [Just this order]  [ Use for every REDACTED-PARTY order ]   │
+│                        [Cancel]  [Just this order]  [ Use for every Contoso order ]   │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ▌ = the existing 2px blue→green left edge (OutputStructureDesigner.tsx:275). Keep verbatim.
 ```
@@ -183,7 +183,7 @@ The tree answers exactly one question: **what does the file look like?** Shape, 
 2. **Column index** — CSV only, on the root's value children and the line item's value children. This is the column order made literal; it is the reason reorder is legible at all in CSV.
 3. **Type pill** — keep the existing four (`{ }` / `[ ]` / `val` / `@`) and the existing colours (`OutputStructureDesigner.tsx:423-428`). Change the `title` from the code word to `Group` / `Repeats for each line` / `Value` / `Attribute`.
 4. **Name** — mono 13/700, click to edit inline (keep).
-5. **Binding pill + resolved value** — `← SupplierItemCode → WRT-8891`. **New:** `OutputSourcePicker.describeBinding` already computes `sample` and throws it away in compact mode (`OutputSourcePicker.tsx:302-304`). Rendering it is the single highest-value density change on the screen, and it is what removes the need for a third "source" column. Truncate at 22ch, full value in `title`.
+5. **Binding pill + resolved value** — `← SupplierItemCode → CTS-8891`. **New:** `OutputSourcePicker.describeBinding` already computes `sample` and throws it away in compact mode (`OutputSourcePicker.tsx:302-304`). Rendering it is the single highest-value density change on the screen, and it is what removes the need for a third "source" column. Truncate at 22ch, full value in `title`.
 6. **State pills** — only when set: format, condition, namespace, transform-count, value-type. Max three visible, then `+2`.
 7. **Row status bar** (existing `inset 3px 0 0 0`): grey container / green bound / violet fixed / **amber unbound** / **red has a Tier-1 problem**. The last two are new and are how the Problems strip (§8) points at the tree.
 
@@ -215,16 +215,16 @@ Keep the dark pane and the byte-identical promise. Add:
 
 ### 4.1 The footer
 
-Today: `Cancel | Save structure`. "Save structure" is the bug — a coordinator reasonably reads it as "saved for REDACTED-PARTY", and it isn't.
+Today: `Cancel | Save structure`. "Save structure" is the bug — a coordinator reasonably reads it as "saved for Contoso", and it isn't.
 
 ```
 Saving for every order also applies to this one.
-                          [Cancel]  [Just this order]  [ Use for every REDACTED-PARTY order ]
+                          [Cancel]  [Just this order]  [ Use for every Contoso order ]
 ```
 
 The **default is reuse**, because the JTBD is literally *"set that up once and never think about it again."* A default that contradicts the stated intent is a design error, not a safe choice.
 
-- `Use for every REDACTED-PARTY order` — primary, `#297F34` fill, white text (5.02:1). Calls `upsertMappingOverride` **then** `promoteMapping(orderId)` — one user action, two calls, one outcome. If the promote leg fails, the order-level save has already succeeded and the message says so exactly (§5).
+- `Use for every Contoso order` — primary, `#297F34` fill, white text (5.02:1). Calls `upsertMappingOverride` **then** `promoteMapping(orderId)` — one user action, two calls, one outcome. If the promote leg fails, the order-level save has already succeeded and the message says so exactly (§5).
 - `Just this order` — secondary, neutral. `upsertMappingOverride` only.
 - On the **supplier mount** there is one button: `Save layout`. No fork — the scope is unambiguous from the route.
 
@@ -232,11 +232,11 @@ The **default is reuse**, because the JTBD is literally *"set that up once and n
 
 Do not close the dialog. The user's next instinct is to check that the preview still looks right, and slamming the sheet shut denies them that. The footer's two buttons are **replaced in place** for 8s by:
 
-> ✓ **Saved.** Every REDACTED-PARTY order will now be built this way — including this one. `Undo`
+> ✓ **Saved.** Every Contoso order will now be built this way — including this one. `Undo`
 
-then it settles, and the scope chip in the header flips to `● Every REDACTED-PARTY order`. The chip flipping *is* the confirmation; the message is the receipt.
+then it settles, and the scope chip in the header flips to `● Every Contoso order`. The chip flipping *is* the confirmation; the message is the receipt.
 
-`Undo` re-promotes the previous config. If WP-12 does not ship an undo path, drop `Undo` and say `View REDACTED-PARTY's layout` instead — do not ship a button that cannot keep its promise.
+`Undo` re-promotes the previous config. If WP-12 does not ship an undo path, drop `Undo` and say `View Contoso's layout` instead — do not ship a button that cannot keep its promise.
 
 Render `PromoteMappingResult.Message` verbatim beneath when present (WP-13's requirement) so the user learns exactly what was saved.
 
@@ -255,21 +255,21 @@ The file this supplier receives.
 │ Saved 14 Jun 2026 by Maria Koch                                 │
 │ ─────────────────────────────────────────────────────────────── │
 │ order_no;item;qty;price                                         │
-│ PO-88421;WRT-8891;10;12.50                                      │
+│ PO-88421;CTS-8891;10;12.50                                      │
 │ ─────────────────────────────────────────────────────────────── │
 │ Used by 47 orders                [Edit layout] [Stop using it]  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**(c) The order header badge.** On `/inbox/[orderId]`, next to the output format: `Layout · REDACTED-PARTY CSV` (or `Layout · this order`). One glance answers "why does this output look like this".
+**(c) The order header badge.** On `/inbox/[orderId]`, next to the output format: `Layout · Contoso CSV` (or `Layout · this order`). One glance answers "why does this output look like this".
 
 ### 4.4 Divergence — the state nobody designs and everybody hits
 
 Once a supplier layout exists and someone edits it inside one order, that order permanently differs and nothing says so. This produces the classic "why did *this* one come out different" support ticket.
 
-Scope chip becomes `◐ Edited for this order` (amber), and the header gains `Revert to REDACTED-PARTY's layout`. In the Problems strip, as a **warning, not an error**:
+Scope chip becomes `◐ Edited for this order` (amber), and the header gains `Revert to Contoso's layout`. In the Problems strip, as a **warning, not an error**:
 
-> This order uses a changed layout. REDACTED-PARTY's other orders still use the saved one. `See the difference` `Revert`
+> This order uses a changed layout. Contoso's other orders still use the saved one. `See the difference` `Revert`
 
 `See the difference` opens the preview pane in a two-up diff (saved | current), text-diff only, no fancy AST diff. If that is too much for WP-15, ship the warning and the revert without the diff — the warning alone closes 80% of the gap.
 
@@ -394,7 +394,7 @@ Combine
   [ Supplier item code  ▾ ]
   [+ Add another field]
 
-Result for this order:  EUR-WRT-8891
+Result for this order:  EUR-CTS-8891
 ```
 
 Writes `Expression = "{{ order.Currency }}-{{ line.SupplierItemCode }}"`. Separator options: `- (dash)` · `_ (underscore)` · `/ (slash)` · `. (dot)` · `space` · `nothing` · `Custom…`.
@@ -480,7 +480,7 @@ Collapsed. Mono input, `--border-control` boundary.
 `Check against this order` reuses `buildExpressionTestDraft` from `OutputMappingEditor.tsx:113-123` verbatim — it already nulls `outputTree` so the tree cannot hijack the render, and it already surfaces the backend's error string rather than swallowing it. Extract it to a shared module rather than copying it.
 
 Result states, all three already handled correctly by `ExpressionTester` — reuse its exact behaviour, including the honest empty:
-- `→ EUR-WRT-8891`
+- `→ EUR-CTS-8891`
 - *"Rendered **empty** for this order — an unknown field name renders blank rather than failing. Names are case-sensitive."*
 - the backend error verbatim.
 
@@ -556,7 +556,7 @@ And the framing is wrong. "Pick an output format" invites a choice from one list
 Reframe the control from a format list into a question with two answer classes.
 
 ```
-What does REDACTED-PARTY need?
+What does Contoso need?
 [ CSV ][ XML ][ JSON ]        A standard document (cXML, UBL, EDI)…
 ```
 
@@ -581,15 +581,15 @@ Then exactly three rows — the three that have an order transform:
 
 | | |
 |---|---|
-| **cXML 1.2** — Ariba, Coupa and most procurement networks. | `Set up cXML for REDACTED-PARTY` |
-| **UBL 2.1** — the OASIS order standard, common across the Nordics and Benelux. | `Set up UBL for REDACTED-PARTY` |
-| **EDI X12 850** — the North American purchase order. | `Set up EDI for REDACTED-PARTY` |
+| **cXML 1.2** — Ariba, Coupa and most procurement networks. | `Set up cXML for Contoso` |
+| **UBL 2.1** — the OASIS order standard, common across the Nordics and Benelux. | `Set up UBL for Contoso` |
+| **EDI X12 850** — the North American purchase order. | `Set up EDI for Contoso` |
 
 Each deep-links to `/library/suppliers/{id}?tab=delivery` (verified: that tab renders `DeliveryGuidedSetup` + `DeliveryConfigEditor`, which is where the output format lives). **Do not list Peppol BIS or EDIFACT** — there is no order transform for either. Listing them would be the same overclaim this panel exists to prevent.
 
 And then the escape hatch, which is the half most people miss — many "we need cXML" requests are actually bespoke XML:
 
-> **Not quite a standard?** If REDACTED-PARTY just wants their own XML file that happens to look similar, build it as XML here — you get their exact tag names and nesting. `Build it as XML`
+> **Not quite a standard?** If Contoso just wants their own XML file that happens to look similar, build it as XML here — you get their exact tag names and nesting. `Build it as XML`
 
 ### 9.4 The capability map
 
@@ -611,12 +611,12 @@ This turns a wall into a map. It is the cheapest thing on this spec and the high
 Never coerce on open. When a loaded tree's `format` is `cXml`/`ubl`/`x12`, keep it and render a bar above the layout, blocking save (Tier 1):
 
 > **This layout is saved as cXML, which can't be built from a layout.**
-> REDACTED-PARTY's cXML is produced by ProcuLink's own cXML builder — this layout isn't being used. Choose what should happen:
+> Contoso's cXML is produced by ProcuLink's own cXML builder — this layout isn't being used. Choose what should happen:
 > `Set up cXML properly` · `Turn this into a plain XML layout` · `Remove this layout`
 
 `Turn this into a plain XML layout` is the *consented* version of today's `designerFormat()` behaviour, and it warns first:
 
-> This will keep your tags and nesting but produce plain XML, without the cXML envelope. REDACTED-PARTY may reject it. Continue?
+> This will keep your tags and nesting but produce plain XML, without the cXML envelope. Contoso may reject it. Continue?
 
 Keep `designerFormat()` for the **display** of an unknown/miscased value (it is a good defensive function) but strip it from the seed and save paths. `xml` must stay `xml`; `cXml` must stay `cXml` until a human decides.
 
@@ -648,7 +648,7 @@ Document-level control in Region B (`XML namespaces: None ▾`), opening a panel
 
 Add instead, under the preset list:
 
-> Looking for cXML, UBL or Peppol as a whole standard document? Those are set up on REDACTED-PARTY's Delivery tab. `Show me`
+> Looking for cXML, UBL or Peppol as a whole standard document? Those are set up on Contoso's Delivery tab. `Show me`
 
 ### 10.3 The mode collision, made actionable
 
@@ -695,7 +695,7 @@ Inline warnings, live against this order's real values:
 **The line-ending migration.** Today it is `Environment.NewLine` → LF on the container. Changing the default changes the bytes every existing CSV supplier receives, so:
 - **New** layouts default to `CRLF` (RFC 4180, and what supplier ERPs expect).
 - **Existing** layouts with no recorded dialect keep LF and show a one-time nudge in Region B:
-  > This layout was saved before line endings could be set, so it currently sends Unix (LF). `Set them to match REDACTED-PARTY's spec`
+  > This layout was saved before line endings could be set, so it currently sends Unix (LF). `Set them to match Contoso's spec`
 
 That preserves byte-parity — which WP-12's whole AC depends on — while fixing the default going forward.
 
@@ -710,13 +710,13 @@ A coordinator opening this with no supplier sample. Today: a textarea, `Build fr
 The first-run screen takes the **whole body** — both columns collapse. A dark, empty preview rectangle beside a paste box is dead weight and reads as broken.
 
 ```
-                        Build the file REDACTED-PARTY needs
+                        Build the file Contoso needs
 
      Every supplier wants their order file a little differently. Set it up once
      here and every future order comes out the same way.
 
   ┌── 1 · Start from their file ────────────────────── recommended ──────────┐
-  │  Paste the example file REDACTED-PARTY sent, or drop it here. We'll match its  │
+  │  Paste the example file Contoso sent, or drop it here. We'll match its  │
   │  structure — column names, order and nesting.                            │
   │  ┌───────────────────────────────────────────────────────────────────┐   │
   │  │  Paste a CSV, XML or JSON file…                                   │   │
@@ -825,7 +825,7 @@ Exact copy, all Tier 1:
 - `The repeating list "lines" is empty, so no order lines would be sent.`
 - `"quantity" is set to send a number, but this order's value is "10 pcs".`
 - `This layout has no columns yet.`
-- `cXML can't be built from a layout. Choose CSV, XML or JSON, or set up cXML on REDACTED-PARTY's Delivery tab.`
+- `cXML can't be built from a layout. Choose CSV, XML or JSON, or set up cXML on Contoso's Delivery tab.`
 
 Tier 2:
 
@@ -1030,7 +1030,7 @@ Today: one scrolling column with the dark preview below the entire tree, so veri
 ```
 ┌─────────────────────────────────┐
 │ ▌ Output layout            ✕    │  56px navy
-│ ▌ ● Every REDACTED-PARTY order        │
+│ ▌ ● Every Contoso order        │
 ├─────────────────────────────────┤
 │ [ Layout ][ Output ][ ⚠ 2 ]     │  48px segmented, pinned
 ├─────────────────────────────────┤
@@ -1095,7 +1095,7 @@ Naming it here so no implementer discovers it mid-build. All five are additive a
 | **XSD / schema validation of namespaced XML** | Well-formedness is checkable here; conformance is `ConformanceService`'s job and belongs on the standards surface. Half-validating would be worse than not. |
 | **Layout version history / diff UI** | `SupplierConnectionRevision` exists server-side. Surfacing it here adds *revision* to the vocabulary — explicitly banned — and doubles the concept count for a rare need. The order-vs-supplier divergence warning (§4.4) covers the one case that actually bites. |
 | **Full undo/redo stack** | Out of proportion. But **single-level undo is in scope** for the three destructive actions — delete a node, reorder, and paste-infer replacing the whole tree — because losing a subtree with no recourse is the cruellest thing this screen can do. Toast-anchored `Undo`, 8s. |
-| **Per-node notes / comments** | Real need (*"REDACTED-PARTY asked for this in March"*), wrong surface. Belongs on the supplier, not on a node. |
+| **Per-node notes / comments** | Real need (*"Contoso asked for this in March"*), wrong surface. Belongs on the supplier, not on a node. |
 | **A shared layout library across workspaces** | Requires a trust and moderation story that does not exist. `Copy from another supplier` within a workspace is 90% of the value. |
 | **Live collaboration** | No. |
 | **A third "source" column in the designer** | Tempting, given the Order Workshop's triptych. But the binding pill's resolved sample value (§3.3, item 5) answers the same question in 40px instead of 380px, and the picker already shows samples. Spending a column on it would squeeze the two panes that matter. |

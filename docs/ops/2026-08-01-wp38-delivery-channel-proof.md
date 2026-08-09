@@ -69,7 +69,8 @@ bytes read back and compared.
 
 1. **SFTP delivery works.** This is the channel's first end-to-end proof with a receiver-side hash.
    The 2026-07-02 live matrix recorded it as `PARTIAL / BLOCKED — needs external infra`
-   (`docs/qa/2026-07-fable5-push/findings.md:62-69`). It is no longer unproven.
+   (that findings log has since been deleted — it carried live counterparty data).
+   It is no longer unproven.
 2. **The server's identity is not part of the decision.** Between run 1 and run 2 the peer's public
    key changed completely. The dispatcher returned the same success, wrote no warning, and — because
    these runs used password authentication, as a supplier-issued SFTP account usually does — **handed
@@ -305,7 +306,7 @@ engineering call. The one-line change itself is trivial; the decision is not.
 `OutboundRequestGuard.cs:52-57` allows scheme `http`, and the ERP connectors check no scheme at all
 (`ErplyConnector.cs:39`, `DirectoConnector.cs:36`).
 
-*Failure:* an operator saves `http://erp.supplier.com/xmlcore` for Directo and the purchase order
+*Failure:* an operator saves `http://erp.supplier.example/xmlcore` for Directo and the purchase order
 **plus** `user` / `password` / `key` (`DirectoConnector.cs:49-53`) leave as a cleartext form body.
 Same for an `http://` OAuth `tokenUrl`, which sends `client_id` / `client_secret` in the clear
 (`ProcuLink.Infrastructure/Services/Security/HttpAuthApplier.cs:148-151`). Nothing warns, nothing blocks, no test catches it.

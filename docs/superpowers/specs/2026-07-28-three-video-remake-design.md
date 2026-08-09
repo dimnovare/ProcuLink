@@ -40,11 +40,9 @@ purchase-order processing. They should not feel like generic AI SaaS ads.
 
 Existing local assets:
 
-- `C:\Users\Dmitri.REDACTED-PARTY\Desktop\ProcuLink\video\proculink-launch-v2.mp4`
-  is 40.4 seconds, 1920x1080, H.264 + AAC. It has useful brand direction but
-  is now old-product-adjacent and too broad.
-- `C:\Users\Dmitri.REDACTED-PARTY\Desktop\ProcuLink\video\proculink-launch-short.mp4`
-  is 24.3 seconds, 1920x1080, silent.
+- A local `proculink-launch-v2.mp4` is 40.4 seconds, 1920x1080, H.264 + AAC. It
+  has useful brand direction but is now old-product-adjacent and too broad.
+- A local `proculink-launch-short.mp4` is 24.3 seconds, 1920x1080, silent.
 - The public walkthrough at
   `https://assets.proculink.eu/marketing/walkthrough.mp4` is 126.3 seconds,
   1920x1080, H.264 + AAC, about 8 MB, last modified 2026-06-13.
@@ -52,7 +50,7 @@ Existing local assets:
 Existing production tooling:
 
 - The frontend repo already has a repeatable video pipeline under
-  `C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink\scripts\demo-video`.
+  `scripts/demo-video`.
 - It can generate ElevenLabs voiceover, capture real UI with Playwright in mock
   mode, assemble with ffmpeg, produce posters, and upload to Cloudflare R2.
 - The current R2 public bucket is `proculink-public`, served through
@@ -60,8 +58,10 @@ Existing production tooling:
 
 Available creative tools:
 
-- ElevenLabs key exists locally at `C:\Users\Dmitri.REDACTED-PARTY\.proculink-secrets\elevenlabs.key`.
-- Kling CLI is authenticated and has available credits.
+- The voiceover provider's API key is held outside the repository, in the
+  operator's local secret store. Never commit it, never print it, and do not
+  record its path here.
+- The image/motion CLI is authenticated and has available credits.
 - Use Kling sparingly for abstract document-flow / bridge-motion shots, not for
   product screens.
 
@@ -239,9 +239,11 @@ ignore/remove the SRT from the staged artifacts.
 
 Local review copies:
 
-- `C:\Users\Dmitri.REDACTED-PARTY\Videos\ProcuLink\walkthrough-2026-07-DRAFT.mp4`
-- `C:\Users\Dmitri.REDACTED-PARTY\Videos\ProcuLink\marketing-2026-07-DRAFT.mp4`
-- `C:\Users\Dmitri.REDACTED-PARTY\Videos\ProcuLink\launch-2026-07-DRAFT.mp4`
+- `walkthrough-2026-07-DRAFT.mp4`
+- `marketing-2026-07-DRAFT.mp4`
+- `launch-2026-07-DRAFT.mp4`
+
+(kept in the operator's local video folder, outside the repository)
 
 Staged R2 keys after founder approval:
 

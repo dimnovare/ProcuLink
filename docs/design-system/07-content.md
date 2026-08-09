@@ -1,5 +1,12 @@
 # 07 — Content & Copy
 
+> ⚠️ **This file predates the vocabulary purge and is partly wrong.** The founder removed
+> `dock` / `crossing` / `lane` / `spine` / "Cross the bridge" from all user-facing copy; they
+> survive only as code identifiers, tokens, component names and routes. The vocabulary table
+> below, and many of the sample strings after it, still show the purged wording as prescribed
+> UI copy. **`00-agent-quick-brief.md` carries the authoritative list and wins over this file.**
+> Do not reintroduce the purged wording into user-visible text on this file's authority.
+
 ## Vocabulary (use these consistently)
 
 | Term | Meaning | Avoid |
@@ -39,7 +46,7 @@
 | Destructive | "Delete mapping" | danger |
 
 **Never:**
-- "Submit", "Send", "Process" → use "Cross the bridge →"
+- "Submit", "Process" → the order-detail primary action is **"Send to supplier"**
 - "Apply magic", "Run AI", "Smart fix" → AI is shown, not advertised
 - "Click here" → buttons say what they do
 - "OK / Cancel" pairs in confirms → name the action ("I've reviewed exceptions. Send to Acme." / "Back")
@@ -60,7 +67,7 @@ The confirm before sending must show: **what** (recipient), **how much** (total)
 ```
 Cross the bridge to Acme Components Ltd.
 
-  Recipient   ops@example.invalid (SFTP)
+  Recipient   ops@acme.example.com (SFTP)
   Total       € 4,436.73
   Lines       14 (3 with AI-mapped SKUs)
   Exceptions  3 reviewed and resolved

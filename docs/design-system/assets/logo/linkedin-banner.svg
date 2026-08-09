@@ -38,10 +38,10 @@
   <g transform="translate(1080, 160)">
     <rect x="0" y="0" width="180" height="36" rx="6" stroke="#1E66C9" stroke-width="1.5" fill="rgba(30,102,201,0.08)"></rect>
     <rect x="0" y="0" width="3" height="36" fill="#1E66C9"></rect>
-    <text x="14" y="22" font-family="Inter, system-ui, sans-serif" font-weight="600" font-size="13" fill="#FFFFFF">Buyer · Heinrich</text>
+    <text x="14" y="22" font-family="Inter, system-ui, sans-serif" font-weight="600" font-size="13" fill="#FFFFFF">Buyer</text>
     <line x1="180" y1="18" x2="280" y2="18" stroke="url(#spine)" stroke-width="2"></line>
     <rect x="280" y="0" width="180" height="36" rx="6" stroke="#2E8E3A" stroke-width="1.5" fill="rgba(46,142,58,0.08)"></rect>
     <rect x="457" y="0" width="3" height="36" fill="#2E8E3A"></rect>
-    <text x="294" y="22" font-family="Inter, system-ui, sans-serif" font-weight="600" font-size="13" fill="#FFFFFF">Supplier · Acme</text>
+    <text x="294" y="22" font-family="Inter, system-ui, sans-serif" font-weight="600" font-size="13" fill="#FFFFFF">Supplier</text>
   </g>
 </svg>

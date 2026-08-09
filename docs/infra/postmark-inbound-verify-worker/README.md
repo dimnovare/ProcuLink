@@ -123,7 +123,7 @@ JavaScript.
 `api.proculink.eu` is **NOT proxied through Cloudflare**. Verified via DNS:
 
 ```
-api.proculink.eu.  CNAME  example.invalid.   → 69.46.46.125 (Railway edge, not a CF IP)
+api.proculink.eu.  CNAME  <railway-origin>.up.railway.app.   → a Railway edge address, not a CF IP
 ```
 
 Consequence: **a Worker route on `api.proculink.eu` cannot intercept traffic
@@ -273,7 +273,7 @@ openssl rand -base64 32
    existing `?token=` exactly as they are).
 
 6. **Prove the mail path**: send a test email to the known-good inbound
-   address (`personal-workspace-d3be` org slug at `orders.proculink.eu`) and
+   address (the org slug at `orders.proculink.eu`) and
    confirm the POST shows **200** in Postmark → Activity → Inbound, and the
    order appears in the app.
 
@@ -299,7 +299,7 @@ rules** → Create:
 
 1. Cloudflare dashboard → `proculink.eu` → DNS → edit `api.proculink.eu` →
    toggle **Proxy status** to *Proxied* (orange cloud). Keep the CNAME target
-   `example.invalid` exactly as is.
+   `<railway-origin>.up.railway.app` exactly as is.
 2. Zone → **SSL/TLS** → set encryption mode to **Full (strict)**. Verify
    `https://api.proculink.eu/scalar` (or any endpoint) still answers before
    going further — if it errors, flip the proxy back off and stop.
@@ -420,7 +420,7 @@ failed webhook deliveries and shows failures in the Activity log).
   future control at the application layer.
 - **Direct-to-origin bypass — until the API-side change ships.** In *both*
   variants the app remains directly reachable: `api.proculink.eu` stays
-  DNS-only (Variant B), and the Railway-issued `example.invalid`
+  DNS-only (Variant B), and the Railway-issued `<railway-origin>.up.railway.app`
   hostname exists regardless of variant. Edge IP-allowlisting alone is
   therefore decorative; **the API requiring `X-Inbound-Proxy-Secret` is the
   step that makes it real.** Do not stop after deploying the Worker.

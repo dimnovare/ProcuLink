@@ -2,6 +2,11 @@
 
 Hand this whole document to Claude Code as the implementation brief. It is self-contained: design system, screen-by-screen specs, signature components, motion language, and stack alignment for Next.js 15 + Tailwind + shadcn/ui + TanStack + Clerk + ASP.NET API.
 
+> ⚠️ **Vocabulary caveat.** This brief predates the founder's purge of `dock` / `crossing` /
+> `lane` / `spine` / "Cross the bridge" from user-facing copy. Screen specs below still use that
+> wording for nav labels, page titles, buttons and toasts. Those words are now code-only.
+> **`00-agent-quick-brief.md` carries the authoritative copy list and wins over this file.**
+
 ---
 
 ## 1. Product brief (paste verbatim)
@@ -326,8 +331,10 @@ Six patterns, each with **one job in the product**. All respect `prefers-reduced
 - Stat block: 84% automation · 1m 42s avg crossing · €4.20 per order · 9 connectors.
 
 ### App
-- Dashboard title: *"Order topology"* (not "Dashboard").
-- Order detail primary action: *"Cross the bridge →"* (not "Send").
+- Dashboard title: *"Orders"*. (This line used to say *"Order topology"*; that heading was
+  purged from user-facing copy — see `00-agent-quick-brief.md`.)
+- Order detail primary action: *"Send to supplier"*. (This line used to say
+  *"Cross the bridge →"*; that wording was purged.)
 - Stage labels: *Parse · Normalize · Validate · Transform · Deliver*.
 - Empty inbox: *"No orders yet. Drop a file or connect a buyer dock."*
 - AI suggestion CTAs: *"Accept" · "Edit" · "Reject"* — never "Apply magic" or sparkles.

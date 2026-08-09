@@ -83,7 +83,7 @@ Same runner, point `--dir` at the real folder:
 
 ```bash
 node run-live.mjs --base https://api.proculink.eu --supplier <guid> --token "..." \
-  --dir "C:\Users\Dmitri.REDACTED-PARTY\Downloads\POs"
+  --dir "%USERPROFILE%\Downloads\POs"
 ```
 
 The 22 PDFs exercise the live **text→LLM extraction** path (needs the prod OpenAI key set

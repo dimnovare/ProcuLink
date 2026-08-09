@@ -34,7 +34,7 @@
 ## File Structure
 
 Create the following isolated production area in
-`C:\Users\Dmitri.REDACTED-PARTY\source\repos\project-proculink`:
+`%USERPROFILE%\source\repos\project-proculink`:
 
 ```text
 scripts/demo-video/films/
@@ -996,8 +996,8 @@ Reject and recapture if any frame shows:
 Create the review directory if absent, then copy:
 
 ```powershell
-New-Item -ItemType Directory -Force -Path 'C:\Users\Dmitri.REDACTED-PARTY\Videos\ProcuLink'
-Copy-Item -LiteralPath 'scripts\demo-video\films\out\walkthrough-2026-07.mp4' -Destination 'C:\Users\Dmitri.REDACTED-PARTY\Videos\ProcuLink\walkthrough-2026-07-DRAFT.mp4'
+New-Item -ItemType Directory -Force -Path '%USERPROFILE%\Videos\ProcuLink'
+Copy-Item -LiteralPath 'scripts\demo-video\films\out\walkthrough-2026-07.mp4' -Destination '%USERPROFILE%\Videos\ProcuLink\walkthrough-2026-07-DRAFT.mp4'
 ```
 
 - [ ] **Step 8: Commit**
@@ -1130,7 +1130,7 @@ to problem/bridge, and every product claim is shown with current UI.
 - [ ] **Step 6: Copy the local review draft**
 
 ```powershell
-Copy-Item -LiteralPath 'scripts\demo-video\films\out\marketing-2026-07.mp4' -Destination 'C:\Users\Dmitri.REDACTED-PARTY\Videos\ProcuLink\marketing-2026-07-DRAFT.mp4'
+Copy-Item -LiteralPath 'scripts\demo-video\films\out\marketing-2026-07.mp4' -Destination '%USERPROFILE%\Videos\ProcuLink\marketing-2026-07-DRAFT.mp4'
 ```
 
 - [ ] **Step 7: Commit**
@@ -1251,7 +1251,7 @@ cards, no captions/SRT, no stale UI.
 - [ ] **Step 5: Copy the local review draft**
 
 ```powershell
-Copy-Item -LiteralPath 'scripts\demo-video\films\out\launch-2026-07.mp4' -Destination 'C:\Users\Dmitri.REDACTED-PARTY\Videos\ProcuLink\launch-2026-07-DRAFT.mp4'
+Copy-Item -LiteralPath 'scripts\demo-video\films\out\launch-2026-07.mp4' -Destination '%USERPROFILE%\Videos\ProcuLink\launch-2026-07-DRAFT.mp4'
 ```
 
 - [ ] **Step 6: Commit**
@@ -1338,18 +1338,18 @@ Write `out/review-manifest.json`:
   "films": [
     {
       "id": "walkthrough-2026-07",
-      "localPath": "C:\\Users\\Dmitri.REDACTED-PARTY\\Videos\\ProcuLink\\walkthrough-2026-07-DRAFT.mp4",
+      "localPath": "%USERPROFILE%\\Videos\\ProcuLink\\walkthrough-2026-07-DRAFT.mp4",
       "stagedR2Key": "marketing/walkthrough-2026-07.mp4",
       "liveReplacementKey": "marketing/walkthrough.mp4"
     },
     {
       "id": "marketing-2026-07",
-      "localPath": "C:\\Users\\Dmitri.REDACTED-PARTY\\Videos\\ProcuLink\\marketing-2026-07-DRAFT.mp4",
+      "localPath": "%USERPROFILE%\\Videos\\ProcuLink\\marketing-2026-07-DRAFT.mp4",
       "stagedR2Key": "marketing/proculink-marketing-2026-07.mp4"
     },
     {
       "id": "launch-2026-07",
-      "localPath": "C:\\Users\\Dmitri.REDACTED-PARTY\\Videos\\ProcuLink\\launch-2026-07-DRAFT.mp4",
+      "localPath": "%USERPROFILE%\\Videos\\ProcuLink\\launch-2026-07-DRAFT.mp4",
       "stagedR2Key": "marketing/proculink-launch-2026-07.mp4"
     }
   ]
@@ -1389,11 +1389,11 @@ Expected: authenticated Cloudflare account and `proculink-public` present.
 Run:
 
 ```powershell
-wrangler r2 object put proculink-public/marketing/walkthrough-2026-07.mp4 --file 'C:\Users\Dmitri.REDACTED-PARTY\Videos\ProcuLink\walkthrough-2026-07-DRAFT.mp4' --content-type video/mp4 --remote
+wrangler r2 object put proculink-public/marketing/walkthrough-2026-07.mp4 --file '%USERPROFILE%\Videos\ProcuLink\walkthrough-2026-07-DRAFT.mp4' --content-type video/mp4 --remote
 wrangler r2 object put proculink-public/marketing/walkthrough-2026-07-poster.jpg --file 'scripts\demo-video\films\out\walkthrough-2026-07-poster.jpg' --content-type image/jpeg --remote
-wrangler r2 object put proculink-public/marketing/proculink-marketing-2026-07.mp4 --file 'C:\Users\Dmitri.REDACTED-PARTY\Videos\ProcuLink\marketing-2026-07-DRAFT.mp4' --content-type video/mp4 --remote
+wrangler r2 object put proculink-public/marketing/proculink-marketing-2026-07.mp4 --file '%USERPROFILE%\Videos\ProcuLink\marketing-2026-07-DRAFT.mp4' --content-type video/mp4 --remote
 wrangler r2 object put proculink-public/marketing/proculink-marketing-2026-07-poster.jpg --file 'scripts\demo-video\films\out\marketing-2026-07-poster.jpg' --content-type image/jpeg --remote
-wrangler r2 object put proculink-public/marketing/proculink-launch-2026-07.mp4 --file 'C:\Users\Dmitri.REDACTED-PARTY\Videos\ProcuLink\launch-2026-07-DRAFT.mp4' --content-type video/mp4 --remote
+wrangler r2 object put proculink-public/marketing/proculink-launch-2026-07.mp4 --file '%USERPROFILE%\Videos\ProcuLink\launch-2026-07-DRAFT.mp4' --content-type video/mp4 --remote
 wrangler r2 object put proculink-public/marketing/proculink-launch-2026-07-poster.jpg --file 'scripts\demo-video\films\out\launch-2026-07-poster.jpg' --content-type image/jpeg --remote
 ```
 
@@ -1460,7 +1460,7 @@ wrangler r2 object put proculink-public/marketing/archive/walkthrough-poster-bef
 - [ ] **Step 3: Replace the live MP4 and poster**
 
 ```powershell
-wrangler r2 object put proculink-public/marketing/walkthrough.mp4 --file 'C:\Users\Dmitri.REDACTED-PARTY\Videos\ProcuLink\walkthrough-2026-07-DRAFT.mp4' --content-type video/mp4 --remote
+wrangler r2 object put proculink-public/marketing/walkthrough.mp4 --file '%USERPROFILE%\Videos\ProcuLink\walkthrough-2026-07-DRAFT.mp4' --content-type video/mp4 --remote
 wrangler r2 object put proculink-public/marketing/walkthrough-poster.jpg --file 'scripts\demo-video\films\out\walkthrough-2026-07-poster.jpg' --content-type image/jpeg --remote
 ```
 
