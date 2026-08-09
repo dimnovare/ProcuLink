@@ -1,7 +1,7 @@
 # ProcuLink — Fable-5 production push — FINAL REPORT
 
 **Date:** 2026-07-02 · **Executed by:** Claude Fable 5 (autonomous) · **Prompt:** `docs/prompts/2026-07-02-fable5-production-push-master-prompt.md`
-**Full findings log:** `docs/qa/2026-07-fable5-push/findings.md` · **Catalog probes:** `catalog-probes.md`
+**Full findings log and catalog probes:** both deleted 2026-08-09 — they carried real counterparty names, live vendor endpoints and production record ids on a public repository.
 
 ---
 

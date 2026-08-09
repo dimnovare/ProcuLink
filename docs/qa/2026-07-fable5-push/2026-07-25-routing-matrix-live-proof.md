@@ -8,7 +8,9 @@ order a document is — **cannot be reached on production at all**, because the 
 channel silently guesses instead. Two P1 defects came out of the run, both live-observed.
 
 Method precedent: OPS-1 (Postmark → `{slug}@orders.proculink.eu`) and the OPS-2 re-run
-(`2026-07-24-ops2-vendor-feed-prod-test.md`) — founder's Chrome signed in to prod, Growth plan,
+(that vendor-feed transcript was deleted 2026-08-09 — it carried live vendor endpoints and
+production record ids; its durable half is `docs/ops/catalog-source-api-notes.md`)
+— founder's Chrome signed in to prod, Growth plan,
 per-request Clerk JWT pulled inside the page, no secret ever printed.
 
 ---
