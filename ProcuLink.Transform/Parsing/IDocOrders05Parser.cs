@@ -39,8 +39,10 @@ namespace ProcuLink.Transform.Parsing;
 ///   internal code (e.g. <c>704</c>) so it is used only when alphabetic.</item>
 /// <item>Order date — <c>E1EDK02 DATUM</c> (<c>yyyyMMdd</c>).</item>
 /// <item>Grand total — <c>E1EDS01 SUMME</c>.</item>
-/// <item>Buyer name — <c>E1EDKA1</c> with <c>PARVW=AG</c>; supplier name — <c>PARVW=LF</c>
-///   (<c>WE</c> = ship-to has no canonical home and is ignored).</item>
+/// <item>Buyer name — <c>E1EDKA1</c> with <c>PARVW=AG</c>; supplier name — <c>PARVW=LF</c>.
+///   <c>PARVW=WE</c> (ship-to) and <c>PARVW=RE</c> (bill-to) become <see cref="ParsedParty"/>
+///   rows, which the ingestion layer denormalises onto the ShipTo*/BillTo* columns the
+///   cXML / UBL / X12 writers emit from.</item>
 /// <item>Lines — <c>E1EDP01</c>: <c>POSEX</c>→line no., <c>MENGE</c>→qty, <c>MENEE</c>→unit,
 ///   <c>VPREI</c>→unit price, <c>NETWR</c>→line amount. Buyer item code from <c>E1EDP19 IDTNR</c>
 ///   (preferring <c>QUALF=002</c> buyer material number, then <c>QUALF=001</c>); description from
@@ -120,10 +122,19 @@ public sealed class IDocOrders05Parser : IPurchaseOrderParser
         // ambiguity bit is discarded here (a header total never gates a line's review).
         var (grandTotal, _) = ParseDecimal(ChildValue(eds01, "SUMME"));
 
-        // ── Parties: AG=buyer, LF=supplier (WE=ship-to ignored) ────────────────
+        // ── Parties: AG=buyer, LF=supplier, WE=ship-to, RE=bill-to ─────────────
         var ka1 = Children(idoc, "E1EDKA1").ToList();
         var buyerName = ExtractPartyName(ka1, "AG");
         var supplierName = ExtractPartyName(ka1, "LF");
+
+        // WE / RE carry the addresses the emitters need. Only these two roles are emitted:
+        // the ingestion layer denormalises exactly shipTo/billTo onto the flat columns, and
+        // AG / LF already have canonical homes in BuyerName / SupplierName above.
+        var parties = new List<ParsedParty>(2);
+        var shipToParty = BuildParty(ka1, "WE", "shipTo");
+        if (shipToParty is not null) parties.Add(shipToParty);
+        var billToParty = BuildParty(ka1, "RE", "billTo");
+        if (billToParty is not null) parties.Add(billToParty);
 
         // ── Lines: one per E1EDP01 ─────────────────────────────────────────────
         var lineEls = Children(idoc, "E1EDP01").ToList();
@@ -203,7 +214,8 @@ public sealed class IDocOrders05Parser : IPurchaseOrderParser
             GrandTotal: grandTotal,
             DocumentType: "order",
             // V5: header-level requested delivery date from E1EDK03 IDDAT=012.
-            RequestedDeliveryDate: requestedDeliveryDate);
+            RequestedDeliveryDate: requestedDeliveryDate,
+            Parties: parties.Count > 0 ? parties : null);
     }
 
     // ── Public static helper (factory-friendly content detection) ───────────────
@@ -270,6 +282,40 @@ public sealed class IDocOrders05Parser : IPurchaseOrderParser
         if (!string.IsNullOrWhiteSpace(name)) return name;
 
         return NullIfEmpty(ChildValue(seg, "ORGTX")) ?? NullIfEmpty(ChildValue(seg, "BNAME"));
+    }
+
+    /// <summary>
+    /// Maps the E1EDKA1 partner segment with the given SAP partner role
+    /// (<paramref name="parvw"/> — <c>WE</c> ship-to, <c>RE</c> bill-to) onto a
+    /// <see cref="ParsedParty"/> carrying the address SAP states alongside the name:
+    /// <c>STRAS</c> street, <c>ORT01</c> city, <c>PSTLZ</c> postal code, <c>LAND1</c> country,
+    /// <c>TELF1</c> phone, <c>BNAME</c> contact person, <c>ILNNR</c> the partner's ILN/GLN.
+    /// Returns null when the segment is absent or nameless — a nameless party reaches no
+    /// ShipTo*/BillTo* column, because the ingestion layer keys the denormalisation on the name.
+    /// </summary>
+    private static ParsedParty? BuildParty(IEnumerable<XElement> ka1Segments, string parvw, string role)
+    {
+        var seg = ka1Segments.FirstOrDefault(e =>
+            string.Equals(ChildValue(e, "PARVW"), parvw, StringComparison.OrdinalIgnoreCase));
+        if (seg is null) return null;
+
+        var name = ExtractPartyName(new[] { seg }, parvw);
+        if (string.IsNullOrWhiteSpace(name)) return null;
+
+        return new ParsedParty(
+            Role:        role,
+            Name:        name,
+            Street:      NullIfEmpty(ChildValue(seg, "STRAS")),
+            City:        NullIfEmpty(ChildValue(seg, "ORT01")),
+            PostalCode:  NullIfEmpty(ChildValue(seg, "PSTLZ")),
+            Country:     NullIfEmpty(ChildValue(seg, "LAND1")),
+            // STCD1 is the SAP tax number 1 field; PARTN/LIFNR is the partner number the
+            // buyer's SAP knows this address by, which is the closest thing to a reference.
+            Vat:         NullIfEmpty(ChildValue(seg, "STCD1")),
+            EdiCode:     NullIfEmpty(ChildValue(seg, "ILNNR")),
+            Reference:   NullIfEmpty(ChildValue(seg, "PARTN")) ?? NullIfEmpty(ChildValue(seg, "LIFNR")),
+            ContactName: NullIfEmpty(ChildValue(seg, "BNAME")),
+            Phone:       NullIfEmpty(ChildValue(seg, "TELF1")));
     }
 
     /// <summary>

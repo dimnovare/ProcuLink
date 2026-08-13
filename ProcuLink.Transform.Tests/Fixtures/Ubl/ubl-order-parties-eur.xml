@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SYNTHETIC fixture, hand-authored — NOT a captured real-world document.
+
+  It pins the shape UBL 2.1 Order states its parties, totals and delivery date in, so the
+  parser's reads are exercised against a document rather than an inline string. Because it was
+  written to match the specification (and this parser), it cannot prove what a real sender's
+  quirks look like: element ordering, optional-element omission, namespace-prefix choices and
+  non-conformant date/number formats are all unrepresented. Only the cXML and IDoc corpora
+  carry genuine captured documents.
+
+  All parties are fictitious placeholder names; addresses, postcodes, phone numbers and
+  identifiers are documentation-reserved values.
+-->
+<Order xmlns="urn:oasis:names:specification:ubl:schema:xsd:Order-2"
+       xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+       xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+  <cbc:CustomizationID>urn:fdc:peppol.eu:poacc:trns:order:3</cbc:CustomizationID>
+  <cbc:ID>PO-UBL-000123</cbc:ID>
+  <cbc:IssueDate>2026-05-28</cbc:IssueDate>
+  <cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode>
+
+  <cac:BuyerCustomerParty>
+    <cac:Party>
+      <cbc:EndpointID schemeID="0088">0000000000000</cbc:EndpointID>
+      <cac:PartyIdentification>
+        <cbc:ID>BUYER-0001</cbc:ID>
+      </cac:PartyIdentification>
+      <cac:PartyName>
+        <cbc:Name>Contoso Buying OY</cbc:Name>
+      </cac:PartyName>
+      <cac:PostalAddress>
+        <cbc:StreetName>1 Example Street</cbc:StreetName>
+        <cbc:AdditionalStreetName>Floor 0</cbc:AdditionalStreetName>
+        <cbc:CityName>Example City</cbc:CityName>
+        <cbc:PostalZone>00000</cbc:PostalZone>
+        <cac:Country>
+          <cbc:IdentificationCode>FI</cbc:IdentificationCode>
+        </cac:Country>
+      </cac:PostalAddress>
+      <cac:PartyTaxScheme>
+        <cbc:CompanyID>FI00000000</cbc:CompanyID>
+        <cac:TaxScheme>
+          <cbc:ID>VAT</cbc:ID>
+        </cac:TaxScheme>
+      </cac:PartyTaxScheme>
+      <cac:PartyLegalEntity>
+        <cbc:RegistrationName>Contoso Buying OY</cbc:RegistrationName>
+        <cbc:CompanyID>0000000-0</cbc:CompanyID>
+      </cac:PartyLegalEntity>
+      <cac:Contact>
+        <cbc:Name>Buyer Contact</cbc:Name>
+        <cbc:Telephone>0000000000</cbc:Telephone>
+        <cbc:ElectronicMail>buyer.contact@example.com</cbc:ElectronicMail>
+      </cac:Contact>
+    </cac:Party>
+  </cac:BuyerCustomerParty>
+
+  <cac:SellerSupplierParty>
+    <cac:Party>
+      <cac:PartyName>
+        <cbc:Name>Fabrikam Supply AB</cbc:Name>
+      </cac:PartyName>
+    </cac:Party>
+  </cac:SellerSupplierParty>
+
+  <cac:Delivery>
+    <cac:DeliveryLocation>
+      <cbc:ID>SITE-0002</cbc:ID>
+      <cac:Address>
+        <cbc:StreetName>2 Example Road</cbc:StreetName>
+        <cbc:CityName>Example Town</cbc:CityName>
+        <cbc:PostalZone>00001</cbc:PostalZone>
+        <cac:Country>
+          <cbc:IdentificationCode>SE</cbc:IdentificationCode>
+        </cac:Country>
+      </cac:Address>
+    </cac:DeliveryLocation>
+    <cac:RequestedDeliveryPeriod>
+      <cbc:StartDate>2026-06-15</cbc:StartDate>
+      <cbc:EndDate>2026-06-19</cbc:EndDate>
+    </cac:RequestedDeliveryPeriod>
+    <cac:DeliveryParty>
+      <cac:PartyName>
+        <cbc:Name>Contoso Warehouse SE</cbc:Name>
+      </cac:PartyName>
+      <cac:Contact>
+        <cbc:Name>Warehouse Contact</cbc:Name>
+        <cbc:Telephone>0000000001</cbc:Telephone>
+        <cbc:ElectronicMail>warehouse@example.com</cbc:ElectronicMail>
+      </cac:Contact>
+    </cac:DeliveryParty>
+  </cac:Delivery>
+
+  <cac:TaxTotal>
+    <cbc:TaxAmount currencyID="EUR">62.50</cbc:TaxAmount>
+  </cac:TaxTotal>
+
+  <cac:AnticipatedMonetaryTotal>
+    <cbc:LineExtensionAmount currencyID="EUR">250.00</cbc:LineExtensionAmount>
+    <cbc:TaxExclusiveAmount currencyID="EUR">250.00</cbc:TaxExclusiveAmount>
+    <cbc:TaxInclusiveAmount currencyID="EUR">312.50</cbc:TaxInclusiveAmount>
+    <cbc:PayableAmount currencyID="EUR">312.50</cbc:PayableAmount>
+  </cac:AnticipatedMonetaryTotal>
+
+  <cac:OrderLine>
+    <cac:LineItem>
+      <cbc:ID>1</cbc:ID>
+      <cbc:Quantity unitCode="EA">10</cbc:Quantity>
+      <cac:Price>
+        <cbc:PriceAmount currencyID="EUR">12.50</cbc:PriceAmount>
+      </cac:Price>
+      <cac:Item>
+        <cbc:Name>Widget Type A</cbc:Name>
+        <cac:BuyersItemIdentification>
+          <cbc:ID>BUY-A-0001</cbc:ID>
+        </cac:BuyersItemIdentification>
+        <cac:SellersItemIdentification>
+          <cbc:ID>SUP-A-0001</cbc:ID>
+        </cac:SellersItemIdentification>
+      </cac:Item>
+    </cac:LineItem>
+  </cac:OrderLine>
+
+  <cac:OrderLine>
+    <cac:LineItem>
+      <cbc:ID>2</cbc:ID>
+      <cbc:Quantity unitCode="EA">5</cbc:Quantity>
+      <cac:Price>
+        <cbc:PriceAmount currencyID="EUR">25.00</cbc:PriceAmount>
+      </cac:Price>
+      <cac:Item>
+        <cbc:Name>Widget Type B</cbc:Name>
+        <cac:BuyersItemIdentification>
+          <cbc:ID>BUY-B-0002</cbc:ID>
+        </cac:BuyersItemIdentification>
+      </cac:Item>
+    </cac:LineItem>
+  </cac:OrderLine>
+</Order>

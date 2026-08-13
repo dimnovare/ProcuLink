@@ -1,0 +1,25 @@
+ISA*00*          *00*          *ZZ*TESTBUYER      *ZZ*TESTSUPPLIER   *260528*1200*U*00401*000000001*0*P*>~
+GS*PO*TESTBUYER*TESTSUPPLIER*20260528*1200*1*X*004010~
+ST*850*0001~
+BEG*00*NE*PO-X12-000123**20260528~
+CUR*BY*USD~
+DTM*002*20260615~
+N1*BY*Contoso Buying Inc*92*BUYER-0001~
+N3*1 Example Street*Suite 0~
+N4*Example City*NY*00000*US~
+PER*OC*Buyer Contact*EM*buyer.contact@example.com*TE*0000000000~
+N1*ST*Contoso Warehouse US*92*SITE-0002~
+N3*2 Example Road~
+N4*Example Town*NJ*00001*US~
+PER*OC*Warehouse Contact*EM*warehouse@example.com*TE*0000000001~
+N1*BT*Contoso Finance Inc*92*BILL-0003~
+N3*4 Example Lane~
+N4*Example Borough*NY*00003*US~
+PO1*1*10*EA*12.50**BP*BUY-A-0001*VP*SUP-A-0001~
+PID*F****Widget Type A~
+PO1*2*5*EA*25.00**BP*BUY-B-0002~
+PID*F****Widget Type B~
+CTT*2~
+SE*21*0001~
+GE*1*1~
+IEA*1*000000001~
