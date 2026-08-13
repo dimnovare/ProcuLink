@@ -14,15 +14,34 @@ on the Railway API service.
 The inbound-email flow is:
 
 ```
-{slug}@orders.proculink.eu
+{token}@orders.proculink.eu
   → Cloudflare Email Routing MX
   → Postmark inbound
   → webhook POST https://api.proculink.eu/api/inbound-email/postmark?token=…
 ```
 
+The local part is a **per-organisation inbound address** — 128 bits of CSPRNG
+output, issued per org (`GET /api/settings/inbound-email`), stored HMAC-hashed
+in `org_inbound_addresses`, and resolved by `IInboundAddressService`. It is a
+credential, not a label: the relay fans the whole domain into one webhook URL
+and cannot attach a per-tenant header, so the recipient address is the only
+field that differs per tenant and therefore the only thing that can name an
+organisation. The full reasoning is the class doc-comment on
+`ProcuLink.Infrastructure\Services\Email\InboundAddressService.cs`.
+
+`{slug}@orders.proculink.eu` is the **legacy** form. Until 2026-08 the local
+part was the org's public slug — kebab-cased company name plus four hex
+characters — so guessing a slug was enough to file purchase orders into a
+stranger's inbox. Existing slugs were backfilled as expiring `legacy_slug`
+addresses (90 days by default, `Inbound:LegacyAddressGraceDays`) and stop
+resolving once they expire.
+
+**None of that changed the Worker,** which was deliberately left untouched: it
+never reads the recipient. Everything below still describes it exactly.
+
 Postmark **inbound** webhooks are **not HMAC-signed** and cannot send custom
-headers — the only authentication today is the shared token embedded in the
-webhook URL (`?token=`, checked in
+headers — the only authentication on the HTTP hop is the shared token embedded
+in the webhook URL (`?token=`, checked in
 `ProcuLink.Api\Controllers\InboundEmailController.cs`). A URL-embedded secret
 is weaker than a signature: it appears in logs, screenshots, and browser
 history, and anyone holding it can POST forged order emails from anywhere on
@@ -413,11 +432,14 @@ failed webhook deliveries and shows failures in the Activity log).
   routed. Spoofed-source *content* remains possible from that position —
   there is no cryptographic origin proof to check.
 - **Email-sender spoofing.** This hardens the *webhook transport*, not the
-  *mail*. Anyone on the internet can still email
-  `{slug}@orders.proculink.eu`; it arrives via legitimate Postmark IPs with
-  the valid secret. Enforcing SPF/DKIM/DMARC verdicts (Postmark includes them
-  in the payload's `Headers`) and/or per-org sender allowlists is a separate,
-  future control at the application layer.
+  *mail*. Anyone who knows an org's inbound address can still email it, and the
+  message arrives via legitimate Postmark IPs with the valid secret. Since
+  2026-08 that address is a per-org credential rather than the org's slug, so it
+  can no longer be *guessed* from a company name — but it is handed to every
+  buyer who is asked to mail orders in, which is why addresses are revocable,
+  rotatable and individually expiring. Enforcing SPF/DKIM/DMARC verdicts
+  (Postmark includes them in the payload's `Headers`) and/or per-org sender
+  allowlists is a separate, future control at the application layer.
 - **Direct-to-origin bypass — until the API-side change ships.** In *both*
   variants the app remains directly reachable: `api.proculink.eu` stays
   DNS-only (Variant B), and the Railway-issued `<railway-origin>.up.railway.app`
