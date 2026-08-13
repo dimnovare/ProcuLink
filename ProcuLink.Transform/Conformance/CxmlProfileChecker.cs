@@ -17,24 +17,30 @@ internal sealed class CxmlProfileChecker : IProfileChecker
         var b = new ConformanceCheckBuilder(Profile, "cXML 1.2 OrderRequest", "1.2.024");
 
         // ── Well-formedness ────────────────────────────────────────────────────
+        // The parse failure is carried out of the catch as a message rather than written as a
+        // check there, so that "cxml.wellformed" is added on exactly one of the three paths below.
+        // Code is a stable machine key (see ConformanceModels.cs): it crosses the wire as
+        // ConformanceCheckDto, callers select on it with Single(), and ToMarkdown() renders one
+        // row per check — so emitting it twice duplicates a row of the downloadable evidence
+        // report. Pinned by ConformanceCheckCodeUniquenessTests.
         XDocument? doc = null;
-        var wellFormed = false;
+        string? parseError = null;
         try
         {
             doc = XDocument.Parse(documentText);
-            wellFormed = true;
         }
         catch (System.Xml.XmlException ex)
         {
-            b.Add("cxml.wellformed", false, "XML 1.0",
-                $"Document is not well-formed XML: {ex.Message}");
+            parseError = ex.Message;
         }
 
-        if (!wellFormed || doc?.Root is null)
+        if (doc?.Root is null)
         {
             // Cannot inspect further — record the dependent mandatory checks as failed.
-            b.Add("cxml.wellformed", wellFormed, "XML 1.0",
-                wellFormed ? "Document is well-formed XML." : "Document has no root element.");
+            b.Add("cxml.wellformed", false, "XML 1.0",
+                parseError is not null
+                    ? $"Document is not well-formed XML: {parseError}"
+                    : "Document has no root element.");
             FailRemaining(b);
             return b.Build();
         }
