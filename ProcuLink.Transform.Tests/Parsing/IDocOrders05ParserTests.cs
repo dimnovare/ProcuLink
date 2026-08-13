@@ -92,7 +92,7 @@ public class IDocOrders05ParserTests
         line.UnitPrice.Should().Be(149.49m);             // VPREI
         line.LineAmount.Should().Be(149.49m);            // NETWR
         line.BuyerItemCode.Should().Be("000000000030001746"); // E1EDP19 QUALF=001 IDTNR (no QUALF=002)
-        line.Description.Should().Be("REDACTED-ORDER-DATA"); // KTEXT (no line-level E1EDPT1)
+        line.Description.Should().Be("TSPAD WIFI 4G 128GB 10,2 KIT SPANISH"); // KTEXT (no line-level E1EDPT1)
     }
 
     // ── Fixture: 4 lines, numeric CURCY=704 must defer to SUNIT=EUR ─────────────
@@ -114,10 +114,10 @@ public class IDocOrders05ParserTests
 
         result.Lines[0].UnitPrice.Should().Be(507.88m);
         result.Lines[0].BuyerItemCode.Should().Be("000000000030002635");
-        result.Lines[0].Description.Should().Be("REDACTED-ORDER-DATA");
+        result.Lines[0].Description.Should().Be("TSPHONE 16E");
 
         result.Lines[1].UnitPrice.Should().Be(12.9m);
-        result.Lines[1].Description.Should().Be("REDACTED-PARTY");
+        result.Lines[1].Description.Should().Be("PROTECTOR TSPHONE");
 
         result.Lines[3].UnitPrice.Should().Be(0.01m);
         result.Lines[3].Description.Should().Be("ENROLAMIENTO EN DEP");
@@ -146,13 +146,13 @@ public class IDocOrders05ParserTests
         first.LineAmount.Should().Be(52.5m);
         first.BuyerItemCode.Should().Be("15728463"); // E1EDP19 QUALF=002 IDTNR
         first.Description.Should().Be(
-            "REDACTED-ORDER-DATA UTP - CAT 6 - blu");
+            "Lamna Solution Economy - Cavo di rete -RJ-45 (M) a RJ-45 (M) - 1.5 m - UTP - CAT 6 - blu");
 
         // Line 4 has a 5-line E1EDPT2 description block — all continuation lines joined.
         var fourth = result.Lines[3];
         fourth.LineNumber.Should().Be(40);
         fourth.BuyerItemCode.Should().Be("20612144");
-        fourth.Description.Should().StartWith("REDACTED-ORDER-DATA");
+        fourth.Description.Should().StartWith("Woodgrove 1.5m CAT6 Ethernet Cable");
         fourth.Description.Should().EndWith("arancione");
     }
 
@@ -175,7 +175,7 @@ public class IDocOrders05ParserTests
         result.Lines[0].BuyerItemCode.Should().Be("11097719");
         result.Lines[0].UnitPrice.Should().Be(19.33m);
         result.Lines[0].Description.Should().Be(
-            "REDACTED-ORDER-DATA REDACTED-ORDER-DATA");
+            "Wingtip Swift Drive - USB flash drive - 32 GB - USB 3.0 - for Nod Compact Unit 12 Pro Kit - NCU12WSKi3");
 
         // Second line carries an empty <E1EDP19 SEGMENT="1" /> — must not throw.
         result.Lines[1].BuyerItemCode.Should().Be("153023");

@@ -30,7 +30,7 @@ public class OpenAiProductCodeSearchTests
             ["Ai:OpenAI:ProductSearch:Enabled"] = "true",
         });
 
-        var result = await service.FindPartNumberAsync("Apple iPhone 15 case", null, CancellationToken.None);
+        var result = await service.FindPartNumberAsync("Tailspin Phone 15 case", null, CancellationToken.None);
 
         result.Should().BeNull();
     }
@@ -45,7 +45,7 @@ public class OpenAiProductCodeSearchTests
             // no ApiKey
         });
 
-        var result = await service.FindPartNumberAsync("Apple iPhone 15 case", null, CancellationToken.None);
+        var result = await service.FindPartNumberAsync("Tailspin Phone 15 case", null, CancellationToken.None);
 
         result.Should().BeNull();
     }
@@ -61,7 +61,7 @@ public class OpenAiProductCodeSearchTests
             // Ai:OpenAI:ProductSearch:Enabled absent
         });
 
-        var result = await service.FindPartNumberAsync("Apple iPhone 15 case", "Apple", CancellationToken.None);
+        var result = await service.FindPartNumberAsync("Tailspin Phone 15 case", "Tailspin", CancellationToken.None);
 
         result.Should().BeNull();
     }
@@ -76,7 +76,7 @@ public class OpenAiProductCodeSearchTests
             ["Ai:OpenAI:ProductSearch:Enabled"] = "false",
         });
 
-        var result = await service.FindPartNumberAsync("Apple iPhone 15 case", null, CancellationToken.None);
+        var result = await service.FindPartNumberAsync("Tailspin Phone 15 case", null, CancellationToken.None);
 
         result.Should().BeNull();
     }
@@ -105,7 +105,7 @@ public class OpenAiProductCodeSearchTests
         // The Responses API stores request/response payloads by default (unlike Chat
         // Completions). PO line descriptions are customer data, so the request must opt out
         // explicitly: StoredOutputEnabled maps to the "store" property in the JSON payload.
-        var options = OpenAiProductCodeSearch.BuildOptions("gpt-5-mini", "Apple iPhone 15 case", null);
+        var options = OpenAiProductCodeSearch.BuildOptions("gpt-5-mini", "Tailspin Phone 15 case", null);
 
         options.StoredOutputEnabled.Should().BeFalse();
     }
@@ -113,7 +113,7 @@ public class OpenAiProductCodeSearchTests
     [Fact]
     public void BuildOptions_CarriesModelWebSearchToolAndOutputCap()
     {
-        var options = OpenAiProductCodeSearch.BuildOptions("gpt-5-mini", "Apple iPhone 15 case", "Apple");
+        var options = OpenAiProductCodeSearch.BuildOptions("gpt-5-mini", "Tailspin Phone 15 case", "Tailspin");
 
         options.Model.Should().Be("gpt-5-mini");
         options.Tools.Should().ContainSingle();
@@ -127,12 +127,12 @@ public class OpenAiProductCodeSearchTests
     public void ParseMatch_ValidJson_MapsAllFields()
     {
         var match = OpenAiProductCodeSearch.ParseMatch(
-            """{"partNumber":"REDACTED-ORDER-DATA","title":"Apple iPhone 15 Silicone Case","sourceUrl":"https://example.invalid/redacted","confidence":0.7}""");
+            """{"partNumber":"TSP23S/A","title":"Tailspin Phone 15 Silicone Case","sourceUrl":"https://tailspin.example/x","confidence":0.7}""");
 
         match.Should().NotBeNull();
-        match!.PartNumber.Should().Be("REDACTED-ORDER-DATA");
-        match.Title.Should().Be("Apple iPhone 15 Silicone Case");
-        match.SourceUrl.Should().Be("https://example.invalid/redacted");
+        match!.PartNumber.Should().Be("TSP23S/A");
+        match.Title.Should().Be("Tailspin Phone 15 Silicone Case");
+        match.SourceUrl.Should().Be("https://tailspin.example/x");
         match.Confidence.Should().BeApproximately(0.7f, 0.0001f);
     }
 
@@ -156,11 +156,11 @@ public class OpenAiProductCodeSearchTests
     public void ParseMatch_TolueratesCodeFencesAndSurroundingProse()
     {
         // Web-search models often wrap JSON in a ```json fence or add a sentence around it.
-        var raw = "Here is what I found:\n```json\n{\"partNumber\":\"A2848\",\"confidence\":0.6}\n```\nHope that helps!";
+        var raw = "Here is what I found:\n```json\n{\"partNumber\":\"T2848\",\"confidence\":0.6}\n```\nHope that helps!";
         var match = OpenAiProductCodeSearch.ParseMatch(raw);
 
         match.Should().NotBeNull();
-        match!.PartNumber.Should().Be("A2848");
+        match!.PartNumber.Should().Be("T2848");
     }
 
     [Fact]

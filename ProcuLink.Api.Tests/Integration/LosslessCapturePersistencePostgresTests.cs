@@ -97,7 +97,7 @@ public sealed class LosslessCapturePersistencePostgresTests(PostgresContainerFix
                         Id = Guid.NewGuid(), LineNumber = 1, BuyerItemCode = "00010",
                         Quantity = 1, UnitPrice = 306.28m,
                         // Phase 1 line lossless columns.
-                        ManufacturerPartNumber = "SCPMX94EGK",
+                        ManufacturerPartNumber = "PLKMX94EGK",
                         Recipient = "c.testperson@buyer.example.com",
                     },
                 },
@@ -133,7 +133,7 @@ public sealed class LosslessCapturePersistencePostgresTests(PostgresContainerFix
 
             // Line lossless columns.
             var line = Assert.Single(o.Lines);
-            Assert.Equal("SCPMX94EGK", line.ManufacturerPartNumber);
+            Assert.Equal("PLKMX94EGK", line.ManufacturerPartNumber);
             Assert.Equal("c.testperson@buyer.example.com", line.Recipient);
 
             // source_captures one-per-order raw bag (jsonb round-trip — parse, don't substring).

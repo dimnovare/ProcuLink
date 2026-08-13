@@ -130,7 +130,7 @@
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>001</QUALF>
-        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+        <KTEXT>Southridge - Cavo patch - RJ-45 (M) a RJ</KTEXT>
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>004</QUALF>
@@ -141,7 +141,7 @@
         <TSSPRAS>I</TSSPRAS>
         <TSSPRAS_ISO>IT</TSSPRAS_ISO>
         <E1EDPT2 SEGMENT="1">
-          <TDLINE>REDACTED-ORDER-DATA</TDLINE>
+          <TDLINE>Southridge - Cavo patch - RJ-45 (M) a RJ-45 (M) - 1 m - UTP - CAT 6 -</TDLINE>
         </E1EDPT2>
         <E1EDPT2 SEGMENT="1">
           <TDLINE>schermato, antiaggrovigliamento - blu</TDLINE>
@@ -174,7 +174,7 @@
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>001</QUALF>
-        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+        <KTEXT>Southridge - Cavo patch - RJ-45 (M) a RJ</KTEXT>
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>004</QUALF>
@@ -185,7 +185,7 @@
         <TSSPRAS>I</TSSPRAS>
         <TSSPRAS_ISO>IT</TSSPRAS_ISO>
         <E1EDPT2 SEGMENT="1">
-          <TDLINE>REDACTED-ORDER-DATA</TDLINE>
+          <TDLINE>Southridge - Cavo patch - RJ-45 (M) a RJ-45 (M) - 1 m - UTP - CAT 6 -</TDLINE>
         </E1EDPT2>
         <E1EDPT2 SEGMENT="1">
           <TDLINE>stampato, antiaggrovigliamento - grigio</TDLINE>
@@ -218,7 +218,7 @@
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>001</QUALF>
-        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+        <KTEXT>Alpine - Cavo patch - RJ-45 (M) a</KTEXT>
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>004</QUALF>
@@ -229,7 +229,7 @@
         <TSSPRAS>I</TSSPRAS>
         <TSSPRAS_ISO>IT</TSSPRAS_ISO>
         <E1EDPT2 SEGMENT="1">
-          <TDLINE>REDACTED-ORDER-DATA</TDLINE>
+          <TDLINE>Alpine - Cavo patch - RJ-45 (M) a RJ-45 (M) - 1 m - S/FTP - CAT</TDLINE>
         </E1EDPT2>
         <E1EDPT2 SEGMENT="1">
           <TDLINE>6a - senza alogeni, stampato - arancione</TDLINE>

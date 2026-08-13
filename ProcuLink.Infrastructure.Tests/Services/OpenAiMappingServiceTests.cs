@@ -337,12 +337,12 @@ public class OpenAiMappingServiceTests
 
     private static readonly AiMappingCandidate[] ManufacturerCandidates =
     {
-        new("", "REDACTED-ITEM", "catalog product REDACTED-ITEM",
-            IsCatalogProduct: true, Name: "Zebra REDACTED-ORDER-DATA handheld scanner", Unit: "PCS", Price: 219.00m,
-            ManufacturerPartNumber: "REDACTED-ORDER-DATA", ManufacturerName: "Zebra"),
-        new("", "REDACTED-ITEM", "catalog product REDACTED-ITEM",
-            IsCatalogProduct: true, Name: "Zebra ZD421 label printer", Unit: "PCS",
-            ManufacturerPartNumber: "REDACTED-ITEM", ManufacturerName: "Zebra"),
+        new("", "FAB-SCAN-77120", "catalog product FAB-SCAN-77120",
+            IsCatalogProduct: true, Name: "Proseware LTQ2500 handheld scanner", Unit: "PCS", Price: 219.00m,
+            ManufacturerPartNumber: "LTQ2500-BK-BTK1", ManufacturerName: "Proseware"),
+        new("", "FAB-PRN-45001", "catalog product FAB-PRN-45001",
+            IsCatalogProduct: true, Name: "Proseware PW421 label printer", Unit: "PCS",
+            ManufacturerPartNumber: "PW421-D01W-EU", ManufacturerName: "Proseware"),
     };
 
     [Fact]
@@ -350,18 +350,18 @@ public class OpenAiMappingServiceTests
     {
         var result = OpenAiMappingService.ApplyCatalogGuardForTest(
             ManufacturerCandidates,
-            suggestedCode: "REDACTED-ORDER-DATA",
+            suggestedCode: "LTQ2500-BK-BTK1",
             confidence: 0.78f,
             reason: "manufacturer part number matches",
             provenance: "line carries the manufacturer number only");
 
         result.Should().NotBeNull("a manufacturer part number naming exactly one catalog product is a real match");
-        result!.SupplierItemCode.Should().Be("REDACTED-ITEM");
-        result.SupplierItemCode.Should().NotBe("REDACTED-ORDER-DATA",
+        result!.SupplierItemCode.Should().Be("FAB-SCAN-77120");
+        result.SupplierItemCode.Should().NotBe("LTQ2500-BK-BTK1",
             "the manufacturer's number must never surface as if it were the supplier's own code");
         // Provenance names the resolved catalog row, not the model's vague text.
-        result.Provenance.Should().Contain("REDACTED-ITEM");
-        result.Provenance.Should().Contain("Zebra REDACTED-ORDER-DATA handheld scanner");
+        result.Provenance.Should().Contain("FAB-SCAN-77120");
+        result.Provenance.Should().Contain("Proseware LTQ2500 handheld scanner");
         result.Provenance.Should().NotContain("line carries the manufacturer number only");
         result.Confidence.Should().BeApproximately(0.78f, 0.0001f);
     }
@@ -374,21 +374,21 @@ public class OpenAiMappingServiceTests
         // normalised key is what makes the two meet.
         var candidates = new[]
         {
-            new AiMappingCandidate("", "REDACTED-ITEM", "catalog product REDACTED-ITEM",
-                IsCatalogProduct: true, Name: "Zebra REDACTED-ORDER-DATA handheld scanner",
-                ManufacturerPartNumber: "qbt2500bkbtk1", ManufacturerName: "Zebra"),
+            new AiMappingCandidate("", "FAB-SCAN-77120", "catalog product FAB-SCAN-77120",
+                IsCatalogProduct: true, Name: "Proseware LTQ2500 handheld scanner",
+                ManufacturerPartNumber: "ltq2500bkbtk1", ManufacturerName: "Proseware"),
         };
 
         var result = OpenAiMappingService.ApplyCatalogGuardForTest(
             candidates,
-            suggestedCode: "REDACTED-ORDER-DATA",
+            suggestedCode: "LTQ2500-BK-BTK1",
             confidence: 0.71f,
             reason: "same manufacturer part, different punctuation",
             provenance: "model");
 
         result.Should().NotBeNull();
-        result!.SupplierItemCode.Should().Be("REDACTED-ITEM");
-        result.Provenance.Should().Contain("REDACTED-ITEM");
+        result!.SupplierItemCode.Should().Be("FAB-SCAN-77120");
+        result.Provenance.Should().Contain("FAB-SCAN-77120");
     }
 
     [Fact]
@@ -400,23 +400,23 @@ public class OpenAiMappingServiceTests
         // so this also proves ambiguity is detected on the NORMALISED key, not the raw string.
         var ambiguous = new[]
         {
-            new AiMappingCandidate("", "REDACTED-ITEM", "catalog product REDACTED-ITEM",
-                IsCatalogProduct: true, Name: "Zebra REDACTED-ORDER-DATA scanner (EU)",
-                ManufacturerPartNumber: "REDACTED-ORDER-DATA"),
-            new AiMappingCandidate("", "REDACTED-ITEM", "catalog product REDACTED-ITEM",
-                IsCatalogProduct: true, Name: "Zebra REDACTED-ORDER-DATA scanner (UK)",
-                ManufacturerPartNumber: "qbt2500 bk btk1"),
+            new AiMappingCandidate("", "FAB-SCAN-77120", "catalog product FAB-SCAN-77120",
+                IsCatalogProduct: true, Name: "Proseware LTQ2500 scanner (EU)",
+                ManufacturerPartNumber: "LTQ2500-BK-BTK1"),
+            new AiMappingCandidate("", "FAB-SCAN-77121", "catalog product FAB-SCAN-77121",
+                IsCatalogProduct: true, Name: "Proseware LTQ2500 scanner (UK)",
+                ManufacturerPartNumber: "ltq2500 bk btk1"),
         };
 
         OpenAiMappingService.ApplyCatalogGuardForTest(
-                ambiguous, "REDACTED-ORDER-DATA", 0.93f, "manufacturer part match", "model")
+                ambiguous, "LTQ2500-BK-BTK1", 0.93f, "manufacturer part match", "model")
             .Should().BeNull("a part number held by two supplier codes names no single product");
 
         // …and the allow-list is still live for the same candidate set: answering with either
         // real supplier code succeeds. Without this, the rejection above could equally be caused
         // by a broken allow-list rather than by the ambiguity rule.
         OpenAiMappingService.ApplyCatalogGuardForTest(
-                ambiguous, "REDACTED-ITEM", 0.93f, "operator picked the UK variant", "model")
+                ambiguous, "FAB-SCAN-77121", 0.93f, "operator picked the UK variant", "model")
             .Should().NotBeNull();
     }
 
@@ -427,11 +427,11 @@ public class OpenAiMappingServiceTests
         // that merely looks like a part number. This runs against candidates that DO carry MPNs,
         // so the manufacturer lookup is populated and genuinely consulted before the rejection.
         OpenAiMappingService.ApplyCatalogGuardForTest(
-                ManufacturerCandidates, "REDACTED-ORDER-DATA-XX-ZZ9", 0.95f, "looks right", "model")
+                ManufacturerCandidates, "LTQ2500-XX-ZZ9", 0.95f, "looks right", "model")
             .Should().BeNull("a plausible-looking part number no catalog row claims is still a hallucination");
 
         OpenAiMappingService.ApplyCatalogGuardForTest(
-                ManufacturerCandidates, "REDACTED-ITEM", 0.95f, "looks right", "model")
+                ManufacturerCandidates, "FAB-SCAN-99999", 0.95f, "looks right", "model")
             .Should().BeNull("a plausible-looking supplier code no catalog row claims is still a hallucination");
     }
 
@@ -440,15 +440,15 @@ public class OpenAiMappingServiceTests
     {
         var result = OpenAiMappingService.ApplyCatalogGuardForTest(
             ManufacturerCandidates,
-            suggestedCode: "REDACTED-ITEM",
+            suggestedCode: "FAB-PRN-45001",
             confidence: 0.88f,
             reason: "description match",
             provenance: "buyer description evidence");
 
         result.Should().NotBeNull();
-        result!.SupplierItemCode.Should().Be("REDACTED-ITEM");
-        result.Provenance.Should().Contain("REDACTED-ITEM");
-        result.Provenance.Should().Contain("Zebra ZD421 label printer");
+        result!.SupplierItemCode.Should().Be("FAB-PRN-45001");
+        result.Provenance.Should().Contain("FAB-PRN-45001");
+        result.Provenance.Should().Contain("Proseware PW421 label printer");
     }
 
     [Fact]
@@ -459,20 +459,20 @@ public class OpenAiMappingServiceTests
         // entries, or a discontinued part could be suggested as if it were in stock.
         var mixed = new[]
         {
-            new AiMappingCandidate("", "REDACTED-ITEM", "catalog product REDACTED-ITEM",
-                IsCatalogProduct: true, Name: "Zebra REDACTED-ORDER-DATA handheld scanner"),
-            new AiMappingCandidate("HEI-SCAN-01", "REDACTED-ITEM", "existing mapping",
-                IsCatalogProduct: false, Name: "Zebra LS2208 (discontinued)",
-                ManufacturerPartNumber: "REDACTED-ITEM"),
+            new AiMappingCandidate("", "FAB-SCAN-77120", "catalog product FAB-SCAN-77120",
+                IsCatalogProduct: true, Name: "Proseware LTQ2500 handheld scanner"),
+            new AiMappingCandidate("HEI-SCAN-01", "FAB-SCAN-00001", "existing mapping",
+                IsCatalogProduct: false, Name: "Proseware LS2208 (discontinued)",
+                ManufacturerPartNumber: "PW2208-SR20007R-UR"),
         };
 
         OpenAiMappingService.ApplyCatalogGuardForTest(
-                mixed, "REDACTED-ITEM", 0.9f, "manufacturer part match", "model")
+                mixed, "PW2208-SR20007R-UR", 0.9f, "manufacturer part match", "model")
             .Should().BeNull("only catalog rows may contribute manufacturer part numbers to the allow-list");
 
         // The catalog row itself is still reachable, so the guard has not simply gone inert.
         OpenAiMappingService.ApplyCatalogGuardForTest(
-                mixed, "REDACTED-ITEM", 0.9f, "description match", "model")
+                mixed, "FAB-SCAN-77120", 0.9f, "description match", "model")
             .Should().NotBeNull();
     }
 

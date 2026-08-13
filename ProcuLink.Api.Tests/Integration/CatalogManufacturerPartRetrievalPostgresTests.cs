@@ -40,8 +40,8 @@ public sealed class CatalogManufacturerPartRetrievalPostgresTests(PostgresContai
 
     // The supplier's own code shares no substring with the manufacturer part number, so a pass
     // can never be an accident of the trigram similarity pass that runs after this one.
-    private const string SupplierCode = "REDACTED-ITEM";
-    private const string ManufacturerPart = "REDACTED-ORDER-DATA";
+    private const string SupplierCode = "FAB-SCAN-77120";
+    private const string ManufacturerPart = "LTQ2500-BK-BTK1";
 
     // The punchout line: the buyer's item code is the buying network's internal id.
     private const string PunchoutBuyerCode = "29954596";
@@ -76,7 +76,7 @@ public sealed class CatalogManufacturerPartRetrievalPostgresTests(PostgresContai
         {
             db.Organisations.Add(new Organisation
             {
-                Id = orgId, Name = "Markit", Slug = $"markit-{orgId:N}",
+                Id = orgId, Name = "Fabrikam", Slug = $"fabrikam-{orgId:N}",
                 // ClerkOrgId defaults to "" and carries a UNIQUE index, so two orgs seeded in one
                 // test (the cross-tenant case) collide on it. Only Postgres enforces this — EF
                 // InMemory ignores unique indexes entirely, which is why it passed locally.
@@ -85,7 +85,7 @@ public sealed class CatalogManufacturerPartRetrievalPostgresTests(PostgresContai
             });
             db.Suppliers.Add(new Supplier
             {
-                Id = supplierId, OrgId = orgId, Name = "REDACTED-NAME", CreatedAt = DateTime.UtcNow,
+                Id = supplierId, OrgId = orgId, Name = "Fabrikam Distribution", CreatedAt = DateTime.UtcNow,
             });
             await db.SaveChangesAsync();
 
@@ -93,7 +93,7 @@ public sealed class CatalogManufacturerPartRetrievalPostgresTests(PostgresContai
                 orgId, supplierId,
                 products.Select(p => new SupplierProduct
                 {
-                    Code = p.Code, Name = p.Name, ManufacturerPartNumber = p.Mpn, ManufacturerName = "REDACTED-PARTY",
+                    Code = p.Code, Name = p.Name, ManufacturerPartNumber = p.Mpn, ManufacturerName = "Litware",
                 }),
                 CancellationToken.None);
         }
@@ -104,7 +104,7 @@ public sealed class CatalogManufacturerPartRetrievalPostgresTests(PostgresContai
     [DockerRequiredFact]
     public async Task Normalized_key_column_and_index_really_exist_and_round_trip()
     {
-        var (orgId, supplierId) = await SeedAsync((SupplierCode, "QuickScan REDACTED-ORDER-DATA kit", ManufacturerPart));
+        var (orgId, supplierId) = await SeedAsync((SupplierCode, "QuickTrace LTQ2500 kit", ManufacturerPart));
 
         await using var db = new ProcuLinkDbContext(_options!);
 
@@ -112,8 +112,8 @@ public sealed class CatalogManufacturerPartRetrievalPostgresTests(PostgresContai
             .SingleAsync(p => p.OrgId == orgId && p.SupplierId == supplierId);
 
         Assert.Equal(ManufacturerPart, stored.ManufacturerPartNumber);
-        Assert.Equal("QBT2500BKBTK1", stored.ManufacturerPartNumberNormalized);
-        Assert.Equal("REDACTED-PARTY", stored.ManufacturerName);
+        Assert.Equal("LTQ2500BKBTK1", stored.ManufacturerPartNumberNormalized);
+        Assert.Equal("Litware", stored.ManufacturerName);
 
         // The index the fallback lookup depends on — named explicitly in the model config, so a
         // migration that dropped it would leave the query a sequential scan on every large catalog.
@@ -128,8 +128,8 @@ public sealed class CatalogManufacturerPartRetrievalPostgresTests(PostgresContai
     public async Task Retrieves_by_manufacturer_part_number_when_the_buyer_code_matches_nothing()
     {
         var (orgId, supplierId) = await SeedAsync(
-            (SupplierCode, "QuickScan REDACTED-ORDER-DATA kit", ManufacturerPart),
-            ("REDACTED-ITEM", "QuickScan QBT2400 kit", "QBT2400-BK-BTK1"));
+            (SupplierCode, "QuickTrace LTQ2500 kit", ManufacturerPart),
+            ("FAB-SCAN-77121", "QuickTrace LTQ2400 kit", "LTQ2400-BK-BTK1"));
 
         await using var db = new ProcuLinkDbContext(_options!);
         var svc = new CatalogRetrievalService(db);
@@ -148,13 +148,13 @@ public sealed class CatalogManufacturerPartRetrievalPostgresTests(PostgresContai
         // A null here would mean the indexed path bailed out — the test must not pass vacuously.
         Assert.NotNull(candidates);
         Assert.Contains(candidates!, p => p.Code == SupplierCode);
-        Assert.DoesNotContain(candidates!, p => p.Code == "REDACTED-ITEM");
+        Assert.DoesNotContain(candidates!, p => p.Code == "FAB-SCAN-77121");
 
         // The retrieved row carries the manufacturer fields through the projection, which is what
         // lets the grounded candidate tell the model "this catalog product IS part X".
         var hit = candidates!.Single(p => p.Code == SupplierCode);
         Assert.Equal(ManufacturerPart, hit.ManufacturerPartNumber);
-        Assert.Equal("REDACTED-PARTY", hit.ManufacturerName);
+        Assert.Equal("Litware", hit.ManufacturerName);
     }
 
     [DockerRequiredFact]
@@ -162,7 +162,7 @@ public sealed class CatalogManufacturerPartRetrievalPostgresTests(PostgresContai
     {
         // The catalog spells it without separators and in lower case; the order line uses hyphens
         // and upper case. The comparison happens in Postgres, on the stored normalised key.
-        var (orgId, supplierId) = await SeedAsync((SupplierCode, "QuickScan REDACTED-ORDER-DATA kit", "qbt2500 bk btk1"));
+        var (orgId, supplierId) = await SeedAsync((SupplierCode, "QuickTrace LTQ2500 kit", "ltq2500 bk btk1"));
 
         await using var db = new ProcuLinkDbContext(_options!);
         var svc = new CatalogRetrievalService(db);
@@ -176,17 +176,17 @@ public sealed class CatalogManufacturerPartRetrievalPostgresTests(PostgresContai
         Assert.Contains(candidates!, p => p.Code == SupplierCode);
 
         // Both sides really did differ before normalisation — otherwise this proves nothing.
-        Assert.NotEqual("qbt2500 bk btk1", ManufacturerPart);
+        Assert.NotEqual("ltq2500 bk btk1", ManufacturerPart);
         Assert.Equal(
-            ProductKeyNormalizer.Normalize("qbt2500 bk btk1"),
+            ProductKeyNormalizer.Normalize("ltq2500 bk btk1"),
             ProductKeyNormalizer.Normalize(ManufacturerPart));
     }
 
     [DockerRequiredFact]
     public async Task Retrieval_never_crosses_org_or_supplier()
     {
-        var (orgId, supplierId) = await SeedAsync(("REDACTED-ITEM", "Something else", null));
-        var (otherOrgId, otherSupplierId) = await SeedAsync((SupplierCode, "QuickScan REDACTED-ORDER-DATA kit", ManufacturerPart));
+        var (orgId, supplierId) = await SeedAsync(("FAB-OTHER", "Something else", null));
+        var (otherOrgId, otherSupplierId) = await SeedAsync((SupplierCode, "QuickTrace LTQ2500 kit", ManufacturerPart));
 
         await using var db = new ProcuLinkDbContext(_options!);
         var svc = new CatalogRetrievalService(db);

@@ -133,7 +133,7 @@
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>001</QUALF>
-        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+        <KTEXT>Wingtip Swift Drive - USB flash drive -</KTEXT>
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>004</QUALF>
@@ -144,10 +144,10 @@
         <TSSPRAS>F</TSSPRAS>
         <TSSPRAS_ISO>FR</TSSPRAS_ISO>
         <E1EDPT2 SEGMENT="1">
-          <TDLINE>REDACTED-ORDER-DATA</TDLINE>
+          <TDLINE>Wingtip Swift Drive - USB flash drive - 32 GB - USB 3.0 - for Nod</TDLINE>
         </E1EDPT2>
         <E1EDPT2 SEGMENT="1">
-          <TDLINE>REDACTED-ORDER-DATA</TDLINE>
+          <TDLINE>Compact Unit 12 Pro Kit - NCU12WSKi3</TDLINE>
         </E1EDPT2>
       </E1EDPT1>
     </E1EDP01>

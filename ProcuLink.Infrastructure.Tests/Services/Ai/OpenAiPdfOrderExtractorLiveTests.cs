@@ -155,7 +155,7 @@ public class OpenAiPdfOrderExtractorLiveTests
 
     /// <summary>
     /// Anonymised, real-shaped POs that reproduce the exact ambiguity the founder hit:
-    /// the system-customer-like name ("Markit") appears as the SUPPLIER/recipient, while
+    /// the system-customer-like name ("Fabrikam") appears as the SUPPLIER/recipient, while
     /// a DIFFERENT organisation is the BUYER/issuer. The extractor must assign roles from
     /// the document labels — NOT pick the familiar name as the buyer. Verifies, end to end
     /// against the real OpenAI call, the fix in <see cref="OpenAiPdfOrderExtractor"/>'s
@@ -163,12 +163,12 @@ public class OpenAiPdfOrderExtractorLiveTests
     /// </summary>
     public static IEnumerable<object[]> PartyRoleFixtures()
     {
-        // DK shape, "Supplier:" label: the buyer/issuer is a third org; Markit is the
+        // DK shape, "Supplier:" label: the buyer/issuer is a third org; Fabrikam is the
         // supplier/recipient.
         yield return new object[]
         {
             "Exemplar Valves",  // expected buyer (issuer)
-            "Markit",   // expected supplier (the system-customer-like recipient)
+            "Fabrikam",   // expected supplier (the system-customer-like recipient)
             CreatePdf(
                 "Exemplar Valves A/S",
                 "Teststadvej 81, 6430 Teststad, Denmark",
@@ -177,7 +177,7 @@ public class OpenAiPdfOrderExtractorLiveTests
                 "Order Date: 2026-04-14",
                 "Currency: EUR",
                 "Supplier:",
-                "REDACTED-PARTY",
+                "Fabrikam AS",
                 "Tallinn, Estonia",
                 "Line  Item Code   Description           Qty  Unit  Unit Price  Amount",
                 "1     DF-VLT-110  Frequency converter   3    PCS   240.00      720.00",
@@ -185,11 +185,11 @@ public class OpenAiPdfOrderExtractorLiveTests
         };
 
         // AT shape, German "Bestellung" + "Vendor / Supplier:" label: the buyer/issuer is a
-        // third org; Markit is the supplier.
+        // third org; Fabrikam is the supplier.
         yield return new object[]
         {
             "Exemplar",
-            "Markit",
+            "Fabrikam",
             CreatePdf(
                 "Exemplar AG",
                 "Exemplar-Strasse 1, 4020 Teststadt, Austria",
@@ -198,19 +198,19 @@ public class OpenAiPdfOrderExtractorLiveTests
                 "Order Date: 2026-03-02",
                 "Currency: EUR",
                 "Vendor / Supplier:",
-                "REDACTED-PARTY",
+                "Fabrikam AS",
                 "Tallinn, Estonia",
                 "Line  Item Code   Description           Qty  Unit  Unit Price  Amount",
                 "1     VA-STL-450  Steel coil            5    PCS   1250.00     6250.00",
                 "2     VA-BLT-012  Bolt set              40   PCS   3.20        128.00")
         };
 
-        // CH control case, "Sold to / Supplier:" label: the buyer/issuer is a third org; Markit
+        // CH control case, "Sold to / Supplier:" label: the buyer/issuer is a third org; Fabrikam
         // is the supplier.
         yield return new object[]
         {
             "Exemplar Drives",
-            "Markit",
+            "Fabrikam",
             CreatePdf(
                 "Exemplar Drives Ltd",
                 "Teststrasse 44, 8050 Teststadt, Switzerland",
@@ -219,7 +219,7 @@ public class OpenAiPdfOrderExtractorLiveTests
                 "Order Date: 2026-05-09",
                 "Currency: EUR",
                 "Sold to / Supplier:",
-                "REDACTED-PARTY",
+                "Fabrikam AS",
                 "Tallinn, Estonia",
                 "Line  Item Code   Description           Qty  Unit  Unit Price  Amount",
                 "1     EXD-DRV-30  Motor drive            2    PCS   980.00      1960.00",

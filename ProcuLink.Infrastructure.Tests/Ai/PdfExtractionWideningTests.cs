@@ -24,11 +24,11 @@ public class ValidateAndMapWideningTests
             Lines: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(
-                    LineNumber: 1, BuyerItemCode: "00010", Description: "Panasonic",
+                    LineNumber: 1, BuyerItemCode: "00010", Description: "Lucerne",
                     Quantity: 1, Unit: "ST", UnitPrice: 306.28, LineAmount: 306.28,
-                    ManufacturerPartNumber: "SCPMX94EGK", Recipient: "c.testperson@buyer.example.com")
+                    ManufacturerPartNumber: "PLKMX94EGK", Recipient: "c.testperson@buyer.example.com")
             },
-            SupplierName: "REDACTED-PARTY",
+            SupplierName: "Fabrikam GmbH",
             Parties: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionPartyDto(
@@ -47,7 +47,7 @@ public class ValidateAndMapWideningTests
         Assert.Equal("DDP", result.Order!.Incoterms);
         Assert.Equal("c.testperson@buyer.example.com", result.Order.ContactEmail);
         Assert.Equal("ATU99000000", result.Order.Parties!.Single(p => p.Role == "shipTo").Vat);
-        Assert.Equal("SCPMX94EGK", result.Order.Lines[0].ManufacturerPartNumber);
+        Assert.Equal("PLKMX94EGK", result.Order.Lines[0].ManufacturerPartNumber);
         Assert.Contains(result.Order.RawFields!, f => f.Label == "EDI id" && f.Value == "999000111");
     }
 }

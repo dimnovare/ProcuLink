@@ -71,7 +71,7 @@ public class OrderServiceXlsxRoutingTests
             .Callback<string, Guid, CancellationToken>((text, _, _) => capturedText = text)
             .ReturnsAsync(new StructuredExtractionResult(
                 Success: true, Confidence: 0.9,
-                Order: new ExtractedOrder("226131000790", new DateTime(2026, 5, 20), "Markit", "PLN", new[]
+                Order: new ExtractedOrder("226131000790", new DateTime(2026, 5, 20), "Fabrikam", "PLN", new[]
                 {
                     new ExtractedOrderLine(1, "ABC-123", "Widget A", 10, "PCS", 4.5m),
                     new ExtractedOrderLine(2, "XYZ-999", "Widget B", 6, "PCS", 8.25m),
@@ -178,7 +178,7 @@ public class OrderServiceXlsxRoutingTests
 
     // ── Fixtures ──────────────────────────────────────────────────────────────
 
-    /// <summary>Markit-style labelled/sectioned workbook (header label/value cells + a Lines section).</summary>
+    /// <summary>Fabrikam-style labelled/sectioned workbook (header label/value cells + a Lines section).</summary>
     private static byte[] BuildLabelledWorkbook()
     {
         using var wb = new XLWorkbook();

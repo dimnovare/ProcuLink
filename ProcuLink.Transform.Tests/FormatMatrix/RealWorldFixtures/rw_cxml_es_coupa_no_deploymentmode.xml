@@ -35,7 +35,7 @@
           <UnitPrice>
             <Money currency="EUR">88.3</Money>
           </UnitPrice>
-          <Description xml:lang="en">REDACTED-ORDER-DATA</Description>
+          <Description xml:lang="en">Munson Traveller - Hard drive 2TB USB 3.0</Description>
           <UnitOfMeasure>EA</UnitOfMeasure>
         </ItemDetail>
       </ItemOut>

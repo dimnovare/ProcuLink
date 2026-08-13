@@ -330,15 +330,15 @@ public class SupplierCatalogServiceTests
 
         await svc.UpsertManyAsync(orgId, supplierId, new[]
         {
-            Draft("REDACTED-ITEM", "Handheld scanner", manufacturerPartNumber: "REDACTED-ORDER-DATA",
-                manufacturerName: "Zebra"),
+            Draft("FAB-SCAN-77120", "Handheld scanner", manufacturerPartNumber: "LTQ2500-BK-BTK1",
+                manufacturerName: "Proseware"),
         }, CancellationToken.None);
 
-        var row = await RowAsync(db, "REDACTED-ITEM");
-        row.ManufacturerPartNumber.Should().Be("REDACTED-ORDER-DATA", "the raw value is stored verbatim for humans");
-        row.ManufacturerPartNumberNormalized.Should().Be("QBT2500BKBTK1",
+        var row = await RowAsync(db, "FAB-SCAN-77120");
+        row.ManufacturerPartNumber.Should().Be("LTQ2500-BK-BTK1", "the raw value is stored verbatim for humans");
+        row.ManufacturerPartNumberNormalized.Should().Be("LTQ2500BKBTK1",
             "the lookup key is the raw value with separators stripped and upper-cased");
-        row.ManufacturerName.Should().Be("Zebra");
+        row.ManufacturerName.Should().Be("Proseware");
     }
 
     [Fact]
@@ -355,21 +355,21 @@ public class SupplierCatalogServiceTests
 
         await svc.UpsertManyAsync(orgId, supplierId, new[]
         {
-            Draft("REDACTED-ITEM", "Handheld scanner", manufacturerPartNumber: "REDACTED-ORDER-DATA"),
+            Draft("FAB-SCAN-77120", "Handheld scanner", manufacturerPartNumber: "LTQ2500-BK-BTK1"),
         }, CancellationToken.None);
 
         var (created, updated) = await svc.UpsertManyAsync(orgId, supplierId, new[]
         {
-            Draft("REDACTED-ITEM", "Handheld scanner", manufacturerPartNumber: "REDACTED-ORDER-DATA"),
+            Draft("FAB-SCAN-77120", "Handheld scanner", manufacturerPartNumber: "PRW58930-010"),
         }, CancellationToken.None);
 
         created.Should().Be(0);
         updated.Should().Be(1);
 
-        var row = await RowAsync(db, "REDACTED-ITEM");
-        row.ManufacturerPartNumber.Should().Be("REDACTED-ORDER-DATA");
-        row.ManufacturerPartNumberNormalized.Should().Be("P1058930010");
-        row.ManufacturerPartNumberNormalized.Should().NotBe("QBT2500BKBTK1",
+        var row = await RowAsync(db, "FAB-SCAN-77120");
+        row.ManufacturerPartNumber.Should().Be("PRW58930-010");
+        row.ManufacturerPartNumberNormalized.Should().Be("PRW58930010");
+        row.ManufacturerPartNumberNormalized.Should().NotBe("LTQ2500BKBTK1",
             "the stale key from the previous import must not survive the re-import");
     }
 
@@ -385,15 +385,15 @@ public class SupplierCatalogServiceTests
 
         await svc.UpsertManyAsync(orgId, supplierId, new[]
         {
-            Draft("REDACTED-ITEM", "Handheld scanner", manufacturerPartNumber: "REDACTED-ORDER-DATA"),
+            Draft("FAB-SCAN-77120", "Handheld scanner", manufacturerPartNumber: "LTQ2500-BK-BTK1"),
         }, CancellationToken.None);
 
         await svc.UpsertManyAsync(orgId, supplierId, new[]
         {
-            Draft("REDACTED-ITEM", "Handheld scanner", manufacturerPartNumber: null),
+            Draft("FAB-SCAN-77120", "Handheld scanner", manufacturerPartNumber: null),
         }, CancellationToken.None);
 
-        var row = await RowAsync(db, "REDACTED-ITEM");
+        var row = await RowAsync(db, "FAB-SCAN-77120");
         row.ManufacturerPartNumber.Should().BeNull();
         row.ManufacturerPartNumberNormalized.Should().BeNull();
     }
@@ -409,19 +409,19 @@ public class SupplierCatalogServiceTests
         var supplierId = Guid.NewGuid();
         var svc = new SupplierCatalogService(db);
 
-        var insert = Draft("REDACTED-ITEM", "Handheld scanner", manufacturerPartNumber: "REDACTED-ORDER-DATA");
+        var insert = Draft("FAB-SCAN-77120", "Handheld scanner", manufacturerPartNumber: "LTQ2500-BK-BTK1");
         insert.ManufacturerPartNumberNormalized = "WRONG-KEY-FROM-CALLER";
         await svc.UpsertManyAsync(orgId, supplierId, new[] { insert }, CancellationToken.None);
 
-        (await RowAsync(db, "REDACTED-ITEM")).ManufacturerPartNumberNormalized
-            .Should().Be("QBT2500BKBTK1", "the insert branch derives the key, it does not copy it");
+        (await RowAsync(db, "FAB-SCAN-77120")).ManufacturerPartNumberNormalized
+            .Should().Be("LTQ2500BKBTK1", "the insert branch derives the key, it does not copy it");
 
-        var update = Draft("REDACTED-ITEM", "Handheld scanner", manufacturerPartNumber: "REDACTED-ORDER-DATA");
+        var update = Draft("FAB-SCAN-77120", "Handheld scanner", manufacturerPartNumber: "PRW58930-010");
         update.ManufacturerPartNumberNormalized = "WRONG-KEY-FROM-CALLER";
         await svc.UpsertManyAsync(orgId, supplierId, new[] { update }, CancellationToken.None);
 
-        (await RowAsync(db, "REDACTED-ITEM")).ManufacturerPartNumberNormalized
-            .Should().Be("P1058930010", "the update branch derives the key too");
+        (await RowAsync(db, "FAB-SCAN-77120")).ManufacturerPartNumberNormalized
+            .Should().Be("PRW58930010", "the update branch derives the key too");
     }
 
     [Fact]
@@ -441,7 +441,7 @@ public class SupplierCatalogServiceTests
             Draft("NO-MPN-NULL",  "Cable tie",   manufacturerPartNumber: null),
             Draft("NO-MPN-BLANK", "Cable clip",  manufacturerPartNumber: "   "),
             Draft("NO-MPN-PUNCT", "Cable gland", manufacturerPartNumber: "---"),
-            Draft("HAS-MPN",      "Scanner",     manufacturerPartNumber: "REDACTED-ORDER-DATA"),
+            Draft("HAS-MPN",      "Scanner",     manufacturerPartNumber: "LTQ2500-BK-BTK1"),
         }, CancellationToken.None);
 
         foreach (var code in new[] { "NO-MPN-NULL", "NO-MPN-BLANK", "NO-MPN-PUNCT" })
@@ -461,7 +461,7 @@ public class SupplierCatalogServiceTests
         // … while the row that does have one is found by exactly that key.
         (await db.SupplierProducts.AsNoTracking()
                 .Where(p => p.OrgId == orgId && p.SupplierId == supplierId
-                         && p.ManufacturerPartNumberNormalized == "QBT2500BKBTK1")
+                         && p.ManufacturerPartNumberNormalized == "LTQ2500BKBTK1")
                 .ToListAsync())
             .Should().ContainSingle(p => p.Code == "HAS-MPN");
     }
@@ -479,17 +479,17 @@ public class SupplierCatalogServiceTests
 
         await svc.UpsertManyAsync(orgId, supplierId, new[]
         {
-            Draft("REDACTED-ITEM", "Handheld scanner", barcode: "4001234000010",
-                manufacturerPartNumber: "REDACTED-ORDER-DATA"),
-            Draft("REDACTED-ITEM",  "Label printer",    barcode: "4001234000027",
-                manufacturerPartNumber: "REDACTED-ITEM"),
+            Draft("FAB-SCAN-77120", "Handheld scanner", barcode: "4001234000010",
+                manufacturerPartNumber: "LTQ2500-BK-BTK1"),
+            Draft("FAB-PRN-45001",  "Label printer",    barcode: "4001234000027",
+                manufacturerPartNumber: "PW421-D01W-EU"),
         }, CancellationToken.None);
 
         (await svc.ListAsync(orgId, supplierId, "2500-bk", null, CancellationToken.None))
-            .Should().ContainSingle(p => p.Code == "REDACTED-ITEM");
+            .Should().ContainSingle(p => p.Code == "FAB-SCAN-77120");
 
-        (await svc.ListAsync(orgId, supplierId, "ZD421", null, CancellationToken.None))
-            .Should().ContainSingle(p => p.Code == "REDACTED-ITEM");
+        (await svc.ListAsync(orgId, supplierId, "PW421", null, CancellationToken.None))
+            .Should().ContainSingle(p => p.Code == "FAB-PRN-45001");
 
         // A manufacturer number no product carries still finds nothing — the predicate widened
         // the search, it did not make it match everything.

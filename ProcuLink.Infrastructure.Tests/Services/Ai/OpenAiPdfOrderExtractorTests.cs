@@ -102,23 +102,23 @@ public class OpenAiPdfOrderExtractorTests
         // The multi-vendor "Pos." shape: the model put the positional "Pos." index ("0001")
         // into buyer_item_code while the genuine part number sits in manufacturer_part_number.
         // The real code must win — a positional counter is not an item code.
-        const string source = "0001 Samsung Galaxy A57 1 PC 1469,00 1469,00 SM-A576BZABEEE";
+        const string source = "0001 Humongous Nova A57 1 PC 1469,00 1469,00 HG-A576BZABEEE";
 
         var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
             Confidence: 0.9, PoNumber: "PO-1", OrderDate: "", Currency: "PLN", BuyerName: "Exemplar Elektro",
             Lines: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(
-                    1, "0001", "Samsung Galaxy A57", 1, "PC", 1469.00, 1469.00,
-                    ManufacturerPartNumber: "SM-A576BZABEEE"),
+                    1, "0001", "Humongous Nova A57", 1, "PC", 1469.00, 1469.00,
+                    ManufacturerPartNumber: "HG-A576BZABEEE"),
             });
 
         var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, source);
 
         result.Success.Should().BeTrue();
-        result.Order!.Lines[0].BuyerItemCode.Should().Be("SM-A576BZABEEE",
+        result.Order!.Lines[0].BuyerItemCode.Should().Be("HG-A576BZABEEE",
             "the positional index 0001 must be replaced by the genuine part number");
-        result.Order.Lines[0].ManufacturerPartNumber.Should().Be("SM-A576BZABEEE");
+        result.Order.Lines[0].ManufacturerPartNumber.Should().Be("HG-A576BZABEEE");
     }
 
     [Fact]
@@ -126,14 +126,14 @@ public class OpenAiPdfOrderExtractorTests
     {
         // EXEMPLAR SEAFOOD shape: "Pos. Part No." — model echoes the position ("1"); the real "Part No."
         // (43469659) landed in customer_part_number. Promote the real code.
-        const string source = "1 43469659 Lenovo ThinkPad L14 1 Piece 12157,84 12157,84";
+        const string source = "1 43469659 VanArsdel WorkBook L14 1 Piece 12157,84 12157,84";
 
         var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
             Confidence: 0.9, PoNumber: "PO-1", OrderDate: "", Currency: "NOK", BuyerName: "EXEMPLAR SEAFOOD",
             Lines: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(
-                    1, "1", "Lenovo ThinkPad L14", 1, "Piece", 12157.84, 12157.84,
+                    1, "1", "VanArsdel WorkBook L14", 1, "Piece", 12157.84, 12157.84,
                     CustomerPartNumber: "43469659"),
             });
 
@@ -168,13 +168,13 @@ public class OpenAiPdfOrderExtractorTests
     {
         // A real 8-digit part number that is not the line position must be kept as-is —
         // the positional guard must be narrow enough not to clobber legitimate codes.
-        const string source = "1 43469659 Lenovo ThinkPad 1 Piece 12157,84 12157,84";
+        const string source = "1 43469659 VanArsdel WorkBook 1 Piece 12157,84 12157,84";
 
         var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
             Confidence: 0.9, PoNumber: "PO-1", OrderDate: "", Currency: "NOK", BuyerName: "EXEMPLAR SEAFOOD",
             Lines: new[]
             {
-                new OpenAiPdfOrderExtractor.ExtractionLineDto(1, "43469659", "Lenovo ThinkPad", 1, "Piece", 12157.84, 12157.84),
+                new OpenAiPdfOrderExtractor.ExtractionLineDto(1, "43469659", "VanArsdel WorkBook", 1, "Piece", 12157.84, 12157.84),
             });
 
         var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, source);
@@ -250,15 +250,15 @@ public class OpenAiPdfOrderExtractorTests
 
         var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
             Confidence: 0.9, PoNumber: "PO-1", OrderDate: "", Currency: "EUR",
-            BuyerName: "REDACTED-PARTY",
+            BuyerName: "FABRIKAM B2B APS",
             Lines: new[] { new OpenAiPdfOrderExtractor.ExtractionLineDto(1, "X", "Y", 1, "PCS", 0, 0) },
-            SupplierName: "REDACTED-PARTY");
+            SupplierName: "Fabrikam B2B ApS");
 
         var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, source);
 
         result.Order!.BuyerName.Should().BeNull(
             "buyer and supplier are the same party → the buyer cannot be trusted, leave it for review");
-        result.Order.SupplierName.Should().Be("REDACTED-PARTY");
+        result.Order.SupplierName.Should().Be("Fabrikam B2B ApS");
     }
 
     [Fact]

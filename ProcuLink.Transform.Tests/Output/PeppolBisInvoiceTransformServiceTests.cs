@@ -51,7 +51,7 @@ public class PeppolBisInvoiceTransformServiceTests
         SellerEndpointId     = "0192:998765432",
         SellerEndpointScheme = "0192",
         SellerVatId          = "EE100123456",
-        BuyerName            = "REDACTED-PARTY",
+        BuyerName            = "Fabrikam AS",
         BuyerEndpointId      = "0088:1234567890123",
         BuyerEndpointScheme  = "0088",
         BuyerVatId           = "EE100987654",

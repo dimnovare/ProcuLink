@@ -156,12 +156,12 @@ public sealed class CxmlOrderParser : IPurchaseOrderParser
             var unit        = GetDescendant(itemDetailEl, "UnitOfMeasure")?.Value?.Trim();
 
             // Lossless capture of the real identifiers cXML carries — these are the
-            // genuine codes (e.g. ManufacturerPartID "REDACTED-ORDER-DATA"), NOT something to be
+            // genuine codes (e.g. ManufacturerPartID "TSP23S/A"), NOT something to be
             // guessed downstream. ManufacturerPartNumber is the catalog/enrichment key
             // and the high-confidence source for a supplier-code suggestion.
             var mpn = GetDescendant(itemDetailEl, "ManufacturerPartID")?.Value?.Trim();
             // The brand that goes WITH the part number. Punchout orders (Ariba/Coupa) routinely
-            // carry it — "REDACTED-PARTY" alongside "REDACTED-ORDER-DATA" — and without it the review UI
+            // carry it — "Litware" alongside "LTQ2500-BK-BTK1" — and without it the review UI
             // can only show a bare code the operator has to look up by hand.
             var manufacturerName = GetDescendant(itemDetailEl, "ManufacturerName")?.Value?.Trim();
             var auxId = GetDescendant(itemIdEl, "SupplierPartAuxiliaryID")?.Value?.Trim();

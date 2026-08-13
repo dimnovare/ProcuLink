@@ -48,7 +48,7 @@ public class HighVolumeMatrixTests
     private static readonly string[] UnicodeDescriptions =
     {
         "Kaabel USB-C — USB-A 2m",
-        "Ratón ergonómico Natec Crake 2",
+        "Ratón ergonómico Margie Kite 2",
         "Câble réseau — catégorie 6",
         "Kabel sieciowy 1.5m CAT6",
         "Netzwerkkabel 1m — Gigabit",
@@ -56,8 +56,8 @@ public class HighVolumeMatrixTests
         "鼠标 ergonomic M510",
         "Mouse 🖱️ ergonomic",
         "USB Flash Drive 32GB — Łódź",
-        "Süsteemiplaat — Asus Prime B550",
-        "Näytönohjain RTX 4060 Ti",
+        "Süsteemiplaat — Firstup Base B550",
+        "Näytönohjain GX 4060 Ti",
     };
 
     // Adversarial numeric strings covering both the EU comma-decimal and the

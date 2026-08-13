@@ -120,7 +120,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
                 "type": "object",
                 "properties": {
                   "line_number":              { "type": "integer" },
-                  "buyer_item_code":          { "type": "string", "description": "The line's real PRODUCT / PART / material number (e.g. a manufacturer or vendor item code like 'REDACTED-ITEM', 'SM-A576BZABEEE', or a 'your material number' / 'Numer materiału' value). NEVER the positional 'Pos.' / 'Position' / line-counter index (e.g. '0001', '0010', '1') — leave this empty if the only code on the line is that positional counter." },
+                  "buyer_item_code":          { "type": "string", "description": "The line's real PRODUCT / PART / material number (e.g. a manufacturer or vendor item code like '410-001949', 'HG-A576BZABEEE', or a 'your material number' / 'Numer materiału' value). NEVER the positional 'Pos.' / 'Position' / line-counter index (e.g. '0001', '0010', '1') — leave this empty if the only code on the line is that positional counter." },
                   "manufacturer_part_number": { "type": "string", "description": "The manufacturer/vendor product number (e.g. 'Ihre Materialnr', ManufPN). Empty if none." },
                   "customer_part_number":     { "type": "string" },
                   "description":              { "type": "string" },
@@ -157,7 +157,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         "in the document. " +
         // ── Item code (buyer_item_code) — the real part number, never the position ──
         "buyer_item_code is the line's real PRODUCT / PART / material number (a manufacturer or " +
-        "vendor item code such as 'REDACTED-ITEM', 'SM-A576BZABEEE', or a 'your material number' / " +
+        "vendor item code such as '410-001949', 'HG-A576BZABEEE', or a 'your material number' / " +
         "'Numer materiału dostawcy' / 'Ihre Materialnummer' value). It is NEVER the positional " +
         "line index from a 'Pos.' / 'Position' / 'Pozycja' counter column (e.g. '0001', '0010', " +
         "'1', '2') — that counter is just the row number. If the ONLY code on a line is that " +
@@ -915,8 +915,8 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
     /// <summary>
     /// True when two party names denote the same organisation for the purpose of the
     /// buyer≠supplier invariant — a case-insensitive comparison after collapsing whitespace
-    /// and stripping trailing legal-form suffixes (ApS / AS / GmbH / etc.) so "REDACTED-PARTY"
-    /// and "REDACTED-PARTY" are recognised as one party.
+    /// and stripping trailing legal-form suffixes (ApS / AS / GmbH / etc.) so "FABRIKAM B2B APS"
+    /// and "Fabrikam B2B ApS" are recognised as one party.
     /// </summary>
     private static bool SamePartyName(string a, string b) =>
         string.Equals(NormalizePartyName(a), NormalizePartyName(b), StringComparison.OrdinalIgnoreCase);

@@ -106,7 +106,7 @@ public sealed class CatalogRetrievalService : ICatalogRetrievalService
 
             // ── Pass 1b — EXACT MANUFACTURER PART NUMBER match (indexed) ──────────────────
             // Compared on the normalised key (upper-cased, separators stripped) so the same part
-            // written "REDACTED-ORDER-DATA" by the buyer and "qbt2500 bk btk1" by the distributor
+            // written "LTQ2500-BK-BTK1" by the buyer and "ltq2500 bk btk1" by the distributor
             // still meets. Served by (org_id, supplier_id, manufacturer_part_number_normalized).
             var manufacturerKeys = queries
                 .Select(q => ProductKeyNormalizer.Normalize(q.ManufacturerPartNumber))

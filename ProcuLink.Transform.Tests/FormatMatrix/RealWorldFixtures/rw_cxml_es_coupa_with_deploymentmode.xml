@@ -74,11 +74,11 @@
           <UnitPrice>
             <Money currency="EUR">88.3</Money>
           </UnitPrice>
-          <Description xml:lang="en">REDACTED-ORDER-DATA</Description>
+          <Description xml:lang="en">Munson Traveller MSBU6Y0020BBK - Hard drive - 2 TB - external (portable) - USB 3.0</Description>
           <UnitOfMeasure>EA</UnitOfMeasure>
           <Classification domain="UNSPSC">unknown</Classification>
-          <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID>
-          <ManufacturerName xml:lang="en">REDACTED-NAME</ManufacturerName>
+          <ManufacturerPartID>MSBU6Y0020BBK-WESN</ManufacturerPartID>
+          <ManufacturerName xml:lang="en">Munson Digital</ManufacturerName>
         </ItemDetail>
       </ItemOut>
     </OrderRequest>

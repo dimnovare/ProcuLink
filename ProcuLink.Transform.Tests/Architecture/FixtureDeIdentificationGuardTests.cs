@@ -377,7 +377,7 @@ public class FixtureDeIdentificationGuardTests
     // Category (d): a really-allocated account identifier. #179 de-identified one of these and
     // this one survived three lines deep in a CIF data row.
     [InlineData(
-        "AN01234567891,13080788,REDACTED-ORDER-DATA,\"Patch cable\",43223303,4.24,EA",
+        "AN01234567891,13080788,95PAT50CMRD,\"Patch cable\",43223303,4.24,EA",
         "Ariba Network ID outside the reserved all-zeros placeholder range")]
     // Split across a "+" for the same reason SourcePersonalDataGuardTests splits its own controls:
     // CxmlIdentityGuardTests sweeps .cs source for <Identity> values, and an unsplit control here
@@ -417,7 +417,7 @@ public class FixtureDeIdentificationGuardTests
     [InlineData("<ApiBase>http://localhost:5223/api/orders</ApiBase>")]
     // The reserved placeholder Ariba Network ID must not trip the ANID rule.
     [InlineData("<Credential domain=\"NetworkID\"><Identity>AN00000000001</Identity></Credential>")]
-    [InlineData("AN00000000001,13080788,REDACTED-ORDER-DATA,\"Patch cable\",43223303,4.24,EA")]
+    [InlineData("AN00000000001,13080788,95PAT50CMRD,\"Patch cable\",43223303,4.24,EA")]
     // Dotted tokens that are not hosts: a version, a file name, a decimal. A host detector that
     // fired on these would be suppressed within a week.
     [InlineData("<UnspscVersion>20.0601</UnspscVersion>")]

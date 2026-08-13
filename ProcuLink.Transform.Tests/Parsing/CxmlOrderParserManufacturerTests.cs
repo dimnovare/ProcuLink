@@ -33,8 +33,8 @@ public class CxmlOrderParserManufacturerTests
 
         var line = result.Lines.Should().ContainSingle().Subject;
         line.BuyerItemCode.Should().Be("29954596");                      // SupplierPartID
-        line.ManufacturerPartNumber.Should().Be("REDACTED-ORDER-DATA");      // ManufacturerPartID
-        line.ManufacturerName.Should().Be("REDACTED-PARTY");                  // ManufacturerName
+        line.ManufacturerPartNumber.Should().Be("LTQ2500-BK-BTK1");      // ManufacturerPartID
+        line.ManufacturerName.Should().Be("Litware");                  // ManufacturerName
 
         line.ManufacturerPartNumber.Should().NotBe(line.BuyerItemCode,
             "this is the punchout case — echoing the MPN back as the supplier code is wrong here");
@@ -46,8 +46,8 @@ public class CxmlOrderParserManufacturerTests
         var result = await ParseFixtureAsync("real-cxml-1.1-mpn-equals-supplier-part.xml");
 
         var line = result.Lines.Should().ContainSingle().Subject;
-        line.BuyerItemCode.Should().Be("REDACTED-ORDER-DATA");
-        line.ManufacturerPartNumber.Should().Be("REDACTED-ORDER-DATA");
+        line.BuyerItemCode.Should().Be("PRW58930-010");
+        line.ManufacturerPartNumber.Should().Be("PRW58930-010");
         line.ManufacturerName.Should().BeNull(
             "this order carries no <ManufacturerName>; an absent brand must stay null, not \"\"");
     }

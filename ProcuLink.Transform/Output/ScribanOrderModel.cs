@@ -171,8 +171,8 @@ internal static class ScribanOrderModel
             if (product is null && !string.IsNullOrWhiteSpace(line.ManufacturerPartNumber))
             {
                 catalogLookup.TryGetValue(line.ManufacturerPartNumber, out product);
-                // Then the normalised form, so "REDACTED-ORDER-DATA" still finds a catalog row that
-                // spells it "QBT2500BKBTK1" (the lookup carries both keys).
+                // Then the normalised form, so "LTQ2500-BK-BTK1" still finds a catalog row that
+                // spells it "LTQ2500BKBTK1" (the lookup carries both keys).
                 if (product is null)
                 {
                     var normalised = ProductKeyNormalizer.Normalize(line.ManufacturerPartNumber);

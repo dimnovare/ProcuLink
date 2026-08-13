@@ -18,13 +18,13 @@
           <UnitPrice>
             <Money currency="EUR">1.84</Money>
           </UnitPrice>
-          <Description lang="en">REDACTED-ORDER-DATA (Packung mit 3) - für Poly Voyager 5200, 5200 Office, 5200 UC, 5200-M Office</Description>
-          <ShortDescription lang="en">REDACTED-ORDER-DATA</ShortDescription>
-          <URL>https://example.invalid/redacted</URL>
+          <Description lang="en">Coho Trey - Ohrhörer-Satz für Headset - medium (Packung mit 3) - für Trey Ranger 5200, 5200 Office, 5200 UC, 5200-M Office</Description>
+          <ShortDescription lang="en">Coho Trey - Ohrhörer-Satz für Headset - medium</ShortDescription>
+          <URL>https://catalog.example.com/de/de/coho-trey-ohrhoerer-satz-fuer-headset-medium-packung/v2p34762852</URL>
           <UnitOfMeasure>EA</UnitOfMeasure>
           <Classification domain="UNSPSC">52161600</Classification>
-          <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID>
-          <ManufacturerName>REDACTED-PARTY</ManufacturerName>
+          <ManufacturerPartID>55Q22AA</ManufacturerPartID>
+          <ManufacturerName>Coho Inc.</ManufacturerName>
           <CustomerId>TESTBUYER_DE</CustomerId>
           <SupplierId>TESTSUPPLIER_DE</SupplierId>
           <CountryCode>DE</CountryCode>
@@ -43,13 +43,13 @@
           <UnitPrice>
             <Money currency="EUR">1.84</Money>
           </UnitPrice>
-          <Description lang="en">REDACTED-ORDER-DATA</Description>
-          <ShortDescription lang="en">REDACTED-ORDER-DATA</ShortDescription>
-          <URL>https://example.invalid/redacted</URL>
+          <Description lang="en">Coho Trey - Ohrhörer-Satz für Headset (Packung mit 3) - für Trey Ranger 5200, 5200 Office, 5200 UC, 5200-M Office</Description>
+          <ShortDescription lang="en">Coho Trey - Ohrhörer-Satz für Headset</ShortDescription>
+          <URL>https://catalog.example.com/de/de/coho-trey-ohrhoerer-satz-fuer-headset-packung-mit/v2p34763402</URL>
           <UnitOfMeasure>EA</UnitOfMeasure>
           <Classification domain="UNSPSC">52161600</Classification>
-          <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID>
-          <ManufacturerName>REDACTED-PARTY</ManufacturerName>
+          <ManufacturerPartID>55Q26AA</ManufacturerPartID>
+          <ManufacturerName>Coho Inc.</ManufacturerName>
           <CustomerId>TESTBUYER_DE</CustomerId>
           <SupplierId>TESTSUPPLIER_DE</SupplierId>
           <CountryCode>DE</CountryCode>

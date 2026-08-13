@@ -62,7 +62,7 @@
           <UnitPrice>
             <Money currency="PLN">49.31</Money>
           </UnitPrice>
-          <Description xml:lang="pl">REDACTED-ORDER-DATA</Description>
+          <Description xml:lang="pl">Margie KITE 2 - Mysz pionowa - ergonomic</Description>
           <UnitOfMeasure>EA</UnitOfMeasure>
         </ItemDetail>
       </ItemOut>
@@ -75,7 +75,7 @@
           <UnitPrice>
             <Money currency="PLN">148.93</Money>
           </UnitPrice>
-          <Description xml:lang="pl">REDACTED-ORDER-DATA</Description>
+          <Description xml:lang="pl">Consolidated Ranger TC3000E - Adapter sieciow</Description>
           <UnitOfMeasure>EA</UnitOfMeasure>
         </ItemDetail>
       </ItemOut>

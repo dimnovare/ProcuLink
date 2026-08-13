@@ -8,7 +8,7 @@ using ProcuLink.Transform.Output;
 namespace ProcuLink.Transform.Tests.Output;
 
 /// <summary>
-/// The Testforsikring bug: a PO from a buyer that is NOT Exemple was routed to a cXML supplier whose
+/// The ex-VAT reconcile bug: a PO from a buyer that is NOT Exemple was routed to a cXML supplier whose
 /// configured From identity is Exemple's VatNr (FR99000000000). The cXML From/Identity is the
 /// BUYER's identity, so a different buyer must NOT inherit the configured From's VatNr. These tests
 /// pin:
@@ -28,7 +28,7 @@ public class CxmlTransformServiceBuyerTaxAndLineTaxTests
         Id         = Guid.NewGuid(),
         OrgId      = OrgId,
         SupplierId = SupplierId,
-        PoNumber   = "REDACTED-ITEM",
+        PoNumber   = "PO-EXF-1",
         OrderDate  = new DateOnly(2026, 6, 15),
         Currency   = "NOK",
         Status     = "ready",
@@ -71,7 +71,7 @@ public class CxmlTransformServiceBuyerTaxAndLineTaxTests
             SenderSharedSecret: null);
 
         var order = BuildOrder();
-        order.BuyerTaxId = "NO999000000"; // a DIFFERENT buyer (Testforsikring org number).
+        order.BuyerTaxId = "NO999000000"; // a DIFFERENT buyer (Exemplar Forsikring org number).
 
         var xml = await RenderAsync(order, creds);
 

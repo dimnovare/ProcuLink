@@ -99,9 +99,9 @@ public class OrderIngestionLosslessCaptureTests
             Lines: new[]
             {
                 new ExtractedOrderLine(
-                    LineNumber: 1, BuyerItemCode: "00010", Description: "Panasonic",
+                    LineNumber: 1, BuyerItemCode: "00010", Description: "Lucerne",
                     Quantity: 1, Unit: "ST", UnitPrice: 306.28m,
-                    ManufacturerPartNumber: "SCPMX94EGK",
+                    ManufacturerPartNumber: "PLKMX94EGK",
                     Recipient: "c.testperson@buyer.example.com"),
             },
             ContactEmail: "c.testperson@buyer.example.com",
@@ -137,7 +137,7 @@ public class OrderIngestionLosslessCaptureTests
 
         // Per-line lossless columns.
         var line = Assert.Single(order.Lines);
-        Assert.Equal("SCPMX94EGK", line.ManufacturerPartNumber);
+        Assert.Equal("PLKMX94EGK", line.ManufacturerPartNumber);
         Assert.Equal("c.testperson@buyer.example.com", line.Recipient);
 
         // SourceCapture raw bag built from raw_fields.
