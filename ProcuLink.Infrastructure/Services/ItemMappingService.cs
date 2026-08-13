@@ -206,7 +206,7 @@ public sealed class ItemMappingService : IItemMappingService
     public async Task UpsertAsync(
         Guid orgId, Guid supplierId,
         string buyerItemCode, string supplierItemCode,
-        MappingSource source, CancellationToken ct)
+        MappingSource source, float? confidence, CancellationToken ct)
     {
         var normalised = buyerItemCode.Trim();
         var sourceStr  = source.ToString().ToLowerInvariant();
@@ -225,7 +225,11 @@ public sealed class ItemMappingService : IItemMappingService
                 SupplierId       = supplierId,
                 BuyerItemCode    = normalised,
                 SupplierItemCode = supplierItemCode.Trim(),
-                Confidence       = source == MappingSource.Manual ? 1.0f : 0.8f,
+                // Whatever the caller measured, or null. This was
+                // `source == MappingSource.Manual ? 1.0f : 0.8f` — a two-valued literal under a
+                // column the supplier screen heads "Confidence", so a hand-typed code claimed a
+                // green 100% and an imported one a flat amber 80%, neither of them measured.
+                Confidence       = confidence,
                 Source           = sourceStr,
                 AppliedCount     = 1,
                 CreatedAt        = now,
@@ -254,7 +258,11 @@ public sealed class ItemMappingService : IItemMappingService
 
             existing.SupplierItemCode = supplierItemCode.Trim();
             existing.Source           = sourceStr;
-            existing.Confidence       = source == MappingSource.Manual ? 1.0f : existing.Confidence;
+            // A re-save carrying a real score overwrites; a re-save carrying none (hand-typed,
+            // imported) CLEARS, because the stored number no longer describes the code now held.
+            // Keeping the old score here would let a 0.91 from a previous accept sit against a
+            // code a human has since typed over the top of it.
+            existing.Confidence       = confidence;
             existing.AppliedCount    += 1;
             existing.UpdatedAt        = now;
         }
@@ -291,7 +299,7 @@ public sealed class ItemMappingService : IItemMappingService
     public async Task<ItemMapping> CreateAsync(
         Guid orgId, Guid supplierId,
         string buyerItemCode, string supplierItemCode,
-        MappingSource source, CancellationToken ct)
+        MappingSource source, float? confidence, CancellationToken ct)
     {
         var normalised = buyerItemCode.Trim();
 
@@ -307,7 +315,7 @@ public sealed class ItemMappingService : IItemMappingService
         {
             existing.SupplierItemCode = supplierItemCode.Trim();
             existing.Source           = source.ToString().ToLowerInvariant();
-            existing.Confidence       = source == MappingSource.Manual ? 1.0f : existing.Confidence;
+            existing.Confidence       = confidence; // see UpsertAsync — null clears, it does not preserve
             existing.UpdatedAt        = now;
             await _db.SaveChangesAsync(ct);
             return existing;
@@ -320,7 +328,7 @@ public sealed class ItemMappingService : IItemMappingService
             SupplierId       = supplierId,
             BuyerItemCode    = normalised,
             SupplierItemCode = supplierItemCode.Trim(),
-            Confidence       = source == MappingSource.Manual ? 1.0f : 0.8f,
+            Confidence       = confidence, // see UpsertAsync — was `Manual ? 1.0f : 0.8f`
             Source           = source.ToString().ToLowerInvariant(),
             CreatedAt        = now,
             UpdatedAt        = now,
@@ -355,7 +363,10 @@ public sealed class ItemMappingService : IItemMappingService
         mapping.BuyerItemCode    = normalised;
         mapping.SupplierItemCode = supplierItemCode.Trim();
         mapping.Source           = source.ToString().ToLowerInvariant();
-        mapping.Confidence       = source == MappingSource.Manual ? 1.0f : mapping.Confidence;
+        // An operator retyping this mapping's codes through the editor. Nothing scored the result,
+        // so it carries no score — this used to stamp a literal 1.0f, which is how a row an
+        // operator had just hand-corrected came to display a green "100% confidence".
+        mapping.Confidence       = null;
         mapping.UpdatedAt        = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
         return mapping;

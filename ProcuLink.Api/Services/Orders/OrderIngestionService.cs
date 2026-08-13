@@ -2008,7 +2008,12 @@ internal sealed class OrderIngestionService
                 Quantity         = line.Quantity,
                 Unit             = line.Unit,
                 UnitPrice        = line.UnitPrice ?? 0m,
-                Confidence       = resolved ? (parserFlagged ? 0.5f : 1.0f) : 0.0f,
+                // No model runs on this path — a line is resolved by the supplier's saved item
+                // mappings or it is not — so there is no confidence to record. This used to write
+                // `resolved ? (parserFlagged ? 0.5f : 1.0f) : 0.0f`: a three-valued STATE FLAG that
+                // the order passport then painted onto the confidence ramp as 100% green / 50% red /
+                // 0% red. The state it encoded is the very next two lines, which is where it belongs.
+                Confidence       = null,
                 NeedsReview      = !resolved || parserFlagged,
                 // P2 hardening: persist WHY the line was flagged so the review UI can say so.
                 ReviewReason     = ComposeReviewReason(resolved, parserFlagged, line),

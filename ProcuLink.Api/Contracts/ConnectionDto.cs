@@ -17,7 +17,7 @@ public record ConnectionRevisionSummaryDto(
     DateTime? EffectiveFrom, DateTime? EffectiveTo, DateTime? PublishedAt, DateTime CreatedAt);
 
 public record ConnectionItemMappingDto(
-    string BuyerItemCode, string SupplierItemCode, float Confidence, string Source);
+    string BuyerItemCode, string SupplierItemCode, float? Confidence, string Source);
 
 /// <summary>The full revision bundle (the Connection page tabs).</summary>
 public record ConnectionRevisionDto(

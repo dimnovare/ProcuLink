@@ -1958,10 +1958,16 @@ public sealed class OrdersController : ControllerBase
             };
         }
 
-        // Overall detected confidence = average of per-line Confidence values (only when lines exist).
-        double? detectedConfidence = lines.Count > 0
-            ? lines.Average(l => (double)l.Confidence)
-            : null;
+        // Overall detected confidence = the average of the per-line scores THAT EXIST. Null when
+        // no line carries one, which is the normal case for an order resolved by saved mappings.
+        //
+        // This used to average `(double)l.Confidence` over every line, back when that column was a
+        // non-nullable state flag — so the "detected confidence" of an order was really
+        // (resolved-lines + 0.5×flagged-lines) ÷ lines, a resolution ratio wearing a percentage.
+        // Averaging over the scored lines only means an unscored line no longer votes; a cast over
+        // the nullable column would now throw outright rather than lie, but neither is the answer.
+        var scored = lines.Where(l => l.Confidence.HasValue).Select(l => (double)l.Confidence!.Value).ToList();
+        double? detectedConfidence = scored.Count > 0 ? scored.Average() : null;
 
         var lineDtos = lines.Select(l =>
         {

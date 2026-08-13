@@ -125,22 +125,41 @@ internal sealed class OrderResolutionService
             // Record what happened to any AI suggestion that was attached to this line.
             decisionRecords.Add(BuildDecisionFromLine(line, chosen, decidedBy: "user"));
 
+            // Did the reviewer take the model's code verbatim, or type their own over it? Same
+            // comparison BuildDecisionFromLine uses to call a decision "accepted". Read BEFORE the
+            // Ai* fields are cleared below — the model's own number is the only real confidence
+            // anywhere near this line, and it used to be thrown away here without being carried
+            // anywhere, which is why no saved mapping in the product had ever held a real score.
+            var acceptedModelCode =
+                !string.IsNullOrWhiteSpace(line.AiSuggestedSupplierItemCode)
+                && string.Equals(line.AiSuggestedSupplierItemCode!.Trim(), chosen,
+                                 StringComparison.OrdinalIgnoreCase);
+            var modelConfidence = acceptedModelCode ? line.AiSuggestionConfidence : null;
+
             line.SupplierItemCode = chosen;
             line.NeedsReview     = false;
             line.ReviewReason    = null; // human resolved the line — the "why flagged" no longer applies
-            line.Confidence      = 1.0f;
+            // Only a real model score, never a state flag. This used to be a flat `1.0f`, which the
+            // order passport then printed as a green "100%" chip on the confidence ramp — for a
+            // code a human had just typed by hand. "A human resolved this" is already carried by
+            // NeedsReview and by the decision record; it is not a probability.
+            line.Confidence      = modelConfidence;
             line.AiSuggestedSupplierItemCode = null;
             line.AiSuggestionConfidence = null;
             line.AiSuggestionReason = null;
             line.AiSuggestionProvenance = null;
 
-            // Persist the mapping so future uploads auto-resolve it
+            // Persist the mapping so future uploads auto-resolve it.
             if (saveMappings && !string.IsNullOrWhiteSpace(line.BuyerItemCode))
             {
                 await _mappings.UpsertAsync(
                     organisationId, entity.SupplierId ?? Guid.Empty,
                     line.BuyerItemCode, line.SupplierItemCode,
-                    MappingSource.Manual, ct);
+                    // Accepting the model's code verbatim is not the same act as typing one, and
+                    // the supplier screen prints this source. Recording BOTH as "manual" is what
+                    // made the Source column unable to explain the score beside it.
+                    acceptedModelCode ? MappingSource.Suggested : MappingSource.Manual,
+                    modelConfidence, ct);
             }
         }
 
@@ -378,7 +397,10 @@ internal sealed class OrderResolutionService
             decisionRecords.Add(BuildDecisionFromLine(line, chosen, decidedBy: "ai"));
 
             line.SupplierItemCode           = chosen;
-            line.Confidence                 = (float)(line.AiSuggestionConfidence ?? line.Confidence);
+            // The model's real number, promoted so it survives the clearing below. Unchanged in
+            // intent — this was already the one honest write to this column, and it is now the
+            // ONLY kind of write to it.
+            line.Confidence                 = line.AiSuggestionConfidence ?? line.Confidence;
             line.NeedsReview                = false;
             line.ReviewReason               = null; // suggestion accepted — the "why flagged" no longer applies
             line.AiSuggestedSupplierItemCode = null;

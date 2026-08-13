@@ -163,7 +163,10 @@ internal sealed class OrderServiceShared
         {
             if (!reviewSet.Contains(le.LineNumber)) continue;
             le.NeedsReview = true;
-            if (le.Confidence > 0.5f) le.Confidence = 0.5f;
+            // `if (le.Confidence > 0.5f) le.Confidence = 0.5f;` used to sit here — capping a state
+            // flag so a flagged line would render red. NeedsReview + ReviewReason (set just below)
+            // are what say the line needs looking at; the confidence column now holds a model score
+            // or nothing, and a review flag is not evidence about the score's value.
 
             var reason = reviewReasons is not null && reviewReasons.TryGetValue(le.LineNumber, out var r)
                 ? r

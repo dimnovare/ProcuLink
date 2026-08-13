@@ -14,22 +14,51 @@ namespace ProcuLink.Api.Contracts;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// <summary>
-/// One AI/learned source→canonical (or canonical→output) mapping suggestion for an order,
-/// rendered in the mapper as an accept/reject ghost wire.
+/// One learned or model-derived source→canonical (or canonical→output) mapping suggestion for an
+/// order, rendered in the mapper as an accept/reject ghost wire.
 /// Serializes to the frontend <c>MappingSuggestion</c> shape:
-/// <c>{ targetKey, sourceId, confidence, reason, sourceKind }</c>.
+/// <c>{ targetKey, sourceId, confidence, reason, sourceKind, basis }</c>.
+///
+/// <para><b><c>Confidence</c> is nullable, and null is the normal answer.</b> It used to be a
+/// non-nullable double that the saved-mapping path filled with a hard-coded <c>0.95</c> — a
+/// constant, not a measurement — which the mapper then rendered as an "AI confidence 95%" chip in
+/// AI-violet. It was wrong twice over: no model ran on that path (the suggester is deliberately
+/// not invoked), and a saved supplier mapping is not a probability at all. A suggestion that
+/// nothing scored now sends <c>null</c> and says so through <see cref="Basis"/>, and the frontend
+/// prints what it is instead of inventing a number for it.</para>
 /// </summary>
 /// <param name="TargetKey">Target/output field path OR canonical field key being suggested a source for.</param>
 /// <param name="SourceId">Suggested source: a SourceToken id (raw/structured) or a canonical field key.</param>
-/// <param name="Confidence">0..1 — rendered as a confidence ring.</param>
+/// <param name="Confidence">
+/// 0..1 model score, or <c>null</c> when nothing scored this suggestion. Only ever set when
+/// <see cref="Basis"/> is <c>"model"</c>. Never fill this with a placeholder.
+/// </param>
 /// <param name="Reason">Short human reason (e.g. "Saved supplier mapping: column 'Ihre Materialnr' → ManufacturerPartNumber").</param>
 /// <param name="SourceKind">"canonical" | "raw" | "custom" — provenance of the source.</param>
+/// <param name="Basis">
+/// What this suggestion actually is, so the UI can label it honestly:
+/// <c>"saved_mapping"</c> — read back from the supplier's saved PO mapping; a fact about
+/// configuration, carrying no probability (<see cref="Confidence"/> is null).
+/// <c>"model"</c> — produced by a scorer; <see cref="Confidence"/> carries its real number.
+/// </param>
 public sealed record MappingSuggestionDto(
     string TargetKey,
     string SourceId,
-    double Confidence,
+    double? Confidence,
     string Reason,
-    string SourceKind);
+    string SourceKind,
+    string Basis);
+
+/// <summary>Values for <see cref="MappingSuggestionDto.Basis"/>. Mirrored by the frontend's
+/// <c>MappingSuggestion["basis"]</c> union in src/lib/api/types.ts.</summary>
+public static class MappingSuggestionBasis
+{
+    /// <summary>Read back from the supplier's saved PO mapping. A fact, never a probability.</summary>
+    public const string SavedMapping = "saved_mapping";
+
+    /// <summary>Produced by a scorer; the DTO's Confidence carries its real number.</summary>
+    public const string Model = "model";
+}
 
 /// <summary>
 /// Per-field validation outcome surfaced as a green/amber badge on the mapper rows.

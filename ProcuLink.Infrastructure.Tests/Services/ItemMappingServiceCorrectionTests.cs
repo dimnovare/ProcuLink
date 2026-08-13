@@ -30,7 +30,7 @@ public class ItemMappingServiceCorrectionTests
         var supplierId = Guid.NewGuid();
 
         await svc.UpsertAsync(orgId, supplierId, "BUYER-001", "SUP-001",
-            MappingSource.Manual, CancellationToken.None);
+            MappingSource.Manual, confidence: null, CancellationToken.None);
 
         var mapping = await db.ItemMappings.SingleAsync();
         mapping.AppliedCount.Should().Be(1);
@@ -46,9 +46,9 @@ public class ItemMappingServiceCorrectionTests
         var supplierId = Guid.NewGuid();
 
         await svc.UpsertAsync(orgId, supplierId, "BUYER-001", "SUP-001",
-            MappingSource.Manual, CancellationToken.None);
+            MappingSource.Manual, confidence: null, CancellationToken.None);
         await svc.UpsertAsync(orgId, supplierId, "BUYER-001", "SUP-001",
-            MappingSource.Manual, CancellationToken.None);
+            MappingSource.Manual, confidence: null, CancellationToken.None);
 
         var mapping = await db.ItemMappings.SingleAsync();
         mapping.AppliedCount.Should().Be(2);
@@ -64,9 +64,9 @@ public class ItemMappingServiceCorrectionTests
         var supplierId = Guid.NewGuid();
 
         await svc.UpsertAsync(orgId, supplierId, "BUYER-001", "SUP-OLD",
-            MappingSource.Manual, CancellationToken.None);
+            MappingSource.Manual, confidence: null, CancellationToken.None);
         await svc.UpsertAsync(orgId, supplierId, "BUYER-001", "SUP-NEW",
-            MappingSource.Manual, CancellationToken.None);
+            MappingSource.Manual, confidence: null, CancellationToken.None);
 
         var correction = await db.MappingCorrections.SingleAsync();
         correction.OldSupplierItemCode.Should().Be("SUP-OLD");
@@ -83,9 +83,9 @@ public class ItemMappingServiceCorrectionTests
         var supplierId = Guid.NewGuid();
 
         await svc.UpsertAsync(orgId, supplierId, "BUYER-001", "SUP-OLD",
-            MappingSource.Manual, CancellationToken.None);
+            MappingSource.Manual, confidence: null, CancellationToken.None);
         await svc.UpsertAsync(orgId, supplierId, "BUYER-001", "SUP-NEW",
-            MappingSource.Manual, CancellationToken.None);
+            MappingSource.Manual, confidence: null, CancellationToken.None);
 
         var mapping = await db.ItemMappings.SingleAsync();
         mapping.AppliedCount.Should().Be(2);
@@ -100,11 +100,11 @@ public class ItemMappingServiceCorrectionTests
         var supplierId = Guid.NewGuid();
 
         await svc.UpsertAsync(orgId, supplierId, "BUYER-001", "SUP-A",
-            MappingSource.Manual, CancellationToken.None);
+            MappingSource.Manual, confidence: null, CancellationToken.None);
         await svc.UpsertAsync(orgId, supplierId, "BUYER-001", "SUP-B",
-            MappingSource.Manual, CancellationToken.None);
+            MappingSource.Manual, confidence: null, CancellationToken.None);
         await svc.UpsertAsync(orgId, supplierId, "BUYER-001", "SUP-C",
-            MappingSource.Manual, CancellationToken.None);
+            MappingSource.Manual, confidence: null, CancellationToken.None);
 
         db.MappingCorrections.Should().HaveCount(2);
 

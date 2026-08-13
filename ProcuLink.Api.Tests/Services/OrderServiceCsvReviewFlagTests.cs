@@ -120,7 +120,11 @@ public class OrderServiceCsvReviewFlagTests
         var sci = order.Lines.Single(l => l.LineNumber == 2);
         sci.SupplierItemCode.Should().Be("SUP-2", "the code resolved deterministically");
         sci.NeedsReview.Should().BeTrue("a scientific-notation price must force review even when the code resolved");
-        sci.Confidence.Should().BeLessThanOrEqualTo(0.5f, "a parser-flagged line's confidence is capped");
+        // This used to assert the flag was capped into the confidence column as <= 0.5, which the
+        // order passport then printed as a red "50%" that no model had produced. A parser flag is
+        // not a confidence — it is NeedsReview + ReviewReason, asserted above and below.
+        sci.Confidence.Should().BeNull("a parser flag is not a confidence");
+        sci.ReviewReason.Should().NotBeNullOrWhiteSpace("the flag must still say why");
         sci.UnitPrice.Should().NotBe(1.52m, "the silently-wrong 1.52 must never be persisted");
         sci.UnitPrice.Should().Be(0m, "an unparseable price degrades to 0 (visible), not a guessed value");
     }
