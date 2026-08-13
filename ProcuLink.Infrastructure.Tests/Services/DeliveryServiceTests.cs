@@ -339,7 +339,7 @@ public class DeliveryServiceTests
             string contentType,
             SupplierDeliveryConfig config,
             string decryptedCredentials,
-            CancellationToken ct, string? idempotencyKey = null)
+            CancellationToken ct, string? idempotencyKey = null, bool isTestFire = false)
         {
             Calls++;
             content.Should().NotBeEmpty();

@@ -60,7 +60,8 @@ public sealed class SmtpDeliveryDispatcher : IDeliveryDispatcher
         SupplierDeliveryConfig config,
         string decryptedCredentials,
         CancellationToken ct,
-        string? idempotencyKey = null)
+        string? idempotencyKey = null,
+        bool isTestFire = false)
     {
         SmtpConfig? cfg;
         try
@@ -102,21 +103,17 @@ public sealed class SmtpDeliveryDispatcher : IDeliveryDispatcher
         var port = cfg.Port > 0 ? cfg.Port : 587;
         var timeoutSeconds = cfg.TimeoutSeconds is > 0 ? cfg.TimeoutSeconds!.Value : 30;
         var fileNameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
-        var attachmentName = string.IsNullOrWhiteSpace(cfg.AttachmentFileName) ? fileName : cfg.AttachmentFileName;
 
-        var subject = BuildFromTemplate(
-            string.IsNullOrWhiteSpace(cfg.SubjectTemplate)
-                ? "Purchase Order " + fileNameWithoutExt
-                : cfg.SubjectTemplate,
-            fileNameWithoutExt,
-            attachmentName);
+        // Subject/body/attachment naming live in EmailMessageComposer, shared with the Postmark
+        // dispatcher — a test fire says it is a test on BOTH email channels or on neither.
+        var attachmentName = EmailMessageComposer.AttachmentName(
+            isTestFire, cfg.AttachmentFileName, fileName);
 
-        var body = BuildFromTemplate(
-            string.IsNullOrWhiteSpace(cfg.BodyTemplate)
-                ? $"Please find the attached purchase order ({attachmentName})."
-                : cfg.BodyTemplate,
-            fileNameWithoutExt,
-            attachmentName);
+        var subject = EmailMessageComposer.Subject(
+            isTestFire, cfg.SubjectTemplate, fileNameWithoutExt, attachmentName);
+
+        var body = EmailMessageComposer.Body(
+            isTestFire, cfg.BodyTemplate, fileNameWithoutExt, attachmentName);
 
         var secureOptions = cfg.UseSsl
             ? SecureSocketOptions.SslOnConnect
@@ -258,9 +255,7 @@ public sealed class SmtpDeliveryDispatcher : IDeliveryDispatcher
     }
 
     internal static string BuildFromTemplate(string template, string poNumber, string attachmentName)
-        => template
-            .Replace("{poNumber}", poNumber)
-            .Replace("{fileName}", attachmentName);
+        => EmailMessageComposer.Render(template, poNumber, attachmentName);
 
     private static bool IsRecipientError(SmtpCommandException ex)
         // SmtpErrorCode has no MailboxUnavailable member — the mailbox-unavailable

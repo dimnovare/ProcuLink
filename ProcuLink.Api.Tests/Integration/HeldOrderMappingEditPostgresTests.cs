@@ -232,7 +232,7 @@ public sealed class HeldOrderMappingEditPostgresTests : IAsyncLifetime
         public Task<DeliveryResult> DispatchAsync(
             byte[] content, string fileName, string contentType,
             SupplierDeliveryConfig config, string decryptedCredentials, CancellationToken ct,
-            string? idempotencyKey = null)
+            string? idempotencyKey = null, bool isTestFire = false)
         {
             CapturedContent = content;
             return Task.FromResult(new DeliveryResult(true, null, 200));

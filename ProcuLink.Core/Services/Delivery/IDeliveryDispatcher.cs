@@ -61,6 +61,25 @@ public interface IDeliveryDispatcher
     /// as a deterministic <c>Message-ID</c>. SFTP/FTPS ignore it (they are already idempotent via
     /// the deterministic overwrite filename). Null for test-fire / callers that do not supply one.
     /// </param>
+    /// <param name="isTestFire">
+    /// True only on "Send a test now" (<c>IDeliveryService.TestFireAsync</c>), where the payload is
+    /// <see cref="DeliveryTestArtifact"/> and NO order exists. It selects the message a channel
+    /// composes around the payload — nothing else. The host, credentials, config, transport and this
+    /// very method stay identical to a real delivery's, which is the entire reason a passing test is
+    /// worth anything; a flag that changed the route would prove only that the route works.
+    ///
+    /// <para><b>Why a flag and not recognition by name.</b> The instinct is for a dispatcher to spot
+    /// <see cref="DeliveryTestArtifact.FileName"/> in <paramref name="fileName"/> and need no new
+    /// argument. That is sound for the file-drop channels — <c>DeliveryService.BuildFileName</c>
+    /// gives their orders a <c>-{8 hex of the order id}</c> qualifier no test name can wear, which is
+    /// exactly what <see cref="DeliveryTestArtifact.IsAtPath"/> leans on — but it is NOT sound in
+    /// general, because that qualifier is appended for file-drop protocols ONLY. On email an order's
+    /// name is the sanitised PO number plus the artifact extension, so a purchase order numbered
+    /// <c>proculink-test</c> emitted as CSV is named <c>proculink-test.csv</c> exactly. Recognition
+    /// by name would then title a genuine order "this is not a purchase order" and invite the
+    /// supplier to bin it — the present defect inverted, and worse. The caller is the only party that
+    /// knows for certain, so the caller says.</para>
+    /// </param>
     Task<DeliveryResult> DispatchAsync(
         byte[] content,
         string fileName,
@@ -68,5 +87,6 @@ public interface IDeliveryDispatcher
         SupplierDeliveryConfig config,
         string decryptedCredentials,
         CancellationToken ct,
-        string? idempotencyKey = null);
+        string? idempotencyKey = null,
+        bool isTestFire = false);
 }

@@ -215,7 +215,7 @@ public sealed class DeliveryConcurrentRetryPostgresTests(PostgresContainerFixtur
             string contentType,
             SupplierDeliveryConfig config,
             string decryptedCredentials,
-            CancellationToken ct, string? idempotencyKey = null)
+            CancellationToken ct, string? idempotencyKey = null, bool isTestFire = false)
         {
             Interlocked.Increment(ref _calls);
             await Task.Delay(_holdFor, ct);

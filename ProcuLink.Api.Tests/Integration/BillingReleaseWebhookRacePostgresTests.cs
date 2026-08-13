@@ -235,7 +235,8 @@ public sealed class BillingReleaseWebhookRacePostgresTests(PostgresContainerFixt
         public string Protocol => "http";
         public Task<DeliveryResult> DispatchAsync(
             byte[] content, string fileName, string contentType,
-            SupplierDeliveryConfig config, string decryptedCredentials, CancellationToken ct, string? idempotencyKey = null)
+            SupplierDeliveryConfig config, string decryptedCredentials, CancellationToken ct, string? idempotencyKey = null,
+            bool isTestFire = false)
             => Task.FromResult(new DeliveryResult(true, null, 200));
     }
 

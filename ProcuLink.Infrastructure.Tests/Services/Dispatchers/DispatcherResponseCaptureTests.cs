@@ -190,7 +190,7 @@ public class DispatcherResponseCaptureTests
 
         public Task<DeliveryResult> DispatchAsync(
             byte[] content, string fileName, string contentType, SupplierDeliveryConfig config,
-            string decryptedCredentials, CancellationToken ct, string? idempotencyKey = null)
+            string decryptedCredentials, CancellationToken ct, string? idempotencyKey = null, bool isTestFire = false)
             => Task.FromResult(new DeliveryResult(false, "HTTP 400", 400));
     }
 

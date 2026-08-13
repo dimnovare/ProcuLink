@@ -803,13 +803,19 @@ public sealed class DeliveryService : IDeliveryService
         // meets the previous test's file on an overwrite-off connection. A literal here would drift
         // from the one there and quietly restore the message that talks about "this order" when
         // there is no order (see DeliveryTestArtifact).
+        // isTestFire: true is the ONE thing that separates this call from the order path above — same
+        // dispatcher, same config, same credentials, same host. It selects the message the email
+        // channels compose around the payload, so a supplier's order-intake address receives
+        // something that says it is a test instead of "Purchase Order proculink-test".
         var result = await dispatcher.DispatchAsync(
             Encoding.UTF8.GetBytes(DeliveryTestArtifact.Body),
             DeliveryTestArtifact.FileName,
             DeliveryTestArtifact.ContentType,
             config,
             credentials,
-            ct);
+            ct,
+            idempotencyKey: null,
+            isTestFire: true);
 
         // The natural first-contact point: a test fire connects with no order at stake, so an
         // operator setting a supplier up pins the host key here, before the first real purchase

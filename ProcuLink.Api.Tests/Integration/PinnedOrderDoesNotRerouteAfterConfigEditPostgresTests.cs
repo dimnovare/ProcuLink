@@ -413,7 +413,7 @@ public sealed class PinnedOrderDoesNotRerouteAfterConfigEditPostgresTests(Postgr
         public Task<DeliveryResult> DispatchAsync(
             byte[] content, string fileName, string contentType,
             SupplierDeliveryConfig config, string decryptedCredentials, CancellationToken ct,
-            string? idempotencyKey = null)
+            string? idempotencyKey = null, bool isTestFire = false)
         {
             Calls++;
             LastConfigJson  = config.ConfigJson;

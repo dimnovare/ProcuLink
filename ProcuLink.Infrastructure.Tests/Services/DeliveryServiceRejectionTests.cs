@@ -508,7 +508,7 @@ public class DeliveryServiceRejectionTests
         public Task<DeliveryResult> DispatchAsync(
             byte[] content, string fileName, string contentType,
             SupplierDeliveryConfig config, string decryptedCredentials,
-            CancellationToken ct, string? idempotencyKey = null) => Task.FromResult(_result);
+            CancellationToken ct, string? idempotencyKey = null, bool isTestFire = false) => Task.FromResult(_result);
     }
 
     private sealed class FakeFileStorage : IFileStorageService

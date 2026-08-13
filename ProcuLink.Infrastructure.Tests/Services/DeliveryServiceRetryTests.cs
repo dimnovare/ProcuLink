@@ -301,7 +301,7 @@ public class DeliveryServiceRetryTests
             string contentType,
             SupplierDeliveryConfig config,
             string decryptedCredentials,
-            CancellationToken ct, string? idempotencyKey = null)
+            CancellationToken ct, string? idempotencyKey = null, bool isTestFire = false)
         {
             Calls++;
             return Task.FromResult(_result);
