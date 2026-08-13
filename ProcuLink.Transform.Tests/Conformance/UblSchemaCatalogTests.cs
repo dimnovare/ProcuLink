@@ -194,16 +194,38 @@ public class UblSchemaCatalogTests
     [InlineData("https://docs.oasis-open.org/ubl/os-UBL-2.1/xsd/maindoc/UBL-Order-2.1.xsd")]
     [InlineData("http://www.w3.org/2001/XMLSchema.dtd")]
     [InlineData("file:///C:/Windows/win.ini")]
-    [InlineData("https://schemas.proculink.invalid/etc/passwd")]
+    [InlineData("http://169.254.169.254/latest/meta-data/")]
     public void TheResolverRefusesEveryUriOutsideTheVendoredCatalog(string uri)
     {
         var resolver = new UblSchemaCatalog.VendoredOnlyResolver(UblSchemaCatalog.OpenEmbedded);
 
         var act = () => resolver.GetEntity(new Uri(uri), null, typeof(Stream));
 
+        // Asserted on the MESSAGE, not merely on the throw. Every path out of GetEntity throws, so a
+        // bare Throw<XmlException>() would still pass if the catalog-prefix check were deleted — the
+        // request would just fail later, on a lookup miss. Only the prefix branch says "never the
+        // network", so pinning that sentence is what makes the check load-bearing. Verified by
+        // deleting the check and watching this test go red.
         act.Should().Throw<XmlException>(
-            "an XmlResolver that can reach a URL is an SSRF surface and a build fragility; this one "
-            + "resolves the vendored copies and nothing else");
+                "an XmlResolver that can reach a URL is an SSRF surface and a build fragility; this "
+                + "one resolves the vendored copies and nothing else")
+            .WithMessage("*never the network*");
+    }
+
+    /// <summary>
+    /// Inside the catalog's own URI space but not a vendored file. Separate from the case above
+    /// because it must fail for the OTHER reason — "not vendored", not "not the network" — and a
+    /// single test that accepted either message would prove neither.
+    /// </summary>
+    [Fact]
+    public void TheResolverRefusesAPathInsideTheCatalogThatIsNotVendored()
+    {
+        var resolver = new UblSchemaCatalog.VendoredOnlyResolver(UblSchemaCatalog.OpenEmbedded);
+
+        var act = () => resolver.GetEntity(
+            new Uri(UblSchemaCatalog.CatalogPrefix + "common/Not-Vendored-2.1.xsd"), null, typeof(Stream));
+
+        act.Should().Throw<XmlException>().WithMessage("*not vendored*");
     }
 
     [Fact]
