@@ -10,6 +10,11 @@ namespace ProcuLink.Transform.Parsing;
 /// Supported column aliases (same as CsvOrderParser):
 ///   buyer code  — BuyerItemCode, ItemCode
 ///   unit price  — UnitPrice, Price
+///   ship-to     — ShipToName, ShipToStreet, ShipToCity, ShipToPostalCode, ShipToCountry, …
+///   bill-to     — BillToName, BillToStreet, BillToCity, BillToPostalCode, BillToCountry, …
+/// The ship-to / bill-to columns are read ONLY when a header names them; nothing is inferred
+/// from column position (see BuildParties). Those columns alone match on a normalised header
+/// ("Ship To Name" == "shiptoname"); every pre-existing column keeps its exact-text match.
 /// </summary>
 public sealed class XlsxOrderParser : IPurchaseOrderParser
 {
@@ -111,11 +116,123 @@ public sealed class XlsxOrderParser : IPurchaseOrderParser
         }
 
         return Task.FromResult(new ParsedOrder(poNumber, orderDate, buyerName, currency, lines,
+            // Ship-to / bill-to, read ONLY from columns whose header named them. See BuildParties.
+            Parties: BuildParties(dataRows, headerMap),
             // A text-typed date cell declares no ordering: "03/04/2026" is a genuine coin-flip.
             // (A date-TYPED cell never reaches here — ClosedXML hands those back already
             // resolved, so this only flags the string path that carries the defect.)
             NeedsReview:  orderDateAmbiguous,
             ReviewReason: DateParsing.BuildAmbiguityReason(orderDateAmbiguous, "order date", orderDateStr)));
+    }
+
+    // ── Parties ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Ship-to / bill-to parties, or <c>null</c> when the sheet names neither.
+    ///
+    /// <para>A worksheet is columnar: a cell's position says nothing about what it MEANS. So a
+    /// party is only read where a header explicitly named the field, and no column is inferred
+    /// from its position — a delivery address invented from layout is worse than no delivery
+    /// address, because nothing downstream can tell it apart from one the buyer really stated.
+    /// A sheet naming no such column keeps producing <c>Parties == null</c>, exactly as before.</para>
+    ///
+    /// <para>These are header-level values repeated on every line row, so each is taken from the
+    /// first row that states it — the rule PoNumber/BuyerName/Currency already use above.</para>
+    /// </summary>
+    private static IReadOnlyList<ParsedParty>? BuildParties(
+        List<IXLRangeRow> dataRows, Dictionary<string, int> headerMap)
+    {
+        // Header matching for these columns normalises to letters+digits lowercase, so
+        // "Ship To Name", "ShipTo_Name" and "shiptoname" are one alias — the same rule
+        // CsvOrderParser applies via PrepareHeaderForMatch. The existing header map is
+        // LEFT ALONE (it is exact-text, case-insensitive) so no already-shipping column
+        // silently starts or stops matching; this is a second map used only here.
+        var normalized = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var (header, column) in headerMap)
+        {
+            var key = NormalizeHeader(header);
+            if (key.Length > 0) normalized.TryAdd(key, column);
+        }
+
+        if (normalized.Count == 0) return null;
+
+        string? First(params string[] aliases) =>
+            dataRows
+                .Select(r => GetNormalizedColumnValue(r, normalized, aliases))
+                .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+
+        var parties = new List<ParsedParty>(2);
+
+        AddIfAnyFieldPresent(parties, "shipTo",
+            name:        First("shiptoname", "shipto", "deliveryname", "deliverto", "delivertoname", "deliveryparty"),
+            street:      First("shiptostreet", "shiptoaddress", "shiptoaddress1", "shiptoaddressline1", "deliveryaddress", "deliverystreet"),
+            city:        First("shiptocity", "deliverycity", "shiptotown"),
+            postalCode:  First("shiptopostalcode", "shiptopostcode", "shiptozip", "shiptozipcode", "deliverypostalcode", "deliverypostcode", "deliveryzip"),
+            country:     First("shiptocountry", "deliverycountry"),
+            contactName: First("shiptocontact", "shiptocontactname", "shiptoattention", "deliverycontact"),
+            email:       First("shiptoemail", "deliveryemail"),
+            phone:       First("shiptophone", "deliveryphone"));
+
+        AddIfAnyFieldPresent(parties, "billTo",
+            name:        First("billtoname", "billto", "invoiceto", "invoicetoname", "invoicename"),
+            street:      First("billtostreet", "billtoaddress", "billtoaddress1", "billtoaddressline1", "invoiceaddress"),
+            city:        First("billtocity", "invoicecity", "billtotown"),
+            postalCode:  First("billtopostalcode", "billtopostcode", "billtozip", "billtozipcode", "invoicepostalcode", "invoicezip"),
+            country:     First("billtocountry", "invoicecountry"),
+            contactName: First("billtocontact", "billtocontactname", "billtoattention", "invoicecontact"),
+            email:       First("billtoemail", "invoiceemail"),
+            phone:       First("billtophone", "invoicephone"));
+
+        return parties.Count > 0 ? parties : null;
+    }
+
+    /// <summary>
+    /// Appends a party only when the sheet stated at least one of its fields. An all-null
+    /// party would write an <c>order_parties</c> row claiming the document named a delivery
+    /// party when it named nothing.
+    /// </summary>
+    private static void AddIfAnyFieldPresent(
+        List<ParsedParty> parties, string role,
+        string? name, string? street, string? city, string? postalCode,
+        string? country, string? contactName, string? email, string? phone)
+    {
+        if (name is null && street is null && city is null && postalCode is null
+            && country is null && contactName is null && email is null && phone is null)
+            return;
+
+        parties.Add(new ParsedParty(role,
+            Name: name, Street: street, City: city, PostalCode: postalCode, Country: country,
+            ContactName: contactName, Email: email, Phone: phone));
+    }
+
+    /// <summary>Letters+digits, lower-cased — the header-normalisation rule CsvOrderParser uses.</summary>
+    private static string NormalizeHeader(string? header) =>
+        string.IsNullOrWhiteSpace(header)
+            ? string.Empty
+            : new string(header.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+
+    /// <summary>
+    /// The trimmed value of the first alias column present in the NORMALISED header map.
+    /// A postal code is read as text on purpose: "00001" is a postcode, not the number 1,
+    /// and ClosedXML hands a numeric-typed cell back without its leading zeros.
+    /// </summary>
+    private static string? GetNormalizedColumnValue(
+        IXLRangeRow row, Dictionary<string, int> normalizedHeaderMap, params string[] aliases)
+    {
+        var originCol = row.FirstCell().Address.ColumnNumber;
+
+        foreach (var alias in aliases)
+        {
+            if (!normalizedHeaderMap.TryGetValue(alias, out var absCol)) continue;
+
+            var relCol = absCol - originCol + 1;
+            if (relCol < 1) continue;
+
+            var value = row.Cell(relCol).GetString().Trim();
+            if (!string.IsNullOrEmpty(value)) return value;
+        }
+
+        return null;
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

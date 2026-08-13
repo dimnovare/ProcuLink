@@ -266,7 +266,11 @@ public class PdfOrderParserTests
             .Should().BeTrue("the value must be a defensible reading or flagged for review");
     }
 
-    private static byte[] CreatePdf(params string[] lines)
+    /// <summary>
+    /// Minimal valid text PDF. Internal so <c>ParserCanonicalReadGapTests</c> can build one
+    /// too rather than carrying a fourth copy of this scaffolding.
+    /// </summary>
+    internal static byte[] CreatePdf(params string[] lines)
     {
         var content = new StringBuilder();
         content.AppendLine("BT");

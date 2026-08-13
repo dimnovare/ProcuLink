@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Moq;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Controllers;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
@@ -171,6 +172,129 @@ public class DashboardControllerTests
         dto.Wires.Should().HaveCount(1);
         dto.Wires[0].Health.Should().Be("down"); // legacy row carries the failure
         dto.Wires[0].Alert.Should().Be(1);       // 1 delivery_failed (exception) from the legacy row
+    }
+
+    /// <summary>
+    /// A supplier that refused every order it was sent scored <b>100%</b> on the figure the
+    /// dashboard labels "Delivery success rate, last 30 days", because the controller's private
+    /// failure set omitted <c>rejected_by_supplier</c> — the one status that means the supplier
+    /// explicitly refused the document.
+    /// </summary>
+    [Fact]
+    public async Task GetTopology_SupplierThatRejectedEveryOrder_ScoresZero_NotOneHundred()
+    {
+        var (ctrl, orgId, db) = Build();
+        var supplierId = Guid.NewGuid();
+        db.Suppliers.Add(new Supplier
+        {
+            Id = supplierId, OrgId = orgId, Name = "Contoso Supplies",
+            CreatedAt = DateTime.UtcNow,
+        });
+        db.PurchaseOrders.AddRange(
+            MakeOrderWithBuyerColumn(orgId, supplierId, OrderStatusConstants.RejectedBySupplier, "Contoso Buying OY"),
+            MakeOrderWithBuyerColumn(orgId, supplierId, OrderStatusConstants.RejectedBySupplier, "Contoso Buying OY"));
+        await db.SaveChangesAsync();
+
+        var result = await ctrl.GetTopology(CancellationToken.None);
+        var ok     = result.Should().BeOfType<OkObjectResult>().Subject;
+        var dto    = ok.Value.Should().BeOfType<DashboardTopologyDto>().Subject;
+
+        dto.Suppliers.Should().ContainSingle();
+        dto.Suppliers[0].Health.Should().Be(
+            0, "every order in the window was refused by this supplier — the omission rendered 100");
+
+        dto.Wires.Should().ContainSingle();
+        dto.Wires[0].Health.Should().Be(
+            "down", "wire health reads the failure count first; a rejected-only wire used to read amber 'risk'");
+    }
+
+    /// <summary>
+    /// The generalisation of the test above, walked over the canonical
+    /// <see cref="OrderStatusConstants.FailureBucket"/> rather than over a list re-typed here —
+    /// a re-typed list is how the defect entered the controller in the first place. Every member
+    /// of the bucket must drag supplier health to 0 and the wire to "down".
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(FailureBucketMembers))]
+    public async Task GetTopology_EveryCanonicalFailureStatus_CountsAsAFailure(string status)
+    {
+        var (ctrl, orgId, db) = Build();
+        var supplierId = Guid.NewGuid();
+        db.Suppliers.Add(new Supplier
+        {
+            Id = supplierId, OrgId = orgId, Name = "Contoso Supplies",
+            CreatedAt = DateTime.UtcNow,
+        });
+        db.PurchaseOrders.Add(MakeOrderWithBuyerColumn(orgId, supplierId, status, "Contoso Buying OY"));
+        await db.SaveChangesAsync();
+
+        var result = await ctrl.GetTopology(CancellationToken.None);
+        var ok     = result.Should().BeOfType<OkObjectResult>().Subject;
+        var dto    = ok.Value.Should().BeOfType<DashboardTopologyDto>().Subject;
+
+        dto.Suppliers.Should().ContainSingle();
+        dto.Suppliers[0].Health.Should().Be(0, "'{0}' is in OrderStatusConstants.FailureBucket", status);
+        dto.Wires.Should().ContainSingle();
+        dto.Wires[0].Health.Should().Be("down", "'{0}' is in OrderStatusConstants.FailureBucket", status);
+    }
+
+    /// <summary>The statuses the theory above actually walked — enumerated from the bucket.</summary>
+    private static readonly IReadOnlyList<string> WalkedFailureStatuses =
+        OrderStatusConstants.FailureBucket.ToList();
+
+    public static TheoryData<string> FailureBucketMembers()
+    {
+        var data = new TheoryData<string>();
+        foreach (var status in WalkedFailureStatuses) data.Add(status);
+        return data;
+    }
+
+    /// <summary>
+    /// Anti-vacuity floor for the theory above. It counts what was actually extracted from the
+    /// canonical bucket — not files scanned, not cases declared — so the walk cannot silently
+    /// shrink to nothing (or to a subset) and keep reporting green.
+    /// </summary>
+    [Fact]
+    public void FailureBucketWalk_CoversEveryCanonicalFailureStatus_AndIsNotEmpty()
+    {
+        var walked = WalkedFailureStatuses;
+
+        FailureBucketMembers().Count.Should().Be(
+            walked.Count, "every extracted status must become a theory case");
+        walked.Should().HaveCountGreaterThanOrEqualTo(
+            5, "the canonical failure bucket had five members when this floor was written");
+        walked.Should().BeEquivalentTo(
+            OrderStatusConstants.FailureBucket,
+            "the walk must be the bucket itself, never a list re-typed beside it");
+        walked.Should().Contain(
+            OrderStatusConstants.RejectedBySupplier,
+            "this is the member the controller's hand-written copy dropped");
+    }
+
+    /// <summary>
+    /// A delivered order is the negative control for both tests above: if the controller counted
+    /// every status as a failure they would pass while saying nothing.
+    /// </summary>
+    [Fact]
+    public async Task GetTopology_DeliveredOnlySupplier_ScoresOneHundred()
+    {
+        var (ctrl, orgId, db) = Build();
+        var supplierId = Guid.NewGuid();
+        db.Suppliers.Add(new Supplier
+        {
+            Id = supplierId, OrgId = orgId, Name = "Contoso Supplies",
+            CreatedAt = DateTime.UtcNow,
+        });
+        db.PurchaseOrders.Add(
+            MakeOrderWithBuyerColumn(orgId, supplierId, OrderStatusConstants.Delivered, "Contoso Buying OY"));
+        await db.SaveChangesAsync();
+
+        var result = await ctrl.GetTopology(CancellationToken.None);
+        var ok     = result.Should().BeOfType<OkObjectResult>().Subject;
+        var dto    = ok.Value.Should().BeOfType<DashboardTopologyDto>().Subject;
+
+        dto.Suppliers[0].Health.Should().Be(100);
+        dto.Wires[0].Health.Should().Be("ok");
     }
 
     [Fact]
