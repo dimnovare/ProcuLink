@@ -130,6 +130,18 @@ internal static class OrgAdminGateIlScanner
             OnInterface<IPullIngressSettingsService>(nameof(IPullIngressSettingsService.UpdateS3Async)),
             "Repoints the S3/R2 poller at an external bucket, with access keys."),
 
+        new("IInboundAddressService.MintPrimaryAsync",
+            OnInterface<IInboundAddressService>(nameof(IInboundAddressService.MintPrimaryAsync)),
+            "Issues a bearer credential that authorises inbound purchase orders into this "
+          + "organisation. It is the inbound twin of minting an API key, and rotating is how an "
+          + "organisation's ingest identity changes."),
+
+        new("IInboundAddressService.RevokeAsync",
+            OnInterface<IInboundAddressService>(nameof(IInboundAddressService.RevokeAsync)),
+            "Switches off an address buyers are actively sending to. Their mail stops being "
+          + "accepted from the next message, and nothing tells them — a silent redirection of "
+          + "where an organisation's documents can arrive."),
+
         new("new IntegrationSubscription / DbSet<IntegrationSubscription>.Add",
             CreatesIntegrationSubscription,
             "Stands up an outbound subscription that ships the payload of every matching order to "
