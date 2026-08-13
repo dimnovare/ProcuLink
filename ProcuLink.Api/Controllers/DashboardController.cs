@@ -96,18 +96,27 @@ public class DashboardController : ControllerBase
     // populate the column — so the cap bounds cost without affecting new data.
     private const int LegacyBuyerNameFallbackRows = 1000;
 
-    private static readonly HashSet<string> FailedStatuses = new(StringComparer.Ordinal)
-    {
-        OrderStatusConstants.Failed, OrderStatusConstants.DeliveryFailed,
-        OrderStatusConstants.TransformFailed, OrderStatusConstants.DeliveryDeadLetter,
-    };
+    // DERIVED from the canonical bucket, never re-typed. This used to be a hand-written
+    // list of four, and the member it omitted was RejectedBySupplier — the supplier
+    // explicitly refusing the document, i.e. the single worst outcome an order can have.
+    // Supplier "health" below is (Total - Failed) / Total, so a supplier that rejected
+    // every order in the window scored 100% on a figure the dashboard labels a delivery
+    // success rate, and its wire rendered amber "risk" instead of red "down" (the wire
+    // health at the bottom of GetTopology reads Failed first, Exceptions second — and
+    // ExceptionStatuses DID contain the status, which is what made the omission look
+    // deliberate rather than dropped).
+    //
+    // The mirror tests cover the public constants; they could not see a private HashSet
+    // copy. Deriving removes the copy rather than adding a test to police it — a sixth
+    // failure status now lands here on the day it is declared.
+    private static readonly HashSet<string> FailedStatuses =
+        new(OrderStatusConstants.FailureBucket, StringComparer.Ordinal);
 
-    private static readonly HashSet<string> ExceptionStatuses = new(StringComparer.Ordinal)
-    {
-        OrderStatusConstants.PendingReview, OrderStatusConstants.Failed,
-        OrderStatusConstants.DeliveryFailed, OrderStatusConstants.TransformFailed,
-        OrderStatusConstants.DeliveryDeadLetter, OrderStatusConstants.RejectedBySupplier,
-    };
+    // Exceptions = everything that failed, plus the orders parked awaiting a human.
+    // Also derived, for the same reason: it happened to be correct, by hand, today.
+    private static readonly HashSet<string> ExceptionStatuses =
+        new(OrderStatusConstants.FailureBucket.Append(OrderStatusConstants.PendingReview),
+            StringComparer.Ordinal);
 
     [HttpGet("topology")]
     [ProducesResponseType(typeof(DashboardTopologyDto), StatusCodes.Status200OK)]
