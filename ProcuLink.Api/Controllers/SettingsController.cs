@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Auth;
+using ProcuLink.Api.Contracts;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
@@ -25,6 +26,8 @@ public sealed class SettingsController : ControllerBase
     private readonly IBillingService _billing;
     private readonly OutboundRequestGuard _guard;
     private readonly ProcuLinkDbContext _db;
+    private readonly IInboundAddressService _inboundAddresses;
+    private readonly IConfiguration _config;
 
     public SettingsController(
         ICurrentTenantService tenant,
@@ -33,7 +36,9 @@ public sealed class SettingsController : ControllerBase
         IOrganisationSettingsService orgSettings,
         IBillingService billing,
         OutboundRequestGuard guard,
-        ProcuLinkDbContext db)
+        ProcuLinkDbContext db,
+        IInboundAddressService inboundAddresses,
+        IConfiguration config)
     {
         _tenant = tenant;
         _emailSettings = emailSettings;
@@ -42,6 +47,8 @@ public sealed class SettingsController : ControllerBase
         _billing = billing;
         _guard = guard;
         _db = db;
+        _inboundAddresses = inboundAddresses;
+        _config = config;
     }
 
     private async Task<bool> SupplierExistsAsync(Guid orgId, Guid supplierId, CancellationToken ct) =>
@@ -60,6 +67,96 @@ public sealed class SettingsController : ControllerBase
     [ProducesResponseType(typeof(OrgSettingsResponse), StatusCodes.Status200OK)]
     public async Task<IActionResult> UpdateOrganisation([FromBody] UpdateOrderDirectionRequest req, CancellationToken ct)
         => Ok(await _orgSettings.UpdateDirectionAsync(_tenant.OrganisationId, req, ct));
+
+    // ── Hosted inbound-email addresses ─────────────────────────────────────────
+    // The addresses buyers send purchase orders to. Each one is a CREDENTIAL: presenting it is
+    // what authorises delivery into this organisation, so these endpoints are how an operator
+    // rotates and revokes without a deploy.
+
+    /// <summary>
+    /// Lists this organisation's inbound addresses, minting a primary if it has none yet.
+    ///
+    /// <para>Open to every member, unlike rotate/revoke below. The address authorises INGEST into
+    /// the caller's own organisation, and every member can already ingest — they can upload a
+    /// purchase order through the UI. So showing it to a member grants nothing they did not
+    /// already have, and withholding it would stop the one person who actually talks to the
+    /// supplier from doing their job.</para>
+    /// </summary>
+    [HttpGet("inbound-email")]
+    [ProducesResponseType(typeof(InboundAddressListResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetInboundAddresses(CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+        await _inboundAddresses.EnsurePrimaryAsync(orgId, ct);
+        return Ok(await BuildInboundResponseAsync(orgId, ct));
+    }
+
+    /// <summary>
+    /// Mints a NEW primary address. The previous one keeps working until it is explicitly revoked,
+    /// so an operator can hand the new address out before retiring the old one — rotation without
+    /// a window in which mail bounces.
+    ///
+    /// <para>Administrators only: rotating is how an organisation's ingest identity changes, and
+    /// revoking the old address afterwards silently stops every buyer still using it. That is the
+    /// same reasoning that gates the IMAP settings above.</para>
+    /// </summary>
+    [HttpPost("inbound-email/rotate")]
+    [RequireOrgAdmin]
+    [ProducesResponseType(typeof(InboundAddressListResponse), StatusCodes.Status200OK)]
+    public async Task<IActionResult> RotateInboundAddress(CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+        await _inboundAddresses.MintPrimaryAsync(orgId, "Primary", ct);
+        return Ok(await BuildInboundResponseAsync(orgId, ct));
+    }
+
+    /// <summary>
+    /// Revokes one address. Takes effect on the next message — a revoked address resolves to
+    /// nothing, and the sender's mail is refused rather than delivered somewhere else.
+    /// </summary>
+    [HttpPost("inbound-email/{id:guid}/revoke")]
+    [RequireOrgAdmin]
+    [ProducesResponseType(typeof(InboundAddressListResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> RevokeInboundAddress(Guid id, CancellationToken ct)
+    {
+        var orgId = _tenant.OrganisationId;
+        if (!await _inboundAddresses.RevokeAsync(orgId, id, ct))
+            return NotFound(new { error = "No such inbound address." });
+
+        return Ok(await BuildInboundResponseAsync(orgId, ct));
+    }
+
+    /// <summary>
+    /// Renders address rows as the full mailbox a buyer would send to. The domain comes from the
+    /// same configuration the router parses recipients with, so what is displayed here and what
+    /// actually resolves cannot drift apart.
+    /// </summary>
+    private async Task<InboundAddressListResponse> BuildInboundResponseAsync(Guid orgId, CancellationToken ct)
+    {
+        var rows = await _inboundAddresses.ListAsync(orgId, ct);
+        var domain = _config["Inbound:Postmark:InboundDomain"];
+        var suffix = _config["Inbound:Postmark:HostSuffix"];
+
+        return new InboundAddressListResponse(rows.Select(r => new InboundAddressDto(
+            r.Id,
+            r.Kind,
+            r.Label,
+            // Null token (an unopenable blob) yields a null address rather than a broken one that
+            // looks real — the row is still listed so it can be revoked.
+            r.Token is null ? null : ComposeAddress(r.Token, domain, suffix),
+            r.TokenPrefix,
+            r.IsActive,
+            r.CreatedAt,
+            r.ExpiresAt,
+            r.RevokedAt,
+            r.LastUsedAt)).ToList());
+    }
+
+    private static string ComposeAddress(string token, string? inboundDomain, string? hostSuffix) =>
+        !string.IsNullOrWhiteSpace(inboundDomain)
+            ? $"{token}@{inboundDomain}"
+            : $"orders@{token}{(string.IsNullOrWhiteSpace(hostSuffix) ? ".proculink.eu" : hostSuffix)}";
 
     [HttpGet("email")]
     [ProducesResponseType(typeof(EmailSettingsResponse), StatusCodes.Status200OK)]

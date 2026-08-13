@@ -21,17 +21,19 @@ namespace ProcuLink.Infrastructure.Services.Email;
 /// imported via <c>IClaimedOrderCreator.CreateClaimedStubAsync</c> with a null supplier and the parse job parks them
 /// <c>unrouted</c> for <c>POST /api/orders/{id}/assign-supplier</c> — the same hold the pull
 /// channels use. The caller therefore answers 200; a false <c>InboundEmailResult.Success</c>
-/// is reserved for messages this product cannot act on: an unparseable recipient, an unknown
-/// tenant slug, a missing organisation, and an organisation whose account status blocks
-/// ingest. Each of those also carries an <c>InboundEmailRejectionKind</c>, which is what
+/// is reserved for messages this product cannot act on: an unparseable recipient, a recipient
+/// that is not a live inbound address, a missing organisation, and an organisation whose account
+/// status blocks ingest. Each of those also carries an <c>InboundEmailRejectionKind</c>, which is what
 /// decides whether the mail provider re-delivers the message — see that enum.
 ///
-/// Tenant resolution routes on the organisation's own unique <c>Slug</c> (auto-generated
-/// at org creation), so any org can receive orders with no per-org setup. Two recipient
-/// schemes are supported: the preferred <c>{slug}@{InboundDomain}</c> (local-part; single
-/// MX, set <c>Inbound:Postmark:InboundDomain</c>) and the legacy <c>orders@{slug}.proculink.eu</c>
-/// (subdomain; needs a wildcard MX). An explicit <c>Inbound:Postmark:TenantMapping:{slug}</c>
-/// config entry is still honoured as an override/fallback. (Live receipt also needs the
+/// Tenant resolution runs against <c>org_inbound_addresses</c>: the recipient address is a
+/// per-organisation CREDENTIAL, and the organisation follows from the credential presented
+/// rather than from anything the sender chose. It used to route on the organisation's public
+/// <c>Slug</c>, which meant guessing a slug was enough to file purchase orders into a stranger's
+/// inbox — see <c>InboundAddressService</c> for the full account. Two recipient schemes are
+/// supported: the preferred <c>{token}@{InboundDomain}</c> (local-part; single
+/// MX, set <c>Inbound:Postmark:InboundDomain</c>) and the legacy <c>orders@{token}.proculink.eu</c>
+/// (subdomain; needs a wildcard MX). (Live receipt also needs the
 /// inbound MX + Postmark domain configured — that is one-time infra, not per-org.)
 ///
 /// Log levels: this runs once per inbound message an org receives, so the expected
@@ -117,6 +119,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
     private readonly IClaimedOrderCreator _orders;
     private readonly IParseJobEnqueuer _enqueuer;
     private readonly IEmailBodyOrderExtractor _bodyExtractor;
+    private readonly IInboundAddressService _addresses;
     private readonly IConfiguration _config;
     private readonly ILogger<InboundEmailRouter> _logger;
 
@@ -125,6 +128,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         IClaimedOrderCreator orders,
         IParseJobEnqueuer enqueuer,
         IEmailBodyOrderExtractor bodyExtractor,
+        IInboundAddressService addresses,
         IConfiguration config,
         ILogger<InboundEmailRouter> logger)
     {
@@ -132,32 +136,63 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         _orders = orders;
         _enqueuer = enqueuer;
         _bodyExtractor = bodyExtractor;
+        _addresses = addresses;
         _config = config;
         _logger = logger;
     }
 
     public async Task<InboundEmailResult> RouteAsync(InboundEmailPayload payload, CancellationToken ct)
     {
-        // ── 1. Resolve the tenant slug from the recipient address ────────────
-        var slug = ExtractTenantSlug(payload.ToEmail);
-        if (slug is null)
+        // ── 1. Resolve the tenant from the recipient address ─────────────────
+        // The recipient address IS the credential — see InboundAddressService for why the mail
+        // channel leaves no other place to put one. The organisation therefore follows from what
+        // was presented; nothing the sender writes anywhere else in the message can name a tenant.
+        var addressToken = ExtractAddressToken(payload.ToEmail);
+        if (addressToken is null)
         {
             _logger.LogWarning(
-                "Inbound email rejected: recipient address {To} does not match orders@{{slug}}{HostSuffix}.",
-                payload.ToEmail, GetHostSuffix());
+                "Inbound email rejected: recipient address {To} is not shaped like an inbound ProcuLink address.",
+                payload.ToEmail);
             return new InboundEmailResult(false, OrgId: null, Array.Empty<Guid>(),
                 $"Recipient '{payload.ToEmail}' does not look like an inbound ProcuLink address.",
                 InboundEmailRejectionKind.Permanent);
         }
 
-        var orgId = await ResolveOrgIdFromSlugAsync(slug, ct);
-        if (orgId is null)
+        var lookup = await _addresses.ResolveAsync(addressToken, ct);
+        switch (lookup.Status)
         {
-            _logger.LogWarning("Inbound email rejected: no tenant mapping for slug {Slug}.", slug);
-            return new InboundEmailResult(false, OrgId: null, Array.Empty<Guid>(),
-                $"Unknown tenant slug '{slug}'.",
-                InboundEmailRejectionKind.Permanent);
+            // The org id is destructured in the guard, so a "Resolved" that carries no organisation
+            // — an impossible construction today, and exactly the kind of thing a later edit
+            // introduces — falls through to the refusing branch instead of dereferencing null.
+            case InboundAddressLookupStatus.Resolved when lookup.OrgId is { } resolved && resolved != Guid.Empty:
+                break;
+
+            case InboundAddressLookupStatus.Unavailable:
+                // We cannot recognise ANY address right now, so this says nothing about this
+                // message. Transient keeps the provider re-delivering while the misconfiguration is
+                // fixed; calling it Permanent here would settle real purchase orders as handled and
+                // lose them.
+                _logger.LogError(
+                    "Inbound email deferred: the inbound-address lookup is unavailable, so no tenant " +
+                    "can be resolved. The message is being retried, not dropped.");
+                return new InboundEmailResult(false, OrgId: null, Array.Empty<Guid>(),
+                    "Inbound address lookup is temporarily unavailable.",
+                    InboundEmailRejectionKind.Transient);
+
+            default:
+                // NotFound — and anything a future edit adds without thinking, because an
+                // unrecognised status must refuse rather than fall through to the accepting branch.
+                // The address is never echoed: it is a credential, the log is not a place to leak
+                // one, and this repository is public.
+                _logger.LogWarning(
+                    "Inbound email rejected: recipient address is not a live inbound address for any " +
+                    "organisation (unissued, revoked, or expired).");
+                return new InboundEmailResult(false, OrgId: null, Array.Empty<Guid>(),
+                    "Recipient is not a recognised inbound address.",
+                    InboundEmailRejectionKind.Permanent);
         }
+
+        var orgId = lookup.OrgId;
 
         // ── 2. Load the organisation + verify account-status gate ───────────
         var org = await _db.Organisations
@@ -169,13 +204,13 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         if (org is null)
         {
             _logger.LogWarning(
-                "Inbound email rejected: slug {Slug} mapped to org {OrgId} but no such organisation exists.",
-                slug, orgId.Value);
+                "Inbound email rejected: inbound address resolved to org {OrgId} but no such organisation exists.",
+                orgId.Value);
             return new InboundEmailResult(false, OrgId: orgId, Array.Empty<Guid>(),
                 $"Organisation '{orgId.Value}' not found.",
-                // Our own misconfiguration: a TenantMapping entry outliving its org.
-                // Retries give the operator a window in which repairing it lands the
-                // order untouched, so this is not the sender's problem to fix.
+                // Our own inconsistency: an address row outliving its organisation. The foreign key
+                // makes it unreachable in practice, but retries give the operator a window in which
+                // repairing it lands the order untouched, so this is not the sender's problem to fix.
                 InboundEmailRejectionKind.Transient);
         }
 
@@ -499,7 +534,13 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
 
     // ── Tenant resolution ────────────────────────────────────────────────────
 
-    private string? ExtractTenantSlug(string? toEmail)
+    /// <summary>
+    /// Pulls the address TOKEN out of a recipient address — the part that identifies the tenant,
+    /// under either addressing scheme. Purely syntactic: it decides what was presented, never
+    /// whether it is valid. <c>IInboundAddressService.ResolveAsync</c> owns that, and is the only
+    /// thing that can turn a token into an organisation.
+    /// </summary>
+    private string? ExtractAddressToken(string? toEmail)
     {
         if (string.IsNullOrWhiteSpace(toEmail))
             return null;
@@ -520,8 +561,8 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         var local = trimmed[..at];
         var host = trimmed[(at + 1)..].ToLowerInvariant();
 
-        // ── Scheme A: local-part addressing — {slug}@{InboundDomain} ─────────
-        // The slug is the mailbox name and the host is one fixed inbound domain
+        // ── Scheme A: local-part addressing — {token}@{InboundDomain} ────────
+        // The token is the mailbox name and the host is one fixed inbound domain
         // (e.g. orders.proculink.eu). This needs only a SINGLE MX record on that
         // domain → Postmark, and avoids a wildcard MX on the marketing apex
         // (*.proculink.eu would otherwise swallow all subdomain mail). Preferred
@@ -530,40 +571,44 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         if (!string.IsNullOrWhiteSpace(inboundDomain) &&
             host.Equals(inboundDomain, StringComparison.OrdinalIgnoreCase))
         {
-            return NormaliseLocalPartSlug(local);
+            return NormaliseAddressToken(local);
         }
 
-        // ── Scheme B: subdomain addressing — orders@{slug}{HostSuffix} ───────
-        // The slug is a subdomain label. Requires a wildcard MX (*.proculink.eu).
+        // ── Scheme B: subdomain addressing — orders@{token}{HostSuffix} ──────
+        // The token is a subdomain label. Requires a wildcard MX (*.proculink.eu).
         // Kept for back-compat with the original addressing scheme.
         var suffix = GetHostSuffix().ToLowerInvariant();
         if (!host.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
             return null;
 
-        var slug = host[..^suffix.Length];
-        if (string.IsNullOrWhiteSpace(slug) || slug.Contains('.'))
+        var token = host[..^suffix.Length];
+        if (string.IsNullOrWhiteSpace(token) || token.Contains('.'))
             return null;
 
-        return slug;
+        return token;
     }
 
     /// <summary>
-    /// Normalises a local-part slug: lower-cases it and strips a <c>+tag</c>
-    /// (plus-addressing) suffix, so <c>acme+po@orders.proculink.eu</c> still
-    /// routes to org <c>acme</c>. Returns null for an empty result.
+    /// Normalises a local-part token: lower-cases it and strips a <c>+tag</c>
+    /// (plus-addressing) suffix, so <c>{token}+po@orders.proculink.eu</c> still
+    /// reaches the same organisation. Returns null for an empty result.
     /// </summary>
-    private static string? NormaliseLocalPartSlug(string local)
+    /// <remarks>
+    /// Lower-casing is why minted tokens use a case-insensitive alphabet — see
+    /// <c>InboundAddressService.NewToken</c>. A case-sensitive token would lose entropy here.
+    /// </remarks>
+    private static string? NormaliseAddressToken(string local)
     {
-        var slug = local.Trim().ToLowerInvariant();
-        var plus = slug.IndexOf('+');
+        var token = local.Trim().ToLowerInvariant();
+        var plus = token.IndexOf('+');
         if (plus >= 0)
-            slug = slug[..plus];
-        // Reject structurally invalid slugs. Org slugs are kebab-case (no dots);
-        // this mirrors the subdomain scheme's dot-rejection so both schemes behave
-        // consistently and a "user.name@domain" address can't resolve a bogus slug.
-        if (string.IsNullOrWhiteSpace(slug) || slug.Contains('.'))
+            token = token[..plus];
+        // Reject structurally invalid tokens. Minted tokens are hex and legacy slugs are kebab-case,
+        // neither of which contains a dot; this mirrors the subdomain scheme's dot-rejection so both
+        // schemes behave consistently and a "user.name@domain" address can't resolve at all.
+        if (string.IsNullOrWhiteSpace(token) || token.Contains('.'))
             return null;
-        return slug;
+        return token;
     }
 
     private string GetHostSuffix()
@@ -579,21 +624,15 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
     /// </summary>
     private string GetInboundDomain() => _config["Inbound:Postmark:InboundDomain"] ?? string.Empty;
 
-    private async Task<Guid?> ResolveOrgIdFromSlugAsync(string slug, CancellationToken ct)
-    {
-        // Primary: the org's own unique Slug (auto-generated at creation) — no per-org config.
-        var orgId = await _db.Organisations
-            .AsNoTracking()
-            .Where(o => o.Slug == slug)
-            .Select(o => (Guid?)o.Id)
-            .FirstOrDefaultAsync(ct);
-        if (orgId is not null)
-            return orgId;
-
-        // Fallback/override: explicit config mapping Inbound:Postmark:TenantMapping:{slug}.
-        var raw = _config[$"Inbound:Postmark:TenantMapping:{slug}"];
-        return Guid.TryParse(raw, out var id) ? id : (Guid?)null;
-    }
+    // NOTE: there is deliberately no ResolveOrgIdFromSlugAsync here any more, and no
+    // Inbound:Postmark:TenantMapping:{slug} configuration fallback.
+    //
+    // Both were ways for a caller-supplied string to name an organisation directly: the first via
+    // the organisation's public Slug column, the second via a config key whose NAME was the
+    // caller's own string. Tenant selection now has exactly one door — a hashed lookup against
+    // org_inbound_addresses — so there is nowhere left for an unrecognised address to fall through
+    // to a real organisation. If a new resolution path is ever added, it belongs behind
+    // IInboundAddressService, not beside it.
 
     // ── Supplier resolution ──────────────────────────────────────────────────
 

@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Api.Controllers;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Email;
 using ProcuLink.Infrastructure;
 using Sentry;
 
@@ -262,6 +263,32 @@ public static class MigrationBootstrap
             migLogger.LogError(rebindEx,
                 "Credential binding backfill failed (app stays up; unbound credentials still decrypt).");
             SentrySdk.CaptureException(rebindEx);
+        }
+
+        // ── Inbound-email address backfill ───────────────────────────
+        // Give every organisation a high-entropy inbound address, and register its existing public
+        // slug as an EXPIRING address so mail already in flight — and every address book that has
+        // the old address in it — keeps arriving across this deploy. Idempotent: an organisation
+        // that already has both kinds is skipped, so this is safe on every boot.
+        //
+        // Best-effort like its neighbours, but the failure mode is worth naming: with no rows,
+        // NOTHING resolves and inbound mail is deferred rather than lost — the router answers a
+        // transient rejection, so the provider keeps re-delivering for ~10.5 hours and then files
+        // the message as re-fireable. So a failure here delays inbound mail; it does not drop it,
+        // and it must not stop the app serving every other channel.
+        try
+        {
+            var inboundAddresses = scopedServices.GetRequiredService<IInboundAddressService>();
+            var addressCount = await inboundAddresses.BackfillMissingAsync(CancellationToken.None);
+            migLogger.LogInformation(
+                "Inbound-address backfill complete: {Count} address row(s) inserted.", addressCount);
+        }
+        catch (Exception inboundAddressEx)
+        {
+            migLogger.LogError(inboundAddressEx,
+                "Inbound-address backfill failed (app stays up; inbound mail is DEFERRED by the " +
+                "provider's retries until this succeeds, not dropped).");
+            SentrySdk.CaptureException(inboundAddressEx);
         }
 
         // ── Group V4: idempotent rule-definition seed + link ─────────

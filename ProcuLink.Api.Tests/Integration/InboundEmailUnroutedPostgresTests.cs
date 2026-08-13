@@ -1,3 +1,4 @@
+﻿using ProcuLink.TestSupport;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -344,6 +345,9 @@ public sealed class InboundEmailUnroutedPostgresTests(PostgresContainerFixture p
         }
 
         await db.SaveChangesAsync();
+        // Inbound mail now resolves its tenant through an issued address, not the slug column, so
+        // an org that is supposed to receive mail has to be given one.
+        await InboundAddressTestHarness.SeedAddressAsync(db, orgId, slug);
         return (orgId, slug);
     }
 
@@ -392,14 +396,13 @@ public sealed class InboundEmailUnroutedPostgresTests(PostgresContainerFixture p
     private static InboundEmailRouter MakeRouter(
         ProcuLinkDbContext db, IClaimedOrderCreator orders, IParseJobEnqueuer enqueuer)
     {
-        // No TenantMapping entries: resolution goes through the org's own Slug column,
-        // which is what production does.
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>())
-            .Build();
+        // Resolution goes through the issued inbound address, which is what production does. There
+        // is no configuration path that could name an organisation instead.
+        var config = InboundAddressTestHarness.Configuration();
 
         return new InboundEmailRouter(
-            db, orders, enqueuer, NoOpBodyExtractor.Instance, config,
+            db, orders, enqueuer, NoOpBodyExtractor.Instance,
+            InboundAddressTestHarness.Create(db, config), config,
             NullLogger<InboundEmailRouter>.Instance);
     }
 

@@ -1,3 +1,4 @@
+﻿using ProcuLink.TestSupport;
 using System.Data.Common;
 using System.Security.Claims;
 using System.Text;
@@ -129,6 +130,9 @@ public sealed class IngestDedupePostgresTests : IClassFixture<IngestDedupeFixtur
             CreatedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync();
+        // Inbound mail now resolves its tenant through an issued address, not the slug column, so
+        // an org that is supposed to receive mail has to be given one.
+        await InboundAddressTestHarness.SeedAddressAsync(db, orgId, slug);
         return (orgId, slug);
     }
 
@@ -193,7 +197,8 @@ public sealed class IngestDedupePostgresTests : IClassFixture<IngestDedupeFixtur
         IEmailBodyOrderExtractor? bodyExtractor = null)
         => new(db, orders, enqueuer,
             bodyExtractor ?? NoOrderBodyExtractor.Instance,
-            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build(),
+            InboundAddressTestHarness.Create(db),
+            InboundAddressTestHarness.Configuration(),
             NullLogger<InboundEmailRouter>.Instance);
 
     // ── Gap 1: Postmark replay ──────────────────────────────────────────────────────────────────

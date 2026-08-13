@@ -1,3 +1,4 @@
+﻿using ProcuLink.TestSupport;
 using FluentAssertions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -80,7 +81,9 @@ public class SettingsControllerPullIngressTests
             new Mock<IOrganisationSettingsService>().Object,
             billing.Object,
             guard,
-            db);
+            db,
+            InboundAddressTestHarness.Create(db),
+            config);
 
         var supplier = new Supplier { Id = Guid.NewGuid(), OrgId = orgId, Name = "Acme", CreatedAt = DateTime.UtcNow };
         db.Suppliers.Add(supplier);

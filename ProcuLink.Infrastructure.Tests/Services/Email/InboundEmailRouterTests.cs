@@ -1,3 +1,4 @@
+﻿using ProcuLink.TestSupport;
 using System.Text;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
@@ -924,9 +925,8 @@ public class InboundEmailRouterTests
     [Fact]
     public async Task MissingOrganisation_IsTransient_SoFixingTheMappingStillLandsTheOrder()
     {
-        // The slug resolved through Inbound:Postmark:TenantMapping but the org row is
-        // gone — that is our own misconfiguration, not a bad address, and the operator
-        // can repair it inside the retry window.
+        // The address row resolved but the org row is gone — that is our own inconsistency, not a
+        // bad address, and the operator can repair it inside the retry window.
         await using var db = CreateDb();
         var orders = new FakeOrderService();
         var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: Guid.NewGuid());
@@ -1023,6 +1023,134 @@ public class InboundEmailRouterTests
         actions.Should().Contain("inbound_email.rejected_read_only");
     }
 
+    // ── Tenant selection is by credential, not by anything the sender chose ───
+    //
+    // The defect: the recipient's LOCAL PART used to be matched against organisations.slug — a
+    // company name plus four hex characters — so mailing a guessed address filed purchase orders
+    // into a stranger's inbox, with no credential involved at all. These four pin the closure at
+    // the router, where the decision is actually consumed.
+
+    [Fact]
+    public async Task SlugAddressedMail_IsRefused_WhenNoAddressWasIssuedForThatSlug()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+        await SeedSupplierAsync(db, orgId);
+
+        // Give the org a real slug and a real, working inbound address that is NOT the slug. This is
+        // the production shape after the legacy grace period ends.
+        var org = await db.Organisations.SingleAsync(o => o.Id == orgId);
+        org.Slug = "acme-a1b2";
+        await db.SaveChangesAsync();
+
+        var orders = new FakeOrderService();
+        var enqueuer = new RecordingEnqueuer();
+        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
+
+        var result = await router.RouteAsync(new InboundEmailPayload(
+            FromEmail: "stranger@example.com",
+            ToEmail:   "orders@acme-a1b2.proculink.eu",
+            Subject:   "Forged PO",
+            Attachments: new[] { new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }) }),
+            default);
+
+        result.Success.Should().BeFalse();
+        result.OrgId.Should().BeNull(
+            "the slug is public and guessable; resolving on it is what let a stranger address " +
+            "another tenant's inbox");
+        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Permanent);
+        orders.CalledWith.Should().BeEmpty("no order may be created for an unissued address");
+        enqueuer.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ConfigTenantMapping_CannotNameAnOrganisation()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+        await SeedSupplierAsync(db, orgId);
+
+        // The old fallback: a config key whose NAME was the caller's own string. It is gone, and it
+        // must not come back — an operator-set key is still selected by a value the sender controls.
+        var config = InboundAddressTestHarness.Configuration(new Dictionary<string, string?>
+        {
+            ["Inbound:Postmark:TenantMapping:injected"] = orgId.ToString(),
+        });
+
+        var orders = new FakeOrderService();
+        var router = new InboundEmailRouter(
+            db, orders, new RecordingEnqueuer(), FakeBodyExtractor.NoOp,
+            InboundAddressTestHarness.Create(db, config), config,
+            NullLogger<InboundEmailRouter>.Instance);
+
+        var result = await router.RouteAsync(new InboundEmailPayload(
+            FromEmail: "stranger@example.com",
+            ToEmail:   "orders@injected.proculink.eu",
+            Subject:   "Config-routed PO",
+            Attachments: Array.Empty<InboundAttachment>()), default);
+
+        result.Success.Should().BeFalse();
+        result.OrgId.Should().BeNull();
+        orders.CalledWith.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UnavailableLookup_IsTransient_SoOurMisconfigurationDefersMailInsteadOfDroppingIt()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+        await SeedSupplierAsync(db, orgId);
+
+        // The pepper is missing, so NOTHING resolves. That is a statement about us, not about this
+        // message — and 200 would tell Postmark the mail was handled and end it for good.
+        var broken = InboundAddressTestHarness.Configuration(new Dictionary<string, string?>
+        {
+            ["Security:ApiKeyHashSecret"] = "",
+        });
+
+        var router = new InboundEmailRouter(
+            db, new FakeOrderService(), new RecordingEnqueuer(), FakeBodyExtractor.NoOp,
+            InboundAddressTestHarness.Create(db, broken), broken,
+            NullLogger<InboundEmailRouter>.Instance);
+
+        var result = await router.RouteAsync(new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "Real PO",
+            Attachments: Array.Empty<InboundAttachment>()), default);
+
+        result.Success.Should().BeFalse();
+        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Transient,
+            "a transient rejection is a non-200, which keeps Postmark re-delivering for ~10.5 hours " +
+            "and then files the message as re-fireable. Permanent would answer 200 and the purchase " +
+            "order would be gone");
+    }
+
+    [Fact]
+    public async Task RefusalLog_NeverEchoesTheRecipientAddress()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+
+        const string secretAddress = "deadbeefdeadbeefdeadbeefdeadbeef";
+        var logger = new RecordingLogger();
+        var router = MakeRouter(db, new FakeOrderService(), new RecordingEnqueuer(),
+            slug: Slug, orgId: orgId, logger: logger);
+
+        await router.RouteAsync(new InboundEmailPayload(
+            FromEmail: "someone@example.com",
+            ToEmail:   $"orders@{secretAddress}.proculink.eu",
+            Subject:   "Probe",
+            Attachments: Array.Empty<InboundAttachment>()), default);
+
+        // An inbound address is a bearer credential. A near-miss echoed into the log is a credential
+        // in the log — and these logs are shipped off-box. This repository is public, so a fixture
+        // that leaked into an assertion message would be published too.
+        logger.Entries.Should().NotBeEmpty("the refusal must still be visible to an operator");
+        logger.Entries.Should().OnlyContain(e => !e.Message.Contains(secretAddress),
+            "the rejection has to be greppable without printing the credential that was presented");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -1062,20 +1190,22 @@ public class InboundEmailRouterTests
         string? inboundDomain = null,
         ILogger<InboundEmailRouter>? logger = null)
     {
-        var settings = new Dictionary<string, string?>
-        {
-            [$"Inbound:Postmark:TenantMapping:{slug}"] = orgId.ToString(),
-        };
+        var settings = new Dictionary<string, string?>();
         if (inboundDomain is not null)
             settings["Inbound:Postmark:InboundDomain"] = inboundDomain;
 
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(settings)
-            .Build();
+        var config = InboundAddressTestHarness.Configuration(settings);
+
+        // Registering the address is what used to be an Inbound:Postmark:TenantMapping config
+        // entry. The difference is the whole point of the change: a tenant is now named by a row
+        // that had to be ISSUED to it, so a test that wants a non-resolving recipient simply does
+        // not seed one — there is no configuration left that could name an organisation instead.
+        InboundAddressTestHarness.SeedAddress(db, orgId, slug, config);
 
         return new InboundEmailRouter(
             db, orders, enqueuer,
             extractor ?? FakeBodyExtractor.NoOp,
+            InboundAddressTestHarness.Create(db, config),
             config,
             logger ?? NullLogger<InboundEmailRouter>.Instance);
     }

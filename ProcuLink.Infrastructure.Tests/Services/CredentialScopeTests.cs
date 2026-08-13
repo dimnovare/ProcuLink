@@ -96,9 +96,10 @@ public class CredentialScopeTests
             CredentialPurpose.OrgEmailImapPassword,
             CredentialPurpose.OrgIngressSftpPassword,
             CredentialPurpose.OrgIngressS3SecretKey,
+            CredentialPurpose.OrgInboundEmailAddress,
         };
 
         all.Should().OnlyHaveUniqueItems();
-        all.Should().HaveCount(8);
+        all.Should().HaveCount(9);
     }
 }

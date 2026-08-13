@@ -40,14 +40,14 @@ public sealed class OrgAdminGateIsRealTests
     /// <para>Changing this number is the deliberate act of widening or narrowing what an
     /// organisation reserves to its administrators, and it should never move on its own.</para>
     /// </summary>
-    private const int ExpectedGatedEndpointCount = 12;
+    private const int ExpectedGatedEndpointCount = 14;
 
     /// <summary>
     /// How many operations are declared destructive. Twelve endpoints reach thirteen primitives,
     /// because <c>UpsertDeliveryConfig</c> both writes the delivery row and republishes the live
     /// connection revision.
     /// </summary>
-    private const int ExpectedDestructivePrimitiveCount = 13;
+    private const int ExpectedDestructivePrimitiveCount = 15;
 
     // ── Controls: the scanner must be able to fail ────────────────────────────
 

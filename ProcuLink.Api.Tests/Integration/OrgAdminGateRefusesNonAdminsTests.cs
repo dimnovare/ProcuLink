@@ -157,7 +157,7 @@ public sealed class RbacTestFactory : WebApplicationFactory<Program>
 public sealed class OrgAdminGateRefusesNonAdminsTests : IClassFixture<RbacTestFactory>
 {
     /// <summary>Must match <c>OrgAdminGateIsRealTests.ExpectedGatedEndpointCount</c>.</summary>
-    private const int ExpectedGatedEndpointCount = 12;
+    private const int ExpectedGatedEndpointCount = 14;
 
     /// <summary>An organisation with a REAL Clerk organisation id — the modern shape.</summary>
     private const string ClerkOrg = "org_TEST_RBAC";
