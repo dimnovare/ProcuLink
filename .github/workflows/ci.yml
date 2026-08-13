@@ -82,9 +82,54 @@ jobs:
     # this workflow already uploads and find what got slower. Do not raise this again.
     timeout-minutes: 25
 
+    # WHY THIS JOB CHECKS OUT THE FRONTEND.
+    #
+    # EndpointReachabilityGuardTests asks "does anything call this endpoint?", and only
+    # project-proculink can answer the second half: the callers are ~160 fetch sites across
+    # src/lib/api-client.ts, seven modules under src/lib/api/ and scripts/live-matrix/. Without
+    # that checkout the guard cannot run at all — and it deliberately does NOT degrade to a skip.
+    #
+    # The audit that commissioned it (docs/superpowers/plans/2026-07-27-v1-master-plan/
+    # AUDIT-2026-08-06-V2.md §3) named the alternative by name: backendMirror.test.ts is
+    # `skipIf(!BACKEND)`, frontend CI never checked the backend out, and it reported green for
+    # months having compared nothing. A cross-repo guard is either supplied with the other side or
+    # it is theatre. This is the supply.
+    #
+    # dimnovare/project-proculink is a PUBLIC repository, so actions/checkout reads it with the
+    # automatically-provisioned GITHUB_TOKEN — no secret, no PAT, nothing to rotate, and it works
+    # unchanged on a fork PR. If it is ever made private this checkout 404s and the job goes RED,
+    # which is the correct direction to fail; the fix would be a read-only fine-grained PAT passed
+    # as `token:`, not a skip.
+    #
+    # NO `ref:` IS PINNED, DELIBERATELY. The checkout follows the frontend's DEFAULT BRANCH, because
+    # the guard exists to catch a caller DISAPPEARING and a pinned mirror only re-confirms the
+    # moment it was pinned. The consequence is real and intended: a frontend PR that deletes the
+    # last call site for an endpoint turns this job red on the backend. That red is the finding —
+    # an endpoint nobody can reach — and the fix is to restore the caller, delete the endpoint, or
+    # declare it in EndpointReachabilityGuardTests with a written reason.
+    #
+    # Reproduce locally with the two repositories side by side (nothing to configure), or:
+    #   PROCULINK_FRONTEND_PATH=/path/to/project-proculink \
+    #     dotnet test ProcuLink.Api.Tests --filter FullyQualifiedName~EndpointReachability
+    env:
+      PROCULINK_FRONTEND_PATH: ${{ github.workspace }}/.frontend-checkout
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
+      - name: Checkout frontend (dimnovare/project-proculink, default branch)
+        uses: actions/checkout@v5
+        with:
+          repository: dimnovare/project-proculink
+          path: .frontend-checkout
+          fetch-depth: 1
+
+      - name: Record which frontend commit the reachability guard ran against
+        run: |
+          SHA="$(git -C .frontend-checkout rev-parse HEAD)"
+          echo "Endpoint reachability checked against dimnovare/project-proculink @ ${SHA}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Endpoint reachability checked against dimnovare/project-proculink @ ${SHA}"
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v5
