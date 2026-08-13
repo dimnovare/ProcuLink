@@ -9,7 +9,6 @@ using Moq;
 using ProcuLink.Api.Controllers;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
-using ProcuLink.Core.Services.Detection;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Tenancy;
 using Xunit;
