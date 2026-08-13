@@ -53,8 +53,11 @@ public abstract class ErpDeliveryDispatcherBase : IDeliveryDispatcher
         SupplierDeliveryConfig config,
         string decryptedCredentials,
         CancellationToken ct,
-        string? idempotencyKey = null)
+        string? idempotencyKey = null,
+        bool isTestFire = false)
     {
+        // isTestFire is deliberately unused: an ERP post carries no human-read subject or body to
+        // reword — the payload IS the message, and it is already the fixed non-order test artifact.
         // A3 idempotency: the ERP connector contract accepts no idempotency key, and both
         // connectors are generic HTTP posts to a tenant-configured URL — there is no ERP document
         // model or lookup API to dedupe against. So idempotencyKey is intentionally unused here.

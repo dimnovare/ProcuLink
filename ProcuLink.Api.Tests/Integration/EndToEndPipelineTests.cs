@@ -115,7 +115,7 @@ public sealed class CapturingHttpDispatcher : IDeliveryDispatcher
         string contentType,
         SupplierDeliveryConfig config,
         string decryptedCredentials,
-        CancellationToken ct, string? idempotencyKey = null)
+        CancellationToken ct, string? idempotencyKey = null, bool isTestFire = false)
     {
         CallCount++;
         CapturedContent = content;

@@ -470,7 +470,8 @@ public sealed class LostOrderRecoveryPostgresTests(PostgresContainerFixture post
 
         public Task<DeliveryResult> DispatchAsync(
             byte[] content, string fileName, string contentType,
-            SupplierDeliveryConfig config, string decryptedCredentials, CancellationToken ct, string? idempotencyKey = null)
+            SupplierDeliveryConfig config, string decryptedCredentials, CancellationToken ct, string? idempotencyKey = null,
+            bool isTestFire = false)
         {
             Interlocked.Increment(ref _calls);
             return Task.FromResult(new DeliveryResult(true, null, 200));

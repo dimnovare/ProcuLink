@@ -591,7 +591,7 @@ public sealed class ReplayReprocessPostgresTests : IClassFixture<ReplayReprocess
         public Task<DeliveryResult> DispatchAsync(
             byte[] content, string fileName, string contentType,
             SupplierDeliveryConfig config, string decryptedCredentials, CancellationToken ct,
-            string? idempotencyKey = null)
+            string? idempotencyKey = null, bool isTestFire = false)
         {
             Calls++;
             LastContent = content;

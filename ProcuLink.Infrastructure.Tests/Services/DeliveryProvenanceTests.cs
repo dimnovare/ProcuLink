@@ -330,7 +330,7 @@ public class DeliveryProvenanceTests
             public Task<DeliveryResult> DispatchAsync(
                 byte[] content, string fileName, string contentType,
                 SupplierDeliveryConfig config, string decryptedCredentials, CancellationToken ct,
-                string? idempotencyKey = null) =>
+                string? idempotencyKey = null, bool isTestFire = false) =>
                 throw new InvalidOperationException("must never be reached: the protocol does not match");
         }
 
@@ -397,7 +397,8 @@ public class DeliveryProvenanceTests
 
         public Task<DeliveryResult> DispatchAsync(
             byte[] content, string fileName, string contentType,
-            SupplierDeliveryConfig config, string decryptedCredentials, CancellationToken ct, string? idempotencyKey = null) =>
+            SupplierDeliveryConfig config, string decryptedCredentials, CancellationToken ct, string? idempotencyKey = null,
+            bool isTestFire = false) =>
             Task.FromResult(_result);
     }
 

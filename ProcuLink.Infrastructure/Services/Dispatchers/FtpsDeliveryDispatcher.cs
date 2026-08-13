@@ -84,8 +84,11 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
         SupplierDeliveryConfig config,
         string decryptedCredentials,
         CancellationToken ct,
-        string? idempotencyKey = null)
+        string? idempotencyKey = null,
+        bool isTestFire = false)
     {
+        // isTestFire is deliberately unused: a file drop has no covering message to reword. What a
+        // test leaves behind here is a FILE, disclosed to the operator in the UI before they fire it.
         // A3 idempotency: FTPS is already idempotent by construction. The remote filename is a
         // deterministic function of the ORDER (PO number + order id — see DeliveryService.BuildFileName),
         // so a crash-recovery re-upload targets the same path rather than creating a second file —

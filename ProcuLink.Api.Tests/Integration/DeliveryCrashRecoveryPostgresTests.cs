@@ -278,7 +278,7 @@ public sealed class DeliveryCrashRecoveryPostgresTests(PostgresContainerFixture 
         public Task<DeliveryResult> DispatchAsync(
             byte[] content, string fileName, string contentType,
             SupplierDeliveryConfig config, string decryptedCredentials,
-            CancellationToken ct, string? idempotencyKey = null)
+            CancellationToken ct, string? idempotencyKey = null, bool isTestFire = false)
         {
             Interlocked.Increment(ref _calls);
             LastIdempotencyKey = idempotencyKey;

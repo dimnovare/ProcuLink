@@ -95,8 +95,12 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
         SupplierDeliveryConfig config,
         string decryptedCredentials,
         CancellationToken ct,
-        string? idempotencyKey = null)
+        string? idempotencyKey = null,
+        bool isTestFire = false)
     {
+        // isTestFire is deliberately unused: a file drop has no covering message to reword. What a
+        // test leaves behind here is a FILE, and the honest handling of that is the operator-facing
+        // disclosure in the UI plus RefusedTestFileExists below — not a change to the upload.
         // A3 idempotency: SFTP is already idempotent by construction. The remote filename is a
         // deterministic function of the ORDER (PO number + order id — see DeliveryService.BuildFileName),
         // so a crash-recovery re-upload targets the same path rather than creating a second file —

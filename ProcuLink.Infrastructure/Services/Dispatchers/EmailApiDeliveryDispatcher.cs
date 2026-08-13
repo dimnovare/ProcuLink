@@ -57,7 +57,8 @@ public sealed class EmailApiDeliveryDispatcher : IDeliveryDispatcher
         SupplierDeliveryConfig config,
         string decryptedCredentials,
         CancellationToken ct,
-        string? idempotencyKey = null)
+        string? idempotencyKey = null,
+        bool isTestFire = false)
     {
         if (!_email.IsConfigured)
             return new DeliveryResult(false,
@@ -82,17 +83,17 @@ public sealed class EmailApiDeliveryDispatcher : IDeliveryDispatcher
             return new DeliveryResult(false, "Email delivery has no valid recipient addresses.");
 
         var fileNameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
-        var attachmentName = string.IsNullOrWhiteSpace(cfg.AttachmentFileName) ? fileName : cfg.AttachmentFileName!;
 
-        var subject = BuildFromTemplate(
-            string.IsNullOrWhiteSpace(cfg.SubjectTemplate) ? "Purchase Order " + fileNameWithoutExt : cfg.SubjectTemplate!,
-            fileNameWithoutExt, attachmentName);
+        // Subject/body/attachment naming live in EmailMessageComposer, shared with the SMTP
+        // dispatcher — a test fire says it is a test on BOTH email channels or on neither.
+        var attachmentName = EmailMessageComposer.AttachmentName(
+            isTestFire, cfg.AttachmentFileName, fileName);
 
-        var bodyText = BuildFromTemplate(
-            string.IsNullOrWhiteSpace(cfg.BodyTemplate)
-                ? $"Please find the attached purchase order ({attachmentName})."
-                : cfg.BodyTemplate!,
-            fileNameWithoutExt, attachmentName);
+        var subject = EmailMessageComposer.Subject(
+            isTestFire, cfg.SubjectTemplate, fileNameWithoutExt, attachmentName);
+
+        var bodyText = EmailMessageComposer.Body(
+            isTestFire, cfg.BodyTemplate, fileNameWithoutExt, attachmentName);
 
         // From defaults to the provider-verified platform sender. A custom fromAddress is honoured
         // only if supplied (operator must have verified that domain with the provider, else the
@@ -160,9 +161,7 @@ public sealed class EmailApiDeliveryDispatcher : IDeliveryDispatcher
     }
 
     internal static string BuildFromTemplate(string template, string poNumber, string attachmentName)
-        => template
-            .Replace("{poNumber}", poNumber)
-            .Replace("{fileName}", attachmentName);
+        => EmailMessageComposer.Render(template, poNumber, attachmentName);
 
     /// <summary>Config POCO — mirrors the JSON the frontend writes for the <c>email</c> protocol.</summary>
     private sealed class EmailDeliveryConfig

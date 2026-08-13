@@ -78,8 +78,11 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
         SupplierDeliveryConfig config,
         string decryptedCredentials,
         CancellationToken ct,
-        string? idempotencyKey = null)
+        string? idempotencyKey = null,
+        bool isTestFire = false)
     {
+        // isTestFire is deliberately unused: an HTTP post carries no human-read subject or body to
+        // reword — the payload IS the message, and it is already the fixed non-order test artifact.
         try
         {
             var httpCfg = JsonSerializer.Deserialize<HttpConfig>(config.ConfigJson, JsonOpts);
