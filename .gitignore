@@ -84,8 +84,3 @@ docs/design-system/current-ui-screenshots-*/
 # Test run artifacts (dotnet test --logger trx)
 TestResults/
 *.trx
-
-# CI-only sibling checkout of dimnovare/project-proculink. EndpointReachabilityGuardTests
-# reads it to answer "does anything call this endpoint?"; see the frontend-checkout step in
-# .github/workflows/ci.yml. Locally the guard finds ../project-proculink instead.
-.frontend-checkout/

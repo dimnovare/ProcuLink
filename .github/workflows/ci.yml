@@ -108,11 +108,24 @@ jobs:
     # an endpoint nobody can reach — and the fix is to restore the caller, delete the endpoint, or
     # declare it in EndpointReachabilityGuardTests with a written reason.
     #
+    # WHY IT LANDS UNDER `.claude/`, WHICH IS NOT ITS USUAL MEANING.
+    #
+    # actions/checkout can only write inside the workspace, so the frontend ends up inside the
+    # BACKEND repo — and two architecture guards here walk `*.cs` from the repo root:
+    # RetiredSubsystemsStayRetiredTests.SourceFiles and
+    # RevisionAuthorityHostCoverageTests.ProductionSourceFiles. The frontend carries one tracked
+    # C# file, src/test/fixtures/backendCopy/SampleService.cs, deliberately stuffed with the
+    # phrases those scanners hunt for; at a top-level path it would be read as a production
+    # project of this repo. `.claude/` is the one prefix EVERY source scan in this repository
+    # already excludes — they all do it because parallel sessions keep full repo COPIES under
+    # `.claude/worktrees/`, and a foreign checkout is exactly that problem again. Reusing the
+    # existing exclusion beats adding a new one to three scanners and hoping the fourth remembers.
+    #
     # Reproduce locally with the two repositories side by side (nothing to configure), or:
     #   PROCULINK_FRONTEND_PATH=/path/to/project-proculink \
     #     dotnet test ProcuLink.Api.Tests --filter FullyQualifiedName~EndpointReachability
     env:
-      PROCULINK_FRONTEND_PATH: ${{ github.workspace }}/.frontend-checkout
+      PROCULINK_FRONTEND_PATH: ${{ github.workspace }}/.claude/frontend-checkout
 
     steps:
       - name: Checkout
@@ -122,12 +135,12 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: dimnovare/project-proculink
-          path: .frontend-checkout
+          path: .claude/frontend-checkout
           fetch-depth: 1
 
       - name: Record which frontend commit the reachability guard ran against
         run: |
-          SHA="$(git -C .frontend-checkout rev-parse HEAD)"
+          SHA="$(git -C .claude/frontend-checkout rev-parse HEAD)"
           echo "Endpoint reachability checked against dimnovare/project-proculink @ ${SHA}" >> "$GITHUB_STEP_SUMMARY"
           echo "Endpoint reachability checked against dimnovare/project-proculink @ ${SHA}"
 
