@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using ProcuLink.TestSupport;
+using System.Text;
 using Amazon.S3;
 using Amazon.S3.Model;
 using FluentAssertions;
@@ -487,6 +488,8 @@ public sealed class SupplierRoutingMatrixPostgresTests
                 EmailConfigJson = emailConfigJson, CreatedAt = now,
             });
             await seed.SaveChangesAsync();
+            // Inbound mail resolves its tenant through an issued address, not the slug column.
+            await InboundAddressTestHarness.SeedAddressAsync(seed, orgId, slug);
         }
 
         var recorder = new RoutingRecorder(_fixture.Options!);
@@ -512,7 +515,8 @@ public sealed class SupplierRoutingMatrixPostgresTests
             recorder,
             new CountingParseEnqueuer(),
             proseOnly ? OneOrderBodyExtractor.Instance : NoOrderBodyExtractor.Instance,
-            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build(),
+            InboundAddressTestHarness.Create(db),
+            InboundAddressTestHarness.Configuration(),
             NullLogger<InboundEmailRouter>.Instance);
 
         var result = await router.RouteAsync(payload, CancellationToken.None);

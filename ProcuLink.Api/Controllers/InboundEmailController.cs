@@ -15,8 +15,22 @@ namespace ProcuLink.Api.Controllers;
 /// other provider that POSTs a JSON envelope with attachments.
 ///
 /// This controller intentionally does NOT use Clerk authentication — it is a
-/// public webhook. Authentication is the shared <c>X-Postmark-Server-Token</c>
-/// header, compared against <c>Inbound:Postmark:WebhookToken</c> in config.
+/// public webhook. Authentication happens in two independent layers, and it is worth being precise
+/// about which one does what:
+///
+/// <list type="number">
+/// <item><b>Transport</b> — the shared token in <c>Inbound:Postmark:WebhookToken</c> (plus the
+/// optional edge <c>ProxySecret</c>) says the POST came from our relay rather than from a stranger
+/// with the URL. It is one value for the whole deployment and it says NOTHING about which tenant
+/// the message belongs to.</item>
+/// <item><b>Tenant</b> — the recipient address, resolved by <c>IInboundAddressService</c> against
+/// <c>org_inbound_addresses</c>. This is the per-tenant credential, and it is the only thing that
+/// can name an organisation.</item>
+/// </list>
+///
+/// The distinction is the whole point: the transport token guards the HTTP door, but the ordinary
+/// way to reach this endpoint is to send an email, and the relay accepts mail from anybody. So the
+/// transport layer cannot be what protects a tenant — only the address can.
 /// </summary>
 [ApiController]
 [Route("api/inbound-email")]
@@ -62,13 +76,15 @@ public sealed class InboundEmailController : ControllerBase
     /// </remarks>
     [HttpPost("postmark")]
     [CrossOrganisationRead(
-        "Postmark inbound webhook: the organisation is derived from the RECIPIENT address by " +
-        "IInboundEmailRouter, never from the caller. The endpoint authenticates with a shared token " +
-        "rather than an ASP.NET auth scheme, so today no tenant resolves and the router's reads are " +
-        "unfiltered by accident. A request that did arrive with a valid bearer token would arm the " +
-        "context, and inbound mail for every other tenant would stop routing while the endpoint " +
-        "kept answering 200 — which is exactly how Postmark is told the message was handled. " +
-        "Declared so the safety is deliberate rather than incidental.")]
+        "Postmark inbound webhook: the organisation is derived from the RECIPIENT address, which is " +
+        "a per-tenant CREDENTIAL looked up in org_inbound_addresses by IInboundAddressService — the " +
+        "query that DISCOVERS the tenant, so it necessarily runs before any tenant is known and " +
+        "cannot be scoped to one. The endpoint authenticates with a shared token rather than an " +
+        "ASP.NET auth scheme, so no tenant resolves from the caller and the router's reads are " +
+        "unfiltered. A request that did arrive with a valid bearer token would arm the context, and " +
+        "inbound mail for every other tenant would stop routing while the endpoint kept answering " +
+        "200 — which is exactly how Postmark is told the message was handled. Declared so the " +
+        "safety is deliberate rather than incidental.")]
     [EnableRateLimiting("upload")]
     [Consumes("application/json")]
     [ProducesResponseType(StatusCodes.Status200OK)]

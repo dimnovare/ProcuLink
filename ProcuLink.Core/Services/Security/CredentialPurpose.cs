@@ -34,4 +34,15 @@ public static class CredentialPurpose
 
     /// <summary>Scope id: Guid.Empty — one S3 ingress configuration per organisation.</summary>
     public const string OrgIngressS3SecretKey = "org.ingress.s3_secret_key";
+
+    /// <summary>
+    /// Scope id: OrgInboundAddress.Id. The plaintext inbound-email address token, kept recoverable
+    /// so the organisation can be shown the address it must hand to its buyers.
+    ///
+    /// <para>Scoped on the ROW id rather than <c>Guid.Empty</c> because an organisation holds
+    /// several of these at once — a primary, a legacy address mid-retirement, an old one inside a
+    /// rotation overlap. Row scoping is what stops a ciphertext lifted from one row being replayed
+    /// into another.</para>
+    /// </summary>
+    public const string OrgInboundEmailAddress = "org.inbound.email_address";
 }

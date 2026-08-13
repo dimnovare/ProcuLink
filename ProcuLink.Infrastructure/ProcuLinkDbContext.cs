@@ -188,6 +188,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<RetentionAuditLog>              RetentionAuditLogs            { get; set; } = null!;
     // ── Supplier auto-detect: ranked candidates for an order that arrived unrouted ─
     public DbSet<OrderSupplierSuggestion>        OrderSupplierSuggestions      { get; set; } = null!;
+    // ── Inbound email: the per-org address that authorises delivery into an org ─
+    public DbSet<OrgInboundAddress>              OrgInboundAddresses           { get; set; } = null!;
 
     // ── Org plan-history chokepoint ──────────────────────────────────────────
     // Overage metering must resolve the plan + order-limit override AS OF each
@@ -1865,6 +1867,37 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasOne(x => x.Organisation).WithMany().HasForeignKey(x => x.OrgId);
             b.HasIndex(x => new { x.OrgId, x.OrderId, x.OccurredAt })
              .HasDatabaseName("IX_po_passport_events_org_id_order_id_occurred_at");
+        });
+
+        // ── org_inbound_addresses ────────────────────────────────────────────
+        // The credential that decides which organisation an inbound email belongs to.
+        //
+        // token_hash carries a GLOBAL unique index, not a per-org one, and that is the point: it
+        // makes "one address names at most one organisation" a database invariant rather than a
+        // property of the lookup code. A per-org index would let two organisations register the
+        // same address and leave the winner up to row order.
+        modelBuilder.Entity<OrgInboundAddress>(e =>
+        {
+            e.ToTable("org_inbound_addresses");
+            e.HasKey(a => a.Id);
+            e.Property(a => a.Id).HasColumnName("id");
+            e.Property(a => a.OrganisationId).HasColumnName("organisation_id");
+            e.Property(a => a.TokenHash).HasColumnName("token_hash");
+            e.Property(a => a.EncryptedToken).HasColumnName("encrypted_token");
+            e.Property(a => a.TokenPrefix).HasColumnName("token_prefix");
+            e.Property(a => a.Kind).HasColumnName("kind");
+            e.Property(a => a.Label).HasColumnName("label");
+            e.Property(a => a.IsActive).HasColumnName("is_active").HasDefaultValue(true);
+            e.Property(a => a.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            e.Property(a => a.ExpiresAt).HasColumnName("expires_at").HasColumnType("timestamptz");
+            e.Property(a => a.RevokedAt).HasColumnName("revoked_at").HasColumnType("timestamptz");
+            e.Property(a => a.LastUsedAt).HasColumnName("last_used_at").HasColumnType("timestamptz");
+            e.HasIndex(a => a.TokenHash).IsUnique();
+            e.HasIndex(a => a.OrganisationId);
+            e.HasOne(a => a.Organisation)
+             .WithMany(o => o.InboundAddresses)
+             .HasForeignKey(a => a.OrganisationId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── Organisation query filters ───────────────────────────────────────

@@ -1,3 +1,4 @@
+﻿using ProcuLink.TestSupport;
 using FluentAssertions;
 using Hangfire;
 using Microsoft.AspNetCore.Mvc;
@@ -94,7 +95,9 @@ public class BillingGateErrorCodeTests
             new Mock<IOrganisationSettingsService>().Object,
             billing.Object,
             new OutboundRequestGuard(config, NullLogger<OutboundRequestGuard>.Instance),
-            db);
+            db,
+            InboundAddressTestHarness.Create(db),
+            config);
 
         var supplier = new Supplier { Id = Guid.NewGuid(), OrgId = orgId, Name = "Acme", CreatedAt = DateTime.UtcNow };
         db.Suppliers.Add(supplier);

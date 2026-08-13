@@ -114,4 +114,5 @@ public class Organisation
     public List<AuditEvent> AuditEvents { get; set; } = new();
     public List<TenantApiKey>             ApiKeys                  { get; set; } = new();
     public List<IntegrationSubscription>  IntegrationSubscriptions { get; set; } = new();
+    public List<OrgInboundAddress>        InboundAddresses         { get; set; } = new();
 }

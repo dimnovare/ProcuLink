@@ -1,4 +1,5 @@
-﻿using FluentAssertions;
+﻿using ProcuLink.TestSupport;
+using FluentAssertions;
 using Hangfire;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -376,7 +377,9 @@ public class BillingFeatureEnforcementTests
             new Mock<IOrganisationSettingsService>().Object,
             BillingGranting(granted).Object,
             new OutboundRequestGuard(config, NullLogger<OutboundRequestGuard>.Instance),
-            db);
+            db,
+            InboundAddressTestHarness.Create(db),
+            config);
 
         var supplier = new Supplier { Id = Guid.NewGuid(), OrgId = orgId, Name = "Acme", CreatedAt = DateTime.UtcNow };
         db.Suppliers.Add(supplier);

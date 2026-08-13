@@ -627,6 +627,7 @@ builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
 builder.Services.AddScoped<IIdempotencyService, IdempotencyService>();
 builder.Services.AddScoped<ISchemaInferencer, OpenAiSchemaInferencer>();
 builder.Services.AddScoped<IEmailBodyOrderExtractor, OpenAiEmailBodyOrderExtractor>();
+builder.Services.AddScoped<IInboundAddressService, InboundAddressService>();
 builder.Services.AddScoped<IInboundEmailRouter, InboundEmailRouter>();
 builder.Services.AddScoped<IParseJobEnqueuer, ProcuLink.Api.Controllers.HangfireParseJobEnqueuer>();
 
