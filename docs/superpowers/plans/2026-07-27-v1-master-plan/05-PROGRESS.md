@@ -3,15 +3,48 @@
 **Update this file whenever a packet changes state.** It is the one place that answers "what is done
 and what is not". Findings live in `AUDIT-2026-07-27.md`; packet specs in `01-WORK-PACKETS.md`.
 
-**Last updated:** 2026-07-27, after fix round 1 launched.
+**Last updated:** 2026-08-13.
+
+> ## ⚠️ READ THIS BEFORE THE REST OF THE FILE
+>
+> **The v1 master plan is COMPLETE. All 41 packets landed, and everything below this box is a
+> historical record of how it got there — not current state.**
+>
+> Until 2026-08-13 this file opened by asserting *"Nothing has been merged to `main` in either
+> repo. Every branch below is local and unpushed"*, written 2026-07-27 and false from 2026-07-30
+> onward, when WP-01 merged. `CLAUDE.md` §15 instructs every session to read this file **before
+> re-investigating anything**, so for two weeks the one document meant to answer "what is done"
+> told each new session the plan had never started. That is the same defect class as
+> [FE #141](https://github.com/dimnovare/project-proculink/pull/141) — a guard on source cannot
+> stop a defect whose delivery vehicle is a doc an agent reads.
+>
+> **Current state, and where to look instead:**
+>
+> - The **v1 plan is closed**. `AUDIT-2026-08-06-V2.md` was run the day it completed and is the
+>   live plan; its §7 defines the current packet set as Waves A–E.
+> - **Waves A, B, C and D are closed** as of 2026-08-13. Wave E (structured parsers beyond five
+>   canonical fields; conformance validation for any format sold) is open by design. The EDIFACT
+>   half of Wave E was closed by withdrawing the claim, a founder decision, not by building a
+>   transformer.
+> - Both repos' `main` are green and merge freely. The "BE main is diverged / needs founder
+>   reconciliation" note below was resolved long ago.
+> - The ownership table below ("Who owns what — 2026-07-30") described two specific sessions and
+>   has no bearing on anything now.
+>
+> **Do not update the historical sections below.** If you are recording new work, it belongs
+> against a Wave A–E packet in the v2 audit, not against a v1 WP-nn.
 
 ## Status legend
 
 `⬜ not started` · `🔵 in flight` · `🟠 built, refuted — fixing` · `🟡 built, awaiting review` ·
 `🟢 merged` · `⚫ retired / no longer needed`
 
-**Nothing has been merged to `main` in either repo. Every branch below is local and unpushed unless
-marked otherwise.** BE `main` is still diverged (6 local vs 9 origin) and needs founder reconciliation.
+---
+
+# Historical record — v1 master plan, 2026-07-27 to 2026-08-06
+
+Everything from here down is preserved as written. Statements about what is merged, which branches
+are unpushed, and who owns what were true when written and are not true now.
 
 ---
 
