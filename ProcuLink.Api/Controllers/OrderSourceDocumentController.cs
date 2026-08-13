@@ -90,7 +90,10 @@ public sealed class OrderSourceDocumentController : ControllerBase
     /// </summary>
     [HttpGet("{id:guid}/source")]
     [EnableRateLimiting("signed-url")]
-    [ProducesResponseType(typeof(FileResult), StatusCodes.Status200OK)]
+    // No response TYPE on the 200: the body is opaque bytes and the media type is decided per
+    // order from the file's own content, so naming a schema here would document a shape that does
+    // not exist. `InvoiceController.Download`, the other binary download, declares none either.
+    [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status410Gone)]
