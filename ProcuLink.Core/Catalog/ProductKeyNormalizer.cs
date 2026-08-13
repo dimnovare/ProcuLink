@@ -5,8 +5,8 @@ namespace ProcuLink.Core.Catalog;
 /// manufacturer part number (MPN).
 ///
 /// The problem it solves: the same manufacturer part is written differently by every system
-/// that touches it. A punchout cXML says <c>REDACTED-ORDER-DATA</c>, a distributor's price feed
-/// says <c>QBT2500BKBTK1</c>, an ERP export says <c>qbt2500 bk btk1</c>. Compared literally
+/// that touches it. A punchout cXML says <c>LTQ2500-BK-BTK1</c>, a distributor's price feed
+/// says <c>LTQ2500BKBTK1</c>, an ERP export says <c>ltq2500 bk btk1</c>. Compared literally
 /// these are three different strings and the line stays unmatched.
 ///
 /// The rule (deliberately small, and the ONLY rule — nothing here is fuzzy):
@@ -21,10 +21,10 @@ namespace ProcuLink.Core.Catalog;
 ///
 /// Worked examples:
 /// <code>
-///   "REDACTED-ORDER-DATA"  → "QBT2500BKBTK1"
-///   "qbt2500 bk btk1"  → "QBT2500BKBTK1"
-///   "REDACTED-ORDER-DATA"     → "P1058930010"
-///   "REDACTED-ORDER-DATA"         → "MWR23SA"
+///   "LTQ2500-BK-BTK1"  → "LTQ2500BKBTK1"
+///   "ltq2500 bk btk1"  → "LTQ2500BKBTK1"
+///   "PRW58930-010"     → "PRW58930010"
+///   "TSP23S/A"         → "TSP23SA"
 ///   "  "               → null
 ///   "---"              → null
 /// </code>

@@ -4,7 +4,7 @@ namespace ProcuLink.Core.Services.Ai;
 /// Optional, provider-neutral external web/product search that finds a real manufacturer
 /// part number (MPN) / SKU for a described product. It runs ONLY as a last resort — when the
 /// source document states no code AND the supplier has no authoritative product catalog to
-/// match against — so a clearly-described real product ("Apple iPhone 15 silicone case") can
+/// match against — so a clearly-described real product ("Tailspin Phone 15 silicone case") can
 /// surface its actual part number instead of a fuzzy guess.
 ///
 /// <para>This is strictly a SUGGESTION source: results are plausible, not verified, so every

@@ -32,14 +32,14 @@ public class CatalogManufacturerPartMappingTests
     public async Task ParseCsv_MpnColumn_LandsInManufacturerPartNumber()
     {
         var csv = "code,name,price,mpn\n" +
-                  "SUP-77,Barcode scanner,129.00,REDACTED-ORDER-DATA\n";
+                  "SUP-77,Barcode scanner,129.00,LTQ2500-BK-BTK1\n";
 
         var result = await SupplierCatalogFileParser.ParseCsvAsync(Csv(csv), CancellationToken.None);
 
         var d = result.Drafts.Should().ContainSingle().Subject;
         d.Code.Should().Be("SUP-77");
         d.Price.Should().Be(129.00m);
-        d.ManufacturerPartNumber.Should().Be("REDACTED-ORDER-DATA");
+        d.ManufacturerPartNumber.Should().Be("LTQ2500-BK-BTK1");
         d.ManufacturerName.Should().BeNull("the feed carries no brand column");
         // The raw value is stored verbatim; the normalised key has exactly one writer
         // (SupplierCatalogService.UpsertManyAsync), so the parser must NOT pre-compute it.
@@ -52,14 +52,14 @@ public class CatalogManufacturerPartMappingTests
         // German distributor feed: "Herstellernummer" = the MANUFACTURER's number,
         // "Hersteller" = the manufacturer's name.
         var csv = "sku;bezeichnung;herstellernummer;hersteller\n" +
-                  "A-1;Etikettendrucker;ZD4A042-D0EM00EZ;Zebra\n";
+                  "A-1;Etikettendrucker;PW4A042-D0EM00EZ;Proseware\n";
 
         var result = await SupplierCatalogFileParser.ParseCsvAsync(Csv(csv), CancellationToken.None);
 
         var d = result.Drafts.Should().ContainSingle().Subject;
         d.Code.Should().Be("A-1");
-        d.ManufacturerPartNumber.Should().Be("ZD4A042-D0EM00EZ");
-        d.ManufacturerName.Should().Be("Zebra");
+        d.ManufacturerPartNumber.Should().Be("PW4A042-D0EM00EZ");
+        d.ManufacturerName.Should().Be("Proseware");
     }
 
     [Fact]
@@ -74,8 +74,8 @@ public class CatalogManufacturerPartMappingTests
         // MANUFACTURER carry NO override on purpose: they must be picked up by the global
         // aliases, which is the behaviour under test.
         var csv = "ARTNUM;SHORT_EN;YOUR_PRICE_NET;ORIGINAL_ART_NO;MANUFACTURER\n" +
-                  "10001;Zebra ZD421;130,41;ZD4A042;Zebra\n" +
-                  "10002;REDACTED-PARTY QD2430;89,90;REDACTED-ITEM;REDACTED-PARTY\n";
+                  "10001;Proseware PW421;130,41;PW4A042;Proseware\n" +
+                  "10002;Litware LTQ2430;89,90;LTQ2430-BK;Litware\n";
         var overrides = new Dictionary<string, string>
         {
             ["ARTNUM"] = "code",
@@ -90,16 +90,16 @@ public class CatalogManufacturerPartMappingTests
 
         var first = result.Drafts[0];
         first.Code.Should().Be("10001");                      // ← ARTNUM (override)
-        first.Name.Should().Be("Zebra ZD421");
+        first.Name.Should().Be("Proseware PW421");
         first.Price.Should().Be(130.41m);                     // comma decimal, locale-tolerant
-        first.ManufacturerPartNumber.Should().Be("ZD4A042");  // ← ORIGINAL_ART_NO (alias)
-        first.ManufacturerName.Should().Be("Zebra");          // ← MANUFACTURER (alias)
+        first.ManufacturerPartNumber.Should().Be("PW4A042");  // ← ORIGINAL_ART_NO (alias)
+        first.ManufacturerName.Should().Be("Proseware");          // ← MANUFACTURER (alias)
         first.ExternalId.Should().BeNull("ORIGINAL_ART_NO is the MPN now, not the re-sync key");
 
         var second = result.Drafts[1];
         second.Code.Should().Be("10002");
-        second.ManufacturerPartNumber.Should().Be("REDACTED-ITEM");
-        second.ManufacturerName.Should().Be("REDACTED-PARTY");
+        second.ManufacturerPartNumber.Should().Be("LTQ2430-BK");
+        second.ManufacturerName.Should().Be("Litware");
     }
 
     // ── REGRESSION GUARD: "Manufacturer Part ID" was retargeted off external_id ──
@@ -109,12 +109,12 @@ public class CatalogManufacturerPartMappingTests
     {
         // The CIF 3.0 / cXML spelling. It used to alias to external_id; a revert must fail here.
         var csv = "code,name,Manufacturer Part ID\n" +
-                  "SUP-77,Barcode scanner,REDACTED-ORDER-DATA\n";
+                  "SUP-77,Barcode scanner,LTQ2500-BK-BTK1\n";
 
         var result = await SupplierCatalogFileParser.ParseCsvAsync(Csv(csv), CancellationToken.None);
 
         var d = result.Drafts.Should().ContainSingle().Subject;
-        d.ManufacturerPartNumber.Should().Be("REDACTED-ORDER-DATA");
+        d.ManufacturerPartNumber.Should().Be("LTQ2500-BK-BTK1");
         d.ExternalId.Should().BeNull(
             "Manufacturer Part ID is the cross-party match key, NOT the idempotent re-sync key");
     }
@@ -126,13 +126,13 @@ public class CatalogManufacturerPartMappingTests
         // external_id, and "first mapping to a canonical field wins" meant erp_id took it and the
         // manufacturer part was DROPPED ENTIRELY — a silent data loss, not a mis-file.
         var csv = "code,erp_id,Manufacturer Part ID\n" +
-                  "SUP-77,ERP-7,REDACTED-ORDER-DATA\n";
+                  "SUP-77,ERP-7,LTQ2500-BK-BTK1\n";
 
         var result = await SupplierCatalogFileParser.ParseCsvAsync(Csv(csv), CancellationToken.None);
 
         var d = result.Drafts.Should().ContainSingle().Subject;
         d.ExternalId.Should().Be("ERP-7");
-        d.ManufacturerPartNumber.Should().Be("REDACTED-ORDER-DATA");
+        d.ManufacturerPartNumber.Should().Be("LTQ2500-BK-BTK1");
     }
 
     [Fact]
@@ -211,13 +211,13 @@ public class CatalogManufacturerPartMappingTests
         var first = result.Drafts[0];
         first.Code.Should().Be("2403916");                          // SupplierPartID
         first.ExternalId.Should().Be("30670483");                   // unchanged by the MPN work
-        first.ManufacturerPartNumber.Should().Be("REDACTED-ORDER-DATA");         // ManufacturerPartID
-        first.ManufacturerName.Should().Be("REDACTED-ORDER-DATA");              // ManufacturerName
+        first.ManufacturerPartNumber.Should().Be("BW0027");         // ManufacturerPartID
+        first.ManufacturerName.Should().Be("Bellows");              // ManufacturerName
 
-        result.Drafts[1].ManufacturerPartNumber.Should().Be("REDACTED-ORDER-DATA");
-        result.Drafts[1].ManufacturerName.Should().Be("Deltaco");
-        result.Drafts[2].ManufacturerPartNumber.Should().Be("REDACTED-ITEM");
-        result.Drafts[2].ManufacturerName.Should().Be("Gembird");
+        result.Drafts[1].ManufacturerPartNumber.Should().Be("1990137");
+        result.Drafts[1].ManufacturerName.Should().Be("Adventure");
+        result.Drafts[2].ManufacturerPartNumber.Should().Be("FHB-CM-U3P4P-01");
+        result.Drafts[2].ManufacturerName.Should().Be("Fincher");
 
         // The honesty report must list both columns, otherwise the mapping UI shows them as
         // unmapped source data the operator has to wire up by hand.
@@ -232,10 +232,10 @@ public class CatalogManufacturerPartMappingTests
 
         result.Drafts.Should().HaveCount(2);
         result.Drafts[0].Code.Should().Be("34762852");
-        result.Drafts[0].ManufacturerPartNumber.Should().Be("REDACTED-ORDER-DATA");
-        result.Drafts[0].ManufacturerName.Should().Be("REDACTED-PARTY");
-        result.Drafts[1].ManufacturerPartNumber.Should().Be("REDACTED-ORDER-DATA");
-        result.Drafts[1].ManufacturerName.Should().Be("REDACTED-PARTY");
+        result.Drafts[0].ManufacturerPartNumber.Should().Be("55Q22AA");
+        result.Drafts[0].ManufacturerName.Should().Be("Coho Inc.");
+        result.Drafts[1].ManufacturerPartNumber.Should().Be("55Q26AA");
+        result.Drafts[1].ManufacturerName.Should().Be("Coho Inc.");
     }
 
     [Fact]
@@ -246,7 +246,7 @@ public class CatalogManufacturerPartMappingTests
             OpenFixture("cxml-index-bare.xml"), CancellationToken.None);
 
         result.Format.Should().Be("cxml_index");
-        result.Drafts[0].ManufacturerPartNumber.Should().Be("REDACTED-ORDER-DATA");
-        result.Drafts[0].ManufacturerName.Should().Be("REDACTED-ORDER-DATA");
+        result.Drafts[0].ManufacturerPartNumber.Should().Be("BW0027");
+        result.Drafts[0].ManufacturerName.Should().Be("Bellows");
     }
 }

@@ -343,12 +343,12 @@ public class InCoverageMatrixTests
     [Fact]
     public async Task Cxml_NonEurCurrencyAndUnicode_Preserved()
     {
-        var lines = new List<Line> { new(10, "29048107", "Gigaset 550 HX — Dodatkowa słuch", 1m, "EA", 295.02m) };
+        var lines = new List<Line> { new(10, "29048107", "Adatum 570 KX — Dodatkowa słuch", 1m, "EA", 295.02m) };
         var bytes = Cxml("CX-PLN", "PLN", lines, total: "295.02");
         var order = await new CxmlOrderParser().ParseAsync(ToStream(bytes), CancellationToken.None);
 
         order.Currency.Should().Be("PLN");
-        order.Lines[0].Description.Should().Be("Gigaset 550 HX — Dodatkowa słuch");
+        order.Lines[0].Description.Should().Be("Adatum 570 KX — Dodatkowa słuch");
         order.Lines[0].UnitPrice.Should().Be(295.02m);
     }
 
@@ -413,13 +413,13 @@ public class InCoverageMatrixTests
     [Fact]
     public async Task Ubl_GbpAndAccentedBuyer_Preserved()
     {
-        var lines = new List<Line> { new(1, "11097719", "SanDisk Ultra Flair — clé USB", 2m, "EA", 19.33m) };
+        var lines = new List<Line> { new(1, "11097719", "Wingtip Swift Drive — clé USB", 2m, "EA", 19.33m) };
         var bytes = Ubl("UBL-GBP", "GBP", "Æthelred & Sons Ltd", lines);
         var order = await new UblOrderParser().ParseAsync(ToStream(bytes), CancellationToken.None);
 
         order.Currency.Should().Be("GBP");
         order.BuyerName.Should().Be("Æthelred & Sons Ltd");
-        order.Lines[0].Description.Should().Be("SanDisk Ultra Flair — clé USB");
+        order.Lines[0].Description.Should().Be("Wingtip Swift Drive — clé USB");
     }
 
     [Fact]

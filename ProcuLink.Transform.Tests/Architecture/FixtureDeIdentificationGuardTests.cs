@@ -341,11 +341,16 @@ public class FixtureDeIdentificationGuardTests
     [Theory]
     [InlineData("<Email>firstname.lastname@" + "some-trading-company.de</Email>", "email address on a non-placeholder domain")]
     [InlineData("<cXML payloadID=\"1700000000.1@" + "buyer.somehost.com\">", "email address on a non-placeholder domain")]
-    [InlineData("xsi:schemaLocation=\"urn:x file:///C:/Users/someone/Docs/schema.xsd\"", "file:// URI")]
-    [InlineData("xsi:schemaLocation=\"urn:x file:///C:/Users/someone/Docs/schema.xsd\"", "absolute local filesystem path")]
+    // SPLIT ACROSS A + on the /Users arm — do not join back. This file is tracked .cs, so it is
+    // inside TrackedSourceOperationalDataGuardTests' corpus B, whose class 8 applies the
+    // absolute-local-path rule with no vocabulary at all. These controls name nobody, but "names
+    // nobody" is not something a format rule can see. The compiler folds each pair to the
+    // identical constant, so this guard's own assertions are unchanged.
+    [InlineData("xsi:schemaLocation=\"urn:x file:///C:/Users" + "/someone/Docs/schema.xsd\"", "file:// URI")]
+    [InlineData("xsi:schemaLocation=\"urn:x file:///C:/Users" + "/someone/Docs/schema.xsd\"", "absolute local filesystem path")]
     [InlineData("<Path>D:\\build\\artifacts\\out.xml</Path>", "absolute local filesystem path")]
     [InlineData("<Path>/home/someone/build/out.xml</Path>", "absolute local filesystem path")]
-    [InlineData("<Path>redacted-fixture</Path>", "absolute local filesystem path")]
+    [InlineData("<Path>/Users" + "/someone/build/out.xml</Path>", "absolute local filesystem path")]
     [InlineData("<Path>\\\\fileserver\\share\\out.xml</Path>", "absolute local filesystem path")]
     // The rotation #179 reported and did not fix: a live URL is not an e-mail, not a file:// URI
     // and not a local path, so the first three detectors waved all of these through. Every host
@@ -377,7 +382,7 @@ public class FixtureDeIdentificationGuardTests
     // Category (d): a really-allocated account identifier. #179 de-identified one of these and
     // this one survived three lines deep in a CIF data row.
     [InlineData(
-        "AN01234567891,13080788,REDACTED-ORDER-DATA,\"Patch cable\",43223303,4.24,EA",
+        "AN01234567891,13080788,95PAT50CMRD,\"Patch cable\",43223303,4.24,EA",
         "Ariba Network ID outside the reserved all-zeros placeholder range")]
     // Split across a "+" for the same reason SourcePersonalDataGuardTests splits its own controls:
     // CxmlIdentityGuardTests sweeps .cs source for <Identity> values, and an unsplit control here
@@ -417,7 +422,7 @@ public class FixtureDeIdentificationGuardTests
     [InlineData("<ApiBase>http://localhost:5223/api/orders</ApiBase>")]
     // The reserved placeholder Ariba Network ID must not trip the ANID rule.
     [InlineData("<Credential domain=\"NetworkID\"><Identity>AN00000000001</Identity></Credential>")]
-    [InlineData("AN00000000001,13080788,REDACTED-ORDER-DATA,\"Patch cable\",43223303,4.24,EA")]
+    [InlineData("AN00000000001,13080788,95PAT50CMRD,\"Patch cable\",43223303,4.24,EA")]
     // Dotted tokens that are not hosts: a version, a file name, a decimal. A host detector that
     // fired on these would be suppressed within a week.
     [InlineData("<UnspscVersion>20.0601</UnspscVersion>")]

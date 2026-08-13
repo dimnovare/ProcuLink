@@ -100,7 +100,7 @@ public class OrderServiceWebProductSearchTests
     // One unresolved line, a clearly real product, no manufacturer part number in the source.
     private const string CaseCsv =
         "itemcode,description,quantity,price\n" +
-        "BUYER-CASE,Apple iPhone 15 silicone case midnight,5,12.00\n";
+        "BUYER-CASE,Tailspin Phone 15 silicone case midnight,5,12.00\n";
 
     private static Mock<IAiMappingService> AiMock(
         IReadOnlyDictionary<int, AiMappingSuggestion> returns, List<AiMappingCandidate?> capture)
@@ -126,15 +126,15 @@ public class OrderServiceWebProductSearchTests
         var search = new Mock<IProductCodeSearch>();
         search
             .Setup(s => s.FindPartNumberAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ProductCodeMatch("REDACTED-ORDER-DATA", "Apple iPhone 15 Silicone Case", "https://example.invalid/redacted", 0.7f));
+            .ReturnsAsync(new ProductCodeMatch("TSP23S/A", "Tailspin Phone 15 Silicone Case", "https://www.tailspin.example/x", 0.7f));
 
         var captured = new List<AiMappingCandidate?>();
         // The model picks the web-grounded code (no catalog → free path, allow-list inert).
         var ai = AiMock(
             new Dictionary<int, AiMappingSuggestion>
             {
-                [1] = new AiMappingSuggestion("REDACTED-ORDER-DATA", 0.7f, "found via web search",
-                    "web product search (unverified): https://example.invalid/redacted"),
+                [1] = new AiMappingSuggestion("TSP23S/A", 0.7f, "found via web search",
+                    "web product search (unverified): https://www.tailspin.example/x"),
             },
             captured);
 
@@ -146,12 +146,12 @@ public class OrderServiceWebProductSearchTests
         Assert.True(result.IsSuccess);
 
         // The web hit was folded in as a non-catalog candidate with honest provenance.
-        Assert.Contains(captured, c => c is { IsCatalogProduct: false, SupplierItemCode: "REDACTED-ORDER-DATA" }
+        Assert.Contains(captured, c => c is { IsCatalogProduct: false, SupplierItemCode: "TSP23S/A" }
                                         && c!.Provenance.Contains("web product search"));
 
         // It surfaces as a review hint only — never auto-applied.
         var line = await db.PurchaseOrderLines.AsNoTracking().FirstAsync(l => l.OrderId == result.Value!.Id);
-        Assert.Equal("REDACTED-ORDER-DATA", line.AiSuggestedSupplierItemCode);
+        Assert.Equal("TSP23S/A", line.AiSuggestedSupplierItemCode);
         Assert.True(line.NeedsReview);
         Assert.Null(line.SupplierItemCode);
 
@@ -256,10 +256,10 @@ public class OrderServiceWebProductSearchTests
     {
         var lines = new[]
         {
-            Line(1, "Apple iPhone 15 silicone case"), // described, no MPN → eligible
+            Line(1, "Tailspin Phone 15 silicone case"), // described, no MPN → eligible
             Line(2, "   "),                            // blank description → skip
             Line(3, null),                             // null description → skip
-            Line(4, "Logitech MX Master 3S"),          // described, but has source MPN → skip
+            Line(4, "Fourthcoffee TW Master 3S"),          // described, but has source MPN → skip
         };
         var sourceMpn = new HashSet<int> { 4 };
 

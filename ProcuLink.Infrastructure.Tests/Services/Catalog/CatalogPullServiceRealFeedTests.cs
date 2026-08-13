@@ -126,7 +126,7 @@ public class CatalogPullServiceRealFeedTests
     [Fact]
     public async Task Pull_JsonWithColumnMapping_MapsNonAliasFields()
     {
-        const string json = """[{"Id":923,"Name":"REDACTED-NAME","Price":73250.0},{"Id":930,"Name":"Other","Price":100.0}]""";
+        const string json = """[{"Id":923,"Name":"Relecloud Monitor","Price":73250.0},{"Id":930,"Name":"Other","Price":100.0}]""";
         var h = await BuildAsync(
             new HttpClient(new BytesHandler(Encoding.UTF8.GetBytes(json), "application/json")),
             s =>
@@ -191,8 +191,8 @@ public class CatalogPullServiceRealFeedTests
         handler.TokenCalls.Should().BeGreaterThanOrEqualTo(1);
 
         var products = await new SupplierCatalogService(h.Db).ListAsync(h.OrgId, h.SupplierId, null, null, CancellationToken.None);
-        products.Should().Contain(p => p.Code == "REDACTED-ITEM" && p.Price == 645.91m);
-        products.Should().Contain(p => p.Code == "REDACTED-ITEM");
+        products.Should().Contain(p => p.Code == "WW1-BBRX" && p.Price == 645.91m);
+        products.Should().Contain(p => p.Code == "WW2-BTSP");
     }
 
     // ── test doubles ──────────────────────────────────────────────────────────
@@ -246,9 +246,9 @@ public class CatalogPullServiceRealFeedTests
                     // One page, two items, NextItemNo present → fetcher requests page 2.
                     return Ok("""
                     {"StatusCode":1,"Status":"OK","Message":[
-                      {"SKU":"REDACTED-ITEM","Name":"REDACTED-PARTY","Price":{"PriceExclVAT":"645.91","Currency":"EUR"}},
-                      {"SKU":"REDACTED-ITEM","Name":"DELL Monitor","Price":{"PriceExclVAT":"120.00","Currency":"EUR"}}
-                    ],"NextItemNo":"REDACTED-ITEM"}
+                      {"SKU":"WW1-BBRX","Name":"WIDEWORLD HDD","Price":{"PriceExclVAT":"645.91","Currency":"EUR"}},
+                      {"SKU":"WW2-BTSP","Name":"WIDEWORLD Monitor","Price":{"PriceExclVAT":"120.00","Currency":"EUR"}}
+                    ],"NextItemNo":"WW2-BTSP"}
                     """, "application/json");
                 }
                 // Page 2 empty → terminates pagination.

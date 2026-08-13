@@ -433,7 +433,7 @@ public class PassportServiceTests
             Status        = OrderStatusConstants.Ready,
             SourceFileKey = "org/ord/po.csv",
             // Denormalized column set by ParseStoredFileAsync; CanonicalJson left null.
-            BuyerName     = "REDACTED-NAME",
+            BuyerName     = "Fabrikam Procurement",
             CanonicalJson = null,
             CreatedAt     = t0,
             UpdatedAt     = t0.AddMinutes(1),
@@ -445,6 +445,6 @@ public class PassportServiceTests
         var result = await svc.GetAsync(orgId, orderId, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal("REDACTED-NAME", result.Value!.Order.BuyerName);
+        Assert.Equal("Fabrikam Procurement", result.Value!.Order.BuyerName);
     }
 }

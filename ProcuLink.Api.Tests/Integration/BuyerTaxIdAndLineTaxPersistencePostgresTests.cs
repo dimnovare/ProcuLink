@@ -69,7 +69,7 @@ public sealed class BuyerTaxIdAndLineTaxPersistencePostgresTests(PostgresContain
                 Id         = orderId,
                 OrgId      = orgId,
                 SupplierId = supplierId,
-                PoNumber   = "REDACTED-ITEM",
+                PoNumber   = "PO-EXF-1",
                 Currency   = "NOK",
                 Status     = "ready",
                 OrderDate  = new DateOnly(2026, 6, 15),

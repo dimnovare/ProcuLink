@@ -46,12 +46,12 @@
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>001</QUALF>
-        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+        <KTEXT>Fourthcoffee Wireless Mouse T510</KTEXT>
       </E1EDP19>
       <E1EDPT1 SEGMENT="1">
         <TDID>F01</TDID>
         <E1EDPT2 SEGMENT="1">
-          <TDLINE>REDACTED-ORDER-DATA</TDLINE>
+          <TDLINE>Fourthcoffee Wireless Mouse T510 - USB receiver</TDLINE>
         </E1EDPT2>
       </E1EDPT1>
     </E1EDP01>
@@ -68,12 +68,12 @@
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>001</QUALF>
-        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+        <KTEXT>Wingtip Swift Drive USB Flash Drive 32GB</KTEXT>
       </E1EDP19>
       <E1EDPT1 SEGMENT="1">
         <TDID>F01</TDID>
         <E1EDPT2 SEGMENT="1">
-          <TDLINE>REDACTED-ORDER-DATA</TDLINE>
+          <TDLINE>Wingtip Swift Drive - Flash drive - 32 GB - USB 3.0</TDLINE>
         </E1EDPT2>
       </E1EDPT1>
     </E1EDP01>
@@ -90,12 +90,12 @@
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>001</QUALF>
-        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+        <KTEXT>Lamna Solution - Cavo di rete - CAT6</KTEXT>
       </E1EDP19>
       <E1EDPT1 SEGMENT="1">
         <TDID>F01</TDID>
         <E1EDPT2 SEGMENT="1">
-          <TDLINE>REDACTED-ORDER-DATA</TDLINE>
+          <TDLINE>Lamna Solution - Cavo di rete - RJ-45 (M) a RJ-45 (M) - 1.5 m - UTP - CAT 6</TDLINE>
         </E1EDPT2>
       </E1EDPT1>
     </E1EDP01>
@@ -112,7 +112,7 @@
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>001</QUALF>
-        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+        <KTEXT>Woodgrove 1.5m CAT6 Ethernet Cable</KTEXT>
       </E1EDP19>
     </E1EDP01>
     <E1EDP01 SEGMENT="1">
@@ -128,7 +128,7 @@
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>001</QUALF>
-        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+        <KTEXT>Woodgrove 1.5m Orange Slim CAT6</KTEXT>
       </E1EDP19>
     </E1EDP01>
     <E1EDS01 SEGMENT="1">

@@ -83,7 +83,7 @@ public class CatalogFormatAndMappingTests
         result.Drafts.Should().HaveCount(5);
         var first = result.Drafts[0];
         first.Code.Should().Be("923");
-        first.Name.Should().Be("REDACTED-ORDER-DATA");
+        first.Name.Should().Be("Relecloud ClearView RC2430-BK");
         first.Price.Should().Be(73250m);
     }
 
@@ -93,8 +93,8 @@ public class CatalogFormatAndMappingTests
     public async Task ParseCsv_PositionalMapping_HeaderlessComma()
     {
         // Headerless positional shape: comma-delimited, NO header. Map by index; first line is DATA.
-        var csv = "C,CAT,B793,0710193,DESC,DESC2,NMS,GS108UK,00000017.87,0,Y\n" +
-                  "C,CAT,B793,0710342,DESC,DESC2,NMS,GS105UK,00000013.75,0,Y\n";
+        var csv = "C,CAT,B793,0710193,DESC,DESC2,NMS,AL108UK,00000017.87,0,Y\n" +
+                  "C,CAT,B793,0710342,DESC,DESC2,NMS,AL105UK,00000013.75,0,Y\n";
         var overrides = new Dictionary<string, string>
         {
             ["__noheader__"] = "true",
@@ -106,14 +106,14 @@ public class CatalogFormatAndMappingTests
         result.Drafts.Should().HaveCount(2);
         result.Drafts[0].Code.Should().Be("0710193");
         result.Drafts[0].Price.Should().Be(17.87m);
-        result.Drafts[0].ExternalId.Should().Be("GS108UK");
+        result.Drafts[0].ExternalId.Should().Be("AL108UK");
     }
 
     [Fact]
     public async Task ParseCsv_PositionalMapping_TabDelimitedCp1252()
     {
         // Headerless positional shape: tab-delimited, cp1252, NO header.
-        var line = "1009318\tREDACTED-PARTYID\tPrint\tSupplies\tPapers\tEPSON paper\t0\t36.65\tC13S041068\tEPSON\n";
+        var line = "1009318\t0010343800001\tPrint\tSupplies\tPapers\tBESTFOR paper\t0\t36.65\tX13S041068\tBESTFOR\n";
         var overrides = new Dictionary<string, string>
         {
             ["__noheader__"] = "true",
@@ -125,7 +125,7 @@ public class CatalogFormatAndMappingTests
         var result = await SupplierCatalogFileParser.ParseCsvAsync(Csv(line, enc), CancellationToken.None, overrides, enc);
         var d = result.Drafts.Should().ContainSingle().Subject;
         d.Code.Should().Be("1009318");
-        d.Barcode.Should().Be("REDACTED-PARTYID");
+        d.Barcode.Should().Be("0010343800001");
         d.Price.Should().Be(36.65m);
     }
 
@@ -134,7 +134,7 @@ public class CatalogFormatAndMappingTests
     {
         // ';'-delimited named-column shape: header present, comma-decimal price.
         var csv = "ProductId;ReferenceNo;EAN;Manufacturer;Price_B2B_Regular\n" +
-                  "6480518;REDACTED-ITEM;;Microsoft;674,68\n";
+                  "6480518;H90-01386;;Adventureworks;674,68\n";
         var overrides = new Dictionary<string, string>
         {
             ["ReferenceNo"] = "code",
@@ -143,7 +143,7 @@ public class CatalogFormatAndMappingTests
         };
         var result = await SupplierCatalogFileParser.ParseCsvAsync(Csv(csv), CancellationToken.None, overrides, null);
         var d = result.Drafts.Should().ContainSingle().Subject;
-        d.Code.Should().Be("REDACTED-ITEM");
+        d.Code.Should().Be("H90-01386");
         d.Price.Should().Be(674.68m);
     }
 
@@ -218,9 +218,9 @@ public class CatalogFormatAndMappingTests
         result.Format.Should().Be("xml");
         result.Drafts.Should().HaveCount(3);
         var d = result.Drafts[0];
-        d.Code.Should().Be("REDACTED-ORDER-DATA");   // Code attribute → code alias
+        d.Code.Should().Be("HCANTP14");   // Code attribute → code alias
         d.Barcode.Should().Be("4711213680519"); // EAN → barcode via override (beats Code2 alias)
-        d.Name.Should().Contain("REDACTED-ORDER-DATA");
+        d.Name.Should().Contain("Halden HL-801");
         d.Price.Should().Be(40.12m);       // PriceDea via override
     }
 
@@ -305,12 +305,12 @@ public class CatalogFormatAndMappingTests
         // Real feed shape (14,713 items): <priceinfo> → repeating <item> with scalar children.
         // SHORT_EN and YOUR_PRICE_NET sit at odd positions, so the drop hit exactly name+price.
         var xml = "<priceinfo>"
-                + "<item><ARTNUM>10001</ARTNUM><MANUFACTURER>Zebra</MANUFACTURER><STOCK_QTY>7</STOCK_QTY>"
-                + "<YOUR_PRICE_NET>130,41</YOUR_PRICE_NET><SHORT_EN>Zebra ZD421</SHORT_EN>"
-                + "<ORIGINAL_ART_NO>ZD4A042</ORIGINAL_ART_NO></item>"
-                + "<item><ARTNUM>10002</ARTNUM><MANUFACTURER>REDACTED-PARTY</MANUFACTURER><STOCK_QTY>3</STOCK_QTY>"
-                + "<YOUR_PRICE_NET>89,90</YOUR_PRICE_NET><SHORT_EN>REDACTED-PARTY QD2430</SHORT_EN>"
-                + "<ORIGINAL_ART_NO>REDACTED-ITEM</ORIGINAL_ART_NO></item>"
+                + "<item><ARTNUM>10001</ARTNUM><MANUFACTURER>Proseware</MANUFACTURER><STOCK_QTY>7</STOCK_QTY>"
+                + "<YOUR_PRICE_NET>130,41</YOUR_PRICE_NET><SHORT_EN>Proseware PW421</SHORT_EN>"
+                + "<ORIGINAL_ART_NO>PW4A042</ORIGINAL_ART_NO></item>"
+                + "<item><ARTNUM>10002</ARTNUM><MANUFACTURER>Litware</MANUFACTURER><STOCK_QTY>3</STOCK_QTY>"
+                + "<YOUR_PRICE_NET>89,90</YOUR_PRICE_NET><SHORT_EN>Litware LTQ2430</SHORT_EN>"
+                + "<ORIGINAL_ART_NO>LTQ2430-BK</ORIGINAL_ART_NO></item>"
                 + "</priceinfo>";
         var overrides = new Dictionary<string, string>
         {
@@ -325,10 +325,10 @@ public class CatalogFormatAndMappingTests
         result.Drafts.Should().HaveCount(2);
         var d = result.Drafts[0];
         d.Code.Should().Be("10001");
-        d.Name.Should().Be("Zebra ZD421");
+        d.Name.Should().Be("Proseware PW421");
         d.Price.Should().Be(130.41m); // comma decimal, locale-tolerant
-        d.ExternalId.Should().Be("ZD4A042");
-        result.Drafts[1].Name.Should().Be("REDACTED-PARTY QD2430");
+        d.ExternalId.Should().Be("PW4A042");
+        result.Drafts[1].Name.Should().Be("Litware LTQ2430");
         result.Drafts[1].Price.Should().Be(89.90m);
     }
 
@@ -369,7 +369,7 @@ public class CatalogFormatAndMappingTests
         result.Drafts.Should().HaveCount(3);
         var d = result.Drafts[0];
         d.Code.Should().Be("13080788");            // "Supplier Part ID" spaced alias
-        d.Name.Should().StartWith("example.invalid"); // quoted description parsed whole (not truncated)
+        d.Name.Should().StartWith("Woodgrove"); // quoted description parsed whole (not truncated)
         d.Name.Should().Contain("50 cm Rouge");     // full field survived quoted-CSV splitting
         d.Price.Should().Be(4.24m);                 // "Unit Price"
         d.Unit.Should().Be("EA");

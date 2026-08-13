@@ -5,7 +5,7 @@ using Xunit;
 namespace ProcuLink.Infrastructure.Tests.Services.Ai;
 
 /// <summary>
-/// The Testforsikring bug: a real line had unit price 3337.08 (ex-VAT) but a line total of
+/// The ex-VAT reconcile bug: a real line had unit price 3337.08 (ex-VAT) but a line total of
 /// 4171.35 (= 3337.08 × 1.25, with 25 % Norwegian VAT). The plain
 /// <c>quantity × unitPrice ≈ lineAmount</c> reconcile would flag that as a mismatch
 /// (834.27 off) even though it is perfectly correct — an ex-VAT unit price against a
@@ -29,7 +29,7 @@ public class OpenAiPdfOrderExtractorTaxReconcileTests
         const string source = "1 GJ Service 1 EA 3337.08 25 4171.35";
 
         var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
-            Confidence: 0.9, PoNumber: "REDACTED-ITEM", OrderDate: "", Currency: "NOK", BuyerName: "Testforsikring AS",
+            Confidence: 0.9, PoNumber: "PO-EXF", OrderDate: "", Currency: "NOK", BuyerName: "Exemplar Forsikring AS",
             Lines: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(
@@ -52,7 +52,7 @@ public class OpenAiPdfOrderExtractorTaxReconcileTests
         const string source = "1 GJ Service 1 EA 3337.08 834.27 4171.35";
 
         var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
-            Confidence: 0.9, PoNumber: "REDACTED-ITEM", OrderDate: "", Currency: "NOK", BuyerName: "Testforsikring AS",
+            Confidence: 0.9, PoNumber: "PO-EXF", OrderDate: "", Currency: "NOK", BuyerName: "Exemplar Forsikring AS",
             Lines: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(
@@ -74,7 +74,7 @@ public class OpenAiPdfOrderExtractorTaxReconcileTests
         const string source = "1 GJ Service 1 EA 3337.08 10 4171.35";
 
         var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
-            Confidence: 0.9, PoNumber: "REDACTED-ITEM", OrderDate: "", Currency: "NOK", BuyerName: "Testforsikring AS",
+            Confidence: 0.9, PoNumber: "PO-EXF", OrderDate: "", Currency: "NOK", BuyerName: "Exemplar Forsikring AS",
             Lines: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(
@@ -112,12 +112,12 @@ public class OpenAiPdfOrderExtractorTaxReconcileTests
     [Fact]
     public void ValidateAndMap_NoTaxCaptured_PlainMismatch_StillFlagged()
     {
-        // No tax captured and the ex-VAT product doesn't match → flagged (the Testforsikring
+        // No tax captured and the ex-VAT product doesn't match → flagged (the ex-VAT reconcile
         // line as it would arrive if the model failed to capture tax — the genuine bug case).
         const string source = "1 GJ Service 1 EA 3337.08 4171.35";
 
         var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
-            Confidence: 0.9, PoNumber: "REDACTED-ITEM", OrderDate: "", Currency: "NOK", BuyerName: "Testforsikring AS",
+            Confidence: 0.9, PoNumber: "PO-EXF", OrderDate: "", Currency: "NOK", BuyerName: "Exemplar Forsikring AS",
             Lines: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(1, "GJ", "Service", 1, "EA", 3337.08, 4171.35),

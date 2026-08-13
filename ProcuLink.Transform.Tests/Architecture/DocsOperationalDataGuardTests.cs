@@ -527,6 +527,18 @@ public class DocsOperationalDataGuardTests
         };
     }
 
+    /// <summary>
+    /// The absolute-local-path matches on one line. Exposed so a sibling corpus can apply the
+    /// SAME rule rather than declaring a second copy of it — the mistake this family has already
+    /// made once, since <see cref="FixtureDeIdentificationGuardTests"/> carries its own
+    /// independent copy of this regex and the two can drift.
+    ///
+    /// <para>Internal, and returning the matches rather than a bool, so an anti-vacuity floor can
+    /// count what the DETECTOR extracted instead of trusting a second regex to agree with it.</para>
+    /// </summary>
+    internal static IReadOnlyList<string> LocalPathsIn(string line)
+        => AbsoluteLocalPath.Matches(line).Select(m => m.Value).ToList();
+
     internal static IReadOnlyList<string> ViolationClasses(string line, string relativePath = "")
     {
         var classes = new List<string>();
@@ -704,11 +716,17 @@ public class DocsOperationalDataGuardTests
     [InlineData("escalated to ops@" + "invented-distributor.de on Tuesday")]
     // Absolute local paths: the worktree header that opens many documents in this corpus, a
     // Windows user profile, and a Unix home. The account segment is the identity.
-    [InlineData(@"**Worktree:** C:\Users\some.account\source\repos\Thing\.claude\worktrees\x")]
-    [InlineData(@"key lives at C:\Users\an.operator\.secrets\provider.key")]
-    [InlineData("captures staged under /Users/anoperator/Videos/drafts")]
+    // SPLIT ACROSS A + — do not join back. The absolute-local-path class is now applied to every
+    // tracked .cs file by TrackedSourceOperationalDataGuardTests (class 8), and this file is one.
+    // The class needs no vocabulary — a drive letter followed by \Users\ is a format fact — so
+    // these controls, which name nobody, are violations by construction unless no single source
+    // LINE carries a matching path. #184 established the split; the compiler folds the halves to
+    // the identical constant, so each control tests exactly what it always did.
+    [InlineData(@"**Worktree:** C:" + @"\Users\some.account\source\repos\Thing\.claude\worktrees\x")]
+    [InlineData(@"key lives at C:" + @"\Users\an.operator\.secrets\provider.key")]
+    [InlineData("captures staged under /Users" + "/anoperator/Videos/drafts")]
     // The escaped form, as it appears inside JSON and code samples.
-    [InlineData(@"{""out"":""C:\\Users\\some.account\\Videos\\draft.mp4""}")]
+    [InlineData(@"{""out"":""C:" + @"\\Users\\some.account\\Videos\\draft.mp4""}")]
     public void Detector_FiresOnKnownBadInput(string line)
         => ViolationClasses(line).Should().NotBeEmpty();
 
@@ -801,8 +819,8 @@ public class DocsOperationalDataGuardTests
     [InlineData("`91.198.174.192` **OPEN**", "91.198.174.192")]
     [InlineData("https://feeduser:s3cr3t@" + "invented-distributor.de/x", "s3cr3t")]
     [InlineData("escalated to ops@" + "invented-distributor.de", "ops@" + "invented-distributor.de")]
-    [InlineData(@"**Worktree:** C:\Users\some.account\source\repos\Thing", "some.account")]
-    [InlineData("captures staged under /Users/anoperator/Videos", "anoperator")]
+    [InlineData(@"**Worktree:** C:" + @"\Users\some.account\source\repos\Thing", "some.account")]
+    [InlineData("captures staged under /Users" + "/anoperator/Videos", "anoperator")]
     public void Detector_WithholdsTheOffendingValueFromTheViolationClass(string line, string secret)
     {
         var classes = ViolationClasses(line);

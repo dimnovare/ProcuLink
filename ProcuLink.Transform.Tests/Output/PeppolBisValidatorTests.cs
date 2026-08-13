@@ -42,7 +42,7 @@ public class PeppolBisValidatorTests
         SellerEndpointId     = "0192:998765432",
         SellerEndpointScheme = "0192",
         SellerVatId          = "EE100123456",
-        BuyerName            = "REDACTED-PARTY",
+        BuyerName            = "Fabrikam AS",
         BuyerEndpointId      = "0088:1234567890123",
         BuyerEndpointScheme  = "0088",
         BuyerVatId           = "EE100987654",
@@ -75,7 +75,7 @@ public class PeppolBisValidatorTests
             SellerName       = "Northwind Trading OÜ",
             SellerEndpointId = null,           // ← missing mandatory field
             SellerVatId      = "EE100123456",
-            BuyerName        = "REDACTED-PARTY",
+            BuyerName        = "Fabrikam AS",
             BuyerEndpointId  = "0088:1234567890123",
             BuyerVatId       = "EE100987654",
         };
@@ -139,7 +139,7 @@ public class PeppolBisValidatorTests
             SellerName       = "Northwind Trading OÜ",
             SellerEndpointId = "0192:998765432",
             SellerEndpointScheme = "0192",
-            BuyerName        = "REDACTED-PARTY",
+            BuyerName        = "Fabrikam AS",
             BuyerEndpointId  = "0088:1234567890123",
             BuyerEndpointScheme = "0088",
             // no SellerVatId / BuyerVatId

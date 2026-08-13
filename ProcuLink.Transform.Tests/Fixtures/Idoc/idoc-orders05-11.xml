@@ -130,7 +130,7 @@
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>001</QUALF>
-        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+        <KTEXT>Lamna Solution Economy - Cavo di rete - RJ</KTEXT>
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>004</QUALF>
@@ -141,7 +141,7 @@
         <TSSPRAS>I</TSSPRAS>
         <TSSPRAS_ISO>IT</TSSPRAS_ISO>
         <E1EDPT2 SEGMENT="1">
-          <TDLINE>REDACTED-ORDER-DATA</TDLINE>
+          <TDLINE>Lamna Solution Economy - Cavo di rete -RJ-45 (M) a RJ-45 (M) - 1.5 m -</TDLINE>
         </E1EDPT2>
         <E1EDPT2 SEGMENT="1">
           <TDLINE>UTP - CAT 6 - blu</TDLINE>
@@ -174,7 +174,7 @@
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>001</QUALF>
-        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+        <KTEXT>Lamna Solution Economy - Cavo di rete - RJ</KTEXT>
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>004</QUALF>
@@ -185,7 +185,7 @@
         <TSSPRAS>I</TSSPRAS>
         <TSSPRAS_ISO>IT</TSSPRAS_ISO>
         <E1EDPT2 SEGMENT="1">
-          <TDLINE>REDACTED-ORDER-DATA</TDLINE>
+          <TDLINE>Lamna Solution Economy - Cavo di rete - RJ-45 (M) a RJ-45 (M) - 1.5 m -</TDLINE>
         </E1EDPT2>
         <E1EDPT2 SEGMENT="1">
           <TDLINE>UTP- CAT 6 - grigio</TDLINE>
@@ -218,7 +218,7 @@
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>001</QUALF>
-        <KTEXT>REDACTED-ORDER-DATA)</KTEXT>
+        <KTEXT>Lamna Solution - Cavo di rete - RJ-45 (M)</KTEXT>
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>004</QUALF>
@@ -229,7 +229,7 @@
         <TSSPRAS>I</TSSPRAS>
         <TSSPRAS_ISO>IT</TSSPRAS_ISO>
         <E1EDPT2 SEGMENT="1">
-          <TDLINE>REDACTED-ORDER-DATA</TDLINE>
+          <TDLINE>Lamna Solution - Cavo di rete - RJ-45 (M) a RJ-45 (M) - 1.5 m - UTP -</TDLINE>
         </E1EDPT2>
         <E1EDPT2 SEGMENT="1">
           <TDLINE>CAT 6 - senza alogeni, stampato, antiaggrovigliamento - grigio</TDLINE>
@@ -262,7 +262,7 @@
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>001</QUALF>
-        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+        <KTEXT>Woodgrove 1.5m CAT6 Ethernet Cable, 1</KTEXT>
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>004</QUALF>
@@ -273,7 +273,7 @@
         <TSSPRAS>I</TSSPRAS>
         <TSSPRAS_ISO>IT</TSSPRAS_ISO>
         <E1EDPT2 SEGMENT="1">
-          <TDLINE>REDACTED-ORDER-DATA</TDLINE>
+          <TDLINE>Woodgrove 1.5m CAT6 Ethernet Cable, 10 Gigabit Snagless RJ45 650MHz</TDLINE>
         </E1EDPT2>
         <E1EDPT2 SEGMENT="1">
           <TDLINE>100W PoE Patch Cord, CAT 6 10GbE UTP Network Cable w/Strain R elief,</TDLINE>
@@ -282,7 +282,7 @@
           <TDLINE>Orange, Wiring is UL Certified/TIA - Category 6 - 24AWG</TDLINE>
         </E1EDPT2>
         <E1EDPT2 SEGMENT="1">
-          <TDLINE>(REDACTED-ORDER-DATA</TDLINE>
+          <TDLINE>(S6PATC150CMOR) - Cavo patch - RJ-45 (M) a RJ-45 (M) - 1.5 m - UTP -</TDLINE>
         </E1EDPT2>
         <E1EDPT2 SEGMENT="1">
           <TDLINE>CAT 6 - antiaggrovigliamento - arancione</TDLINE>
@@ -315,7 +315,7 @@
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>001</QUALF>
-        <KTEXT>REDACTED-ORDER-DATA</KTEXT>
+        <KTEXT>Woodgrove 1.5m Orange Slim CAT6 Ether</KTEXT>
       </E1EDP19>
       <E1EDP19 SEGMENT="1">
         <QUALF>004</QUALF>
@@ -326,7 +326,7 @@
         <TSSPRAS>I</TSSPRAS>
         <TSSPRAS_ISO>IT</TSSPRAS_ISO>
         <E1EDPT2 SEGMENT="1">
-          <TDLINE>REDACTED-ORDER-DATA,</TDLINE>
+          <TDLINE>Woodgrove 1.5m Orange Slim CAT6 Ethernet Cable, Snagless, 28AWG,</TDLINE>
         </E1EDPT2>
         <E1EDPT2 SEGMENT="1">
           <TDLINE>LSZH - Cavo patch - RJ-45 (M) a RJ-45 (M) - 1.5 m - 3.6 mm - UTP  -</TDLINE>

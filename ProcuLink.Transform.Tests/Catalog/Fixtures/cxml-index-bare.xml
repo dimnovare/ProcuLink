@@ -16,12 +16,12 @@
       <UnitPrice>
         <Money currency="EUR">7.01</Money>
       </UnitPrice>
-      <Description xml:lang="en">REDACTED-ORDER-DATA</Description>
-      <URL>https://example.invalid/redacted</URL>
+      <Description xml:lang="en">Blueyonder Mousepad with GEL Wrist Rest Support - Mouse pad with wrist pillow</Description>
+      <URL>https://catalog.example.com/ee/en/blueyonder-mousepad-with-gel-wrist-rest-support-mouse/v2p2403916</URL>
       <UnitOfMeasure>EA</UnitOfMeasure>
       <Classification domain="UNSPSC">43211600</Classification>
-      <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID>
-      <ManufacturerName>REDACTED-ORDER-DATA</ManufacturerName>
+      <ManufacturerPartID>BW0027</ManufacturerPartID>
+      <ManufacturerName>Bellows</ManufacturerName>
       <LeadTime>4</LeadTime>
       <Extrinsic name="ListName">Self-service portal</Extrinsic>
       <Extrinsic name="Image">https://cdn.example.com/images/big/08262ec549d61e915ce85e1cb01d9bab.jpg</Extrinsic>
@@ -37,12 +37,12 @@
       <UnitPrice>
         <Money currency="EUR">7.69</Money>
       </UnitPrice>
-      <Description xml:lang="en">REDACTED-PARTY - Screen protector for mobile phone - full coverage - 2.5D - glass - frame colour black - for Apple iPhone 16 Pro</Description>
-      <URL>https://example.invalid/redacted</URL>
+      <Description xml:lang="en">ADVENTURE - Screen protector for mobile phone - full coverage - 2.5D - glass - frame colour black - for Tailspin TsPhone 16 Pro</Description>
+      <URL>https://catalog.example.com/ee/en/adventure-screen-protector-for-mobile-phone-full-coverage/v2p39962336</URL>
       <UnitOfMeasure>EA</UnitOfMeasure>
       <Classification domain="UNSPSC">43191600</Classification>
-      <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID>
-      <ManufacturerName>Deltaco</ManufacturerName>
+      <ManufacturerPartID>1990137</ManufacturerPartID>
+      <ManufacturerName>Adventure</ManufacturerName>
       <LeadTime>5</LeadTime>
       <Extrinsic name="ListName">Self-service portal</Extrinsic>
       <Extrinsic name="Image">https://cdn.example.com/images/big/3cbc071ac2d257b456d5a9af41293819.jpg</Extrinsic>
@@ -58,12 +58,12 @@
       <UnitPrice>
         <Money currency="EUR">8.02</Money>
       </UnitPrice>
-      <Description xml:lang="en">REDACTED-ORDER-DATA</Description>
-      <URL>https://example.invalid/redacted</URL>
+      <Description xml:lang="en">Fincher FHB-CM-U3P4P-01 - Hub - type-C - 4 x USB 3.1 Gen 1 - desktop</Description>
+      <URL>https://catalog.example.com/ee/en/fincher-fhb-cm-u3p4p-01-hub-type-c/v2p37865558</URL>
       <UnitOfMeasure>EA</UnitOfMeasure>
       <Classification domain="UNSPSC">43211609</Classification>
-      <ManufacturerPartID>REDACTED-ITEM</ManufacturerPartID>
-      <ManufacturerName>Gembird</ManufacturerName>
+      <ManufacturerPartID>FHB-CM-U3P4P-01</ManufacturerPartID>
+      <ManufacturerName>Fincher</ManufacturerName>
       <LeadTime>28</LeadTime>
       <Extrinsic name="ListName">Self-service portal</Extrinsic>
       <Extrinsic name="Image">https://cdn.example.com/images/big/85b9a544f0d591c7390694f7f4853d04.jpg</Extrinsic>

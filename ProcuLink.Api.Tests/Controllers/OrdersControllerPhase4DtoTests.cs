@@ -210,7 +210,7 @@ public class OrdersControllerPhase4DtoTests
             OrgId         = orgId,
             SupplierId    = supplierId,
             Supplier      = new Supplier { Id = supplierId, OrgId = orgId, Name = "Resolved Supplier Ltd" },
-            PoNumber      = "REDACTED-ITEM",
+            PoNumber      = "PO-EXF",
             OrderDate     = DateOnly.FromDateTime(DateTime.UtcNow),
             Currency      = "NOK",
             Status        = "pending_review",

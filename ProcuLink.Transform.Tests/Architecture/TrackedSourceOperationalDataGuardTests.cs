@@ -174,11 +174,180 @@ public class TrackedSourceOperationalDataGuardTests
     }
 
 
-    /// <summary>Class 6 alone — the only class corpus B carries.</summary>
+    // ── Class 7: the manufacturer / brand field ──────────────────────────────────────────
+
+    /// <summary>
+    /// A field whose NAME says it holds a manufacturer or brand, in assignment position, followed
+    /// by string literals. Class 6's move applied to a second field: "is this brand real?" is
+    /// undecidable free text, but "may this field hold a value that is not a known placeholder?"
+    /// is decided by a committed vocabulary.
+    ///
+    /// <para>The field names are the closed set this codebase actually uses for the concept —
+    /// the canonical entity property, the DTO/record parameter, the two catalog-format element
+    /// names, and the AI brand hint. A new name for the same concept is a deliberate edit, and
+    /// adding it here is part of that edit.</para>
+    ///
+    /// <para><b>Value position only</b>, exactly as class 6: after the operator the operand must
+    /// begin with a string literal. That is what lets this file hold its own positive controls —
+    /// C# source quoting C# source escapes the inner quote, and <c>\"</c> does not open a literal.
+    /// Asserted by <see cref="Detector_IsNotTrippedByItsOwnControlsInSource"/>.</para>
+    /// </summary>
+    private static readonly Regex BrandAssignment = new(
+        @"\b(?:ManufacturerName|Manufacturer|MANUFACTURER|brandHint|Brand)\b\s*(?:==|=>|=|:)\s*(?<operand>[^;,]*)",
+        RegexOptions.Compiled);
+
+    /// <summary>An XML element or JSON key naming the brand, for the fixture corpus, where the
+    /// value is delimited by the markup rather than by an operator.</summary>
+    private static readonly Regex BrandElement = new(
+        @"<(?<tag>ManufacturerName|Manufacturer|MANUFACTURER|Brand)>(?<v>[^<]*)</\k<tag>>"
+        + @"|""(?:Manufacturer|manufacturer|manufacturerName|ManufacturerName|brand|Brand)""\s*:\s*""(?<j>[^""]*)""",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// Every brand a manufacturer field is allowed to name. Each entry is a canonical
+    /// FICTITIOUS-company name, so a reader can tell at a glance that it is a placeholder rather
+    /// than an unfamiliar real vendor — which is the property that makes this list safe to commit.
+    ///
+    /// <para><b>Allow-list, never deny-list</b>, for #179's reason. The inverse — a committed list
+    /// of the real manufacturer names this packet removed — would republish on a public repository
+    /// exactly what it was written to suppress, and would outlive the history rewrite.</para>
+    ///
+    /// <para>Adding a name here is the moment to ask "is this invented, or is this somebody we
+    /// actually buy from?" A real brand beside a real part number is what the founder ruled out,
+    /// so that question is worth stopping for.</para>
+    /// </summary>
+    private static readonly HashSet<string> ApprovedBrandPlaceholders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Adatum", "Adventure", "Adventureworks", "Alpine", "Bellows", "Bestfor", "Blueyonder",
+        "Bramwell", "Coho", "Coho Inc.", "Corvello", "Fabrikam", "Fincher", "Fourthcoffee",
+        "Halden", "Humongous", "Lamna", "Lamna Solution", "Litware", "Lucerne", "Margie",
+        "Munson", "Munson Digital", "Nod", "Proseware", "Relecloud", "Southridge", "Tailspin",
+        "Trey", "VanArsdel", "Wideworld", "Wingtip", "Woodgrove",
+        // Placeholder vocabulary already established by earlier passes in this family.
+        "Acme", "Contoso", "Exemplar", "Northwind", "Widget",
+    };
+
+    /// <summary>
+    /// Brand-shaped values on one line. Internal so the anti-vacuity floor counts what the
+    /// DETECTOR extracted, not what a second copy of the regex would.
+    /// </summary>
+    internal static IReadOnlyList<string> BrandLiteralsIn(string line)
+    {
+        var found = new List<string>();
+
+        foreach (Match m in BrandAssignment.Matches(line))
+        {
+            var operand = m.Groups["operand"].Value;
+
+            var comment = operand.IndexOf("//", StringComparison.Ordinal);
+            if (comment >= 0)
+            {
+                operand = operand[..comment];
+            }
+
+            var head = operand.TrimStart();
+            while (head.StartsWith('('))
+            {
+                head = head[1..].TrimStart();
+            }
+
+            if (!head.StartsWith('"'))
+            {
+                continue;
+            }
+
+            foreach (Match lit in StringLiteral.Matches(head))
+            {
+                found.Add(lit.Groups["v"].Value);
+            }
+        }
+
+        foreach (Match m in BrandElement.Matches(line))
+        {
+            var v = m.Groups["v"].Success && m.Groups["v"].Value.Length > 0
+                ? m.Groups["v"].Value
+                : m.Groups["j"].Value;
+
+            if (v.Length > 0)
+            {
+                found.Add(v);
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// The brand name inside a value, stripped of the corporate-form and division suffixes a
+    /// catalog feed spells the same brand a dozen ways with. The normalisation exists because
+    /// <c>SupplierProduct.ManufacturerName</c>'s own doc comment says feeds do exactly that, so a
+    /// guard that demanded an exact match would fire on a legitimate placeholder written with a
+    /// suffix and be suppressed within a week.
+    /// </summary>
+    private static bool IsApprovedBrand(string value)
+    {
+        var v = value.Trim();
+        if (v.Length == 0 || ApprovedBrandPlaceholders.Contains(v))
+        {
+            return true;
+        }
+
+        foreach (var suffix in new[] { " ADC", " S.p.A.", " Inc.", " GmbH", " AS", " OY", " Solution" })
+        {
+            if (v.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)
+                && ApprovedBrandPlaceholders.Contains(v[..^suffix.Length].Trim()))
+            {
+                return true;
+            }
+        }
+
+        // A placeholder followed by a model designation ("<brand> LTQ2500 handheld scanner").
+        var firstWord = v.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
+        return ApprovedBrandPlaceholders.Contains(firstWord);
+    }
+
+    /// <summary>Classes 6, 7 and 8 — what corpus B carries.</summary>
     internal static IReadOnlyList<string> ProtocolViolationClasses(string line)
-        => ProtocolLiteralsIn(line).Any(v => v.Length > 0 && !ApprovedProtocolTokens.Contains(v))
-            ? new[] { "catalog-source protocol discriminator is not drawn from the approved vocabulary" }
-            : Array.Empty<string>();
+    {
+        var classes = new List<string>();
+
+        if (ProtocolLiteralsIn(line).Any(v => v.Length > 0 && !ApprovedProtocolTokens.Contains(v)))
+        {
+            classes.Add("catalog-source protocol discriminator is not drawn from the approved vocabulary");
+        }
+
+        classes.AddRange(BrandAndPathClasses(line));
+
+        return classes;
+    }
+
+    /// <summary>
+    /// Classes 7 and 8, shared by corpus B and the fixture corpus.
+    ///
+    /// <para>Class 8 is <see cref="DocsOperationalDataGuardTests.LocalPathsIn"/> called directly,
+    /// never reimplemented. It is the one identity shape a party-name allow-list structurally
+    /// cannot see: an employer's name sits INSIDE a filesystem path, where every name rule is
+    /// looking at name fields and every path rule is looking at paths without caring who is named
+    /// in one. It needs no vocabulary at all, which is why it survives where brand detection
+    /// cannot — and until now it ran over <c>docs/</c>, the fixtures and corpus A, but NOT over
+    /// <c>.cs</c>, which is the largest corpus in the tree.</para>
+    /// </summary>
+    internal static IReadOnlyList<string> BrandAndPathClasses(string line)
+    {
+        var classes = new List<string>();
+
+        if (BrandLiteralsIn(line).Any(v => !IsApprovedBrand(v)))
+        {
+            classes.Add("manufacturer/brand field names a value that is not an approved placeholder");
+        }
+
+        if (DocsOperationalDataGuardTests.LocalPathsIn(line).Count > 0)
+        {
+            classes.Add("absolute path into a local machine");
+        }
+
+        return classes;
+    }
 
     // ── The guard ────────────────────────────────────────────────────────────────────────
 
@@ -209,6 +378,20 @@ public class TrackedSourceOperationalDataGuardTests
             + "later find-and-replace: production rows already carry it, and changing it needs a "
             + "data migration. Add the token to ApprovedProtocolTokens only if it genuinely "
             + "describes a mechanism. Offending file:line and class (values withheld):\n"
+            + string.Join("\n", scan.Violations));
+    }
+
+    [Fact]
+    public void TrackedFixtures_NameNoRealManufacturerInABrandField()
+    {
+        var scan = ScanCorpusC();
+
+        scan.Violations.Should().BeEmpty(
+            "a catalog fixture's manufacturer field must name an invented brand. A real brand "
+            + "beside a real manufacturer part number is the pairing the founder ruled out: the "
+            + "brand alone is public commerce data, but the pair says what actually moved through "
+            + "this system. Add the name to ApprovedBrandPlaceholders only if it is invented. "
+            + "Offending file:line and class (values withheld):\n"
             + string.Join("\n", scan.Violations));
     }
 
@@ -265,6 +448,38 @@ public class TrackedSourceOperationalDataGuardTests
             40,
             $"only {b.ScannedProtocolLiterals} protocol literals were extracted and checked — the "
             + "protocol arm matched nothing, so class 6 proves nothing");
+
+        var c = ScanCorpusC();
+
+        c.ScannedFiles.Should().BeGreaterThanOrEqualTo(
+            20,
+            $"only {c.ScannedFiles} fixture files were swept — corpus C's query is broken");
+
+        c.ScannedBytes.Should().BeGreaterThan(
+            50_000,
+            $"only {c.ScannedBytes} bytes of fixture were read — the files were listed but not opened");
+
+        // The floor that actually protects class 7: count what the brand detector EXTRACTED. A
+        // regex edited into matching nothing drives this to zero and fails loudly, instead of
+        // reading every fixture, examining no brand, and turning green.
+        // 21 today (9 in C#, 12 in fixtures). The floor sits below that rather than at it: this
+        // counts literals in ASSIGNMENT position only, so ordinary test churn moves it by ones and
+        // twos, and a floor pinned to the exact number would fail on a clean refactor and be
+        // raised without thought. Breaking the regex drives it to zero, which is what it is for.
+        (b.ScannedBrandLiterals + c.ScannedBrandLiterals).Should().BeGreaterThanOrEqualTo(
+            15,
+            $"only {b.ScannedBrandLiterals} brand literals in C# and {c.ScannedBrandLiterals} in "
+            + "fixtures were extracted and checked — the brand arm matched almost nothing, so "
+            + "class 7 proves nothing");
+
+        // Class 8 gets NO floor, and the asymmetry is the same one stated above: every local path
+        // this detector extracts IS a violation, so a floor on it would assert that the leak still
+        // exists. Its anti-vacuity comes from a positive control instead —
+        // Detector_RefusesAbsoluteLocalPathsAndUnapprovedBrands.
+        b.ScannedLocalPaths.Should().Be(
+            b.Violations.Count(v => v.EndsWith("absolute path into a local machine", StringComparison.Ordinal)),
+            "every extracted local path must be reported: if these diverge, paths are being "
+            + "counted but not classified");
     }
 
     /// <summary>
@@ -332,7 +547,7 @@ public class TrackedSourceOperationalDataGuardTests
         // changed no value.
         "https://user:pw@" + "files.invented-vendor.net/drop",
         "ops@" + "invented-counterparty.com",
-        @"worktree at C:\Users\someoperator\source\repos\ProcuLink",
+        @"worktree at C:" + @"\Users\someoperator\source\repos\ProcuLink",
         "source.Protocol = \"inventedvendor\";",
         "if (protocol is not (\"sftp\" or \"madeupco\"))",
         "s.Protocol == \"nowhereplc\"",
@@ -405,7 +620,82 @@ public class TrackedSourceOperationalDataGuardTests
         // …while the same line, once the compiler has unescaped it, is still decided.
         ProtocolLiteralsIn("source.Protocol = \"sftp\";")
             .Should().ContainSingle().Which.Should().Be("sftp");
+
+        // Class 7 inherits the property, so its controls need no split either.
+        BrandLiteralsIn("        BrandAndPathClasses(\"ManufacturerName = \\\"Notarealplaceholder\\\",\")")
+            .Should().BeEmpty("an escaped quote does not open a literal in value position");
+
+        BrandLiteralsIn("ManufacturerName = \"Litware\",")
+            .Should().ContainSingle().Which.Should().Be("Litware");
     }
+
+    /// <summary>
+    /// Positive controls for classes 7 and 8 — the anti-vacuity for class 8, which deliberately
+    /// carries no numeric floor because every path it extracts is a violation.
+    ///
+    /// <para><b>The path controls are SPLIT ACROSS A <c>+</c> on purpose. Do not join them back.</b>
+    /// This file is inside corpus B, and class 8 needs no vocabulary at all — a drive letter
+    /// followed by <c>\Users\</c> is a format fact — so a control written as a single literal
+    /// would be a real violation of this guard, inside this guard. #184 established the split for
+    /// exactly this case: the compiler folds the halves into the identical constant, so the
+    /// control tests precisely what it always did while no single source LINE carries a matching
+    /// path. The class-7 controls need no such treatment, because an escaped <c>\"</c> does not
+    /// open a literal in value position.</para>
+    /// </summary>
+    [Fact]
+    public void Detector_RefusesAbsoluteLocalPathsAndUnapprovedBrands()
+    {
+        const string windowsPath = @"C:" + @"\Users\someone\source\repos\thing";
+        BrandAndPathClasses($"**Worktree:** `{windowsPath}`")
+            .Should().Contain("absolute path into a local machine");
+
+        const string macPath = "/Users" + "/someone/work";
+        BrandAndPathClasses($"see {macPath}/notes.md")
+            .Should().Contain("absolute path into a local machine");
+
+        // A brand nobody has approved, in each shape the corpora actually use.
+        const string unapproved = "Notarealplaceholder";
+        const string expected = "manufacturer/brand field names a value that is not an approved placeholder";
+
+        // C# assignment: the escaped \" keeps this source line out of value position, so the
+        // control is safe to write inline.
+        BrandAndPathClasses("ManufacturerName = \"Notarealplaceholder\",")
+            .Should().Contain(expected);
+
+        // The MARKUP arms get no such protection — an XML element is not quote-delimited, so the
+        // tag name is INTERPOLATED rather than written literally. Spelled out because it is the
+        // one asymmetry between class 6's controls and class 7's, and the obvious "tidy-up" is to
+        // inline it, which turns this control into a violation of its own guard.
+        const string tag = "ManufacturerName";
+        BrandAndPathClasses($"<{tag}>{unapproved}</{tag}>").Should().Contain(expected);
+
+        BrandAndPathClasses($"      \"Manufacturer\": \"{unapproved}\"").Should().Contain(expected);
+    }
+
+    /// <summary>
+    /// Negative controls, drawn from shapes that really occur in these corpora — so a future
+    /// narrowing of the allow-list fails HERE rather than silently re-flagging clean lines.
+    /// </summary>
+    [Theory]
+    // Approved placeholders, bare and with the corporate-form suffixes a feed spells them with.
+    [InlineData("ManufacturerName = \"Litware\",")]
+    [InlineData("<ManufacturerName>Coho Inc.</ManufacturerName>")]
+    [InlineData("        \"Manufacturer\": \"Relecloud\"")]
+    [InlineData("same brand a dozen ways (\"Litware\" / \"LITWARE ADC\" / \"Litware S.p.A.\")")]
+    // A placeholder followed by a model designation.
+    [InlineData("Name: \"Proseware PW421 label printer\", ManufacturerName: \"Proseware\"),")]
+    // An absent brand is legitimate and must stay legitimate.
+    [InlineData("ManufacturerName = null,")]
+    [InlineData("NullIfEmpty(manufacturerName)));")]
+    // Not a value position: the field is being READ, not assigned a literal.
+    [InlineData("Assert.Equal(expected, line.ManufacturerName);")]
+    [InlineData("var brand = Clean(draft.ManufacturerName);")]
+    // A relative path, a registry key and a non-profile absolute path name nobody.
+    [InlineData("docs/superpowers/plans/2026-08-13-thing.md")]
+    [InlineData(@"HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet")]
+    [InlineData(@"C:\Program Files\dotnet\dotnet.exe")]
+    public void Detector_PermitsACleanBrandOrPathLine(string line)
+        => BrandAndPathClasses(line).Should().BeEmpty();
 
     /// <summary>
     /// The redaction is load-bearing: a failure message that echoed the value would leak it into a
@@ -441,6 +731,8 @@ public class TrackedSourceOperationalDataGuardTests
         int ScannedHosts,
         int ScannedAddresses,
         int ScannedProtocolLiterals,
+        int ScannedBrandLiterals,
+        int ScannedLocalPaths,
         IReadOnlyList<string> Violations);
 
     private static CorpusScan ScanCorpusA() => Scan(
@@ -452,6 +744,25 @@ public class TrackedSourceOperationalDataGuardTests
     private static CorpusScan ScanCorpusB() => Scan(
         f => f.EndsWith(".cs", StringComparison.Ordinal),
         (line, _) => ProtocolViolationClasses(line));
+
+    /// <summary>
+    /// Corpus C — the fixture corpus, carrying class 7 ONLY.
+    ///
+    /// <para>It deliberately overlaps <see cref="FixtureDeIdentificationGuardTests"/>'s corpus
+    /// rather than avoiding it, because the two ask different questions of the same files: that
+    /// guard asks whether a line names a real person, host or account, and has no opinion about
+    /// manufacturers. The brand class is a leak class it structurally cannot see, and the fixtures
+    /// are where brands actually live — a catalog feed IS a list of manufacturers.</para>
+    ///
+    /// <para>Class 8 is NOT applied here: the fixture guard already carries its own
+    /// absolute-local-path rule over exactly these files, and adding a second would mean two
+    /// guards reporting one line.</para>
+    /// </summary>
+    private static CorpusScan ScanCorpusC() => Scan(
+        FixtureCorpus.IsUnderFixturesDirectory,
+        (line, _) => BrandLiteralsIn(line).Any(v => !IsApprovedBrand(v))
+            ? new[] { "manufacturer/brand field names a value that is not an approved placeholder" }
+            : Array.Empty<string>());
 
     private static CorpusScan Scan(
         Func<string, bool> include,
@@ -467,6 +778,8 @@ public class TrackedSourceOperationalDataGuardTests
         var hosts = 0;
         var addresses = 0;
         var protocolLiterals = 0;
+        var brandLiterals = 0;
+        var localPaths = 0;
         var scanned = 0;
 
         foreach (var relative in files)
@@ -491,6 +804,8 @@ public class TrackedSourceOperationalDataGuardTests
                 hosts += DocsOperationalDataGuardTests.HostsIn(line).Count;
                 addresses += DocsOperationalDataGuardTests.AddressesIn(line).Count;
                 protocolLiterals += ProtocolLiteralsIn(line).Count;
+                brandLiterals += BrandLiteralsIn(line).Count;
+                localPaths += DocsOperationalDataGuardTests.LocalPathsIn(line).Count;
 
                 foreach (var cls in detect(line, relative))
                 {
@@ -501,6 +816,6 @@ public class TrackedSourceOperationalDataGuardTests
 
         return new CorpusScan(
             repoRoot, files, scanned, bytes, extensions.Count, topLevel.Count,
-            hosts, addresses, protocolLiterals, violations);
+            hosts, addresses, protocolLiterals, brandLiterals, localPaths, violations);
     }
 }

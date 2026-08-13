@@ -622,7 +622,7 @@ public class OrderServiceListPagedTests
             OrderDate  = DateOnly.FromDateTime(baseTime),
             Currency   = "EUR",
             Status     = "ready",
-            BuyerName  = "REDACTED-PARTY",  // denormalised column (not CanonicalJson)
+            BuyerName  = "Fabrikam Procurement OÜ",  // denormalised column (not CanonicalJson)
             CreatedAt  = baseTime,
             UpdatedAt  = baseTime,
         });
@@ -656,7 +656,7 @@ public class OrderServiceListPagedTests
         var withoutBuyer = items.FirstOrDefault(i => i.Id == idWithoutBuyer);
         Assert.NotNull(withBuyer);
         Assert.NotNull(withoutBuyer);
-        Assert.Equal("REDACTED-PARTY", withBuyer.BuyerName);
+        Assert.Equal("Fabrikam Procurement OÜ", withBuyer.BuyerName);
         Assert.Null(withoutBuyer.BuyerName);
     }
 

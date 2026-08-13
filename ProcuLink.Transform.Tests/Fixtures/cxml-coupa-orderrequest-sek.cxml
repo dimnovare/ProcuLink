@@ -73,11 +73,11 @@
           <UnitPrice>
             <Money currency="SEK">3179.15</Money>
           </UnitPrice>
-          <Description xml:lang="en">Apple Magic Keyboard - Keyboard and folio case - with trackpad - backlit - Apple Smart connector - Swedish - black - for 11-inch iPad Pro (M4)</Description>
+          <Description xml:lang="en">Tailspin Folio Keyboard - Keyboard and folio case - with trackpad - backlit - Tailspin Smart connector - Swedish - black - for 11-inch TsPad Pro (M4)</Description>
           <UnitOfMeasure>EA</UnitOfMeasure>
           <Classification domain="UNSPSC">unknown</Classification>
-          <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID>
-          <ManufacturerName xml:lang="en">Apple</ManufacturerName>
+          <ManufacturerPartID>TSP23S/A</ManufacturerPartID>
+          <ManufacturerName xml:lang="en">Tailspin</ManufacturerName>
           <Extrinsic name="sales_quote_number" />
           <Extrinsic name="LineType">Quantity</Extrinsic>
         </ItemDetail>

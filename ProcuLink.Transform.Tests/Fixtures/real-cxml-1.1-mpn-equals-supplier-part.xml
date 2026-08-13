@@ -4,7 +4,7 @@
      and nothing in this file that carries them identifies anybody.
 
      Why this fixture exists: here the buyer's <SupplierPartID> and the <ManufacturerPartID> are the
-     SAME string ("REDACTED-ORDER-DATA"). This is the easy case that made the old blind "suggest the MPN as
+     SAME string ("PRW58930-010"). This is the easy case that made the old blind "suggest the MPN as
      the supplier code" shortcut look correct. Pair it with
      real-cxml-1.2-ariba-punchout-mpn-differs.xml, where they are completely different, to see why
      manufacturer part number has to be a real lookup key.
@@ -80,17 +80,17 @@
       </OrderRequestHeader>
       <ItemOut lineNumber="1" quantity="2">
         <ItemID>
-          <SupplierPartID>REDACTED-ORDER-DATA</SupplierPartID>
+          <SupplierPartID>PRW58930-010</SupplierPartID>
           <SupplierPartAuxiliaryID>233748161</SupplierPartAuxiliaryID>
         </ItemID>
         <ItemDetail>
           <UnitPrice>
             <Money currency="EUR">483.31</Money>
           </UnitPrice>
-          <Description xml:lang="en">REDACTED-ORDER-DATA</Description>
+          <Description xml:lang="en">Proseware - 300 dpi - printhead - for PW400 Series PW410</Description>
           <UnitOfMeasure>EA</UnitOfMeasure>
           <Classification domain="UNSPSC">44103100</Classification>
-          <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID>
+          <ManufacturerPartID>PRW58930-010</ManufacturerPartID>
         </ItemDetail>
       </ItemOut>
     </OrderRequest>

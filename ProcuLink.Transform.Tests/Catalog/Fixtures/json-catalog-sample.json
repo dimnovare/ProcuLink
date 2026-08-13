@@ -1,8 +1,8 @@
 [
   {
     "Id": 923,
-    "Manufacturer": "Eizo",
-    "Name": "REDACTED-ORDER-DATA",
+    "Manufacturer": "Relecloud",
+    "Name": "Relecloud ClearView RC2430-BK",
     "Category": "Home & Office",
     "Price": 73250.0,
     "Price_Retail": 62642.0,
@@ -11,8 +11,8 @@
   },
   {
     "Id": 930,
-    "Manufacturer": "Eizo",
-    "Name": "REDACTED-ORDER-DATA",
+    "Manufacturer": "Relecloud",
+    "Name": "Relecloud ClearView RC2451 BK",
     "Category": "Home & Office",
     "Price": 73250.0,
     "Price_Retail": 62642.0,
@@ -21,8 +21,8 @@
   },
   {
     "Id": 931,
-    "Manufacturer": "Eizo",
-    "Name": "REDACTED-ORDER-DATA",
+    "Manufacturer": "Relecloud",
+    "Name": "Relecloud ClearView RC2456-BK",
     "Category": "Home & Office",
     "Price": 102333.33,
     "Price_Retail": 87555.0,
@@ -31,8 +31,8 @@
   },
   {
     "Id": 932,
-    "Manufacturer": "Eizo",
-    "Name": "REDACTED-ORDER-DATA",
+    "Manufacturer": "Relecloud",
+    "Name": "Relecloud ClearView RC2457-WT",
     "Category": "Home & Office",
     "Price": 92416.67,
     "Price_Retail": 79059.0,
@@ -41,8 +41,8 @@
   },
   {
     "Id": 934,
-    "Manufacturer": "Eizo",
-    "Name": "REDACTED-ORDER-DATA",
+    "Manufacturer": "Relecloud",
+    "Name": "Relecloud ClearView RC2785-BK",
     "Category": "Home & Office",
     "Price": 148666.67,
     "Price_Retail": 127157.0,

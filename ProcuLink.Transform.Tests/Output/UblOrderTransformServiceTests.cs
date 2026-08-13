@@ -387,11 +387,11 @@ public class UblOrderTransformServiceTests
     public async Task TransformAsync_UsesDenormalisedSupplierName_NotTheGuid()
     {
         var order = BuildOrder();
-        order.SupplierName = "REDACTED-PARTY";
+        order.SupplierName = "Exemplar Supplies OÜ";
 
         var sellerName = await ReadSellerName(order);
 
-        sellerName.Should().Be("REDACTED-PARTY");
+        sellerName.Should().Be("Exemplar Supplies OÜ");
         sellerName.Should().NotBe(order.SupplierId!.Value.ToString(),
             "the supplier reads this field as its own name");
         Guid.TryParse(sellerName, out _).Should().BeFalse("a GUID is a key, not a name");
@@ -456,11 +456,11 @@ public class UblOrderTransformServiceTests
         string? registrationNumber = null)
     {
         var order = BuildOrder();
-        order.SupplierName = "REDACTED-PARTY";
+        order.SupplierName = "Exemplar Supplies OÜ";
         order.Supplier = new Supplier
         {
             Id                 = order.SupplierId!.Value,
-            Name               = "REDACTED-PARTY",
+            Name               = "Exemplar Supplies OÜ",
             EdiCode            = ediCode,
             VatNumber          = vatNumber,
             RegistrationNumber = registrationNumber,
@@ -653,7 +653,7 @@ public class UblOrderTransformServiceTests
     public async Task TransformAsync_SupplierNavigationNotLoaded_EmitsNoEndpointId()
     {
         var order = BuildOrder();       // SupplierId set, Supplier navigation null
-        order.SupplierName = "REDACTED-PARTY";
+        order.SupplierName = "Exemplar Supplies OÜ";
 
         var (doc, xml) = await Render(order);
 

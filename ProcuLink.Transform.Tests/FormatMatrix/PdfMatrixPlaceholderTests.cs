@@ -12,7 +12,7 @@ namespace ProcuLink.Transform.Tests.FormatMatrix;
 /// covered by:
 ///   • the live bulk runner — tools/edge-case-orders/run-live.mjs (real OpenAI key)
 ///   • PdfOrderParserTests — the deterministic regex FALLBACK parser
-///   • the benchmark on 22 real Markit documents (see docs/superpowers/plans/2026-06-05-pdf-llm-extraction.md)
+///   • the benchmark on 22 real Fabrikam documents (see docs/superpowers/plans/2026-06-05-pdf-llm-extraction.md)
 ///
 /// This placeholder documents that exclusion explicitly (a loud, skipped marker)
 /// AND pins the one deterministic PDF behaviour we CAN assert hermetically: the

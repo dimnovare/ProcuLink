@@ -150,7 +150,7 @@ public record OrderLineDto(
     /// that means anything outside the buying network, so the review UI must be able to show it
     /// next to the buyer's item code. Null for sources that carry none.</summary>
     string?  ManufacturerPartNumber = null,
-    /// <summary>The manufacturer / brand the source names (e.g. "REDACTED-PARTY"). Advisory context
+    /// <summary>The manufacturer / brand the source names (e.g. "Litware"). Advisory context
     /// so the reviewer can check a manufacturer-part match at a glance. Null when not stated.</summary>
     string?  ManufacturerName = null
 );

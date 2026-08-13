@@ -7,8 +7,8 @@ namespace ProcuLink.Transform.Tests.Catalog;
 /// Tests for the cross-party product-identifier key (MPN as a first-class matching key).
 ///
 /// The normaliser is the ONLY thing standing between "the same manufacturer part written three
-/// different ways" and three unmatched order lines: a punchout cXML says <c>REDACTED-ORDER-DATA</c>,
-/// a distributor feed says <c>QBT2500BKBTK1</c>, an ERP export says <c>qbt2500 bk btk1</c>. Every
+/// different ways" and three unmatched order lines: a punchout cXML says <c>LTQ2500-BK-BTK1</c>,
+/// a distributor feed says <c>LTQ2500BKBTK1</c>, an ERP export says <c>ltq2500 bk btk1</c>. Every
 /// non-degenerate case below is a real spelling taken from a fixture in this repo, not a
 /// synthetic string.
 ///
@@ -23,10 +23,10 @@ public class ProductKeyNormalizerTests
 
     [Theory]
     // Real MPNs from the cXML order fixtures in Fixtures/.
-    [InlineData("REDACTED-ORDER-DATA", "QBT2500BKBTK1")]  // real-cxml-1.2-ariba-punchout-mpn-differs.xml
-    [InlineData("qbt2500 bk btk1", "QBT2500BKBTK1")]  // same part, ERP-export spelling
-    [InlineData("REDACTED-ORDER-DATA", "P1058930010")]       // real-cxml-1.1-mpn-equals-supplier-part.xml
-    [InlineData("REDACTED-ORDER-DATA", "MWR23SA")]               // cxml-coupa-orderrequest-sek.cxml
+    [InlineData("LTQ2500-BK-BTK1", "LTQ2500BKBTK1")]  // real-cxml-1.2-ariba-punchout-mpn-differs.xml
+    [InlineData("ltq2500 bk btk1", "LTQ2500BKBTK1")]  // same part, ERP-export spelling
+    [InlineData("PRW58930-010", "PRW58930010")]       // real-cxml-1.1-mpn-equals-supplier-part.xml
+    [InlineData("TSP23S/A", "TSP23SA")]               // cxml-coupa-orderrequest-sek.cxml
     // Nothing comparable survives → null, never "".
     [InlineData(null, null)]
     [InlineData("", null)]
@@ -84,7 +84,7 @@ public class ProductKeyNormalizerTests
     {
         // The key is stored on the row; re-normalising a stored key must be a no-op, otherwise a
         // re-sync would silently rewrite existing keys and orphan already-matched lines.
-        foreach (var raw in new[] { "REDACTED-ORDER-DATA", "REDACTED-ORDER-DATA", "REDACTED-ORDER-DATA", NonBreakingSpaceInput })
+        foreach (var raw in new[] { "LTQ2500-BK-BTK1", "PRW58930-010", "TSP23S/A", NonBreakingSpaceInput })
         {
             var once = ProductKeyNormalizer.Normalize(raw);
             once.Should().NotBeNull();

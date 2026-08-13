@@ -89,7 +89,7 @@ public class CxmlOrderParserTests
         // <!DOCTYPE cXML SYSTEM "…dtd"> header and its <Request> has NO deploymentMode
         // attribute. Both used to throw. The fixture keeps that shape but its buyer
         // identity, contact and addresses are de-identified placeholders; the product
-        // codes (SupplierPartID 39424093, ManufacturerPartID REDACTED-ORDER-DATA) are what must
+        // codes (SupplierPartID 39424093, ManufacturerPartID TSP23S/A) are what must
         // survive parsing, and they are not customer data.
         var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "cxml-coupa-orderrequest-sek.cxml");
         await using var stream = File.OpenRead(path);
@@ -101,12 +101,12 @@ public class CxmlOrderParserTests
         result.Lines.Should().HaveCount(1);
         var line = result.Lines[0];
         line.BuyerItemCode.Should().Be("39424093");                 // SupplierPartID
-        line.ManufacturerPartNumber.Should().Be("REDACTED-ORDER-DATA");        // real Apple MPN — was dropped
+        line.ManufacturerPartNumber.Should().Be("TSP23S/A");        // real Tailspin MPN — was dropped
         line.CustomerPartNumber.Should().Be("180743323");           // SupplierPartAuxiliaryID
         line.Quantity.Should().Be(1m);
         line.UnitPrice.Should().Be(3179.15m);
         line.Unit.Should().Be("EA");
-        line.Description.Should().Contain("Apple Magic Keyboard");
+        line.Description.Should().Contain("Tailspin Folio Keyboard");
         line.Unspsc.Should().BeNull();                              // "unknown" placeholder → null
     }
 

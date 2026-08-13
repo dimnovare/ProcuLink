@@ -60,7 +60,7 @@
           <UnitPrice>
             <Money currency="PLN">295.02</Money>
           </UnitPrice>
-          <Description Lang="pl">REDACTED-ORDER-DATA</Description>
+          <Description Lang="pl">Adatum 570 KX Comfort - Dodatkowa słuch</Description>
           <UnitOfMeasure>EA</UnitOfMeasure>
           <Classification domain="not available">36 Workforce Devices</Classification>
         </ItemDetail>

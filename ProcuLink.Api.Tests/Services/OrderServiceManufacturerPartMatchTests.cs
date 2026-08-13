@@ -21,11 +21,11 @@ namespace ProcuLink.Api.Tests.Services;
 /// <c>&lt;ManufacturerPartID&gt;</c>. Before this change the service simply ECHOED that part number
 /// back as the supplier item code at 0.95 confidence — which looks right in the MPN-equals fixture
 /// (where the two identifiers happen to be the same string) and is flatly wrong in the Ariba
-/// punchout one (where "REDACTED-ORDER-DATA" is REDACTED-PARTY's number, not something the supplier sells
+/// punchout one (where "LTQ2500-BK-BTK1" is Litware's number, not something the supplier sells
 /// under).
 ///
 /// What is asserted here:
-///   • Ariba punchout (REDACTED-PARTY): the manufacturer part number is LOOKED UP in the catalog and
+///   • Ariba punchout (Litware): the manufacturer part number is LOOKED UP in the catalog and
 ///     the suggestion is the supplier's OWN code for that product — never the manufacturer's;
 ///   • MPN-equals: the same path still works when supplier code == manufacturer code;
 ///   • normalisation: a feed that prints the part number without separators still matches;
@@ -36,13 +36,13 @@ namespace ProcuLink.Api.Tests.Services;
 /// </summary>
 public class OrderServiceManufacturerPartMatchTests
 {
-    // The supplier's own code for the REDACTED-PARTY scanner. Deliberately shares no substring with
+    // The supplier's own code for the Litware scanner. Deliberately shares no substring with
     // the manufacturer part number, so a passing test cannot be an accident of fuzzy matching.
-    private const string SupplierCodeForREDACTED-PARTYScanner = "REDACTED-ITEM";
-    private const string REDACTED-PARTYManufacturerPart = "REDACTED-ORDER-DATA";
+    private const string SupplierCodeForLitwareScanner = "FAB-SCAN-77120";
+    private const string LitwareManufacturerPart = "LTQ2500-BK-BTK1";
 
     // The MPN-equals fixture's line: supplier part id and manufacturer part id are the SAME string.
-    private const string SharedSupplierAndManufacturerPart = "REDACTED-ORDER-DATA";
+    private const string SharedSupplierAndManufacturerPart = "PRW58930-010";
 
     private static ProcuLinkDbContext NewDb() =>
         new(new DbContextOptionsBuilder<ProcuLinkDbContext>()
@@ -58,8 +58,8 @@ public class OrderServiceManufacturerPartMatchTests
         db.Organisations.Add(new Organisation
         {
             Id = orgId,
-            Name = "Markit",
-            Slug = $"markit-{orgId:N}",
+            Name = "Fabrikam",
+            Slug = $"fabrikam-{orgId:N}",
             // Unique per org: ClerkOrgId defaults to "" and carries a UNIQUE index. EF InMemory
             // ignores unique indexes, so a collision here would only ever surface on Postgres.
             ClerkOrgId = $"org_{orgId:N}",
@@ -69,7 +69,7 @@ public class OrderServiceManufacturerPartMatchTests
         {
             Id = supplierId,
             OrgId = orgId,
-            Name = "REDACTED-NAME",
+            Name = "Fabrikam Distribution",
             CreatedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync();
@@ -206,8 +206,8 @@ public class OrderServiceManufacturerPartMatchTests
     {
         var (db, orgId, supplierId) = await SeedSupplierAsync();
         await AddCatalogAsync(db, orgId, supplierId,
-            (SupplierCodeForREDACTED-PARTYScanner, "QuickScan REDACTED-ORDER-DATA Bluetooth kit", REDACTED-PARTYManufacturerPart, "REDACTED-PARTY"),
-            ("REDACTED-ITEM", "QuickScan QBT2400 kit", "QBT2400-BK-BTK1", "REDACTED-PARTY"));
+            (SupplierCodeForLitwareScanner, "QuickTrace LTQ2500 Bluetooth kit", LitwareManufacturerPart, "Litware"),
+            ("FAB-SCAN-77121", "QuickTrace LTQ2400 kit", "LTQ2400-BK-BTK1", "Litware"));
 
         var svc = Build(db, UnresolvedMappingsMock().Object, DecoyAiMock().Object);
         var line = await IngestSingleLineAsync(svc, db, orgId, supplierId, "real-cxml-1.2-ariba-punchout-mpn-differs.xml");
@@ -217,13 +217,13 @@ public class OrderServiceManufacturerPartMatchTests
         Assert.Null(line.SupplierItemCode);
 
         // THE ASSERTION: the supplier's own code, translated from the manufacturer part number.
-        Assert.Equal(SupplierCodeForREDACTED-PARTYScanner, line.AiSuggestedSupplierItemCode);
-        Assert.NotEqual(REDACTED-PARTYManufacturerPart, line.AiSuggestedSupplierItemCode);
+        Assert.Equal(SupplierCodeForLitwareScanner, line.AiSuggestedSupplierItemCode);
+        Assert.NotEqual(LitwareManufacturerPart, line.AiSuggestedSupplierItemCode);
 
         // Sourced from the catalog, not from an AI guess and not from a bare echo.
         Assert.Contains("manufacturer part number", line.AiSuggestionProvenance!, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("catalog", line.AiSuggestionProvenance!, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(REDACTED-PARTYManufacturerPart, line.AiSuggestionReason!);
+        Assert.Contains(LitwareManufacturerPart, line.AiSuggestionReason!);
 
         // Suggestion, never a silent rewrite — the operator still accepts it.
         Assert.True(line.NeedsReview);
@@ -237,8 +237,8 @@ public class OrderServiceManufacturerPartMatchTests
         var svc = Build(db, UnresolvedMappingsMock().Object, DecoyAiMock().Object);
         var line = await IngestSingleLineAsync(svc, db, orgId, supplierId, "real-cxml-1.2-ariba-punchout-mpn-differs.xml");
 
-        Assert.Equal(REDACTED-PARTYManufacturerPart, line.ManufacturerPartNumber);
-        Assert.Equal("REDACTED-PARTY", line.ManufacturerName);
+        Assert.Equal(LitwareManufacturerPart, line.ManufacturerPartNumber);
+        Assert.Equal("Litware", line.ManufacturerName);
     }
 
     // ── The easy case that used to hide the bug ───────────────────────────────────────────
@@ -248,7 +248,7 @@ public class OrderServiceManufacturerPartMatchTests
     {
         var (db, orgId, supplierId) = await SeedSupplierAsync();
         await AddCatalogAsync(db, orgId, supplierId,
-            (SharedSupplierAndManufacturerPart, "Zebra ZT410 300 dpi printhead", SharedSupplierAndManufacturerPart, "Zebra"));
+            (SharedSupplierAndManufacturerPart, "Proseware ZT410 300 dpi printhead", SharedSupplierAndManufacturerPart, "Proseware"));
 
         var svc = Build(db, UnresolvedMappingsMock().Object, DecoyAiMock().Object);
         var line = await IngestSingleLineAsync(svc, db, orgId, supplierId, "real-cxml-1.1-mpn-equals-supplier-part.xml");
@@ -265,7 +265,7 @@ public class OrderServiceManufacturerPartMatchTests
         // The catalog row has NO manufacturer part number — only the supplier code, which happens
         // to equal it. This is the common shape of a distributor feed that predates MPN support.
         await AddCatalogAsync(db, orgId, supplierId,
-            (SharedSupplierAndManufacturerPart, "Zebra ZT410 300 dpi printhead", null, null));
+            (SharedSupplierAndManufacturerPart, "Proseware ZT410 300 dpi printhead", null, null));
 
         var svc = Build(db, UnresolvedMappingsMock().Object, DecoyAiMock().Object);
         var line = await IngestSingleLineAsync(svc, db, orgId, supplierId, "real-cxml-1.1-mpn-equals-supplier-part.xml");
@@ -281,14 +281,14 @@ public class OrderServiceManufacturerPartMatchTests
     {
         var (db, orgId, supplierId) = await SeedSupplierAsync();
         // The catalog prints the part number with no separators and in lower case; the order
-        // prints it as "REDACTED-ORDER-DATA". Same product.
+        // prints it as "LTQ2500-BK-BTK1". Same product.
         await AddCatalogAsync(db, orgId, supplierId,
-            (SupplierCodeForREDACTED-PARTYScanner, "QuickScan REDACTED-ORDER-DATA Bluetooth kit", "qbt2500 bk btk1", "REDACTED-PARTY"));
+            (SupplierCodeForLitwareScanner, "QuickTrace LTQ2500 Bluetooth kit", "ltq2500 bk btk1", "Litware"));
 
         var svc = Build(db, UnresolvedMappingsMock().Object, DecoyAiMock().Object);
         var line = await IngestSingleLineAsync(svc, db, orgId, supplierId, "real-cxml-1.2-ariba-punchout-mpn-differs.xml");
 
-        Assert.Equal(SupplierCodeForREDACTED-PARTYScanner, line.AiSuggestedSupplierItemCode);
+        Assert.Equal(SupplierCodeForLitwareScanner, line.AiSuggestedSupplierItemCode);
     }
 
     [Fact]
@@ -298,8 +298,8 @@ public class OrderServiceManufacturerPartMatchTests
         // The same manufacturer part sold under two supplier codes (bare unit vs kit). There is
         // no honest way to choose, so no confident suggestion may be shown.
         await AddCatalogAsync(db, orgId, supplierId,
-            (SupplierCodeForREDACTED-PARTYScanner, "QuickScan REDACTED-ORDER-DATA kit", REDACTED-PARTYManufacturerPart, "REDACTED-PARTY"),
-            ("REDACTED-ITEM", "QuickScan REDACTED-ORDER-DATA kit (bundle)", REDACTED-PARTYManufacturerPart, "REDACTED-PARTY"));
+            (SupplierCodeForLitwareScanner, "QuickTrace LTQ2500 kit", LitwareManufacturerPart, "Litware"),
+            ("FAB-SCAN-77120-B", "QuickTrace LTQ2500 kit (bundle)", LitwareManufacturerPart, "Litware"));
 
         // The AI is stubbed to return nothing, so a suggestion could only come from the MPN path.
         var silentAi = new Mock<IAiMappingService>();
@@ -327,7 +327,7 @@ public class OrderServiceManufacturerPartMatchTests
         var svc = Build(db, UnresolvedMappingsMock().Object, DecoyAiMock().Object);
         var line = await IngestSingleLineAsync(svc, db, orgId, supplierId, "real-cxml-1.2-ariba-punchout-mpn-differs.xml");
 
-        Assert.Equal(REDACTED-PARTYManufacturerPart, line.AiSuggestedSupplierItemCode);
+        Assert.Equal(LitwareManufacturerPart, line.AiSuggestedSupplierItemCode);
         Assert.Contains("source document", line.AiSuggestionProvenance!, StringComparison.OrdinalIgnoreCase);
         Assert.True(line.NeedsReview);
     }
@@ -351,13 +351,13 @@ public class OrderServiceManufacturerPartMatchTests
         });
         await db.SaveChangesAsync();
         await AddCatalogAsync(db, otherOrgId, otherSupplierId,
-            ("LEAKED-CODE", "QuickScan REDACTED-ORDER-DATA kit", REDACTED-PARTYManufacturerPart, "REDACTED-PARTY"));
+            ("LEAKED-CODE", "QuickTrace LTQ2500 kit", LitwareManufacturerPart, "Litware"));
 
         var svc = Build(db, UnresolvedMappingsMock().Object, DecoyAiMock().Object);
         var line = await IngestSingleLineAsync(svc, db, orgId, supplierId, "real-cxml-1.2-ariba-punchout-mpn-differs.xml");
 
         Assert.NotEqual("LEAKED-CODE", line.AiSuggestedSupplierItemCode);
         // With no catalog of its own, this org falls back to the unchanged source-echo behaviour.
-        Assert.Equal(REDACTED-PARTYManufacturerPart, line.AiSuggestedSupplierItemCode);
+        Assert.Equal(LitwareManufacturerPart, line.AiSuggestedSupplierItemCode);
     }
 }

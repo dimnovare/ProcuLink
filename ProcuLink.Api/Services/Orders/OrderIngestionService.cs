@@ -1947,7 +1947,7 @@ internal sealed class OrderIngestionService
 
                 // (a) The manufacturer part number RESOLVED against the supplier's catalog. This is
                 // the punchout case: the buyer's SupplierPartID was the buying network's internal
-                // id ("29954596") and matched nothing, but <ManufacturerPartID>REDACTED-ORDER-DATA is a
+                // id ("29954596") and matched nothing, but <ManufacturerPartID>LTQ2500-BK-BTK1 is a
                 // product this supplier stocks under its OWN code. Suggest that code — translating
                 // the manufacturer's number into the supplier's is the entire point; echoing the
                 // manufacturer's number back would hand the supplier a code it does not sell under.
@@ -2395,12 +2395,12 @@ internal sealed class OrderIngestionService
     // Two ways a line's manufacturer part number can hit a catalog row, in strict priority order:
     //   1. the row's own manufacturer part number, compared on the NORMALISED form
     //      (ProductKeyNormalizer: upper-cased, every non-alphanumeric character stripped, so
-    //      "REDACTED-ORDER-DATA" == "qbt2500 bk btk1" == "QBT2500BKBTK1"). Indexed on
+    //      "LTQ2500-BK-BTK1" == "ltq2500 bk btk1" == "LTQ2500BKBTK1"). Indexed on
     //      (org_id, supplier_id, manufacturer_part_number_normalized);
     //   2. failing that, the row's supplier CODE, compared case-insensitively but WITHOUT
     //      separator stripping. This covers the very common feed that predates manufacturer-part
     //      support and simply resells under the manufacturer's number (the cXML 1.1 MPN-equals
-    //      fixture's "REDACTED-ORDER-DATA" is both). Separators are NOT stripped here on purpose: supplier codes
+    //      fixture's "PRW58930-010" is both). Separators are NOT stripped here on purpose: supplier codes
     //      are a namespace the supplier controls, and collapsing "AB-123"/"AB123" inside it would
     //      be a real risk of matching the wrong SKU — whereas for manufacturer part numbers the
     //      punctuation genuinely is noise added by whoever re-typed it.
@@ -2532,7 +2532,7 @@ internal sealed class OrderIngestionService
     /// <summary>
     /// One human sentence naming what matched what, so the reviewer can accept (or reject) the
     /// suggestion without opening the catalog. Names the manufacturer when the document or the
-    /// catalog states it — "REDACTED-PARTY REDACTED-ORDER-DATA" is checkable at a glance, a bare part
+    /// catalog states it — "Litware LTQ2500-BK-BTK1" is checkable at a glance, a bare part
     /// number is not.
     /// </summary>
     private static string BuildManufacturerPartReason(ParsedOrderLine line, ManufacturerPartLookup lookup)

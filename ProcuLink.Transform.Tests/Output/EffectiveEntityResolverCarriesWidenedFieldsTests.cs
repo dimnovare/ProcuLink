@@ -31,7 +31,7 @@ public class EffectiveEntityResolverCarriesWidenedFieldsTests
             Currency  = "EUR",
             BuyerName = "Acme Buyer AS",
 
-            SupplierName          = "REDACTED-PARTY",
+            SupplierName          = "Exemplar Supplies OÜ",
             SubTotal              = 100m,
             TaxTotal              = 22m,
             GrandTotal            = 122m,
@@ -81,8 +81,8 @@ public class EffectiveEntityResolverCarriesWidenedFieldsTests
                 TaxAmount              = 22m,
                 DiscountPercent        = 7.5m,
                 NetAmount              = 92.5m,
-                ManufacturerPartNumber = "REDACTED-ORDER-DATA",
-                ManufacturerName       = "REDACTED-PARTY",
+                ManufacturerPartNumber = "LTQ2500-BK-BTK1",
+                ManufacturerName       = "Litware",
                 CustomerPartNumber     = "CUST-777",
                 Unspsc                 = "43211711",
                 Recipient              = "Loading bay B",
@@ -128,7 +128,7 @@ public class EffectiveEntityResolverCarriesWidenedFieldsTests
         {
             Id      = Guid.NewGuid(),
             OrgId   = Guid.NewGuid(),
-            Name    = "REDACTED-PARTY",
+            Name    = "Exemplar Supplies OÜ",
             Code    = "NORD",
             EdiCode = "7300010000001",
         };
@@ -174,7 +174,7 @@ public class EffectiveEntityResolverCarriesWidenedFieldsTests
         var row = MappedTransformService.BuildLineRow(
             clone, new OrderMappingOverride(), clone.Lines.Single());
 
-        row["ManufacturerPartNumber"].Should().Be("REDACTED-ORDER-DATA");
+        row["ManufacturerPartNumber"].Should().Be("LTQ2500-BK-BTK1");
         row["Unspsc"].Should().Be("43211711");
         row["ContractNumber"].Should().Be("FRAME-2026-11");
         row["Incoterms"].Should().Be("DAP");

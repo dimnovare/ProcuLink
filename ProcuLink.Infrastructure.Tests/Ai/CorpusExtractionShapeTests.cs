@@ -28,7 +28,7 @@ public class CorpusExtractionShapeTests
 
     /// <summary>
     /// AT / EUR, German-labelled PDF ("Bestellung"). Line manufacturer P/N
-    /// <c>SCPMX94EGK</c>, ship-to party VAT <c>ATU99000000</c>, ordering contact
+    /// <c>PLKMX94EGK</c>, ship-to party VAT <c>ATU99000000</c>, ordering contact
     /// email <c>c.testperson@buyer.example.com</c>, incoterms <c>DDP</c>. All four must
     /// survive onto the canonical order.
     /// </summary>
@@ -44,11 +44,11 @@ public class CorpusExtractionShapeTests
             Lines: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(
-                    LineNumber: 1, BuyerItemCode: "00010", Description: "Panasonic switch",
+                    LineNumber: 1, BuyerItemCode: "00010", Description: "Lucerne switch",
                     Quantity: 1, Unit: "ST", UnitPrice: 306.28, LineAmount: 306.28,
-                    ManufacturerPartNumber: "SCPMX94EGK"),
+                    ManufacturerPartNumber: "PLKMX94EGK"),
             },
-            SupplierName: "REDACTED-PARTY",
+            SupplierName: "Fabrikam GmbH",
             Incoterms: "DDP",
             Contact: new OpenAiPdfOrderExtractor.ContactDto(Email: "c.testperson@buyer.example.com"),
             Parties: new[]
@@ -66,7 +66,7 @@ public class CorpusExtractionShapeTests
         Assert.Equal("DDP", result.Order!.Incoterms);
         Assert.Equal("c.testperson@buyer.example.com", result.Order.ContactEmail);
         Assert.Equal("ATU99000000", result.Order.Parties!.Single(p => p.Role == "shipTo").Vat);
-        Assert.Equal("SCPMX94EGK", result.Order.Lines[0].ManufacturerPartNumber);
+        Assert.Equal("PLKMX94EGK", result.Order.Lines[0].ManufacturerPartNumber);
     }
 
     /// <summary>
@@ -90,7 +90,7 @@ public class CorpusExtractionShapeTests
                     Quantity: 10, Unit: "PC", UnitPrice: 25.0, LineAmount: 250.0,
                     Recipient: "robin.testperson@buyer.example.com"),
             },
-            SupplierName: "REDACTED-PARTY");
+            SupplierName: "Fabrikam AS");
 
         var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, "10123140 10 25.0 250.0 PC NOK");
 
@@ -119,7 +119,7 @@ public class CorpusExtractionShapeTests
                     LineNumber: 1, BuyerItemCode: "ITM-9", Description: "Service",
                     Quantity: 1, Unit: "PC", UnitPrice: 100.0, LineAmount: 100.0),
             },
-            SupplierName: "REDACTED-PARTY",
+            SupplierName: "Fabrikam Oy",
             RawFields: new[] { new OpenAiPdfOrderExtractor.RawFieldDto("EDI id", "003700000004") });
 
         var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, "2680200079 1 100.0 PC EUR 003700000004");
@@ -131,7 +131,7 @@ public class CorpusExtractionShapeTests
 
     /// <summary>
     /// FR / EUR PDF, alphanumeric PO number. Header <c>Incoterms</c> <c>FCA</c> must surface,
-    /// and a line manufacturer P/N <c>X2791HS-B1</c> must ride through.
+    /// and a line manufacturer P/N <c>Y1791HS-B1</c> must ride through.
     /// </summary>
     [Fact]
     public void PdfFr_Eur_surfaces_header_incoterms_and_line_mpn()
@@ -147,9 +147,9 @@ public class CorpusExtractionShapeTests
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(
                     LineNumber: 1, BuyerItemCode: "00100", Description: "Tyre component",
                     Quantity: 4, Unit: "EA", UnitPrice: 50.0, LineAmount: 200.0,
-                    ManufacturerPartNumber: "X2791HS-B1"),
+                    ManufacturerPartNumber: "Y1791HS-B1"),
             },
-            SupplierName: "REDACTED-PARTY",
+            SupplierName: "Fabrikam SAS",
             Incoterms: "FCA");
 
         var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, "E032180 4 50.0 200.0 EA EUR");
@@ -157,7 +157,7 @@ public class CorpusExtractionShapeTests
         Assert.True(result.Success);
         Assert.Empty(result.ReviewLineNumbers);
         Assert.Equal("FCA", result.Order!.Incoterms);
-        Assert.Equal("X2791HS-B1", result.Order.Lines[0].ManufacturerPartNumber);
+        Assert.Equal("Y1791HS-B1", result.Order.Lines[0].ManufacturerPartNumber);
     }
 
     /// <summary>
@@ -180,7 +180,7 @@ public class CorpusExtractionShapeTests
                     Quantity: 2, Unit: "PC", UnitPrice: 500.0, LineAmount: 1000.0,
                     Recipient: "requisitioner@buyer.example.com"),
             },
-            SupplierName: "REDACTED-PARTY",
+            SupplierName: "Fabrikam AS",
             RawFields: new[] { new OpenAiPdfOrderExtractor.RawFieldDto("Cost centre", "CC-4471") });
 
         var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, "226131000790 2 500.0 1000.0 PC USD CC-4471");
@@ -210,7 +210,7 @@ public class CorpusExtractionShapeTests
                     LineNumber: 1, BuyerItemCode: "PART-7", Description: "Valve",
                     Quantity: 5, Unit: "PC", UnitPrice: 40.0, LineAmount: 200.0),
             },
-            SupplierName: "REDACTED-PARTY",
+            SupplierName: "Fabrikam ApS",
             Parties: new[]
             {
                 new OpenAiPdfOrderExtractor.ExtractionPartyDto(

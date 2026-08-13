@@ -48,8 +48,8 @@ public class PurchaseOrderLineEntity
 
     /// <summary>
     /// The manufacturer / brand as the source document states it (cXML
-    /// <c>&lt;ManufacturerName&gt;</c>, e.g. "REDACTED-PARTY"). Captured so the review UI can show
-    /// "REDACTED-PARTY REDACTED-ORDER-DATA" rather than a bare part number, and so a manufacturer-part
+    /// <c>&lt;ManufacturerName&gt;</c>, e.g. "Litware"). Captured so the review UI can show
+    /// "Litware LTQ2500-BK-BTK1" rather than a bare part number, and so a manufacturer-part
     /// match can be sanity-checked at a glance. Advisory only — never part of the match predicate.
     /// </summary>
     public string? ManufacturerName { get; set; }

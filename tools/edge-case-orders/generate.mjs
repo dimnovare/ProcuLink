@@ -377,7 +377,7 @@ emit("cxml-21-zero-neg-qty.xml",
 // 23. cXML non-EUR currency (PLN, as seen on real PL purchase orders)
 emit("cxml-23-pln-currency.xml",
   cxml({ orderID: "CX-PLN", currency: "PLN", total: "295.02", lines: [
-    { line: 10, qty: "1.0", sku: "29048107", price: "295.02", desc: "Gigaset 550 HX — Dodatkowa słuch", uom: "EA" },
+    { line: 10, qty: "1.0", sku: "29048107", price: "295.02", desc: "Adatum 570 KX — Dodatkowa słuch", uom: "EA" },
   ] }),
   { format: "cxml", case: "PLN currency + Polish accents", expect: "parse" });
 
@@ -440,7 +440,7 @@ emit("ubl-32-missing-buyer.xml",
 // 33. UBL unicode + multi-currency-ish (GBP)
 emit("ubl-33-gbp-unicode.xml",
   ubl({ id: "UBL-£GBP", currency: "GBP", buyer: "Æthelred & Sons Ltd", lines: [
-    { line: 1, qty: "2", uom: "EA", price: "19.33", desc: "SanDisk Ultra Flair — clé USB", sku: "11097719" },
+    { line: 1, qty: "2", uom: "EA", price: "19.33", desc: "Wingtip Swift Drive — clé USB", sku: "11097719" },
   ] }),
   { format: "ubl", case: "GBP + accented buyer/desc", expect: "parse" });
 

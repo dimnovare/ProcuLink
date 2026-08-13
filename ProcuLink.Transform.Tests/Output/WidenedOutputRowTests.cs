@@ -30,7 +30,7 @@ public class WidenedOutputRowTests
             Currency  = "EUR",
             BuyerName = "Acme Buyer AS",
 
-            SupplierName          = "REDACTED-PARTY",
+            SupplierName          = "Exemplar Supplies OÜ",
             SubTotal              = 100m,
             TaxTotal              = 22m,
             GrandTotal            = 122m,
@@ -84,8 +84,8 @@ public class WidenedOutputRowTests
                 TaxAmount              = 22m,
                 DiscountPercent        = 7.5m,
                 NetAmount              = 92.5m,
-                ManufacturerPartNumber = "REDACTED-ORDER-DATA",
-                ManufacturerName       = "REDACTED-PARTY",
+                ManufacturerPartNumber = "LTQ2500-BK-BTK1",
+                ManufacturerName       = "Litware",
                 CustomerPartNumber     = "CUST-777",
                 Unspsc                 = "43211711",
                 Recipient              = "Loading bay B",
@@ -168,8 +168,8 @@ public class WidenedOutputRowTests
     [InlineData("TaxAmount",              "22")]
     [InlineData("DiscountPercent",        "7.5")]
     [InlineData("NetAmount",              "92.5")]
-    [InlineData("ManufacturerPartNumber", "REDACTED-ORDER-DATA")]
-    [InlineData("ManufacturerName",       "REDACTED-PARTY")]
+    [InlineData("ManufacturerPartNumber", "LTQ2500-BK-BTK1")]
+    [InlineData("ManufacturerName",       "Litware")]
     [InlineData("CustomerPartNumber",     "CUST-777")]
     [InlineData("Unspsc",                 "43211711")]
     [InlineData("Recipient",              "Loading bay B")]
@@ -244,7 +244,7 @@ public class WidenedOutputRowTests
         using var sr = new StreamReader(result.Content, Encoding.UTF8);
         var xml      = sr.ReadToEnd();
 
-        xml.Should().Contain("<MfrPartId>REDACTED-ORDER-DATA</MfrPartId>");
+        xml.Should().Contain("<MfrPartId>LTQ2500-BK-BTK1</MfrPartId>");
     }
 
     // ── 4. A user's custom field must never be clobbered by a NEW built-in key ───
@@ -385,7 +385,7 @@ public class WidenedOutputRowTests
     public async Task Golden_FixedCsvTransform_NoCustomOutput_IsByteIdenticalToPreWp14()
     {
         var order = FullyPopulatedOrder();
-        order.Supplier = new Supplier { Id = Guid.NewGuid(), Name = "REDACTED-PARTY" };
+        order.Supplier = new Supplier { Id = Guid.NewGuid(), Name = "Exemplar Supplies OÜ" };
 
         var result   = await new CsvTransformService().TransformAsync(order, OutputFormat.Csv, CancellationToken.None);
         using var sr = new StreamReader(result.Content, Encoding.UTF8);
@@ -445,7 +445,7 @@ public class WidenedOutputRowTests
 
         const string golden =
             "PO,Date,Cur,Sup,Tot,Ln,Code,Desc,Qty,Prc,Amt,Vat,Del\n"
-            + "REDACTED-PARTY";
+            + "PO-4711,2026-03-04,EUR,Exemplar Supplies OÜ,122,1,S-1,Barcode scanner,2,50,100,0.22,2026-04-02\n";
 
         csv.Should().Be(golden,
             "an override that binds only pre-WP-14 names must render byte-identically after the "

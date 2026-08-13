@@ -7,7 +7,7 @@ namespace ProcuLink.Transform.Tests.Parsing;
 public class XlsxTextExtractorTests
 {
     /// <summary>
-    /// The real-world Markit shape that the row1=headers <see cref="XlsxOrderParser"/> can't
+    /// The real-world Fabrikam shape that the row1=headers <see cref="XlsxOrderParser"/> can't
     /// read: header fields are LABEL→value cells stacked down the page, and the lines live in a
     /// later <c>Lines …</c> section. The text rendering must preserve that structure (labels
     /// adjacent to values, line rows intact) so the downstream LLM can extract it.
@@ -21,7 +21,7 @@ public class XlsxTextExtractorTests
         // Header section — label/value pairs down column A/B.
         ws.Cell("A1").Value = "PurchaseOrderNr"; ws.Cell("B1").Value = "226131000790";
         ws.Cell("A2").Value = "Currency";        ws.Cell("B2").Value = "PLN";
-        ws.Cell("A3").Value = "BillToName";      ws.Cell("B3").Value = "Markit Sp. z o.o.";
+        ws.Cell("A3").Value = "BillToName";      ws.Cell("B3").Value = "Fabrikam Sp. z o.o.";
 
         // Lines section — a header row of "Lines …" labels, then two data rows.
         ws.Cell("A5").Value = "Lines LineNr";
@@ -45,7 +45,7 @@ public class XlsxTextExtractorTests
         text.Should().Contain("# Sheet: Order");
         text.Should().Contain("PurchaseOrderNr | 226131000790");
         text.Should().Contain("Currency | PLN");
-        text.Should().Contain("BillToName | Markit Sp. z o.o.");
+        text.Should().Contain("BillToName | Fabrikam Sp. z o.o.");
 
         // The Lines header and BOTH data rows survive as joined rows.
         text.Should().Contain("Lines LineNr | Lines ManufPN | Lines ProductName | Lines Quantity | Lines PriceWoVAT");

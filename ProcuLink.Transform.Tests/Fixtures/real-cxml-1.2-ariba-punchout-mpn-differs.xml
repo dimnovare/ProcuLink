@@ -6,7 +6,7 @@
      Why this fixture exists: the order came through a PUNCHOUT session, so the buyer's
      <SupplierPartID> ("29954596") is the buying network's own internal id and resolves against
      nothing in the supplier's catalog. The only usable key is
-     <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID> + <ManufacturerName>REDACTED-PARTY</ManufacturerName>.
+     <ManufacturerPartID>LTQ2500-BK-BTK1</ManufacturerPartID> + <ManufacturerName>Litware</ManufacturerName>.
      Blindly echoing the manufacturer part number back as the supplier item code is WRONG here —
      it has to be looked up in the catalog and translated into the supplier's own code.
      Pair it with real-cxml-1.1-mpn-equals-supplier-part.xml, the easy case where the two match. -->
@@ -147,11 +147,11 @@ Body:COMPLIANCE: Standard buyer compliance terms (redacted for the fixture).
           <UnitPrice>
             <Money alternateCurrency="" alternateAmount="" currency="EUR">164.1</Money>
           </UnitPrice>
-          <Description xml:lang="en">REDACTED-ORDER-DATA</Description>
+          <Description xml:lang="en">Litware QuickTrace LTQ2500 - Kit - barcode scanner - handheld - 2D imager - decoded - Bluetooth 4.0</Description>
           <UnitOfMeasure>EA</UnitOfMeasure>
           <Classification domain="CUSTOM">7810</Classification>
-          <ManufacturerPartID>REDACTED-ORDER-DATA</ManufacturerPartID>
-          <ManufacturerName>REDACTED-PARTY</ManufacturerName>
+          <ManufacturerPartID>LTQ2500-BK-BTK1</ManufacturerPartID>
+          <ManufacturerName>Litware</ManufacturerName>
           <URL name="__lr2bb">https://www.example.invalid/cXML.ashx</URL>
           <LeadTime>3</LeadTime>
           <Extrinsic name="Req. Line No.">1</Extrinsic>
