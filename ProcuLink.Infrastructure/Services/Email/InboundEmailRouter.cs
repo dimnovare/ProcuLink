@@ -42,9 +42,16 @@ namespace ProcuLink.Infrastructure.Services.Email;
 /// runs at <c>Default=Information</c>, so those stay out of the log unless someone
 /// turns them on; the two attachment cases still write their audit row, so demoting
 /// them loses no evidence. <c>Warning</c> is what an operator has to act on: every
-/// message-level reject, and an attachment dropped for a content reason (empty,
-/// oversized, stub creation failed). An order actually created is <c>Information</c>
+/// message-level reject, and an attachment dropped for a content reason (undecodable,
+/// empty, oversized, stub creation failed). An order actually created is <c>Information</c>
 /// — one line per order, not per message.
+///
+/// Every attachment skip writes a durable audit row, and each names its own cause:
+/// <c>attachment_skipped_unsupported</c>, <c>attachment_skipped_undecodable</c>,
+/// <c>attachment_skipped_empty</c>, <c>attachment_skipped_too_large</c>. The rows carry
+/// <c>Strip</c>ped attachments — file name, type and size, never bytes. A skip that writes
+/// only a log line is invisible to the customer and to the operator both; that is the defect
+/// the undecodable and empty branches were fixing.
 /// </remarks>
 public sealed class InboundEmailRouter : IInboundEmailRouter
 {
@@ -282,11 +289,41 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                 continue;
             }
 
+            // ── Two ways an attachment arrives with no bytes, and they are not the same event ──
+            // Both used to land in one branch that wrote only a log line, while the skip branches
+            // on either side of it wrote durable audit rows. The consequence was specific: a buyer
+            // emails a purchase order, the webhook answers 200 so the provider never re-delivers,
+            // no order is created, and the ONLY trace is a server log the customer cannot see and
+            // the operator has no surface for. From every observable position the order simply
+            // never existed. Each branch now writes its own row, named for its own cause.
+            if (att.Decode == InboundAttachmentDecode.Undecodable)
+            {
+                // The sender attached SOMETHING; we could not turn the wire encoding into bytes.
+                // Nothing here is recoverable by re-delivery — the provider replays the same
+                // stored payload, so the same decode fails again — which is why this does not
+                // reject the message. The audit row is what makes the loss visible instead.
+                _logger.LogWarning(
+                    "Inbound email attachment {FileName} for org {OrgId} could not be decoded from its wire encoding — skipping.",
+                    att.FileName, org.Id);
+                await WriteAuditAsync(
+                    org.Id,
+                    "inbound_email.attachment_skipped_undecodable",
+                    payload with { Attachments = new[] { Strip(att) } },
+                    ct);
+                continue;
+            }
+
             if (att.Content is null || att.Content.Length == 0)
             {
+                // Decoded cleanly to nothing: the sender really did attach an empty file.
                 _logger.LogWarning(
                     "Inbound email attachment {FileName} for org {OrgId} has empty content — skipping.",
                     att.FileName, org.Id);
+                await WriteAuditAsync(
+                    org.Id,
+                    "inbound_email.attachment_skipped_empty",
+                    payload with { Attachments = new[] { Strip(att) } },
+                    ct);
                 continue;
             }
 
@@ -778,7 +815,15 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
+    /// <summary>
+    /// Drops the byte content from an attachment so an audit payload carries only metadata.
+    /// </summary>
+    /// <remarks>
+    /// A <c>with</c> expression rather than a positional rebuild: the positional form named three
+    /// members explicitly and would have SILENTLY dropped every member added to the record after
+    /// it was written — which is exactly what would have happened to <c>Decode</c>. Copy
+    /// everything, then blank the one field that must not travel.
+    /// </remarks>
     private static InboundAttachment Strip(InboundAttachment a) =>
-        // Drop the byte content from audit payloads — only metadata.
-        new(a.FileName, a.ContentType, Array.Empty<byte>());
+        a with { Content = Array.Empty<byte>() };
 }

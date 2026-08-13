@@ -25,7 +25,10 @@ public interface IInboundEmailRouter
     /// <returns>
     /// A result describing whether the tenant could be resolved, which org received
     /// the message, and the list of created order ids (one per supported attachment).
-    /// Unsupported attachments are skipped silently; the result is still
+    /// An attachment that cannot be ingested is skipped WITHOUT failing the message —
+    /// unsupported type, undecodable wire encoding, empty, oversized — and each skip
+    /// writes an audit row naming its cause, because the sender is never told and no
+    /// order exists to look at. The result is still
     /// <see cref="InboundEmailResult.Success"/> = <c>true</c> with possibly empty
     /// <see cref="InboundEmailResult.CreatedOrderIds"/>.
     /// </returns>
@@ -65,14 +68,55 @@ public sealed record InboundEmailPayload(
     string? Body = null,
     string? ProviderMessageId = null);
 
+/// <summary>
+/// Whether the webhook adapter could turn this attachment's wire encoding into bytes.
+/// </summary>
+/// <remarks>
+/// The two ways an attachment arrives with no bytes are different facts about a customer, and
+/// they used to be the same zero-length array: <c>InboundEmailController.DecodeBase64</c>
+/// answered <c>Array.Empty&lt;byte&gt;()</c> both for a body it could not decode and for a body
+/// that was genuinely absent. Downstream there was nothing left to tell them apart, so the
+/// router logged one sentence for both and wrote no audit row at all — and a purchase order
+/// whose attachment failed to decode left no trace any operator or customer could see.
+/// <para>
+/// This enum is that missing fact. It says only what the DECODER observed; it is not a verdict
+/// on the file, which the parsers own. <see cref="Decoded"/> is 0 so an adapter that does not
+/// speak about decoding says the ordinary thing — a decoder can only know that it FAILED, so
+/// "not declared undecodable" is the sole sound default.
+/// </para>
+/// </remarks>
+public enum InboundAttachmentDecode
+{
+    /// <summary>
+    /// <see cref="InboundAttachment.Content"/> is what the sender attached. Zero length here
+    /// means the sender really did attach an empty file.
+    /// </summary>
+    Decoded = 0,
+
+    /// <summary>
+    /// The wire encoding was malformed and no bytes could be recovered — for Postmark, a
+    /// <c>Content</c> string that is not valid base64. <see cref="InboundAttachment.Content"/>
+    /// is empty because there is nothing to carry, NOT because the sender sent nothing. The
+    /// undecodable bytes are deliberately dropped rather than forwarded: they are a customer's
+    /// file content and have no business travelling further than the decode site.
+    /// </summary>
+    Undecodable = 1,
+}
+
 /// <summary>A single decoded attachment from an inbound email.</summary>
 /// <param name="FileName">Original file name as supplied by the sender.</param>
 /// <param name="ContentType">MIME content type as declared by the sender.</param>
 /// <param name="Content">Decoded attachment bytes (already base64-decoded from the wire format).</param>
+/// <param name="Decode">
+/// What the adapter's decoder observed. Read this BEFORE reading <paramref name="Content"/>'s
+/// length: an empty <paramref name="Content"/> means "the sender attached nothing" only when
+/// this is <see cref="InboundAttachmentDecode.Decoded"/>. See <see cref="InboundAttachmentDecode"/>.
+/// </param>
 public sealed record InboundAttachment(
     string FileName,
     string ContentType,
-    byte[] Content);
+    byte[] Content,
+    InboundAttachmentDecode Decode = InboundAttachmentDecode.Decoded);
 
 /// <summary>
 /// Why a message was rejected — and therefore whether the sending provider should
