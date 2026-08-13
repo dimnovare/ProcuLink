@@ -7,6 +7,11 @@ namespace ProcuLink.Transform.Parsing;
 /// <summary>
 /// Parses text-based PDF purchase orders. Falls back to <see cref="IDocumentOcrService"/>
 /// when PdfPig extracts no text (image-only / scanned PDFs) and an OCR provider is configured.
+///
+/// <para>Every header field here is read from a printed LABEL — there is no schema, so a label is
+/// the only thing that says what a value means. That constraint is why the ship-to read is
+/// narrower than the structured parsers': see <c>BuildParties</c> for what it deliberately
+/// refuses to infer.</para>
 /// </summary>
 public sealed class PdfOrderParser : IPurchaseOrderParser
 {
@@ -33,6 +38,48 @@ public sealed class PdfOrderParser : IPurchaseOrderParser
 
     private static readonly Regex CurrencyRegex = new(
         @"\bcurrency\s*[:#-]?\s*(?<value>[A-Z]{3})\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // ── Ship-to ────────────────────────────────────────────────────────────────
+    // A PDF is free text: the ONLY thing that says what a value means is a label printed
+    // beside it. So each pattern below requires its own explicit label AND a separator, and
+    // reads only the remainder of that same line.
+    //
+    // The separator is MANDATORY here (`[:#-]`, not the `[:#-]?` the PO-number and buyer
+    // patterns use) and that is the whole design. Without it, "Ship To" alone would match
+    // the BLOCK form —
+    //
+    //     Ship To
+    //     Contoso Warehouse OY
+    //     2 Example Road
+    //     Example Town 00001
+    //
+    // — where the label is on its own line and the address arrives as unlabelled
+    // continuation lines. Assigning those to street / city / postcode can only be done by
+    // counting lines, i.e. by guessing from layout, and a guessed delivery address is worse
+    // than none: nothing downstream can distinguish it from one the buyer actually stated.
+    // That form is therefore deliberately NOT read. See the class doc.
+    //
+    // Ordered specific-before-general at the call site: "Ship To Address:" must reach the
+    // street pattern, and does not reach this one because " Address:" is not a separator.
+    private static readonly Regex ShipToNameRegex = new(
+        @"\b(?:ship|deliver|delivery)\s*to\s*[:#-]\s*(?<value>.+)$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex ShipToStreetRegex = new(
+        @"\b(?:ship(?:ping)?\s*to\s*address|shipping\s*address|delivery\s*address)\s*[:#-]\s*(?<value>.+)$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex ShipToCityRegex = new(
+        @"\b(?:ship\s*to\s*city|delivery\s*city)\s*[:#-]\s*(?<value>.+)$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex ShipToPostalCodeRegex = new(
+        @"\b(?:ship\s*to\s*(?:postal\s*code|postcode|zip(?:\s*code)?)|delivery\s*(?:postal\s*code|postcode|zip(?:\s*code)?))\s*[:#-]\s*(?<value>.+)$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex ShipToCountryRegex = new(
+        @"\b(?:ship\s*to\s*country|delivery\s*country)\s*[:#-]\s*(?<value>.+)$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     // The numeric groups accept REPEATED separators — "1.234,56", not just "1234,56".
@@ -87,10 +134,55 @@ public sealed class PdfOrderParser : IPurchaseOrderParser
             BuyerName: FindFirstValue(textLines, BuyerRegex),
             Currency:  FindFirstValue(textLines, CurrencyRegex)?.ToUpperInvariant(),
             Lines:     ParseLines(textLines),
+            // Ship-to, read ONLY from inline "<label>: <value>" lines. See BuildParties.
+            Parties:   BuildParties(textLines),
             // A printed PDF declares nothing about its date ordering — the same reason this
             // parser cannot assert a decimal locale either. "03/04/2026" is flagged, not guessed.
             NeedsReview:  orderDateAmbiguous,
             ReviewReason: DateParsing.BuildAmbiguityReason(orderDateAmbiguous, "order date", orderDateRaw));
+    }
+
+    /// <summary>
+    /// The ship-to party, or <c>null</c> when the document prints no inline ship-to label.
+    ///
+    /// <para><b>What this deliberately does not do.</b> Only the inline
+    /// <c>"&lt;label&gt;: &lt;value&gt;"</c> form is read. The block form — a bare "Ship To" line
+    /// followed by the address on the lines beneath it — is left unread, because deciding which
+    /// continuation line is the street and which is the city can only be done by counting lines.
+    /// That is a guess from layout, and a guessed delivery address is worse than an absent one:
+    /// once persisted it is indistinguishable from an address the buyer actually stated, and it
+    /// is emitted to the supplier with the same confidence.</para>
+    ///
+    /// <para>Where a document prints everything after one label —
+    /// <c>"Ship To: Contoso Warehouse OY, 2 Example Road, Example Town"</c> — the whole remainder
+    /// becomes the party NAME rather than being split into street/city. That is verbatim what the
+    /// document labelled as the ship-to; splitting it on punctuation would be the same positional
+    /// guess in a smaller disguise.</para>
+    ///
+    /// <para>No bill-to is built here. This parser already reads <c>"Bill To:"</c> as the BUYER
+    /// name (<see cref="BuyerRegex"/>, unchanged), so a bill-to party derived from the identical
+    /// token would add nothing the canonical model does not already carry — and it would double
+    /// the number of places one label writes.</para>
+    /// </summary>
+    private static IReadOnlyList<ParsedParty>? BuildParties(IReadOnlyList<string> textLines)
+    {
+        // Specific labels first: "Ship To Address:" is a street, not a name, and must not be
+        // consumed by the name pattern. (It cannot be — the name pattern demands a separator
+        // directly after "to" — but the ordering keeps that intent readable.)
+        var street     = FindFirstValue(textLines, ShipToStreetRegex);
+        var city       = FindFirstValue(textLines, ShipToCityRegex);
+        var postalCode = FindFirstValue(textLines, ShipToPostalCodeRegex);
+        var country    = FindFirstValue(textLines, ShipToCountryRegex);
+        var name       = FindFirstValue(textLines, ShipToNameRegex);
+
+        if (name is null && street is null && city is null && postalCode is null && country is null)
+            return null;
+
+        return new[]
+        {
+            new ParsedParty("shipTo",
+                Name: name, Street: street, City: city, PostalCode: postalCode, Country: country),
+        };
     }
 
     private static IReadOnlyList<ParsedOrderLine> ParseLines(IEnumerable<string> lines)
