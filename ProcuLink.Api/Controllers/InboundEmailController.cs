@@ -150,10 +150,15 @@ public sealed class InboundEmailController : ControllerBase
 
         // ── 3. Map to provider-neutral shape ─────────────────────────────────
         var attachments = (body.Attachments ?? new List<PostmarkInboundAttachment>())
-            .Select(a => new InboundAttachment(
-                FileName: a.Name ?? string.Empty,
-                ContentType: a.ContentType ?? "application/octet-stream",
-                Content: DecodeBase64(a.Content)))
+            .Select(a =>
+            {
+                var decoded = DecodeBase64(a.Content);
+                return new InboundAttachment(
+                    FileName: a.Name ?? string.Empty,
+                    ContentType: a.ContentType ?? "application/octet-stream",
+                    Content: decoded.Content,
+                    Decode: decoded.Decode);
+            })
             .ToList();
 
         var payload = new InboundEmailPayload(
@@ -238,11 +243,37 @@ public sealed class InboundEmailController : ControllerBase
         return null;
     }
 
-    private static byte[] DecodeBase64(string? content)
+    /// <summary>
+    /// Decodes one Postmark attachment body, keeping "we could not decode what they sent" and
+    /// "they sent nothing" apart.
+    /// </summary>
+    /// <remarks>
+    /// This method used to return a bare <c>byte[]</c> and answered <c>Array.Empty&lt;byte&gt;()</c>
+    /// on both paths, which collapsed the two facts at the only point in the system that could
+    /// still tell them apart — the router then had a single sentence for both and wrote no audit
+    /// row for either, so a purchase order lost to a corrupt attachment was invisible from every
+    /// position a human can occupy. The bytes and the observation now travel together; see
+    /// <see cref="InboundAttachmentDecode"/>.
+    ///
+    /// A malformed body yields NO bytes rather than a partial recovery, and the offending base64
+    /// is not returned, logged, or audited anywhere: it is a customer's file content.
+    /// </remarks>
+    private static (byte[] Content, InboundAttachmentDecode Decode) DecodeBase64(string? content)
     {
-        if (string.IsNullOrWhiteSpace(content)) return Array.Empty<byte>();
-        try { return Convert.FromBase64String(content); }
-        catch (FormatException) { return Array.Empty<byte>(); }
+        // Absent or blank is a real, decodable answer: an empty attachment. (Postmark encodes a
+        // zero-byte file as an empty string, and Convert.FromBase64String ignores whitespace, so
+        // this short-circuit agrees with what the full decode would have returned anyway.)
+        if (string.IsNullOrWhiteSpace(content))
+            return (Array.Empty<byte>(), InboundAttachmentDecode.Decoded);
+
+        try
+        {
+            return (Convert.FromBase64String(content), InboundAttachmentDecode.Decoded);
+        }
+        catch (FormatException)
+        {
+            return (Array.Empty<byte>(), InboundAttachmentDecode.Undecodable);
+        }
     }
 
     /// <summary>

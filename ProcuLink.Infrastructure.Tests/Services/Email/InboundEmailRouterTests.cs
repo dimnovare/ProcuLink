@@ -320,6 +320,119 @@ public class InboundEmailRouterTests
         enqueuer.Calls.Should().BeEmpty();
     }
 
+    // ── 8b-2. No bytes — and WHICH kind of no bytes ──────────────────────────
+    //    Both of these used to be the same branch, writing a log line and nothing else while the
+    //    skips on either side of it wrote audit rows. See InboundAttachmentDecode for the whole
+    //    account; the end-to-end proof, from a corrupt base64 string to the audit row, is
+    //    ProcuLink.Api.Tests/Controllers/InboundEmailAttachmentDecodeTests.cs.
+
+    [Fact]
+    public async Task UndecodableAttachment_IsSkipped_AndWritesTheAuditRowNamingThatCause()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+        await SeedSupplierAsync(db, orgId);
+
+        var orders = new FakeOrderService();
+        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: orgId);
+
+        var result = await router.RouteAsync(new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "PO with a mangled attachment",
+            Attachments: new[]
+            {
+                new InboundAttachment("po.csv", "text/csv", Array.Empty<byte>(),
+                    InboundAttachmentDecode.Undecodable),
+            }), default);
+
+        result.Success.Should().BeTrue(
+            "the message is not unprocessable — one attachment is, and the status code is message-level");
+        result.CreatedOrderIds.Should().BeEmpty();
+        orders.CalledWith.Should().BeEmpty("there are no bytes to upload or parse");
+
+        var actions = await db.AuditEvents.AsNoTracking()
+            .Where(a => a.OrgId == orgId)
+            .Select(a => a.Action)
+            .ToListAsync();
+
+        actions.Should().Contain("inbound_email.attachment_skipped_undecodable",
+            "the audit row is the only product-side evidence — the sender is never told, and no order exists to look at");
+        actions.Should().NotContain("inbound_email.attachment_skipped_empty",
+            "the sender attached something; saying they attached nothing would send an operator after the wrong customer");
+    }
+
+    [Fact]
+    public async Task EmptyAttachment_IsSkipped_AndWritesTheAuditRowNamingThatCause()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+        await SeedSupplierAsync(db, orgId);
+
+        var orders = new FakeOrderService();
+        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: orgId);
+
+        var result = await router.RouteAsync(new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "PO with an empty attachment",
+            Attachments: new[]
+            {
+                new InboundAttachment("po.csv", "text/csv", Array.Empty<byte>()),
+            }), default);
+
+        result.Success.Should().BeTrue();
+        result.CreatedOrderIds.Should().BeEmpty();
+        orders.CalledWith.Should().BeEmpty();
+
+        var actions = await db.AuditEvents.AsNoTracking()
+            .Where(a => a.OrgId == orgId)
+            .Select(a => a.Action)
+            .ToListAsync();
+
+        actions.Should().Contain("inbound_email.attachment_skipped_empty");
+        actions.Should().NotContain("inbound_email.attachment_skipped_undecodable",
+            "nothing failed to decode — a zero-byte attachment decoded perfectly well");
+    }
+
+    /// <summary>
+    /// A message is not all-or-nothing. An undecodable attachment must not cost the ones beside it
+    /// that were fine — which is also why the webhook's status code cannot speak for this: there is
+    /// one status per message and many attachments per message.
+    /// </summary>
+    [Fact]
+    public async Task UndecodableAttachment_DoesNotStopItsSiblingsFromBecomingOrders()
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+        await SeedSupplierAsync(db, orgId);
+
+        var orders = new FakeOrderService();
+        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: orgId);
+
+        var result = await router.RouteAsync(new InboundEmailPayload(
+            FromEmail: "buyer@example.com",
+            ToEmail:   $"orders@{Slug}.proculink.eu",
+            Subject:   "Two POs, one mangled",
+            Attachments: new[]
+            {
+                new InboundAttachment("mangled.csv", "text/csv", Array.Empty<byte>(),
+                    InboundAttachmentDecode.Undecodable),
+                new InboundAttachment("good.csv", "text/csv", new byte[] { 1, 2, 3 }),
+            }), default);
+
+        result.CreatedOrderIds.Should().HaveCount(1);
+        orders.CalledWith.Select(c => c.FileName).Should().Equal("good.csv");
+
+        var actions = await db.AuditEvents.AsNoTracking()
+            .Where(a => a.OrgId == orgId)
+            .Select(a => a.Action)
+            .ToListAsync();
+
+        actions.Should().Contain("inbound_email.attachment_skipped_undecodable");
+        actions.Should().Contain("inbound_email.processed");
+    }
+
     // ── 8c. No supplier at all → UNROUTED hold, not a reject ─────────────────
     //    The webhook used to answer 422 "no supplier configured" and drop the mail
     //    (audit inbound_email.rejected_no_supplier). It now mirrors the pull channels
@@ -839,6 +952,32 @@ public class InboundEmailRouterTests
 
         log.LevelOf("skipped: unsupported type").Should().Be(LogLevel.Debug,
             "email signatures and logos ride along on nearly every message — skipping them is expected");
+    }
+
+    [Fact]
+    public async Task UndecodableAttachmentSkip_IsLoggedAtWarning()
+    {
+        var log = await RunAndCaptureLogAsync(
+            AccountStatusConstants.Active,
+            new[]
+            {
+                new InboundAttachment("po.csv", "text/csv", Array.Empty<byte>(),
+                    InboundAttachmentDecode.Undecodable),
+            });
+
+        log.LevelOf("could not be decoded").Should().Be(LogLevel.Warning,
+            "a purchase order arrived and could not be read — that is not routine chatter, and the sender is never told");
+    }
+
+    [Fact]
+    public async Task EmptyAttachmentSkip_IsLoggedAtWarning()
+    {
+        var log = await RunAndCaptureLogAsync(
+            AccountStatusConstants.Active,
+            new[] { new InboundAttachment("po.csv", "text/csv", Array.Empty<byte>()) });
+
+        log.LevelOf("has empty content").Should().Be(LogLevel.Warning,
+            "an empty attachment on a .csv named like a PO is a sender-side mistake somebody has to chase");
     }
 
     [Fact]
