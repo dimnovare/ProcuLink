@@ -137,6 +137,14 @@ jobs:
           repository: dimnovare/project-proculink
           path: .claude/frontend-checkout
           fetch-depth: 1
+          # Both repos went PRIVATE on 2026-08-13, and the default GITHUB_TOKEN is scoped
+          # to its own repository — so this checkout began failing with a 404, taking the
+          # endpoint-reachability guard with it. Fine-grained PAT, Contents:read on both.
+          #
+          # If this ever fails with "Repository not found", check the token's EXPIRY before
+          # anything else: it is the one part of this job that dies on a calendar rather
+          # than on a code change, and the symptom is identical to the repo being renamed.
+          token: ${{ secrets.CROSS_REPO_READ_TOKEN }}
 
       - name: Record which frontend commit the reachability guard ran against
         run: |
