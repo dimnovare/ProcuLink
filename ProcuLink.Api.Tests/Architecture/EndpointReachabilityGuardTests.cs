@@ -68,12 +68,28 @@ namespace ProcuLink.Api.Tests.Architecture;
 /// unable-to-check state: <see cref="EndpointReachabilityScanner.FindFrontendRoot"/> throws, and
 /// <c>.github/workflows/ci.yml</c> checks the frontend out so CI supplies what it demands.</para>
 ///
-/// <para><b>Deliberate limits</b>, all of which fail in the noisy direction rather than the silent
-/// one: a computed final segment is never credited against a literal route segment (see
-/// <see cref="EndpointReachabilityScanner.Matches"/>); a verb held in a variable rather than
-/// written into the call's own options object reads as GET; and a route registered by something
-/// other than an MVC action is outside the inventory — which is why
-/// <see cref="NoEndpointArrivesThroughAMechanismTheInventoryCannotSee"/> exists.</para>
+/// <para><b>Limits that fail in the NOISY direction</b> — the endpoint reads as unreachable, which
+/// costs a reasoned declaration and never hides anything: a computed final segment is not credited
+/// against a literal route segment (see <see cref="EndpointReachabilityScanner.Matches"/>); a verb
+/// held in a variable rather than written into the call's own options object reads as GET; and a
+/// path assembled from a constant declared in another module has nothing local to resolve.</para>
+///
+/// <para><b>Limits that fail in the SILENT direction</b>, established by mutating a copy of the
+/// frontend until this guard went green, and pinned as fixtures below rather than left as prose —
+/// because a green suite is read as coverage, and this paragraph is exactly where a guard asserts a
+/// limitation nobody checked:</para>
+/// <list type="number">
+///   <item><description><b>A dead branch is indistinguishable from a live call.</b> The sweep
+///     proves a path is NAMED in a call-shaped context, never that the call executes.
+///     <see cref="Detector_CannotTellADeadBranchFromALiveCall"/>.</description></item>
+///   <item><description><b>A display-only URL credits a GET.</b> Reading the verb separates "shown
+///     to the customer" from "called" only when the endpoint is not a GET — which is what keeps
+///     <c>POST /api/ingress/{slug}/orders</c> honest, and what cannot help a GET.
+///     <see cref="Detector_CreditsADisplayOnlyUrlWhenTheEndpointIsAGet"/>.</description></item>
+///   <item><description><b>A route registered outside MVC is not in the inventory at all</b> — which
+///     is why <see cref="NoEndpointArrivesThroughAMechanismTheInventoryCannotSee"/> exists to fail
+///     on the mechanism instead.</description></item>
+/// </list>
 /// </summary>
 public sealed class EndpointReachabilityGuardTests
 {
@@ -1047,6 +1063,58 @@ public sealed class EndpointReachabilityGuardTests
 
         Assert.Empty(Unreachable(endpoints, Calls("fetch(`${API_BASE_URL}/api/dev/files/orders/2026/x.csv`);")));
         Assert.NotEmpty(Unreachable(endpoints, Calls("fetch(`${API_BASE_URL}/api/dev/other/x.csv`);")));
+    }
+
+    // ── What this guard CANNOT see, pinned ───────────────────────────────────────────────
+
+    /// <summary>
+    /// <b>A dead branch reads as a live call.</b> Found by mutation, not by reading: deleting the
+    /// only caller of <c>GET /api/ops/health</c> from a copy of the frontend turned this guard red
+    /// on that exact endpoint; re-adding it as a comment, and as a call in a test file, and as an
+    /// MSW handler, all kept it red — and re-adding it inside <c>if (false) { … }</c> turned it
+    /// green.
+    ///
+    /// <para>That is the honest boundary of a textual sweep: it proves a path is NAMED in a
+    /// call-shaped context, never that the call executes. Closing it would need reachability
+    /// analysis over the frontend's own control flow, which is a different tool. Pinned here so the
+    /// limit is a failing test away from being forgotten: if someone narrows the matcher and this
+    /// starts failing, the paragraph above needs rewriting too.</para>
+    /// </summary>
+    [Fact]
+    public void Detector_CannotTellADeadBranchFromALiveCall()
+    {
+        var endpoints = new[] { Endpoint("GET", "api/ops/health") };
+
+        var calls = Calls("""
+            export async function health() {
+              if (FEATURE === "never") {
+                return fetch(`${API_BASE_URL}/api/ops/health`, { headers });
+              }
+              throw new Error("the panel was removed");
+            }
+            """);
+
+        Assert.Empty(Unreachable(endpoints, calls));
+    }
+
+    /// <summary>
+    /// <b>A URL built only to be shown credits a GET.</b> The verb is what tells display apart from
+    /// call — <c>Detector_DoesNotCreditAUrlAssembledForDisplay</c> shows it working, for a POST —
+    /// and a GET endpoint has no such gap to fall through.
+    ///
+    /// <para>Tightening this would mean requiring the path literal to sit in argument position,
+    /// and that is worse: <c>api-client.ts:1171</c> and <c>:2742</c> assign a URL to
+    /// <c>const url</c> and pass the variable, so the rule would drop real callers to catch a rare
+    /// display constant. Wrong trade, made deliberately, recorded here.</para>
+    /// </summary>
+    [Fact]
+    public void Detector_CreditsADisplayOnlyUrlWhenTheEndpointIsAGet()
+    {
+        var endpoints = new[] { Endpoint("GET", "api/ops/health") };
+
+        var calls = Calls("export const DOC_URL = `${API_BASE_URL}/api/ops/health`;");
+
+        Assert.Empty(Unreachable(endpoints, calls));
     }
 
     // ── The comment stripper ─────────────────────────────────────────────────────────────
