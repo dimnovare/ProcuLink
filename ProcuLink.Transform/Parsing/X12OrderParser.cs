@@ -172,6 +172,23 @@ public sealed class X12OrderParser : IPurchaseOrderParser
         // ── Header-level scans (everything before the first PO1) ───────────────
         string? buyerName = null;
         string? currency  = null;
+        DateOnly? requestedDeliveryDate = null;
+        var parties = new List<ParsedParty>(2);
+
+        // N1 opens a party LOOP: the name is on the N1 itself, but the address and contact
+        // arrive in the N3 / N4 / PER segments that FOLLOW it, up to the next N1 (or the end
+        // of the heading). Matching N1 in isolation — as this scan used to — can therefore
+        // only ever see a name, which is why every X12 order arrived with no address at all.
+        ParsedParty? openParty = null;
+        string?      openRole  = null;
+
+        void CloseParty()
+        {
+            if (openParty is not null && openRole is not null)
+                parties.Add(openParty with { Role = openRole });
+            openParty = null;
+            openRole  = null;
+        }
 
         foreach (var seg in segments.TakeWhile(s => s.Tag != "PO1"))
         {
@@ -182,13 +199,88 @@ public sealed class X12OrderParser : IPurchaseOrderParser
                     currency ??= NullIfEmpty(seg.Element(2))?.ToUpperInvariant();
                     break;
 
+                case "DTM":
+                    // DTM*002*20260717 → 01 = date/time qualifier (002 = requested delivery),
+                    // 02 = date CCYYMMDD. 010 (requested ship) is the accepted alternative.
+                    var dtmQualifier = seg.Element(1);
+                    if (requestedDeliveryDate is null
+                        && (string.Equals(dtmQualifier, "002", StringComparison.Ordinal)
+                            || string.Equals(dtmQualifier, "010", StringComparison.Ordinal)))
+                    {
+                        requestedDeliveryDate = ParseX12DateOnly(seg.Element(2));
+                    }
+                    break;
+
                 case "N1":
-                    // N1*BY*Buyer Name  → 01 = entity identifier code, 02 = name
-                    if (buyerName is null && string.Equals(seg.Element(1), "BY", StringComparison.Ordinal))
+                    // N1*ST*Ship To Name → 01 = entity identifier code, 02 = name.
+                    CloseParty();
+                    var entityCode = seg.Element(1);
+                    if (buyerName is null && string.Equals(entityCode, "BY", StringComparison.Ordinal))
                         buyerName = NullIfEmpty(seg.Element(2));
+
+                    // Only ST / BT reach a canonical column; BY already has BuyerName.
+                    openRole = entityCode switch
+                    {
+                        "ST" => "shipTo",
+                        "BT" => "billTo",
+                        _    => null,
+                    };
+                    if (openRole is not null)
+                    {
+                        var partyName = NullIfEmpty(seg.Element(2));
+                        // A nameless party reaches no ShipTo*/BillTo* column — the ingestion
+                        // layer keys its denormalisation on the name — so do not open a loop
+                        // whose segments could never be persisted.
+                        if (partyName is null)
+                        {
+                            openRole = null;
+                        }
+                        else
+                        {
+                            openParty = new ParsedParty(
+                                Role: openRole,
+                                Name: partyName,
+                                // N104 carries the party's identification code when N103 states
+                                // its qualifier (e.g. "92" = assigned by buyer, "1" = DUNS).
+                                EdiCode: NullIfEmpty(seg.Element(4)));
+                        }
+                    }
+                    break;
+
+                case "N3" when openParty is not null:
+                    // N3*Address line 1*Address line 2
+                    var street = new[] { seg.Element(1), seg.Element(2) }
+                        .Select(NullIfEmpty)
+                        .Where(v => v is not null);
+                    var joined = NullIfEmpty(string.Join(", ", street));
+                    if (joined is not null)
+                        openParty = openParty with { Street = joined };
+                    break;
+
+                case "N4" when openParty is not null:
+                    // N4*City*State*PostalCode*CountryCode
+                    openParty = openParty with
+                    {
+                        City       = NullIfEmpty(seg.Element(1)) ?? openParty.City,
+                        PostalCode = NullIfEmpty(seg.Element(3)) ?? openParty.PostalCode,
+                        Country    = NullIfEmpty(seg.Element(4)) ?? openParty.Country,
+                    };
+                    break;
+
+                case "PER" when openParty is not null:
+                    // PER*OC*Contact Name*EM*a@b.example*TE*555… — 01 = contact function code,
+                    // 02 = name, then (qualifier, value) pairs from element 3 onward.
+                    openParty = openParty with
+                    {
+                        ContactName = NullIfEmpty(seg.Element(2)) ?? openParty.ContactName,
+                        Email       = ExtractPerValue(seg, "EM") ?? openParty.Email,
+                        Phone       = ExtractPerValue(seg, "TE") ?? openParty.Phone,
+                    };
                     break;
             }
         }
+
+        CloseParty();
 
         var lines = ParseLines(segments);
 
@@ -198,6 +290,8 @@ public sealed class X12OrderParser : IPurchaseOrderParser
             BuyerName: buyerName,
             Currency:  currency,
             Lines:     lines,
+            RequestedDeliveryDate: requestedDeliveryDate,
+            Parties:   parties.Count > 0 ? parties : null,
             // False for every conformant CCYYMMDD/YYMMDD date — only a non-conformant
             // partner writing a free-text date into BEG05 can reach this.
             NeedsReview:  orderDateAmbiguous,
@@ -431,6 +525,41 @@ public sealed class X12OrderParser : IPurchaseOrderParser
     /// </summary>
     private static (decimal? Value, bool Ambiguous) ParseDecimal(string? value) =>
         NumberParsing.TryParseFlexibleDecimal(value, european: false);
+
+    /// <summary>
+    /// Reads an X12 <c>DTM02</c> date as a <see cref="DateOnly"/>. X12 dates are CCYYMMDD
+    /// (or YYMMDD on older partners), both unambiguous, so this is exact-format only: a
+    /// non-conformant value stays null rather than being guessed into a wrong delivery date.
+    /// </summary>
+    private static DateOnly? ParseX12DateOnly(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var trimmed = value.Trim();
+        foreach (var format in new[] { "yyyyMMdd", "yyMMdd" })
+        {
+            if (DateOnly.TryParseExact(trimmed, format, CultureInfo.InvariantCulture,
+                    DateTimeStyles.None, out var d))
+            {
+                return d;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Walks a PER segment's (qualifier, value) pairs from element 3 onward and returns the
+    /// value for the given communication-number qualifier (<c>EM</c> email, <c>TE</c> phone),
+    /// or null. X12 allows up to three such pairs per PER, in any order.
+    /// </summary>
+    private static string? ExtractPerValue(Segment per, string qualifier)
+    {
+        for (int qualIdx = 3; qualIdx < per.ElementCount; qualIdx += 2)
+        {
+            if (string.Equals(per.Element(qualIdx), qualifier, StringComparison.Ordinal))
+                return NullIfEmpty(per.Element(qualIdx + 1));
+        }
+        return null;
+    }
 
     private static string? NullIfEmpty(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

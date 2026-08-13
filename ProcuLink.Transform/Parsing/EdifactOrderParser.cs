@@ -162,7 +162,25 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
         string? orderDateRaw = null;
         var orderDateAmbiguous = false;
         string? buyerName   = null;
+        string? supplierName = null;
         string? currency    = null;
+        DateOnly? requestedDeliveryDate = null;
+        var parties = new List<ParsedParty>(2);
+
+        // NAD opens a party GROUP: the address is on the NAD itself, but the contact arrives
+        // in the CTA / COM segments that FOLLOW it, up to the next NAD. Matching NAD in
+        // isolation — as this scan used to, and only for BY — could therefore never see a
+        // ship-to, a bill-to, or any contact at all.
+        ParsedParty? openParty = null;
+        string?      openRole  = null;
+
+        void CloseParty()
+        {
+            if (openParty is not null && openRole is not null)
+                parties.Add(openParty with { Role = openRole });
+            openParty = null;
+            openRole  = null;
+        }
 
         // We walk header segments until the first LIN (line section starts there).
         var headerSegments = segments.TakeWhile(s => s.Tag != "LIN");
@@ -189,15 +207,89 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
                             }
                         }
                     }
+                    // DTM+2:20260717:102 → 2 = requested delivery date. 64 (delivery date
+                    // earliest) is the accepted alternative when a window is stated.
+                    else if (requestedDeliveryDate is null
+                             && (string.Equals(dtmQualifier, "2", StringComparison.Ordinal)
+                                 || string.Equals(dtmQualifier, "64", StringComparison.Ordinal)))
+                    {
+                        var (deliveryValue, _) =
+                            ParseEdifactDate(seg.Component(1, 1), seg.Component(1, 2));
+                        if (deliveryValue is not null)
+                            requestedDeliveryDate = DateOnly.FromDateTime(deliveryValue.Value);
+                    }
                     break;
 
                 case "NAD":
-                    // NAD+BY+5412345678901::9++Acme Buyer Ltd+...
-                    // qualifier at element 1; party-name composite at element 4 (D96A)
+                    // NAD+BY+5412345678901::9++Acme Buyer Ltd+Street+City++PostCode+CC
+                    //   1 = party qualifier          2 = C082 party identification
+                    //   4 = C080 party name          5 = C059 street (up to 4 lines)
+                    //   6 = city   7 = country sub-entity   8 = postcode   9 = country
+                    CloseParty();
                     var nadQualifier = seg.Element(1);
+                    var nadName = ExtractPartyName(seg);
+
                     if (string.Equals(nadQualifier, "BY", StringComparison.Ordinal) && buyerName is null)
+                        buyerName = nadName;
+                    // SU (supplier) and SE (seller) both name the selling party.
+                    if (supplierName is null
+                        && (string.Equals(nadQualifier, "SU", StringComparison.Ordinal)
+                            || string.Equals(nadQualifier, "SE", StringComparison.Ordinal)))
                     {
-                        buyerName = ExtractPartyName(seg);
+                        supplierName = nadName;
+                    }
+
+                    // Only shipTo / billTo reach a canonical column; BY and SU have their own
+                    // header fields above. DP (delivery party) and ST (ship-to) are the two
+                    // spellings ORDERS senders use for the same thing; IV (invoicee) and BT
+                    // (bill-to) likewise.
+                    openRole = nadQualifier switch
+                    {
+                        "DP" or "ST" => "shipTo",
+                        "IV" or "BT" => "billTo",
+                        _            => null,
+                    };
+                    // A nameless party reaches no ShipTo*/BillTo* column — the ingestion layer
+                    // keys its denormalisation on the name — so do not open an unpersistable group.
+                    if (openRole is not null && nadName is not null)
+                    {
+                        openParty = new ParsedParty(
+                            Role:       openRole,
+                            Name:       nadName,
+                            Street:     ExtractStreet(seg),
+                            City:       NullIfEmpty(seg.Element(6)),
+                            PostalCode: NullIfEmpty(seg.Element(8)),
+                            Country:    NullIfEmpty(seg.Element(9)),
+                            EdiCode:    NullIfEmpty(seg.Component(2, 0)));
+                    }
+                    else
+                    {
+                        openRole = null;
+                    }
+                    break;
+
+                case "CTA" when openParty is not null:
+                    // CTA+OC+:Contact Name → element 2 is C056, component 1 is the name.
+                    openParty = openParty with
+                    {
+                        ContactName = NullIfEmpty(seg.Component(2, 1))
+                                      ?? NullIfEmpty(seg.Component(2, 0))
+                                      ?? openParty.ContactName,
+                    };
+                    break;
+
+                case "COM" when openParty is not null:
+                    // COM+contact@example.com:EM → C076: component 0 = value, 1 = qualifier.
+                    var comValue     = NullIfEmpty(seg.Component(1, 0));
+                    var comQualifier = seg.Component(1, 1);
+                    if (comValue is not null)
+                    {
+                        openParty = comQualifier switch
+                        {
+                            "EM" => openParty with { Email = comValue },
+                            "TE" => openParty with { Phone = comValue },
+                            _    => openParty,
+                        };
                     }
                     break;
 
@@ -218,6 +310,9 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
         // (UNA:+,? ') had its quantities/prices parsed under a hard-coded '.' decimal, so
         // "1.234,56" failed to parse (→ null) and an EU-grouped "1.000" was silently
         // under-read as 1.0 instead of 1000 (~1000× wrong). See ParseDecimal.
+        // The last NAD group in the heading has no following NAD to close it.
+        CloseParty();
+
         var lines = ParseLines(segments, delimiters.Decimal);
 
         return new ParsedOrder(
@@ -226,6 +321,9 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
             BuyerName: buyerName,
             Currency:  currency,
             Lines:     lines,
+            SupplierName: supplierName,
+            RequestedDeliveryDate: requestedDeliveryDate,
+            Parties:   parties.Count > 0 ? parties : null,
             // False for every conformant DTM — the format qualifier declares the ordering.
             NeedsReview:  orderDateAmbiguous,
             ReviewReason: DateParsing.BuildAmbiguityReason(orderDateAmbiguous, "order date", orderDateRaw));
@@ -599,6 +697,19 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
     }
 
     // ── Field extraction helpers ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Joins the NAD street composite (C059, element 5) into the single street the canonical
+    /// model stores. D96A allows up to four 35-character street lines; senders routinely use
+    /// two, and dropping all but the first loses the building/unit half of the address.
+    /// </summary>
+    private static string? ExtractStreet(Segment nad)
+    {
+        var parts = Enumerable.Range(0, 4)
+            .Select(i => NullIfEmpty(nad.Component(5, i)))
+            .Where(v => v is not null);
+        return NullIfEmpty(string.Join(", ", parts));
+    }
 
     private static string? ExtractPartyName(Segment nad)
     {

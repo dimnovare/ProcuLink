@@ -93,10 +93,15 @@ public sealed class CxmlOrderParser : IPurchaseOrderParser
         var orderDateStr = headerEl.Attribute("orderDate")?.Value;
         var (orderDate, orderDateAmbiguous) = ParseDate(orderDateStr);
 
-        // ── Currency from Total/Money ──────────────────────────────────────
+        // ── Currency AND grand total from Total/Money ──────────────────────
+        // The element carries both: the currency on @currency and the stated order total
+        // as its text. Only the attribute used to be read, so every cXML order arrived with
+        // GrandTotal = null and the emitters fell back to a derived line sum — which differs
+        // from the stated total whenever the document carries shipping or header-level tax.
         var totalMoneyEl = GetDescendant(headerEl, "Total")
             .Let(t => GetDescendant(t, "Money"));
         var currency = totalMoneyEl?.Attribute("currency")?.Value;
+        var (grandTotal, _) = ParseDecimal(totalMoneyEl?.Value);
 
         // Fallback: pick currency from first ItemOut/ItemDetail/UnitPrice/Money
         if (string.IsNullOrWhiteSpace(currency))
@@ -110,6 +115,23 @@ public sealed class CxmlOrderParser : IPurchaseOrderParser
         var buyerName = fromEl is not null
             ? GetDescendant(fromEl, "Identity")?.Value?.Trim()
             : null;
+
+        // ── ShipTo / BillTo party blocks ───────────────────────────────────
+        // Read from OrderRequestHeader's DIRECT children. Descendant search would be wrong
+        // here: <Fax> carries the same <TelephoneNumber> shape as <Phone>, and the cXML
+        // <Header><To><Correspondent><Contact> block is a routing contact, not the order's.
+        var parties = new List<ParsedParty>(2);
+        var shipTo = BuildParty(GetChild(headerEl, "ShipTo"), "shipTo");
+        if (shipTo is not null) parties.Add(shipTo);
+        var billTo = BuildParty(GetChild(headerEl, "BillTo"), "billTo");
+        if (billTo is not null) parties.Add(billTo);
+
+        // ── Order contact: OrderRequestHeader/Contact ──────────────────────
+        // Scoped to a direct child for the same reason as the address blocks above.
+        var contactEl    = GetChild(headerEl, "Contact");
+        var contactName  = NullIfEmpty(GetChild(contactEl, "Name")?.Value);
+        var contactEmail = NullIfEmpty(GetChild(contactEl, "Email")?.Value);
+        var contactPhone = ComposePhone(GetChild(contactEl, "Phone"));
 
         // ── ItemOut elements (required: at least one) ──────────────────────
         var itemOuts = GetAllDescendants(root, "ItemOut").ToList();
@@ -127,6 +149,11 @@ public sealed class CxmlOrderParser : IPurchaseOrderParser
             var quantityAttr = itemOut.Attribute("quantity")?.Value;
             var (quantityVal, qtyAmbiguous) = ParseDecimal(quantityAttr);
             var quantity = quantityVal ?? 0m;
+
+            // Per-line requested delivery date. cXML carries it as ItemOut@requestedDeliveryDate
+            // (an ISO 8601 dateTime, e.g. "2026-07-17T03:30:00-07:00"); the canonical model's
+            // per-line slot is a DateOnly, so the offset-local calendar date is kept.
+            var lineDeliveryDate = ParseCxmlDateOnly(itemOut.Attribute("requestedDeliveryDate")?.Value);
 
             // SupplierPartID (required per line)
             var itemIdEl      = GetDescendant(itemOut, "ItemID");
@@ -181,6 +208,7 @@ public sealed class CxmlOrderParser : IPurchaseOrderParser
                 // CsvOrderParser/EdifactOrderParser's NeedsReview/ReviewReason contract.
                 NeedsReview:   qtyAmbiguous || priceAmbiguous,
                 ReviewReason:  NumberParsing.BuildAmbiguityReason(qtyAmbiguous, priceAmbiguous),
+                DeliveryDate:           lineDeliveryDate,
                 ManufacturerPartNumber: NullIfEmpty(mpn),
                 CustomerPartNumber:     NullIfEmpty(auxId),
                 Unspsc:                 NullIfEmpty(unspsc),
@@ -189,12 +217,26 @@ public sealed class CxmlOrderParser : IPurchaseOrderParser
             autoLine++;
         }
 
+        // Header-level requested delivery date. cXML states the date per ItemOut, not on the
+        // header, so the canonical header field takes the EARLIEST line date — the date by
+        // which the order as a whole must start arriving. Null when no line states one.
+        var requestedDeliveryDate = lines
+            .Select(l => l.DeliveryDate)
+            .Where(d => d is not null)
+            .Min();
+
         return new ParsedOrder(
             PoNumber:  NullIfEmpty(orderId),
             OrderDate: orderDate,
             BuyerName: NullIfEmpty(buyerName),
             Currency:  NullIfEmpty(currency?.ToUpperInvariant()),
             Lines:     lines,
+            GrandTotal: grandTotal,
+            RequestedDeliveryDate: requestedDeliveryDate,
+            Parties:      parties.Count > 0 ? parties : null,
+            ContactName:  contactName,
+            ContactEmail: contactEmail,
+            ContactPhone: contactPhone,
             // Only reachable via the non-conformant leniency path below — a conformant
             // ISO 8601 orderDate can never be ambiguous.
             NeedsReview:  orderDateAmbiguous,
@@ -217,6 +259,118 @@ public sealed class CxmlOrderParser : IPurchaseOrderParser
     private static IEnumerable<XElement> GetAllDescendants(XElement parent, string localName) =>
         parent.Descendants().Where(e =>
             string.Equals(e.Name.LocalName, localName, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Returns the first DIRECT CHILD with the given local name, checking both the bare name
+    /// and the cXML namespace. Distinct from <see cref="GetDescendant"/>: the address blocks
+    /// repeat element names at several depths (<c>Address/Phone/TelephoneNumber</c> vs
+    /// <c>Address/Fax/TelephoneNumber</c>, <c>OrderRequestHeader/Contact</c> vs
+    /// <c>Header/To/Correspondent/Contact</c>), so a descendant search silently picks the
+    /// wrong node.
+    /// </summary>
+    private static XElement? GetChild(XElement? parent, string localName)
+    {
+        if (parent is null) return null;
+        return parent.Elements().FirstOrDefault(e =>
+            string.Equals(e.Name.LocalName, localName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static IEnumerable<XElement> GetChildren(XElement? parent, string localName) =>
+        parent is null
+            ? Enumerable.Empty<XElement>()
+            : parent.Elements().Where(e =>
+                string.Equals(e.Name.LocalName, localName, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Maps a cXML <c>&lt;ShipTo&gt;</c> / <c>&lt;BillTo&gt;</c> container onto a
+    /// <see cref="ParsedParty"/>. Shape:
+    /// <code>
+    /// &lt;ShipTo&gt;&lt;Address isoCountryCode="SE" addressID="SWZ"&gt;
+    ///   &lt;Name xml:lang="en"&gt;…&lt;/Name&gt;
+    ///   &lt;PostalAddress name="default"&gt;
+    ///     &lt;DeliverTo&gt;…&lt;/DeliverTo&gt;&lt;Street&gt;…&lt;/Street&gt;&lt;City&gt;…&lt;/City&gt;
+    ///     &lt;PostalCode&gt;…&lt;/PostalCode&gt;&lt;Country isoCountryCode="SE"&gt;Sweden&lt;/Country&gt;
+    ///   &lt;/PostalAddress&gt;
+    ///   &lt;Email name="default"&gt;…&lt;/Email&gt;&lt;Phone&gt;…&lt;/Phone&gt;
+    /// &lt;/Address&gt;&lt;/ShipTo&gt;
+    /// </code>
+    /// Returns null when the container is absent or carries no name — the ingestion layer
+    /// denormalises the party onto the flat ShipTo*/BillTo* columns keyed on the NAME, so a
+    /// nameless party would produce an address block no emitter would ever write.
+    /// </summary>
+    private static ParsedParty? BuildParty(XElement? container, string role)
+    {
+        var addressEl = GetChild(container, "Address");
+        if (addressEl is null) return null;
+
+        var name = NullIfEmpty(GetChild(addressEl, "Name")?.Value);
+        if (name is null) return null;
+
+        var postalEl = GetChild(addressEl, "PostalAddress");
+
+        // cXML permits repeated <Street> (and <DeliverTo>) lines for multi-line addresses.
+        // Join the street lines rather than dropping all but the first; take the first
+        // DeliverTo, which is the attention-of person (later ones repeat the company).
+        var street = NullIfEmpty(string.Join(", ", GetChildren(postalEl, "Street")
+            .Select(e => e.Value.Trim())
+            .Where(v => v.Length > 0)));
+
+        var countryEl = GetChild(postalEl, "Country");
+        // Prefer the ISO code over the display text: "Deutschland"/"Sweden" are localised
+        // labels, and every downstream consumer of the country column wants the code.
+        var country = NullIfEmpty(countryEl?.Attribute("isoCountryCode")?.Value)
+                      ?? NullIfEmpty(addressEl.Attribute("isoCountryCode")?.Value)
+                      ?? NullIfEmpty(countryEl?.Value);
+
+        return new ParsedParty(
+            Role:        role,
+            Name:        name,
+            Street:      street,
+            City:        NullIfEmpty(GetChild(postalEl, "City")?.Value),
+            PostalCode:  NullIfEmpty(GetChild(postalEl, "PostalCode")?.Value),
+            Country:     country,
+            EdiCode:     NullIfEmpty(addressEl.Attribute("addressID")?.Value),
+            ContactName: NullIfEmpty(GetChildren(postalEl, "DeliverTo").FirstOrDefault()?.Value),
+            Email:       NullIfEmpty(GetChild(addressEl, "Email")?.Value),
+            Phone:       ComposePhone(GetChild(addressEl, "Phone")));
+    }
+
+    /// <summary>
+    /// Flattens a cXML <c>&lt;Phone&gt;&lt;TelephoneNumber&gt;</c> composite
+    /// (<c>CountryCode</c> + <c>AreaOrCityCode</c> + <c>Number</c>) into a single dialable
+    /// string, e.g. <c>"+49 000 00000"</c>. Returns null when no number part is present.
+    /// </summary>
+    private static string? ComposePhone(XElement? phoneEl)
+    {
+        var telEl = GetChild(phoneEl, "TelephoneNumber");
+        if (telEl is null) return NullIfEmpty(phoneEl?.Value);
+
+        var countryCode = NullIfEmpty(GetChild(telEl, "CountryCode")?.Value);
+        var areaCode    = NullIfEmpty(GetChild(telEl, "AreaOrCityCode")?.Value);
+        var number      = NullIfEmpty(GetChild(telEl, "Number")?.Value);
+
+        if (number is null && areaCode is null) return null;
+
+        var parts = new List<string>(3);
+        if (countryCode is not null) parts.Add("+" + countryCode);
+        if (areaCode    is not null) parts.Add(areaCode);
+        if (number      is not null) parts.Add(number);
+        return NullIfEmpty(string.Join(" ", parts));
+    }
+
+    /// <summary>
+    /// Reads a cXML ISO 8601 dateTime (<c>ItemOut@requestedDeliveryDate</c>) as a calendar
+    /// date. The offset-local date is kept deliberately: "2026-07-17T03:30:00-07:00" is
+    /// the 17th to the party that stated it, and converting to UTC would move it to the 18th.
+    /// </summary>
+    private static DateOnly? ParseCxmlDateOnly(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        return DateTimeOffset.TryParse(value.Trim(), CultureInfo.InvariantCulture,
+                   DateTimeStyles.None, out var dto)
+            ? DateOnly.FromDateTime(dto.DateTime)
+            : null;
+    }
 
     /// <summary>
     /// Parse a cXML date via the shared locale-aware reader. <c>orderDate</c> is ISO 8601 by

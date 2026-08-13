@@ -58,6 +58,10 @@ public class FixtureNamingGuardTests
         // Document formats and standards.
         "cxml", "idoc", "orders", "csv", "json", "xml", "excel", "cif", "soap",
         "stoitembase", "ubl", "edifact",
+        // "x" is what "x12" and the ".x12" extension normalise to once digits are stripped;
+        // "edi" covers the ".edi" extension EDIFACT interchanges conventionally carry. Both are
+        // standards bodies' names for a wire format, not counterparties.
+        "x", "edi",
 
         // Platform / ERP dialects that ProcuLink publicly supports. A dialect is a format,
         // not a customer — see the class doc before adding to this group.
@@ -70,9 +74,11 @@ public class FixtureNamingGuardTests
         // Shapes, quirks and behaviours a fixture exists to pin.
         "bare", "curcy", "deploymentmode", "differs", "dtd", "equals", "lines", "netwr",
         "no", "numeric", "reconcile", "singleline", "unicode", "with",
+        // "parties" names the ship-to / bill-to address blocks a fixture exists to pin.
+        "parties",
 
         // Locales and currencies.
-        "es", "fr", "it", "pl", "de", "en", "eur", "pln", "sek",
+        "es", "fr", "it", "pl", "de", "en", "eur", "pln", "sek", "usd",
     };
 
     /// <summary>Splits a path segment while keeping the delimiters, so a redacted path can be

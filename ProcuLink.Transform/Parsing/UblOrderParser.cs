@@ -131,9 +131,57 @@ public sealed class UblOrderParser : IPurchaseOrderParser
         // ── Seller / supplier party name (cac:SellerSupplierParty/cac:Party/cac:PartyName/cbc:Name) ──
         // NOTE: SellerName is intentionally NOT propagated to ParsedOrder.BuyerName.
         // ParsedOrder.BuyerName carries the buyer; the supplier is identified separately
-        // by SupplierId at the entity layer. SellerSupplierParty is parsed for future
-        // use (e.g. supplier auto-resolution) but currently has no canonical-field home.
-        _ = ExtractPartyName(root, "SellerSupplierParty");
+        // by SupplierId at the entity layer. It DOES have a canonical home of its own —
+        // ParsedOrder.SupplierName — which is what the review UI shows as the counterparty.
+        var supplierName = ExtractPartyName(root, "SellerSupplierParty");
+
+        // ── Buyer party details: address, contact, tax id ──────────────────
+        var buyerPartyEl = GetChild(GetDescendant(root, "BuyerCustomerParty"), "Party");
+        // A true bill-to (cac:AccountingCustomerParty) wins over the ordering buyer when the
+        // document distinguishes them; most Orders carry only BuyerCustomerParty.
+        var accountingPartyEl = GetChild(GetDescendant(root, "AccountingCustomerParty"), "Party");
+        var billToSourceEl = accountingPartyEl ?? buyerPartyEl;
+
+        var contactEl    = GetChild(buyerPartyEl, "Contact");
+        var contactName  = NullIfEmpty(GetChild(contactEl, "Name")?.Value);
+        var contactPhone = NullIfEmpty(GetChild(contactEl, "Telephone")?.Value);
+        var contactEmail = NullIfEmpty(GetChild(contactEl, "ElectronicMail")?.Value);
+
+        // Buyer VAT / company id: cac:PartyTaxScheme/cbc:CompanyID, falling back to
+        // cac:PartyLegalEntity/cbc:CompanyID. Drives the cXML From/Identity on re-emit.
+        var buyerTaxId = NullIfEmpty(GetChild(GetChild(buyerPartyEl, "PartyTaxScheme"), "CompanyID")?.Value)
+                         ?? NullIfEmpty(GetChild(GetChild(buyerPartyEl, "PartyLegalEntity"), "CompanyID")?.Value);
+
+        // ── Delivery: ship-to party + requested delivery date ──────────────
+        // cac:Delivery/cac:DeliveryLocation/cac:Address + cac:Delivery/cac:DeliveryParty,
+        // and cac:Delivery/cac:RequestedDeliveryPeriod/cbc:StartDate for the date.
+        var deliveryEl = GetChild(root, "Delivery");
+        var requestedDeliveryDate =
+            ParseDateOnly(GetChild(GetChild(deliveryEl, "RequestedDeliveryPeriod"), "StartDate")?.Value)
+            // Non-conformant senders sometimes put a bare date on Delivery instead of a period.
+            ?? ParseDateOnly(GetChild(deliveryEl, "RequestedDeliveryDate")?.Value);
+
+        // ── Monetary totals ────────────────────────────────────────────────
+        // UBL 2.1 Order states totals in cac:AnticipatedMonetaryTotal. cac:LegalMonetaryTotal
+        // is the Invoice/OrderResponse spelling, but senders do emit it on Orders, so accept
+        // both rather than silently dropping the totals of a document that carries them.
+        var totalEl = GetChild(root, "AnticipatedMonetaryTotal")
+                      ?? GetChild(root, "LegalMonetaryTotal");
+        var (subTotal, _)   = ParseDecimal(GetChild(totalEl, "LineExtensionAmount")?.Value);
+        var (grandTotal, _) = ParseDecimal(GetChild(totalEl, "PayableAmount")?.Value
+                                           ?? GetChild(totalEl, "TaxInclusiveAmount")?.Value);
+        var (taxTotal, _)   = ParseDecimal(GetChild(GetChild(root, "TaxTotal"), "TaxAmount")?.Value);
+
+        // ── Parties ────────────────────────────────────────────────────────
+        // Only shipTo and billTo are emitted. The ingestion layer denormalises exactly these
+        // two roles onto the flat ShipTo*/BillTo* columns the emitters read; adding a "buyer"
+        // row sourced from the same BuyerCustomerParty would duplicate the billTo row in
+        // order_parties without reaching any additional column.
+        var parties = new List<ParsedParty>(2);
+        var shipToParty = BuildDeliveryParty(deliveryEl);
+        if (shipToParty is not null) parties.Add(shipToParty);
+        var billToParty = BuildParty(billToSourceEl, "billTo");
+        if (billToParty is not null) parties.Add(billToParty);
 
         // ── Peppol BIS 3 customization (informational; not required) ───────
         // var customizationId = GetChild(root, "CustomizationID")?.Value?.Trim();
@@ -233,6 +281,16 @@ public sealed class UblOrderParser : IPurchaseOrderParser
             BuyerName: NullIfEmpty(buyerName),
             Currency:  NullIfEmpty(currency?.ToUpperInvariant()),
             Lines:     lines,
+            SupplierName: NullIfEmpty(supplierName),
+            BuyerTaxId:   buyerTaxId,
+            SubTotal:     subTotal,
+            TaxTotal:     taxTotal,
+            GrandTotal:   grandTotal,
+            RequestedDeliveryDate: requestedDeliveryDate,
+            Parties:      parties.Count > 0 ? parties : null,
+            ContactName:  contactName,
+            ContactEmail: contactEmail,
+            ContactPhone: contactPhone,
             // Only reachable via the non-conformant leniency path below — a conformant
             // xsd:date is ISO and can never be ambiguous.
             NeedsReview:  orderDateAmbiguous,
@@ -312,6 +370,102 @@ public sealed class UblOrderParser : IPurchaseOrderParser
         // Fallback: PartyLegalEntity/RegistrationName (Peppol BIS 3)
         var legalEl = GetChild(partyEl, "PartyLegalEntity");
         return legalEl is null ? null : GetChild(legalEl, "RegistrationName")?.Value?.Trim();
+    }
+
+    /// <summary>
+    /// Maps a <c>cac:Party</c> element onto a <see cref="ParsedParty"/>: name, postal address,
+    /// contact, and the tax / endpoint identifiers UBL carries alongside them. Returns null when
+    /// the element is absent or carries no name — the ingestion layer keys its denormalisation
+    /// onto the flat ShipTo*/BillTo* columns on the NAME, so a nameless party reaches no column.
+    /// </summary>
+    private static ParsedParty? BuildParty(XElement? partyEl, string role)
+    {
+        if (partyEl is null) return null;
+
+        var name = NullIfEmpty(GetChild(GetChild(partyEl, "PartyName"), "Name")?.Value)
+                   ?? NullIfEmpty(GetChild(GetChild(partyEl, "PartyLegalEntity"), "RegistrationName")?.Value);
+        if (name is null) return null;
+
+        var addressEl = GetChild(partyEl, "PostalAddress");
+        var contactEl = GetChild(partyEl, "Contact");
+
+        return new ParsedParty(
+            Role:        role,
+            Name:        name,
+            Street:      BuildStreet(addressEl),
+            City:        NullIfEmpty(GetChild(addressEl, "CityName")?.Value),
+            PostalCode:  NullIfEmpty(GetChild(addressEl, "PostalZone")?.Value),
+            Country:     NullIfEmpty(GetChild(GetChild(addressEl, "Country"), "IdentificationCode")?.Value),
+            Vat:         NullIfEmpty(GetChild(GetChild(partyEl, "PartyTaxScheme"), "CompanyID")?.Value),
+            RegNr:       NullIfEmpty(GetChild(GetChild(partyEl, "PartyLegalEntity"), "CompanyID")?.Value),
+            EdiCode:     NullIfEmpty(GetChild(partyEl, "EndpointID")?.Value)
+                         ?? NullIfEmpty(GetChild(GetChild(partyEl, "PartyIdentification"), "ID")?.Value),
+            ContactName: NullIfEmpty(GetChild(contactEl, "Name")?.Value),
+            Email:       NullIfEmpty(GetChild(contactEl, "ElectronicMail")?.Value),
+            Phone:       NullIfEmpty(GetChild(contactEl, "Telephone")?.Value));
+    }
+
+    /// <summary>
+    /// Builds the ship-to party from <c>cac:Delivery</c>. UBL splits it across two children:
+    /// the NAME lives under <c>cac:DeliveryParty</c> while the ADDRESS lives under
+    /// <c>cac:DeliveryLocation/cac:Address</c>, so neither alone yields a usable party.
+    /// </summary>
+    private static ParsedParty? BuildDeliveryParty(XElement? deliveryEl)
+    {
+        if (deliveryEl is null) return null;
+
+        var deliveryPartyEl = GetChild(deliveryEl, "DeliveryParty");
+        var locationEl      = GetChild(deliveryEl, "DeliveryLocation");
+        var addressEl       = GetChild(locationEl, "Address") ?? GetChild(deliveryEl, "Address");
+
+        var name = NullIfEmpty(GetChild(GetChild(deliveryPartyEl, "PartyName"), "Name")?.Value)
+                   ?? NullIfEmpty(GetChild(GetChild(deliveryPartyEl, "PartyLegalEntity"), "RegistrationName")?.Value)
+                   ?? NullIfEmpty(GetChild(locationEl, "Name")?.Value);
+        if (name is null) return null;
+
+        var contactEl = GetChild(deliveryPartyEl, "Contact");
+
+        return new ParsedParty(
+            Role:        "shipTo",
+            Name:        name,
+            Street:      BuildStreet(addressEl),
+            City:        NullIfEmpty(GetChild(addressEl, "CityName")?.Value),
+            PostalCode:  NullIfEmpty(GetChild(addressEl, "PostalZone")?.Value),
+            Country:     NullIfEmpty(GetChild(GetChild(addressEl, "Country"), "IdentificationCode")?.Value),
+            EdiCode:     NullIfEmpty(GetChild(locationEl, "ID")?.Value),
+            ContactName: NullIfEmpty(GetChild(contactEl, "Name")?.Value),
+            Email:       NullIfEmpty(GetChild(contactEl, "ElectronicMail")?.Value),
+            Phone:       NullIfEmpty(GetChild(contactEl, "Telephone")?.Value));
+    }
+
+    /// <summary>
+    /// Joins the UBL street lines (<c>cbc:StreetName</c> + <c>cbc:AdditionalStreetName</c>) into
+    /// the single street the canonical model stores, dropping the ones the document omits.
+    /// </summary>
+    private static string? BuildStreet(XElement? addressEl)
+    {
+        if (addressEl is null) return null;
+        var parts = new[] { "StreetName", "AdditionalStreetName" }
+            .Select(n => NullIfEmpty(GetChild(addressEl, n)?.Value))
+            .Where(v => v is not null);
+        return NullIfEmpty(string.Join(", ", parts));
+    }
+
+    /// <summary>
+    /// Reads a UBL <c>xsd:date</c> (<c>yyyy-MM-dd</c>) as a <see cref="DateOnly"/>. Conformant
+    /// UBL dates are ISO, so this is exact-format only — a non-conformant value is left null
+    /// rather than guessed at, since a wrong delivery date is worse than an absent one.
+    /// </summary>
+    private static DateOnly? ParseDateOnly(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var trimmed = value.Trim();
+        // Some senders send a full dateTime where the schema says date.
+        if (trimmed.Length > 10) trimmed = trimmed[..10];
+        return DateOnly.TryParseExact(trimmed, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                   DateTimeStyles.None, out var d)
+            ? d
+            : null;
     }
 
     /// <summary>
