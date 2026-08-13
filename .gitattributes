@@ -4,3 +4,13 @@
 # while Windows dev (CRLF) parsed fine. Force CRLF so every build embeds the same bytes.
 ProcuLink.Api/Fixtures/*.csv text eol=crlf
 ProcuLink.Infrastructure/Fixtures/*.csv text eol=crlf
+
+# Vendored OASIS UBL 2.1 schemas — byte-for-byte, no EOL translation, for two reasons.
+#   LICENCE: the OASIS notice grants redistribution only of the UNMODIFIED document.
+#            Rewriting every line ending is a modification, so `-text` is a compliance
+#            requirement here and not a preference.
+#   CORRECTNESS: core.autocrlf is true on Windows dev machines and absent in the Linux CI
+#            container, so without this the embedded resource bytes — and therefore the
+#            SHA-256 digests pinned in PROVENANCE.md — would differ by platform. Exactly
+#            the split the CSV rule above exists to close.
+ProcuLink.Transform/Conformance/Schemas/ubl-2.1/**/*.xsd -text

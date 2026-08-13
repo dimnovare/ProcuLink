@@ -17,6 +17,30 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Vendored OASIS UBL 2.1 Order schema + its complete import closure (14 files, ~2.8 MB), so
+         UblSchemaValidator can validate emitted UBL against the STANDARD rather than against our own
+         reading of it. Provenance, digests and the three licences are in the PROVENANCE.md embedded
+         alongside them — the OASIS grant is conditioned on the notices travelling with the copy, and
+         every notice lives inside the file it governs.
+
+         EMBEDDED, not Content/CopyToOutputDirectory, on purpose: the schemas must resolve identically
+         in a unit test, in the API container and in the Worker container, with no working-directory or
+         publish-layout dependency. A validator that silently finds no schema is worse than one that
+         cannot start.
+
+         LogicalName is set explicitly rather than left to the default $(RootNamespace)-derived name.
+         The directory is literally called "ubl-2.1", so the default mangling would bury a dot inside
+         the resource name and the closure resolver — which maps "../common/X.xsd" onto a resource —
+         would be parsing MSBuild's naming convention. These names are just the on-disk relative path. -->
+    <EmbeddedResource Include="Conformance\Schemas\ubl-2.1\maindoc\*.xsd"
+                      LogicalName="ubl-2.1/maindoc/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Conformance\Schemas\ubl-2.1\common\*.xsd"
+                      LogicalName="ubl-2.1/common/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Conformance\Schemas\ubl-2.1\PROVENANCE.md"
+                      LogicalName="ubl-2.1/PROVENANCE.md" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="ClosedXML" Version="0.104.2" />
     <PackageReference Include="CsvHelper" Version="33.0.0" />
     <!-- ILogger abstraction only (no concrete provider) so the static output builders can emit
