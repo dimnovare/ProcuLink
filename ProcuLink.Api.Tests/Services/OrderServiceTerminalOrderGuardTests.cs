@@ -55,7 +55,7 @@ public class OrderServiceTerminalOrderGuardTests
         itemMappings
             .Setup(s => s.UpsertAsync(
                 It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(),
-                It.IsAny<MappingSource>(), It.IsAny<CancellationToken>()))
+                It.IsAny<MappingSource>(), It.IsAny<float?>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         var integrationTrigger = new Mock<IIntegrationTriggerService>();

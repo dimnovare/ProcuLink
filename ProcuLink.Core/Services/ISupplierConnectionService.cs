@@ -21,7 +21,7 @@ public sealed record ConnectionRevisionDraftInput(
     IReadOnlyList<ConnectionItemMappingInput> ItemMappings);
 
 public sealed record ConnectionItemMappingInput(
-    string BuyerItemCode, string SupplierItemCode, float Confidence, string Source);
+    string BuyerItemCode, string SupplierItemCode, float? Confidence, string Source);
 
 /// <summary>
 /// Thrown when a caller puts a value in <see cref="ConnectionRevisionDraftInput.CredentialsRef"/>.

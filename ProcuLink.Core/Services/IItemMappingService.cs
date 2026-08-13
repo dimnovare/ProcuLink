@@ -37,10 +37,18 @@ public interface IItemMappingService
         Guid orgId, Guid supplierId, IEnumerable<string> buyerItemCodes, CancellationToken ct);
 
     /// <summary>Insert or update a mapping. Updates confidence and source if the row exists.</summary>
+    /// <param name="confidence">
+    /// The model score behind this mapping, 0..1 — or <c>null</c> when nothing scored it, which is
+    /// the honest answer for a hand-typed or bulk-imported code. Callers must state this rather
+    /// than let the store guess: it used to be derived as
+    /// <c>source == Manual ? 1.0f : 0.8f</c>, which printed a green "100%" against a code an
+    /// operator had typed and a flat amber "80%" against one they had imported. Pass the real
+    /// number when a model produced one; pass null otherwise. Never pass a placeholder.
+    /// </param>
     Task UpsertAsync(
         Guid orgId, Guid supplierId,
         string buyerItemCode, string supplierItemCode,
-        MappingSource source, CancellationToken ct);
+        MappingSource source, float? confidence, CancellationToken ct);
 
     /// <summary>All mappings for a supplier, ordered by buyer item code.</summary>
     Task<IReadOnlyList<ItemMapping>> GetForSupplierAsync(
@@ -54,10 +62,11 @@ public interface IItemMappingService
     /// the code already exists under a different spelling it is UPDATED and returned, so this can
     /// never create a case-variant twin. Returns the created-or-updated entity.
     /// </summary>
+    /// <param name="confidence">See <see cref="UpsertAsync"/> — null when nothing scored it.</param>
     Task<ItemMapping> CreateAsync(
         Guid orgId, Guid supplierId,
         string buyerItemCode, string supplierItemCode,
-        MappingSource source, CancellationToken ct);
+        MappingSource source, float? confidence, CancellationToken ct);
 
     /// <summary>
     /// Update buyer and supplier codes by mapping ID. Returns <c>null</c> when the mapping is not

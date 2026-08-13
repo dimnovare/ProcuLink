@@ -201,8 +201,8 @@ public class ItemMappingCaseParityTests
         var supplierId = Guid.NewGuid();
         var service    = new ItemMappingService(db);
 
-        await service.UpsertAsync(orgId, supplierId, "B-1", "SUP-A", MappingSource.Manual, CancellationToken.None);
-        await service.UpsertAsync(orgId, supplierId, "b-1", "SUP-B", MappingSource.Manual, CancellationToken.None);
+        await service.UpsertAsync(orgId, supplierId, "B-1", "SUP-A", MappingSource.Manual, confidence: null, CancellationToken.None);
+        await service.UpsertAsync(orgId, supplierId, "b-1", "SUP-B", MappingSource.Manual, confidence: null, CancellationToken.None);
 
         var rows = await db.ItemMappings
             .Where(m => m.OrgId == orgId && m.SupplierId == supplierId)
@@ -429,8 +429,8 @@ public class ItemMappingCaseParityTests
         var supplierId = Guid.NewGuid();
         var service    = new ItemMappingService(db);
 
-        await service.CreateAsync(orgId, supplierId, "B-1", "SUP-A", MappingSource.Manual, CancellationToken.None);
-        await service.CreateAsync(orgId, supplierId, "b-1", "SUP-B", MappingSource.Manual, CancellationToken.None);
+        await service.CreateAsync(orgId, supplierId, "B-1", "SUP-A", MappingSource.Manual, confidence: null, CancellationToken.None);
+        await service.CreateAsync(orgId, supplierId, "b-1", "SUP-B", MappingSource.Manual, confidence: null, CancellationToken.None);
 
         var rows = await db.ItemMappings
             .Where(m => m.OrgId == orgId && m.SupplierId == supplierId)
@@ -452,8 +452,8 @@ public class ItemMappingCaseParityTests
         var supplierId = Guid.NewGuid();
         var service    = new ItemMappingService(db);
 
-        var keep   = await service.CreateAsync(orgId, supplierId, "B-1", "SUP-A", MappingSource.Manual, CancellationToken.None);
-        var rename = await service.CreateAsync(orgId, supplierId, "C-9", "SUP-C", MappingSource.Manual, CancellationToken.None);
+        var keep   = await service.CreateAsync(orgId, supplierId, "B-1", "SUP-A", MappingSource.Manual, confidence: null, CancellationToken.None);
+        var rename = await service.CreateAsync(orgId, supplierId, "C-9", "SUP-C", MappingSource.Manual, confidence: null, CancellationToken.None);
 
         var result = await service.UpdateByIdAsync(
             orgId, rename.Id, "b-1", "SUP-D", MappingSource.Manual, CancellationToken.None);
@@ -552,7 +552,7 @@ public class ItemMappingCaseParityTests
         var supplierId = Guid.NewGuid();
         var service    = new ItemMappingService(db);
 
-        var mapping = await service.CreateAsync(orgId, supplierId, "B-1", "SUP-A", MappingSource.Manual, CancellationToken.None);
+        var mapping = await service.CreateAsync(orgId, supplierId, "B-1", "SUP-A", MappingSource.Manual, confidence: null, CancellationToken.None);
 
         var result = await service.UpdateByIdAsync(
             orgId, mapping.Id, "b-1", "SUP-B", MappingSource.Manual, CancellationToken.None);

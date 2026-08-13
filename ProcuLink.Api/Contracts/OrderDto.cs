@@ -129,7 +129,10 @@ public record OrderLineDto(
     decimal  Quantity,
     string?  Unit,
     decimal  UnitPrice,
-    float    Confidence,
+    /// <summary>Model score 0..1, or null when nothing scored this line. Null is the normal
+    /// answer for a deterministically or hand-resolved line — it used to be a state flag
+    /// (1.0 resolved / 0.5 flagged / 0.0 unresolved) that clients rendered as a percentage.</summary>
+    float?   Confidence,
     bool     NeedsReview,
     AiMappingSuggestionDto? AiSuggestion,
     // ── Phase 4 per-line enrichment (nullable; only the LLM PDF/email paths populate these) ──

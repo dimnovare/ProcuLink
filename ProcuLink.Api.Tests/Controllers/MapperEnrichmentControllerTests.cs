@@ -164,8 +164,19 @@ public class MapperEnrichmentControllerTests
             .Which.Should().BeEmpty();
     }
 
+    /// <summary>
+    /// A saved supplier mapping is a FACT about configuration, not a probability, so it goes out
+    /// with no confidence at all and says what it is via <c>Basis</c>.
+    ///
+    /// <para>This test used to be named <c>..._YieldsHighConfidenceRawSuggestion</c> and asserted
+    /// <c>s.Confidence &gt;= 0.9</c> — which was the ONLY thing guarding a private
+    /// <c>SavedMappingConfidence = 0.95</c> constant, i.e. the assertion existed to hold a
+    /// fabricated number in place. The mapper rendered that 0.95 as an "AI confidence 95%" chip in
+    /// AI-violet and as a "95" in the ghost-wire ring, on a code path whose own comment says the
+    /// suggester is deliberately never invoked. Nothing measured anything.</para>
+    /// </summary>
     [Fact]
-    public async Task MappingSuggestions_SavedSupplierMapping_YieldsHighConfidenceRawSuggestion()
+    public async Task MappingSuggestions_SavedSupplierMapping_CarriesNoConfidence_AndSaysItIsASavedMapping()
     {
         using var db = NewDb();
         var (orgId, supplierId, orderId) = await SeedOrderAsync(db);
@@ -207,10 +218,19 @@ public class MapperEnrichmentControllerTests
         list.Should().HaveCount(2);
         list.Should().Contain(s =>
             s.TargetKey == "PoNumber" && s.SourceId == "Bestellnummer"
-            && s.SourceKind == "raw" && s.Confidence >= 0.9);
+            && s.SourceKind == "raw");
         list.Should().Contain(s =>
             s.TargetKey == "SupplierItemCode" && s.SourceId == "Ihre Materialnr"
             && s.SourceKind == "raw");
+
+        // The point of the change: no number, and the reason there is no number is stated.
+        list.Should().OnlyContain(s => s.Confidence == null,
+            "nothing scored a saved mapping, so it must not carry a score");
+        list.Should().OnlyContain(s => s.Basis == MappingSuggestionBasis.SavedMapping);
+
+        // Pinned literally, because this is the string the frontend switches its label on.
+        list.Should().OnlyContain(s => s.Basis == "saved_mapping");
+
         // The FixedValue-only entry must NOT appear (no source column to wire).
         list.Should().NotContain(s => s.TargetKey == "Currency");
     }

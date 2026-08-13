@@ -368,7 +368,9 @@ public sealed class SampleOrderService : ISampleOrderService
                 SupplierId       = supplierId,
                 BuyerItemCode    = buyerCode,
                 SupplierItemCode = supplierCode,
-                Confidence       = 1.0f,
+                // Seeded, not scored. This wrote 1.0f while ItemMappingService wrote 0.8f for the
+                // same "imported" source — two writers, one column, two different fictions.
+                Confidence       = null,
                 Source           = "imported",
                 CreatedAt        = now,
                 UpdatedAt        = now,

@@ -13,7 +13,10 @@ public class ConnectionRevisionItemMapping
     public Guid RevisionId { get; set; }
     public string BuyerItemCode { get; set; } = string.Empty;
     public string SupplierItemCode { get; set; } = string.Empty;
-    public float Confidence { get; set; }
+    /// <summary>Snapshot of ItemMapping.Confidence — a model score 0..1, or null when nothing
+    /// scored the mapping this revision copied. Nullable for the same reason the live column is:
+    /// defaulting an unscored mapping to a number here would reintroduce the fiction one layer on.</summary>
+    public float? Confidence { get; set; }
 
     /// <summary>manual | imported | suggested (copied from the source ItemMapping).</summary>
     public string Source { get; set; } = "manual";

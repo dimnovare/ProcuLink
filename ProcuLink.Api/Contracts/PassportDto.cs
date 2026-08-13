@@ -121,7 +121,9 @@ public record PassportMappingDecision(
     string? SupplierItemCode,
     /// <summary>deterministic (resolved from item_mappings or a manual correction) | ai (an AI suggestion is still attached) | unresolved.</summary>
     string  Source,
-    float   Confidence
+    /// <summary>Model score 0..1, or null when nothing scored this line — see
+    /// PurchaseOrderLineEntity.Confidence. Null is the normal answer.</summary>
+    float?  Confidence
 );
 
 /// <summary>

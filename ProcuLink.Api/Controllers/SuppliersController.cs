@@ -388,7 +388,8 @@ public class SuppliersController : ControllerBase
         var mapping = await _mappingService.CreateAsync(
             orgId, supplierId,
             request.BuyerItemCode, request.SupplierItemCode,
-            MappingSource.Manual, ct);
+            // Typed into the supplier's mapping table by hand. Nothing scored it.
+            MappingSource.Manual, confidence: null, ct);
 
         return StatusCode(201, new
         {
@@ -424,6 +425,8 @@ public class SuppliersController : ControllerBase
             .AsNoTracking()
             .AnyAsync(m => m.Id == mappingId && m.OrgId == orgId, ct);
 
+        // UpdateByIdAsync clears the stored score itself: an operator retyping the codes means
+        // nothing has scored the result.
         var mapping = await _mappingService.UpdateByIdAsync(
             orgId, mappingId,
             request.BuyerItemCode, request.SupplierItemCode,
@@ -508,7 +511,10 @@ public class SuppliersController : ControllerBase
             // CreateAsync applies the shared rule itself (updates an existing case-variant row
             // rather than inserting a twin), so ONE call covers both branches.
             await _mappingService.CreateAsync(
-                orgId, supplierId, buyerCode, supplierCode, MappingSource.Imported, ct);
+                orgId, supplierId, buyerCode, supplierCode,
+                // Loaded from the operator's CSV. Nothing scored it — this path used to stamp a
+                // literal 0.8f, which the supplier screen printed as a flat amber '80%'.
+                MappingSource.Imported, confidence: null, ct);
 
             if (existed) updated++; else created++;
         }

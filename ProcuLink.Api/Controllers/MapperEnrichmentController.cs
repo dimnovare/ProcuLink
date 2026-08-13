@@ -70,9 +70,19 @@ public sealed class MapperEnrichmentController : ControllerBase
 
     /// <summary>
     /// Returns learned source→canonical mapping suggestions for the order, rendered as
-    /// accept/reject ghost wires. The source is the supplier's SAVED PO mapping (high
-    /// confidence — it was learned from this supplier's prior orders), NOT a fresh model
-    /// call: deterministic and free. Empty when the supplier has no saved mapping yet.
+    /// accept/reject ghost wires. The source is the supplier's SAVED PO mapping, NOT a fresh
+    /// model call: deterministic and free. Empty when the supplier has no saved mapping yet.
+    ///
+    /// <para><b>These carry no confidence, and that is the honest answer.</b> Every entry used to
+    /// go out with <c>Confidence = 0.95</c> from a private constant — a number no model produced,
+    /// on a path whose own note (below) says the suggester is deliberately never invoked. The
+    /// mapper then printed it as an "AI confidence 95%" chip in AI-violet, and as a "95" numeral
+    /// in the ghost-wire ring. It misdescribed the thing twice: it was not AI, and it was not a
+    /// confidence — it was a configured fact, identical for every field of every supplier.
+    /// A saved mapping now sends <c>Confidence: null</c> with
+    /// <c>Basis: <see cref="MappingSuggestionBasis.SavedMapping"/></c>, and the UI says
+    /// "Saved mapping" instead of scoring it. When the secondary suggester path is lit up it
+    /// sends <see cref="MappingSuggestionBasis.Model"/> with its real number.</para>
     /// </summary>
     [HttpGet("{id:guid}/mapping-suggestions")]
     [ProducesResponseType(typeof(IReadOnlyList<MappingSuggestionDto>), StatusCodes.Status200OK)]
@@ -107,9 +117,12 @@ public sealed class MapperEnrichmentController : ControllerBase
                     suggestions.Add(new MappingSuggestionDto(
                         TargetKey: canonicalField,
                         SourceId: sourceColumn,
-                        Confidence: SavedMappingConfidence,
+                        // Null, not a placeholder: nothing scored this. The saved mapping is a
+                        // fact about the supplier's configuration, and Basis says so.
+                        Confidence: null,
                         Reason: $"Saved supplier mapping: column '{sourceColumn}' → {canonicalField}",
-                        SourceKind: "raw"));
+                        SourceKind: "raw",
+                        Basis: MappingSuggestionBasis.SavedMapping));
                 }
             }
         }
@@ -305,9 +318,6 @@ public sealed class MapperEnrichmentController : ControllerBase
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
-
-    /// <summary>Confidence assigned to a wire derived from the supplier's SAVED (learned) PO mapping.</summary>
-    private const double SavedMappingConfidence = 0.95;
 
     /// <summary>Enumerates a saved PO mapping's header + line entries as (canonicalField, entry) pairs.</summary>
     private static IEnumerable<(string CanonicalField, FieldMappingEntry Entry)> EnumerateMappingEntries(

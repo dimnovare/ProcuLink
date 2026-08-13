@@ -212,16 +212,25 @@ public class OrderServicePdfRoutingTests
     {
         var lines = new List<PurchaseOrderLineEntity>
         {
-            new() { LineNumber = 1, SupplierItemCode = "SUP-1", NeedsReview = false, Confidence = 1.0f },
-            new() { LineNumber = 2, SupplierItemCode = "SUP-2", NeedsReview = false, Confidence = 1.0f },
+            // Confidence left unset (null) because that is what ingestion writes: no model runs on
+            // the deterministic path, so a resolved line carries no score.
+            new() { LineNumber = 1, SupplierItemCode = "SUP-1", NeedsReview = false },
+            new() { LineNumber = 2, SupplierItemCode = "SUP-2", NeedsReview = false },
         };
 
         OrderService.ApplyExtractionReviewFlags(lines, new[] { 1 });
 
         lines[0].NeedsReview.Should().BeTrue("line 1 was flagged by the extractor");
-        lines[0].Confidence.Should().BeLessThanOrEqualTo(0.5f);
+        lines[0].ReviewReason.Should().NotBeNullOrWhiteSpace("the flag must say why");
         lines[1].NeedsReview.Should().BeFalse("line 2 was not flagged");
-        lines[1].Confidence.Should().Be(1.0f);
+        lines[1].ReviewReason.Should().BeNull();
+
+        // This used to assert the flagged line''"'"'s Confidence was capped to <= 0.5, and the clean
+        // line''"'"'s stayed 1.0 — asserting a STATE FLAG stored in the confidence column. Being
+        // flagged for review is not evidence about a score; it is NeedsReview + ReviewReason, which
+        // is what is asserted above. Neither line was scored by a model, so neither carries a number.
+        lines[0].Confidence.Should().BeNull("a review flag is not a confidence");
+        lines[1].Confidence.Should().BeNull("nothing scored this line");
     }
 
     [Fact]

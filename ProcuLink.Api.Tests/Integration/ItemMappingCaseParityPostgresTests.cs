@@ -198,8 +198,8 @@ public sealed class ItemMappingCaseParityPostgresTests
         await db.SaveChangesAsync();
 
         var service = new ItemMappingService(db);
-        await service.UpsertAsync(orgId, supplierId, "B-1", "SUP-A", MappingSource.Manual, CancellationToken.None);
-        await service.UpsertAsync(orgId, supplierId, "b-1", "SUP-B", MappingSource.Manual, CancellationToken.None);
+        await service.UpsertAsync(orgId, supplierId, "B-1", "SUP-A", MappingSource.Manual, confidence: null, CancellationToken.None);
+        await service.UpsertAsync(orgId, supplierId, "b-1", "SUP-B", MappingSource.Manual, confidence: null, CancellationToken.None);
 
         var rows = await db.ItemMappings.AsNoTracking()
             .Where(m => m.OrgId == orgId && m.SupplierId == supplierId)

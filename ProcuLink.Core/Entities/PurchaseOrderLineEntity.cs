@@ -14,7 +14,26 @@ public class PurchaseOrderLineEntity
     public decimal Quantity { get; set; }
     public string? Unit { get; set; }
     public decimal UnitPrice { get; set; }
-    public float Confidence { get; set; }
+    /// <summary>
+    /// The model score behind this line's supplier code, 0..1 — or <c>null</c> when no model
+    /// scored it, which is the case for every deterministically resolved and every hand-resolved
+    /// line.
+    /// </summary>
+    /// <remarks>
+    /// This was a non-nullable float carrying a three-valued <b>state flag</b>:
+    /// <c>resolved ? (parserFlagged ? 0.5f : 1.0f) : 0.0f</c> at ingestion, and a flat
+    /// <c>1.0f</c> on human resolve. The order passport rendered it straight onto the confidence
+    /// ramp, so a resolved line printed a green <b>100%</b>, a parser-flagged one a red
+    /// <b>50%</b>, and an unresolved one a red <b>0%</b> — none of which any model produced.
+    /// <para>Worse, the bulk-accept path wrote the model's REAL <see cref="AiSuggestionConfidence"/>
+    /// into this same column, so one field held both a state flag and a measurement with nothing
+    /// to tell them apart — and it could not be untangled at the read boundary, because accepting
+    /// a suggestion also clears <see cref="AiSuggestedSupplierItemCode"/>, leaving a promoted
+    /// 1.0 measurement byte-identical to a 1.0 flag.</para>
+    /// <para>Resolution state lives in <see cref="NeedsReview"/> and <see cref="ReviewReason"/>,
+    /// where it always did. This column now holds a measurement or nothing.</para>
+    /// </remarks>
+    public float? Confidence { get; set; }
     public bool NeedsReview { get; set; }
 
     /// <summary>
