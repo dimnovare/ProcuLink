@@ -27,6 +27,13 @@ namespace ProcuLink.Api.Controllers;
 [Route("api/orders")]
 public sealed class OrderSourceDocumentController : ControllerBase
 {
+    /// <summary>
+    /// Refuse to buffer more than this. Deliberately well above every ingest cap — uploads and the
+    /// pull/push ingress channels both stop at 10 MB — so it never fires for a document that
+    /// arrived through a supported path, and only catches an object that should not exist.
+    /// </summary>
+    private const long MaxServedBytes = 32L * 1024 * 1024;
+
     private readonly ProcuLinkDbContext _db;
     private readonly ICurrentTenantService _tenant;
     private readonly IFileStorageService _fileStorage;
@@ -134,6 +141,26 @@ public sealed class OrderSourceDocumentController : ControllerBase
 
         if (string.IsNullOrWhiteSpace(order.SourceFileKey))
             return NoDocument(id, "no_source_file_key");
+
+        // Ask storage how big it is BEFORE fetching it. This is the only place the size check can
+        // do any good on the R2 path: R2StorageService.DownloadAsync copies the whole object into
+        // a MemoryStream before it returns, so by the time this action holds a stream the memory is
+        // already committed and a cap on the copy below would bound nothing. TryGetSizeAsync is a
+        // HEAD on R2 and a FileInfo locally, is contractually non-throwing, and returns null when
+        // the backend cannot say — in which case we proceed exactly as before rather than refusing
+        // a document over a number nobody produced.
+        var storedBytes = await _fileStorage.TryGetSizeAsync(order.SourceFileKey, ct);
+        if (storedBytes > MaxServedBytes)
+        {
+            // Every ingest path caps at 10 MB (OrdersController.MaxUploadBytes,
+            // IngressLimits.MaxFileBytes), so this is unreachable unless a cap was bypassed or the
+            // bucket was edited by hand. Error level, not Warning: it is a real defect somewhere
+            // upstream, and it must not read as the ordinary "no document" it is answered with.
+            _logger.LogError(
+                "Order source document refused for {OrderId}: {Reason} ({Bytes} bytes exceeds the {Cap}-byte serve cap)",
+                id, "storage_object_exceeds_serve_cap", storedBytes, MaxServedBytes);
+            return NoContent();
+        }
 
         byte[] bytes;
         try

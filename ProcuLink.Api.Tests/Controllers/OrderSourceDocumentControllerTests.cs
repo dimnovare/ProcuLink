@@ -285,6 +285,71 @@ public sealed class OrderSourceDocumentControllerTests
         Assert.IsType<NoContentResult>(result);
     }
 
+    /// <summary>
+    /// The whole object is buffered to serve it — and on R2 it is buffered again inside
+    /// <c>R2StorageService.DownloadAsync</c> before this action ever holds a stream. So the size
+    /// must be refused BEFORE the download, not while copying it. Every ingest path caps at 10 MB,
+    /// so this only fires for an object that should not exist; it must still not take the process
+    /// down with it.
+    /// </summary>
+    [Fact]
+    public async Task AnObjectAboveTheServeCap_Is204_AndIsNeverDownloaded()
+    {
+        var dbName = $"src-doc-{Guid.NewGuid()}";
+        var orgA = Guid.NewGuid();
+        const string key = "a/o/enormous.pdf";
+
+        Guid orderId;
+        await using (var seed = new ProcuLinkDbContext(Options(dbName)))
+            orderId = SeedOrder(seed, orgA, key);
+
+        await using var db = new ProcuLinkDbContext(Options(dbName));
+        db.ScopeToOrganisation(orgA);
+
+        var storage = StorageServing(key, PdfBytes);
+        storage.Setup(s => s.TryGetSizeAsync(key, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(64L * 1024 * 1024); // twice the 32 MB serve cap
+
+        var result = await Build(db, orgA, storage).GetSource(orderId, CancellationToken.None);
+
+        Assert.IsType<NoContentResult>(result);
+        storage.Verify(s => s.DownloadAsync(key, It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    /// <summary>
+    /// Anti-vacuity for the cap, and the contract for a backend that cannot report a size:
+    /// <c>TryGetSizeAsync</c> returning null must NOT be read as "too large". A test double that
+    /// never implements it would otherwise silently disable the whole endpoint.
+    /// </summary>
+    [Fact]
+    public async Task AnUnknownOrModestSize_StillServesTheDocument()
+    {
+        var dbName = $"src-doc-{Guid.NewGuid()}";
+        var orgA = Guid.NewGuid();
+        const string key = "a/o/normal.pdf";
+
+        Guid unknownSize, knownSize;
+        await using (var seed = new ProcuLinkDbContext(Options(dbName)))
+        {
+            unknownSize = SeedOrder(seed, orgA, key);
+            knownSize = SeedOrder(seed, orgA, key);
+        }
+
+        await using var db = new ProcuLinkDbContext(Options(dbName));
+        db.ScopeToOrganisation(orgA);
+
+        var storage = StorageServing(key, PdfBytes);
+        storage.Setup(s => s.TryGetSizeAsync(key, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((long?)null);
+        var served = await Build(db, orgA, storage).GetSource(unknownSize, CancellationToken.None);
+        Assert.Equal(PdfBytes, Assert.IsType<FileContentResult>(served).FileContents);
+
+        storage.Setup(s => s.TryGetSizeAsync(key, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(PdfBytes.LongLength);
+        var alsoServed = await Build(db, orgA, storage).GetSource(knownSize, CancellationToken.None);
+        Assert.Equal(PdfBytes, Assert.IsType<FileContentResult>(alsoServed).FileContents);
+    }
+
     [Fact]
     public async Task AnEmptyStorageObject_Is204()
     {
