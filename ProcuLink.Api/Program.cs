@@ -494,7 +494,13 @@ builder.Services.AddCors(options =>
               // not read the wait on a 429 even once we started sending it. The 429
               // body carries retryAfterSeconds too, so a client that cannot read
               // headers still gets the number.
-              .WithExposedHeaders("Retry-After")
+              //
+              // Content-Disposition is exposed for the same reason. GET
+              // /api/orders/{id}/source streams the original document and names it in that
+              // header, but the frontend is a different origin and reaches the endpoint by
+              // authenticated fetch (a bare <iframe src> cannot carry the bearer token), so
+              // without this the one consumer the header exists for cannot read it.
+              .WithExposedHeaders("Retry-After", "Content-Disposition")
               .AllowCredentials());
 });
 
