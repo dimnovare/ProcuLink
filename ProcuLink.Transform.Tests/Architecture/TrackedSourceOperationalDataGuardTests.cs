@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using FluentAssertions;
+using ProcuLink.Transform.Conformance;
 
 namespace ProcuLink.Transform.Tests.Architecture;
 
@@ -364,6 +365,38 @@ public class TrackedSourceOperationalDataGuardTests
             + "DocsOperationalDataGuardTests rather than starting a second one here. Offending "
             + "file:line and class (values withheld):\n"
             + string.Join("\n", scan.Violations));
+    }
+
+    /// <summary>
+    /// Keeps the one path exclusion in corpus A honest. An exclusion is a hole in a guard, so it is
+    /// pinned to the registry that owns the excluded files — <c>UblSchemaCatalog</c>'s embedded set,
+    /// which is what the validator actually loads — rather than to a list typed here. A file added
+    /// to that directory to dodge the sweep is not in the embedded set and fails this test; a schema
+    /// dropped from the vendored set fails it too, from the other side.
+    /// </summary>
+    [Fact]
+    public void VendoredSchemaExclusion_CoversTheOasisSchemasAndNothingElse()
+    {
+        var repoRoot = FixtureCorpus.FindRepoRoot();
+        var excluded = FixtureCorpus.TrackedFiles(repoRoot, null)
+            .Where(IsVendoredThirdPartySchema)
+            .ToList();
+
+        excluded.Should().NotBeEmpty(
+            "an exclusion that matches nothing is dead weight hiding in a guard; if the vendored "
+            + "schemas are gone, delete the exclusion with them");
+
+        excluded.Select(f => f[VendoredSchemaDirectory.Length..])
+            .Should().BeEquivalentTo(UblSchemaCatalog.EmbeddedSchemaPaths(),
+                "the exclusion must cover exactly the third-party schemas the UBL validator loads. "
+                + "Anything else under that directory is first-party content and must stay in the "
+                + "sweep — an exclusion is a hole, and holes must not be reusable.");
+
+        FixtureCorpus.TrackedFiles(repoRoot, null)
+            .Where(f => f.StartsWith(VendoredSchemaDirectory, StringComparison.Ordinal))
+            .Should().Contain(VendoredSchemaDirectory + "PROVENANCE.md")
+            .And.Subject.Where(f => !IsVendoredThirdPartySchema(f))
+            .Should().NotBeEmpty("this packet's own PROVENANCE.md is first-party prose and is still swept");
     }
 
     [Fact]
@@ -738,8 +771,40 @@ public class TrackedSourceOperationalDataGuardTests
     private static CorpusScan ScanCorpusA() => Scan(
         f => !f.StartsWith("docs/", StringComparison.Ordinal)
              && !f.EndsWith(".cs", StringComparison.Ordinal)
-             && !FixtureCorpus.IsUnderFixturesDirectory(f),
+             && !FixtureCorpus.IsUnderFixturesDirectory(f)
+             && !IsVendoredThirdPartySchema(f),
         (line, rel) => DocsOperationalDataGuardTests.ViolationClasses(line, rel));
+
+    /// <summary>
+    /// The vendored OASIS UBL 2.1 schemas, excluded from corpus A BY PATH.
+    ///
+    /// <para><b>Why they are excluded.</b> They are third-party normative files, redistributed
+    /// verbatim under a licence that permits redistribution only of the UNMODIFIED document, and
+    /// their digests are pinned in <c>PROVENANCE.md</c> and re-checked by
+    /// <c>UblSchemaCatalogTests</c>. Three of OASIS's own <c>&lt;ccts:Examples&gt;</c> documentation
+    /// strings inside <c>UBL-CommonAggregateComponents-2.1.xsd</c> contain an illustrative e-mail
+    /// address and two illustrative URLs on real corporate domains. They are OASIS's examples, not
+    /// ProcuLink's operational data — no order ever moved through any of them — and they cannot be
+    /// edited out without breaking both the licence and the digest.</para>
+    ///
+    /// <para><b>Why the exclusion is by path and not by vocabulary.</b> The alternative is adding
+    /// those domains to <c>DocsOperationalDataGuardTests.PlatformHosts</c>, which is the ONE shared
+    /// host vocabulary behind three guards. Widening it would make those names permanently
+    /// acceptable everywhere in the tree — including in a first-party config or a fixture, which is
+    /// precisely the leak the vocabulary exists to catch. A path exclusion costs exactly the files it
+    /// names.</para>
+    ///
+    /// <para><b>Why it cannot quietly grow.</b> Only <c>.xsd</c> files under the vendored directory
+    /// are excluded, and
+    /// <see cref="VendoredSchemaExclusion_CoversTheOasisSchemasAndNothingElse"/> asserts the excluded
+    /// set is exactly the schemas the validator actually loads. First-party content dropped into that
+    /// directory — including this packet's own <c>PROVENANCE.md</c> — is still swept.</para>
+    /// </summary>
+    internal static bool IsVendoredThirdPartySchema(string relativePath) =>
+        relativePath.StartsWith(VendoredSchemaDirectory, StringComparison.Ordinal)
+        && relativePath.EndsWith(".xsd", StringComparison.Ordinal);
+
+    private const string VendoredSchemaDirectory = "ProcuLink.Transform/Conformance/Schemas/ubl-2.1/";
 
     private static CorpusScan ScanCorpusB() => Scan(
         f => f.EndsWith(".cs", StringComparison.Ordinal),
