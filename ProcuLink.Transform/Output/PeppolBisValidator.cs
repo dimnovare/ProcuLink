@@ -41,9 +41,32 @@ public sealed record PeppolValidationResult(
 ///   Schematron + EN16931-UBL-validation rule sets (codelist checks, calc rules
 ///   BR-CO-*, BR-S-*, scheme-id validation, etc.). That is the full-conformance leg.
 ///
+/// ── What this validator does NOT check, and why it used to look like it did ──
+///
+///   BT-24 <c>CustomizationID</c> and <c>ProfileID</c> are NOT checked here, and a passing
+///   result says nothing about either. Until 2026-08-14 this class did check them: it read
+///   both elements and compared them to
+///   <see cref="PeppolBisInvoiceTransformService.CustomizationId"/> and
+///   <see cref="PeppolBisInvoiceTransformService.ProfileId"/> — the emitter's own constants.
+///
+///   The only production caller (<c>InvoiceController.ValidatePeppol</c>) builds the document
+///   with that same emitter and hands it straight to this validator, so both comparisons read
+///   back a string the emitter had just written from the same constant. They could not fail.
+///   An assertion that cannot fail is not evidence, and this one was reported to the caller as
+///   part of an <c>isValid</c> that a counterparty might rely on.
+///
+///   This is the same defect that was removed from the ORDER path (see <c>UblProfileChecker</c>
+///   and <c>UblOrderDeclaresNoPeppolProfileTests</c>). There it was fixed by dropping the
+///   declaration as well as the check; here the declaration STAYS and only the check goes. That
+///   asymmetry is deliberate and its reasoning — including the plausible-but-false justification
+///   for it — is written out in <see cref="PeppolBisInvoiceTransformService"/>. Read it there
+///   before changing either file. What is gone is only the pretence that anything verifies them.
+///
+///   Verifying them for real means running the official PEPPOL-EN16931-UBL Schematron. There is
+///   none in this repo. Until there is, the honest statement is the one the API now returns:
+///   the profile is declared, and it is unverified.
+///
 /// Errors checked (mandatory):
-///   BT-24 CustomizationID present and == BIS Billing 3.0 customization
-///   ProfileID present and == BIS billing profile
 ///   BT-1  Invoice number present
 ///   BT-2  Issue date present and ISO-8601
 ///   BT-3  Invoice type code present
@@ -105,22 +128,10 @@ public sealed class PeppolBisValidator
             return new PeppolValidationResult(false, issues);
         }
 
-        // ── BT-24 CustomizationID ───────────────────────────────────────────
-        var customization = Cbc(root, "CustomizationID");
-        if (string.IsNullOrWhiteSpace(customization))
-            issues.Add(new("PLK-BIS-CustomizationID", "BT-24", "error",
-                "Missing CustomizationID (BT-24)."));
-        else if (customization != PeppolBisInvoiceTransformService.CustomizationId)
-            issues.Add(new("PLK-BIS-CustomizationID", "BT-24", "error",
-                $"CustomizationID is not the BIS Billing 3.0 value. Expected '{PeppolBisInvoiceTransformService.CustomizationId}'."));
-
-        // ── ProfileID ───────────────────────────────────────────────────────
-        var profile = Cbc(root, "ProfileID");
-        if (string.IsNullOrWhiteSpace(profile))
-            issues.Add(new("PLK-BIS-ProfileID", null, "error", "Missing ProfileID."));
-        else if (profile != PeppolBisInvoiceTransformService.ProfileId)
-            issues.Add(new("PLK-BIS-ProfileID", null, "error",
-                $"ProfileID is not the BIS Billing profile. Expected '{PeppolBisInvoiceTransformService.ProfileId}'."));
+        // BT-24 CustomizationID and ProfileID are deliberately NOT checked — see the class
+        // summary. Both were compared against the emitter's own constants on a document the
+        // emitter had just produced, so neither comparison could fail. Reinstating either is
+        // pinned by PeppolBisInvoiceConformanceIsUnverifiedTests.
 
         // ── BT-1 Invoice number ─────────────────────────────────────────────
         if (string.IsNullOrWhiteSpace(Cbc(root, "ID")))

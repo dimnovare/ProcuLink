@@ -13,11 +13,49 @@ namespace ProcuLink.Transform.Output;
 /// <see cref="InvoiceEntity"/>. This is purely the document-GENERATION leg.
 ///
 /// HONEST SCOPE (offer⇔works):
+///   * DECLARED BUT NOT VERIFIED — <c>cbc:CustomizationID</c> (BT-24) and <c>cbc:ProfileID</c>.
+///     These two are emitted, and nothing in either repo checks that the document they sit on
+///     actually satisfies the profile they name. They are written anyway, and the distinction
+///     matters, so it is stated rather than left to be inferred:
+///
+///       They are the document's TYPE, not a quality claim. Peppol composes the document type
+///       identifier as "&lt;syntax specific id&gt;##&lt;customization id&gt;::&lt;version&gt;" (Peppol Policy for
+///       use of Identifiers 4.4.0, POLICY 20), and that identifier is the SMP lookup key and the
+///       AS4 Action. The CustomizationID is literally a substring of it. A document without one
+///       is therefore not a leniently-declared invoice — it is one a sender access point cannot
+///       address at all, before any validation runs. Dropping it also trips two fatal Schematron
+///       asserts, BR-01 (CEN) and PEPPOL-EN16931-R004; dropping ProfileID trips
+///       PEPPOL-EN16931-R001 and R007.
+///
+///       DO NOT "fix" this by mirroring the UBL ORDER path, and do not re-derive the reason.
+///       That path removed the same two elements (UblOrderTransformService,
+///       UblOrderDeclaresNoPeppolProfileTests) and it is tempting to read the two decisions as
+///       inconsistent. They are not, and the tempting justification for the difference is FALSE:
+///       an order without a CustomizationID is NOT "merely undeclared" where an invoice would be
+///       rejected. Checked against the sources on 2026-08-14 — Peppol BIS Order-only 3 makes both
+///       elements 1..1 and PEPPOL-T01-B00101/B00102 are equally fatal, and POLICY 20 is scoped to
+///       all business documents, so an order without one is equally unroutable.
+///
+///       The actual difference is a PRODUCT one. The order path stopped offering Peppol output
+///       entirely (src/lib/standards/catalog.ts: transform "planned", "MUST NOT BE ADVERTISED"),
+///       so stripping the ids left a plain OASIS UBL 2.1 Order — independently useful, since
+///       ProcuLink delivers orders over HTTPS/email/SFTP rather than the Peppol network. This
+///       format token is named "peppol" and has no such fallback: a caller asking for it and
+///       receiving a profile-less document gets an artifact with no consumer. So the choice here
+///       is to keep the declaration and be explicit that it is unverified, or to withdraw the
+///       format. It is NOT to emit an unaddressable document under the name "peppol".
+///
+///       What was removed instead is the appearance of verification: PeppolBisValidator used to
+///       compare both elements against the constants below, on a document this class had just
+///       written from those same constants, and could not fail. See that class, and
+///       PeppolBisInvoiceConformanceIsUnverifiedTests.
+///
+///       Treat the emitted file as INPUT to an access point's validator, never as a conformance
+///       result. Nothing here has been accepted by a live access point.
+///
 ///   * COVERED — the structural / high-value mandatory business terms that make a
 ///     document recognisably a BIS Billing 3.0 invoice and that we can populate
 ///     from the canonical <see cref="InvoiceEntity"/> + <see cref="PeppolPartyOptions"/>:
-///       BT-24  CustomizationID  (BIS Billing 3.0 customization)
-///       BT-23/ProfileID         (billing profile bis:billing:01:1.0)
 ///       BT-1   Invoice number          (cbc:ID)
 ///       BT-2   Issue date              (cbc:IssueDate)
 ///       BT-3   Invoice type code 380   (cbc:InvoiceTypeCode)

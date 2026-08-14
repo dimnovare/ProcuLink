@@ -185,9 +185,16 @@ public class UblOrderDeclaresNoPeppolProfileTests
     /// declared but not yet wired, or wired somewhere this suite does not exercise, is caught here.
     ///
     /// Scope, stated rather than assumed: this covers the ORDER path only.
-    /// <c>PeppolBisInvoiceTransformService</c> deliberately emits BIS Billing 3.0 identifiers and is
-    /// backed by <c>PeppolBisValidator</c>, which checks the BT rules and reports its gaps honestly.
-    /// That is a different document, a different profile, and a different question.
+    /// <c>PeppolBisInvoiceTransformService</c> deliberately emits BIS Billing 3.0 identifiers, and
+    /// that remains true — see <see cref="PeppolBisInvoiceConformanceIsUnverifiedTests"/> for why
+    /// the invoice keeps a declaration the order dropped.
+    ///
+    /// This note used to end "and is backed by <c>PeppolBisValidator</c>, which checks the BT rules
+    /// and reports its gaps honestly". Corrected 2026-08-14: true of the BT rules, but the two
+    /// PROFILE identifiers were not among them in any meaningful sense — the validator compared
+    /// them against the emitter's own constants on the emitter's own output, so those two checks
+    /// could not fail. They are deleted. The sentence is left visible rather than quietly swapped,
+    /// because it is what let the invoice-side twin of this defect survive the order-side fix.
     /// </summary>
     [Theory]
     [InlineData("ProcuLink.Transform/Output/UblOrderTransformService.cs")]

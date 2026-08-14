@@ -104,15 +104,37 @@ public class PeppolBisValidatorTests
         result.Errors.Should().Contain(i => i.BusinessTerm == "BT-44");
     }
 
+    /// <summary>
+    /// This test used to assert the opposite, and the assertion it made was not evidence.
+    ///
+    /// It string-replaced the emitter's own CustomizationId constant with "urn:not-peppol" and
+    /// checked that the validator complained. That proved only that an <c>if</c> executes when
+    /// you hand-corrupt its input — an input the product never produces. In production the sole
+    /// caller builds the document with <c>PeppolBisInvoiceTransformService</c> and validates it
+    /// immediately (<c>InvoiceController.ValidatePeppol</c>), so the compared value was always
+    /// the constant the emitter had just written, and the rule could not fail.
+    ///
+    /// The rule is gone. The profile is declared and unverified, and the API says so.
+    /// Reinstating the check is caught by PeppolBisInvoiceConformanceIsUnverifiedTests.
+    /// </summary>
     [Fact]
-    public void Validate_WrongCustomizationId_FlagsError()
+    public void Validate_DoesNotAdjudicateTheDeclaredProfile()
     {
         var xml = GenerateXml(FullParty())
             .Replace(PeppolBisInvoiceTransformService.CustomizationId, "urn:not-peppol");
         var result = new PeppolBisValidator().Validate(xml);
 
-        result.IsValid.Should().BeFalse();
-        result.Errors.Should().Contain(i => i.RuleId == "PLK-BIS-CustomizationID");
+        result.Issues.Should().NotContain(i => i.RuleId == "PLK-BIS-CustomizationID",
+            "the validator must not report a verdict on the profile identifier — it never had the " +
+            "evidence for one, and reporting it made an unverified declaration look checked");
+        result.Issues.Should().NotContain(i => i.RuleId == "PLK-BIS-ProfileID");
+
+        // Anti-vacuity: the document must still really have been validated, and still pass the
+        // checks that DO rest on evidence. A validator that returned nothing would satisfy the
+        // two absences above.
+        result.IsValid.Should().BeTrue(
+            "the mandatory-field and arithmetic checks are unaffected. Issues: {0}",
+            string.Join(" | ", result.Issues.Select(i => $"{i.Severity}:{i.RuleId}:{i.Message}")));
     }
 
     [Fact]
