@@ -59,8 +59,20 @@ public class PeppolBisInvoiceConformanceIsUnverifiedTests
     // ── Direction 1: nothing may adjudicate the declared profile ─────────────────
 
     /// <summary>
-    /// The behavioural guard, and the one the mutation test targets. Reinstating either rule —
-    /// by constant, by literal, or by any other spelling — reddens this.
+    /// What a caller actually receives for a well-formed document: no verdict about the profile.
+    ///
+    /// READ THIS BEFORE TRUSTING THIS TEST. It does NOT catch reinstatement of the deleted rules,
+    /// and it cannot, for the same reason the rules were deleted. Re-add them and this test stays
+    /// green: on our own emitted document the compared values match, so the circular check is
+    /// silent and no issue is raised. Verified by running the mutation — of the four tests in this
+    /// file, this is the one that did not redden.
+    ///
+    /// That is worth leaving in place and labelling rather than deleting: it pins the caller-facing
+    /// behaviour, and it is a live demonstration that a check which cannot fail is invisible to a
+    /// test written from the happy path. The guards that DO refuse reinstatement are
+    /// <see cref="Validator_AcceptsADocumentWhoseDeclaredProfileIsNotBisBilling"/> (behavioural,
+    /// via an input production cannot produce) and
+    /// <see cref="ValidatorSource_DoesNotCompareAgainstTheEmittersOwnConstants"/> (source scan).
     /// </summary>
     [Fact]
     public void Validator_ReportsNoVerdictOnTheDeclaredProfile()
