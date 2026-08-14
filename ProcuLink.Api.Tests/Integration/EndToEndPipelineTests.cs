@@ -678,7 +678,8 @@ public sealed class EndToEndPipelineTests(PostgresContainerFixture postgres) : I
             Assert.Equal(deliveryUrl, attempt.Destination);
             Assert.Equal(200, attempt.ResponseCode);
             Assert.Equal(1, attempt.AttemptNumber);
-            Assert.NotNull(attempt.AcknowledgedAt);           // ACK round-trip recorded
+            Assert.NotNull(attempt.TransportAcceptedAt);      // our dispatch call returned 200
+            Assert.Equal(attempt.AttemptedAt, attempt.TransportAcceptedAt);  // same instant — our clock
             Assert.Null(attempt.RejectionReason);
 
             // Order reached the terminal delivered state.
@@ -688,7 +689,7 @@ public sealed class EndToEndPipelineTests(PostgresContainerFixture postgres) : I
         }
 
         // ── 8. PO PASSPORT shows the proof: delivery attempt + output artifact +
-        //       supplier "acknowledged" response + timeline of the pipeline. ───
+        //       supplier "delivered" response + timeline of the pipeline. ───
         using (var scope = factory.NewScope())
         {
             var passportSvc = scope.ServiceProvider.GetRequiredService<IPassportService>();
@@ -726,11 +727,11 @@ public sealed class EndToEndPipelineTests(PostgresContainerFixture postgres) : I
             Assert.Equal("http", pAttempt.Channel);
             Assert.Equal(deliveryUrl, pAttempt.Destination);
             Assert.Equal(200, pAttempt.ResponseCode);
-            Assert.NotNull(pAttempt.AcknowledgedAt);
+            Assert.NotNull(pAttempt.TransportAcceptedAt);
 
             // Supplier response derived as acknowledged.
             Assert.NotNull(p.SupplierResponse);
-            Assert.Equal("acknowledged", p.SupplierResponse!.Outcome);
+            Assert.Equal("delivered", p.SupplierResponse!.Outcome);
             Assert.Equal(200, p.SupplierResponse.ResponseCode);
 
             // Supplier delivery profile surfaced (http protocol).

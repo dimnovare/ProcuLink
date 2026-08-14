@@ -256,7 +256,7 @@ public sealed class DeliveryConcurrencyPostgresTests(PostgresContainerFixture po
                 Id = Guid.NewGuid(), OrderId = ids.OrderId, OrgId = ids.OrgId,
                 Channel = "http", Destination = "https://supplier.example/orders",
                 Status = "success", AttemptNumber = 1, AttemptedAt = now, ResponseCode = 200,
-                AcknowledgedAt = now,
+                TransportAcceptedAt = now,
             });
             await seed.SaveChangesAsync();
         }

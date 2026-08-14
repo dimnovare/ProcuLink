@@ -276,7 +276,7 @@ public class PassportServiceTests
                 AttemptNumber  = 2,
                 AttemptedAt    = tDeliver.AddMinutes(1),
                 ResponseCode   = 200,
-                AcknowledgedAt = tDeliver.AddMinutes(1),
+                TransportAcceptedAt = tDeliver.AddMinutes(1),
                 ResponseBody   = "OK",
             });
 
@@ -302,14 +302,66 @@ public class PassportServiceTests
         Assert.Equal("delivered", p.DeliveryAttempts[1].Status);
         Assert.Equal("https://supplier.example/orders", p.DeliveryAttempts[1].Destination);
 
-        // Supplier response derived as acknowledged from delivered status + ACK timestamp.
+        // Supplier response derived from delivered status + the transport-acceptance timestamp.
         Assert.NotNull(p.SupplierResponse);
-        Assert.Equal("acknowledged", p.SupplierResponse!.Outcome);
-        Assert.Equal(tDeliver.AddMinutes(1), p.SupplierResponse.AcknowledgedAt);
+        // "delivered", never "acknowledged": the transport accepted the handover and no supplier
+        // answered. Asserted as an exact string because this value is the passport's copy switch —
+        // an "acknowledged" here is what printed "Accepted" to the operator.
+        Assert.Equal("delivered", p.SupplierResponse!.Outcome);
+        Assert.NotEqual("acknowledged", p.SupplierResponse.Outcome);
+        Assert.Equal(tDeliver.AddMinutes(1), p.SupplierResponse.TransportAcceptedAt);
         Assert.Equal(200, p.SupplierResponse.ResponseCode);
 
         Assert.Equal(OrderStatusConstants.Delivered, p.FinalStatus);
         Assert.Contains(p.Timeline, t => t.Action == "delivered");
+    }
+
+    /// <summary>
+    /// The channel that makes the old wording indefensible. SFTP has no response code, no response
+    /// body and no back-channel of any kind — a file was written to a server and nobody has
+    /// necessarily looked at it. The passport used to derive outcome <c>acknowledged</c> here and
+    /// render "Accepted" / "Acknowledged by supplier" with a timestamp we generated ourselves.
+    ///
+    /// <para>Pinned separately from the HTTP case because the HTTP one can hide the defect: a 200
+    /// looks like something a counterparty sent, so a reader can talk themselves into it. On a file
+    /// drop there is nothing to misread — which is exactly why this is the test that must stay.</para>
+    /// </summary>
+    [Fact]
+    public async Task GetAsync_FileDropDelivery_ReportsDelivered_NotAcknowledged()
+    {
+        await using var db = NewDb();
+        var (_, orgId, orderId, _) = await SeedAsync(db, status: OrderStatusConstants.Delivered);
+
+        var tDeliver = new DateTime(2026, 5, 30, 10, 8, 0, DateTimeKind.Utc);
+        db.DeliveryAttempts.Add(new DeliveryAttempt
+        {
+            Id                  = Guid.NewGuid(),
+            OrderId             = orderId,
+            OrgId               = orgId,
+            Channel             = "sftp",
+            Destination         = "sftp://supplier.example/in/order.csv",
+            Status              = DeliveryAttempt.StatusSuccess,
+            AttemptNumber       = 1,
+            AttemptedAt         = tDeliver,
+            // No ResponseCode and no ResponseBody: the channel cannot carry either.
+            TransportAcceptedAt = tDeliver,
+        });
+        await db.SaveChangesAsync();
+
+        var svc = new PassportService(db);
+        var p = (await svc.GetAsync(orgId, orderId, CancellationToken.None)).Value!;
+
+        Assert.NotNull(p.SupplierResponse);
+        Assert.Equal("delivered", p.SupplierResponse!.Outcome);
+        Assert.NotEqual("acknowledged", p.SupplierResponse.Outcome);
+
+        // Nothing was observed FROM the supplier, and the passport must not imply otherwise.
+        Assert.Null(p.SupplierResponse.ResponseCode);
+        Assert.Null(p.SupplierResponse.ResponseBody);
+        Assert.Null(p.SupplierResponse.RejectionReason);
+
+        // The one timestamp present is ours, and it is the dispatch instant.
+        Assert.Equal(tDeliver, p.SupplierResponse.TransportAcceptedAt);
     }
 
     // ── Supplier rejection surfaced via existing delivery data ────────────────────

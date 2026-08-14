@@ -87,7 +87,10 @@ public sealed class ErplyConnector : IErpConnector
             // DOCUMENT from a refusal of the request. Dropping it (as this did) made every ERP 400
             // look unexplained, so it was re-dispatched to an endpoint that cannot de-duplicate.
             return response.IsSuccessStatusCode
-                ? new ErpDeliveryResult(true, null, code)
+                // Kept on SUCCESS as well — an ERP 2xx routinely wraps a per-document status, so
+                // "the request worked" and "the document was accepted" are different facts. We do
+                // not parse it; we stop discarding it. See the sibling note in HttpDeliveryDispatcher.
+                ? new ErpDeliveryResult(true, null, code, ResponseBody: NullIfBlank(body))
                 : new ErpDeliveryResult(
                     false, BuildFailureMessage("Erply", code, body), code,
                     ResponseBody: NullIfBlank(body),

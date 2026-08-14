@@ -201,7 +201,7 @@ public sealed class PassportService : IPassportService
                 Destination:     a.Destination,
                 AttemptedAt:     a.AttemptedAt,
                 ResponseCode:    a.ResponseCode,
-                AcknowledgedAt:  a.AcknowledgedAt,
+                TransportAcceptedAt: a.TransportAcceptedAt,
                 RejectionReason: a.RejectionReason,
                 ErrorMessage:    a.ErrorMessage,
                 ArtifactId:      DeliveryIdempotencyKey.TryParseArtifactId(a.IdempotencyKey, out var dispatched)
@@ -293,27 +293,37 @@ public sealed class PassportService : IPassportService
             .OrderByDescending(a => a.AttemptedAt)
             .FirstOrDefault();
 
-        var rejected     = order.Status == OrderStatusConstants.RejectedBySupplier;
-        var acknowledged = order.Status == OrderStatusConstants.Delivered
-                           || latest?.AcknowledgedAt is not null;
+        // A supplier VERDICT — the one outcome here that a supplier actually authored.
+        var rejected  = order.Status == OrderStatusConstants.RejectedBySupplier;
+
+        // TRANSPORT acceptance only. This predicate is unchanged; what changed is the word it
+        // produces. It used to yield "acknowledged", which the passport rendered as "Accepted" /
+        // "Acknowledged by supplier" — a supplier verdict, derived from our own dispatch clock, on
+        // channels (SFTP/FTPS/SMTP) that cannot carry a verdict at all. Both legs are still just
+        // "the handover succeeded": Delivered is set from result.Success, and TransportAcceptedAt is
+        // stamped from the same instant. So the honest word is "delivered".
+        var delivered = order.Status == OrderStatusConstants.Delivered
+                        || latest?.TransportAcceptedAt is not null;
 
         // Nothing to report when there is neither a delivery attempt nor a terminal
         // delivery/rejection status.
-        if (latest is null && !rejected && !acknowledged)
+        if (latest is null && !rejected && !delivered)
             return null;
 
+        // Rejection wins over delivery: a supplier that read the document and refused it is a
+        // stronger, later fact than the handover that preceded it.
         var outcome = rejected
             ? "rejected"
-            : acknowledged
-                ? "acknowledged"
+            : delivered
+                ? "delivered"
                 : "unknown";
 
         return new PassportSupplierResponse(
-            Outcome:         outcome,
-            AcknowledgedAt:  latest?.AcknowledgedAt,
-            RejectionReason: latest?.RejectionReason,
-            ResponseCode:    latest?.ResponseCode,
-            ResponseBody:    latest?.ResponseBody);
+            Outcome:             outcome,
+            TransportAcceptedAt: latest?.TransportAcceptedAt,
+            RejectionReason:     latest?.RejectionReason,
+            ResponseCode:        latest?.ResponseCode,
+            ResponseBody:        latest?.ResponseBody);
     }
 
     // ── Field helpers ─────────────────────────────────────────────────────────────

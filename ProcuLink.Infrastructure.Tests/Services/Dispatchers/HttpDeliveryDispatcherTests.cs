@@ -66,6 +66,51 @@ public class HttpDeliveryDispatcherTests
         result.Success.Should().BeTrue();
         result.ResponseCode.Should().Be(200);
         result.ErrorMessage.Should().BeNull();
+        // The 2xx body is CARRIED, not discarded. It used to be read and dropped on this branch,
+        // which left an operator chasing a silently-refused order with nothing to read.
+        result.ResponseBody.Should().Be("OK");
+    }
+
+    /// <summary>
+    /// The P0-12 case: a 2xx whose body is an application-level REFUSAL. ProcuLink still reports
+    /// transport success — it parses no functional acknowledgement on any channel and must not start
+    /// guessing from a body — but the supplier's own words are now persisted so the operator can see
+    /// why an order the supplier "accepted" was never actioned.
+    /// </summary>
+    [Fact]
+    public async Task Dispatch_200_CarryingAnApplicationRejection_StillSucceeds_ButKeepsTheBody()
+    {
+        const string refusal = "{\"accepted\":false,\"reason\":\"buyer ACME-42 is not registered\"}";
+        var dispatcher = MakeDispatcher(new FakeHttpMessageHandler(HttpStatusCode.OK, refusal));
+        var config = MakeConfig("https://example.com/orders");
+        var creds = JsonSerializer.Serialize(new { type = "none" });
+
+        var result = await dispatcher.DispatchAsync(
+            Encoding.UTF8.GetBytes("data"), "order.csv", "text/csv", config, creds, default);
+
+        result.Success.Should().BeTrue("a 2xx is transport acceptance; nothing here parses the body");
+        result.ResponseBody.Should().Be(refusal);
+        // Verbatim, unsummarised, uninterpreted. It is the supplier's text, not ours.
+        result.ErrorMessage.Should().BeNull();
+    }
+
+    /// <summary>
+    /// A 2xx with an empty body must record NOTHING rather than an empty string —
+    /// <c>CapturesSupplierResponseBody</c> is true for this dispatcher, which makes a blank body
+    /// evidence that the endpoint said nothing, and <c>""</c> would be indistinguishable noise.
+    /// </summary>
+    [Fact]
+    public async Task Dispatch_200_WithBlankBody_RecordsNoResponseBody()
+    {
+        var dispatcher = MakeDispatcher(new FakeHttpMessageHandler(HttpStatusCode.OK, "   "));
+        var config = MakeConfig("https://example.com/orders");
+        var creds = JsonSerializer.Serialize(new { type = "none" });
+
+        var result = await dispatcher.DispatchAsync(
+            Encoding.UTF8.GetBytes("data"), "order.csv", "text/csv", config, creds, default);
+
+        result.Success.Should().BeTrue();
+        result.ResponseBody.Should().BeNull();
     }
 
     [Fact]

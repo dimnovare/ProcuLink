@@ -160,7 +160,13 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
             var code     = (int)response.StatusCode;
 
             return response.IsSuccessStatusCode
-                ? new DeliveryResult(true, null, code)
+                // The body is kept on SUCCESS too. `Success` here means one thing — the endpoint
+                // answered 2xx — and a 2xx can still carry an application-level refusal ("accepted:
+                // false", a fault document, a queue-rejected notice). ProcuLink parses none of that
+                // and claims nothing from it; it is recorded so an operator chasing an order the
+                // supplier never actioned has the endpoint's own words to read instead of nothing.
+                // Costs one already-read string: `body` was read at the line above and thrown away.
+                ? new DeliveryResult(true, null, code, ResponseBody: NullIfBlank(body))
                 // Pass the full (DeliveryService-bounded) body as ResponseBody for rejection capture,
                 // while ErrorMessage stays a short human-readable summary. Retry-After is the
                 // supplier's own back-pressure and is honoured as a FLOOR on the next backoff step.

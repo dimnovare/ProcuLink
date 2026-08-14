@@ -1025,7 +1025,9 @@ public sealed class DeliveryService : IDeliveryService
             existingAttempt.RejectionReason = isSupplierRejection ? result.ErrorMessage : null;
             existingAttempt.ResponseBody = TruncateResponseBody(result.ResponseBody);
             existingAttempt.RetryAfterSeconds = retryAfterSeconds;
-            existingAttempt.AcknowledgedAt = result.Success ? now : null;
+            // TRANSPORT acceptance, from OUR clock — the same `now` as AttemptedAt above. Not an
+            // acknowledgement: no channel here observes one. See DeliveryAttempt.TransportAcceptedAt.
+            existingAttempt.TransportAcceptedAt = result.Success ? now : null;
             existingAttempt.ArtifactSha256 = dispatchedPayloadSha256 ?? existingAttempt.ArtifactSha256;
         }
         else
@@ -1062,8 +1064,9 @@ public sealed class DeliveryService : IDeliveryService
                 // to add the line. No test can catch this assignment's removal; that is a property
                 // of the call graph, not a gap in the tests.
                 RetryAfterSeconds = retryAfterSeconds,
-                // ACK round-trip: stamp the confirmation time on a successful dispatch.
-                AcknowledgedAt = result.Success ? now : null,
+                // TRANSPORT acceptance, from OUR clock — the same `now` as AttemptedAt above. Not an
+                // acknowledgement: no channel here observes one. See DeliveryAttempt.TransportAcceptedAt.
+                TransportAcceptedAt = result.Success ? now : null,
                 // Provenance: which connection revision/config produced the artifact this attempt
                 // dispatched, plus the SHA-256 of the payload bytes actually sent (null when the
                 // attempt failed before the payload was downloaded).
@@ -1108,10 +1111,16 @@ public sealed class DeliveryService : IDeliveryService
                     ct: ct);
             }
 
+            // `acknowledged_at` was carried here alongside `delivered_at` — from the SAME `now`, so
+            // it was a byte-identical duplicate that additionally told the customer's own system the
+            // supplier had acknowledged the order. Nothing observed an acknowledgement, so the field
+            // is gone rather than renamed: a consumer that read it gets the identical instant from
+            // `delivered_at`, which is honestly named. Removing it is the point — a downstream ERP
+            // must not be able to mark a PO supplier-confirmed off a timestamp we invented.
             await _integrationTrigger.EnqueueAsync(
                 order.OrgId,
                 "order.delivered",
-                new { order_id = order.Id, delivered_at = now, acknowledged_at = now },
+                new { order_id = order.Id, delivered_at = now },
                 ct);
         }
         else if (isSupplierRejection)
