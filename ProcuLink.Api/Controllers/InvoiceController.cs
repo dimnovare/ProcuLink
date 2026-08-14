@@ -176,8 +176,18 @@ public sealed class InvoiceController : ControllerBase
         return Ok(new
         {
             invoiceId = invoice.Id,
+
+            // These two are echoed because a caller needs to know which profile the emitted
+            // document DECLARES. They are not a result: they are constants this API just wrote
+            // into the document it then checked. `profileConformance` states that outright, so
+            // no consumer can read the pair as "verified" — which is exactly how they read while
+            // PeppolBisValidator compared them against these same constants and could not fail.
             customizationId = PeppolBisInvoiceTransformService.CustomizationId,
             profileId       = PeppolBisInvoiceTransformService.ProfileId,
+            profileConformance = "unverified",
+
+            // Scope of `isValid`: the mandatory-field and arithmetic checks in PeppolBisValidator
+            // passed. It is NOT a statement about the declared profile.
             isValid = result.IsValid,
             errorCount   = result.Errors.Count(),
             warningCount = result.Warnings.Count(),
@@ -188,7 +198,12 @@ public sealed class InvoiceController : ControllerBase
                 i.Severity,
                 i.Message,
             }),
-            note = "Lightweight BIS Billing 3.0 mandatory-field check — not full Schematron/EN 16931 conformance, and excludes AS4/Access-Point transport.",
+            note = "Lightweight mandatory-field and arithmetic check on the generated document. "
+                 + "The document declares the BIS Billing 3.0 customization and profile shown above, and "
+                 + "ProcuLink does not verify that declaration: the official PEPPOL-EN16931-UBL Schematron "
+                 + "is not run here, and no document produced by this endpoint has been accepted by a live "
+                 + "access point. Treat the file as input to your access point's validator, never as a "
+                 + "conformance result. AS4/Access-Point transport is out of scope.",
         });
     }
 }
