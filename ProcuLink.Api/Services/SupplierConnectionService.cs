@@ -189,6 +189,9 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
         rev.TestResultJson = null;
         rev.TestedAt       = null;
         rev.TestPassed     = null;
+        // Voided WITH the rest of the evidence. Leaving a stale "passed" here would outlive the
+        // run that earned it and be rendered as a verdict on the edited bundle.
+        rev.TestOutcome    = null;
 
         // Replace child item mappings via the DbSet directly (no Include navigation). Delete the
         // old rows in their own SaveChanges first, then insert the new ones — separate units of
@@ -220,17 +223,18 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
         if (rev is null) return null;
 
         var now = DateTime.UtcNow;
-        bool passed;
+        TestPackOutcome outcome;
         string summaryJson;
         try
         {
-            (passed, summaryJson) = await ExecuteTestPackAsync(orgId, connectionId, revisionId, rev, ct);
+            (outcome, summaryJson) = await ExecuteTestPackAsync(orgId, connectionId, revisionId, rev, ct);
         }
         catch (Exception ex)
         {
             // Failures are stored honestly, never thrown: an exploding test pack is itself a FAIL.
-            passed = false;
+            outcome = TestPackOutcome.Failed;
             summaryJson = JsonSerializer.Serialize(new TestPackSummary(
+                Outcome: TestPackOutcomeNames.Failed,
                 Replay: null,
                 Conformance: null,
                 Error: $"Test pack execution failed: {ex.Message}"), SummaryJsonOptions);
@@ -238,10 +242,13 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
 
         rev.TestResultJson = summaryJson;
         rev.TestedAt       = now;
-        rev.TestPassed     = passed;
+        rev.TestOutcome    = TestPackOutcomeNames.ToName(outcome);
+        // Narrowed mirror, written FAIL-CLOSED: NotExercised stores false, so a reader that only
+        // knows the boolean refuses rather than publishes. TestOutcome above is the authority.
+        rev.TestPassed     = outcome == TestPackOutcome.Passed;
         await _db.SaveChangesAsync(ct);
 
-        return new ConnectionTestEvidence(passed, now, summaryJson);
+        return new ConnectionTestEvidence(outcome, now, summaryJson);
     }
 
     public async Task<ConnectionTestOutcome> MarkTestAsync(
@@ -279,13 +286,28 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
         // gate below — it only applies to NEW publish attempts.
         if (target.Status is not ("draft" or "test")) return ConnectionPublishOutcome.InvalidStatus;
 
-        // Evidence gate: require a PASSING test-pack run that is at least as new as the revision's
-        // last content update (UpdatedAt is stamped by UpdateDraftAsync; null = never edited after
-        // creation, in which case any passing evidence suffices).
-        var evidenceFresh = target.TestPassed == true
-            && target.TestedAt is not null
+        // Evidence gate: require a test-pack run that (a) actually EXERCISED the revision, (b)
+        // found no fault, and (c) is at least as new as the revision's last content update
+        // (UpdatedAt is stamped by UpdateDraftAsync; null = never edited after creation, in which
+        // case any passing evidence suffices).
+        //
+        // Gates on TestOutcome, not TestPassed. The boolean cannot express the case this gate
+        // exists to catch — a pack that ran, failed nothing, and proved nothing — and it is
+        // exactly that case which used to publish. Legacy rows tested before the column existed
+        // have TestOutcome null and are refused here: fail-closed on ambiguity, cleared by
+        // re-running the checks. Already-published revisions are untouched, since the gate only
+        // runs on draft/test.
+        var evidenceFresh = target.TestedAt is not null
             && (target.UpdatedAt is null || target.TestedAt >= target.UpdatedAt);
-        if (!evidenceFresh) return ConnectionPublishOutcome.EvidenceRequired;
+
+        if (!evidenceFresh || target.TestOutcome is null)
+            return ConnectionPublishOutcome.EvidenceRequired;
+
+        if (target.TestOutcome == TestPackOutcomeNames.NotExercised)
+            return ConnectionPublishOutcome.EvidenceNotExercised;
+
+        if (target.TestOutcome != TestPackOutcomeNames.Passed)
+            return ConnectionPublishOutcome.EvidenceRequired;
 
         var now = DateTime.UtcNow;
         // Archive the prior published revision (one published per connection — acceptance precedent).
@@ -583,12 +605,55 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
 
     // ── test pack internals ──────────────────────────────────────────────────
 
-    /// <summary>Serializable summary stored in <c>test_result_json</c> (camelCase).</summary>
-    private sealed record TestPackSummary(ReplayLeg? Replay, ConformanceLeg? Conformance, string? Error, ParseLegSummary? ParseLeg = null);
-    private sealed record ReplayLeg(bool Passed, int OrderCount, int OutputErrors, int OutputChanged, int ValidationChanged, string? Note);
-    private sealed record ConformanceLeg(bool Skipped, bool? Passed, string? Profile, int Errors, int Warnings, string? Note);
+    /// <summary>
+    /// Serializable summary stored in <c>test_result_json</c> (camelCase).
+    ///
+    /// <para>Every leg carries an <c>outcome</c> string (<see cref="TestLegOutcomeNames"/>) rather
+    /// than a <c>passed</c> boolean. The boolean was the defect: each leg's "there was nothing to
+    /// run this on" path set it to <c>true</c>, and since the pack's verdict is a conjunction, an
+    /// un-run leg was indistinguishable from a satisfied one. The conformance leg even had a
+    /// <c>skipped</c> flag that named the situation correctly and was then counted as a pass
+    /// anyway.</para>
+    /// </summary>
+    private sealed record TestPackSummary(
+        string Outcome, ReplayLeg? Replay, ConformanceLeg? Conformance, string? Error, ParseLegSummary? ParseLeg = null);
+    private sealed record ReplayLeg(string Outcome, int OrderCount, int OutputErrors, int OutputChanged, int ValidationChanged, string? Note);
+    private sealed record ConformanceLeg(string Outcome, string? Profile, int Errors, int Warnings, string? Note);
     /// <summary>Replay flip A — parse-from-source leg evidence: how many orders re-parsed / would parse differently / failed / were skipped.</summary>
-    private sealed record ParseLegSummary(bool Passed, int OrdersReParsed, int ParseChanges, int Failures, int Skipped, string? Note);
+    private sealed record ParseLegSummary(string Outcome, int OrdersReParsed, int ParseChanges, int Failures, int Skipped, string? Note);
+
+    /// <summary>
+    /// Rolls three leg outcomes into the pack verdict.
+    ///
+    /// <para>Order of precedence, and why:</para>
+    /// <list type="number">
+    ///   <item>ANY leg that <see cref="TestLegOutcome.Failed"/> fails the pack. A found fault is a
+    ///     found fault whichever leg found it.</item>
+    ///   <item>Otherwise, if the REPLAY leg did not run, the pack is
+    ///     <see cref="TestPackOutcome.NotExercised"/>. Replay is the load-bearing leg: it is the
+    ///     one that takes a real stored order, pushes it through this revision's mapping, and
+    ///     builds the actual outgoing payload. If that never happened, nothing was proved about
+    ///     this bundle and there is no evidence to publish on.</item>
+    ///   <item>Otherwise the pack passed.</item>
+    /// </list>
+    ///
+    /// <para><b>Why an un-run CONFORMANCE or PARSE leg does not, by itself, block.</b> Both have
+    /// permanent, un-clearable absences. <c>ConformanceService.ProfileForFormat</c> returns null for
+    /// CSV, JSON and XML — all three are buildable, publishable formats and CSV is the sample
+    /// default — so a standards leg over them is <see cref="TestLegOutcome.NotApplicable"/> forever;
+    /// gating on it would strand the most common configuration on a check no action can satisfy.
+    /// The parse leg is skipped for AI-extracted PDF sources for the same structural reason. They
+    /// still never report a pass they did not earn, which is what the summary is for — the fix for
+    /// a vacuous check is to stop it claiming a pass, not to convert it into a deadlock.</para>
+    /// </summary>
+    private static TestPackOutcome RollUp(TestLegOutcome replay, TestLegOutcome conformance, TestLegOutcome parse)
+    {
+        if (replay      == TestLegOutcome.Failed) return TestPackOutcome.Failed;
+        if (conformance == TestLegOutcome.Failed) return TestPackOutcome.Failed;
+        if (parse       == TestLegOutcome.Failed) return TestPackOutcome.Failed;
+        if (replay      != TestLegOutcome.Passed) return TestPackOutcome.NotExercised;
+        return TestPackOutcome.Passed;
+    }
 
     /// <summary>
     /// Runs the test-pack legs. (a) REPLAY: the revision is replayed over the most recent
@@ -603,25 +668,41 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
     /// revision's): the pack is bounded at ≤<see cref="TestPackRecentOrders"/> orders, the leg is
     /// deterministic-only (PDF/AI sources skip-with-note) and in-memory, so it is cheap — and an
     /// always-on leg also catches ITEM-MAPPING snapshot drift plus the no-previous-revision case
-    /// that an input-mapping-diff trigger would miss. Pass criterion: when any order with a
-    /// source file exists, at least ONE must re-parse successfully; parse DIFFERENCES are
-    /// informational (a mapping change SHOULD change parsing), only failures gate. NO delivery
-    /// test-fire — side effects are out of bounds here.
+    /// that an input-mapping-diff trigger would miss. Parse DIFFERENCES are informational (a
+    /// mapping change SHOULD change parsing); only failures gate. NO delivery test-fire — side
+    /// effects are out of bounds here.
+    ///
+    /// <para><b>Each leg reports what it DID</b> (<see cref="TestLegOutcome"/>), not merely whether
+    /// it objected, and the pack verdict is rolled up by <see cref="RollUp"/>. Four separate paths
+    /// used to hand back a pass over a run that had proved nothing: no orders for the supplier at
+    /// all; one of five orders rendering while four errored; the standards leg being permanently
+    /// skippable for CSV/JSON/XML output; and every order being a PDF/AI source so the parse leg
+    /// had nothing deterministic to re-read. Each is now named for what it is.</para>
     /// </summary>
-    private async Task<(bool Passed, string SummaryJson)> ExecuteTestPackAsync(
+    private async Task<(TestPackOutcome Outcome, string SummaryJson)> ExecuteTestPackAsync(
         Guid orgId, Guid connectionId, Guid revisionId, SupplierConnectionRevision rev, CancellationToken ct)
     {
         var hasOrders = await _db.PurchaseOrders
             .AnyAsync(o => o.OrgId == orgId && o.SupplierId == rev.SupplierId, ct);
 
+        // VACUOUS PASS #1 — the default state at onboarding, i.e. exactly when an operator runs
+        // checks. This used to hardcode every leg true and return a pass, so a brand-new supplier
+        // could publish a connection whose endpoint, credentials and output format had never been
+        // exercised, and real deliveries then routed through it.
         if (!hasOrders)
         {
+            const string noOrders =
+                "No orders exist for this supplier yet, so this version has not been run against " +
+                "anything. Put one order through for this supplier, then re-run the checks.";
             var emptySummary = new TestPackSummary(
-                new ReplayLeg(true, 0, 0, 0, 0, "No orders exist for this supplier yet — replay pass-with-note."),
-                new ConformanceLeg(true, null, null, 0, 0, "No replayed output available to conformance-check."),
+                TestPackOutcomeNames.NotExercised,
+                new ReplayLeg(TestLegOutcomeNames.NotExercised, 0, 0, 0, 0, noOrders),
+                new ConformanceLeg(TestLegOutcomeNames.NotExercised, null, 0, 0,
+                    "No output was produced, so there was nothing to standards-check."),
                 Error: null,
-                new ParseLegSummary(true, 0, 0, 0, 0, "No orders exist for this supplier yet — nothing to re-parse."));
-            return (true, JsonSerializer.Serialize(emptySummary, SummaryJsonOptions));
+                new ParseLegSummary(TestLegOutcomeNames.NotExercised, 0, 0, 0, 0,
+                    "No orders exist for this supplier yet — nothing to re-parse."));
+            return (TestPackOutcome.NotExercised, JsonSerializer.Serialize(emptySummary, SummaryJsonOptions));
         }
 
         var replay = await _replay.ReplayAsync(
@@ -631,52 +712,82 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
         if (replay is null)
         {
             var missing = new TestPackSummary(
-                new ReplayLeg(false, 0, 0, 0, 0, "Replay could not resolve the connection/revision."),
-                new ConformanceLeg(true, null, null, 0, 0, "Skipped — replay produced no output."),
+                TestPackOutcomeNames.Failed,
+                new ReplayLeg(TestLegOutcomeNames.Failed, 0, 0, 0, 0, "Replay could not resolve the connection/revision."),
+                new ConformanceLeg(TestLegOutcomeNames.NotExercised, null, 0, 0, "Replay produced no output to check."),
                 Error: null,
-                new ParseLegSummary(true, 0, 0, 0, 0, "Skipped — replay produced no orders to re-parse."));
-            return (false, JsonSerializer.Serialize(missing, SummaryJsonOptions));
+                new ParseLegSummary(TestLegOutcomeNames.NotExercised, 0, 0, 0, 0, "Replay produced no orders to re-parse."));
+            return (TestPackOutcome.Failed, JsonSerializer.Serialize(missing, SummaryJsonOptions));
         }
 
-        // Replay leg: with orders present, the revision must render at least ONE of them —
-        // a revision that cannot produce any output must not publish. Per-order errors on
-        // historically-bad orders are recorded, not fatal.
+        // Replay leg — the load-bearing one: a real stored order goes through this revision's
+        // mapping and the actual outgoing payload gets built.
         var outputErrors      = replay.Orders.Count(o => o.OutputError is not null);
         var rendered          = replay.Orders.Count(o => o.DraftOutput is not null);
         var outputChanged     = replay.Orders.Count(o => o.OutputChanged);
         var validationChanged = replay.Orders.Count(o => o.ValidationChanged);
-        var replayPassed      = replay.OrderCount == 0 || rendered > 0;
+
+        // VACUOUS PASS #2 — the criterion was `rendered > 0` over a window of
+        // TestPackRecentOrders (5). Four of five orders failing to render still returned a pass,
+        // while the summary printed "5 orders, 4 render errors" underneath it: the headline
+        // contradicted its own detail. The replay window is the five most RECENT orders, which is
+        // the best available proxy for the next five — so a render error in it is a prediction
+        // that real orders will die at transform, not a historical curiosity. Any render error
+        // now fails the leg, and the note already tells the operator which orders to open.
+        var replayOutcome =
+            replay.OrderCount == 0 ? TestLegOutcome.NotExercised
+            : outputErrors > 0     ? TestLegOutcome.Failed
+            : rendered == 0        ? TestLegOutcome.Failed
+                                   : TestLegOutcome.Passed;
         var replayNote = replay.OrderCount == 0
-            ? "No recent orders matched the replay window — pass-with-note."
+            ? "No recent orders matched the replay window, so this version was not run against any order."
             : outputErrors > 0
                 ? $"{outputErrors} of {replay.OrderCount} recent order(s) couldn't be rebuilt with this version's " +
                   "mapping (usually an unmapped or unresolved field). Open them from the inbox to see which field, " +
                   "fix the mapping, then re-run the test."
-                : null;
-        var replayLeg = new ReplayLeg(replayPassed, replay.OrderCount, outputErrors, outputChanged, validationChanged, replayNote);
+                : rendered == 0
+                    ? $"None of the {replay.OrderCount} recent order(s) produced any output under this version."
+                    : null;
+        var replayLeg = new ReplayLeg(
+            TestLegOutcomeNames.ToName(replayOutcome),
+            replay.OrderCount, outputErrors, outputChanged, validationChanged, replayNote);
 
         // Conformance leg: check the first successfully replayed output against the named
         // profile for the revision's output format, where one exists.
+        //
+        // VACUOUS PASS #3 — this leg's `skipped` flag named the situation correctly and was then
+        // spent as a pass by the conjunction. For CSV / JSON / XML output — the most common
+        // supplier formats, and CSV is the sample default — ProfileForFormat returns null, so the
+        // standards leg was PERMANENTLY vacuous, not merely absent on this run. It is now
+        // NotApplicable: reported, never counted as a pass, and (see RollUp) not a deadlock either,
+        // because no operator action could ever satisfy it.
         ConformanceLeg conformanceLeg;
+        TestLegOutcome conformanceOutcome;
         var sample = replay.Orders.FirstOrDefault(o => o.DraftOutput is not null);
         var format = ParseFormat(rev.OutputFormat);
-        if (sample is null)
+        if (format is null || !_conformance.SupportsFormat(format.Value))
         {
-            conformanceLeg = new ConformanceLeg(true, null, null, 0, 0, "Skipped — no replayed output was produced to check.");
-        }
-        else if (format is null || !_conformance.SupportsFormat(format.Value))
-        {
+            conformanceOutcome = TestLegOutcome.NotApplicable;
             conformanceLeg = new ConformanceLeg(
-                true, null, null, 0, 0,
-                $"Standards check skipped — '{rev.OutputFormat ?? "(none)"}' is a flexible supplier format with no " +
-                $"published standard to check it against (standards-checked formats: {StandardsCheckedFormatsForMessage}). " +
-                "Your output still delivers normally.");
+                TestLegOutcomeNames.ToName(conformanceOutcome), null, 0, 0,
+                $"No standards check exists for '{rev.OutputFormat ?? "(none)"}' — it is a flexible supplier format " +
+                $"with no published standard to check it against (standards-checked formats: " +
+                $"{StandardsCheckedFormatsForMessage}). Nothing was verified here. Your output still delivers normally.");
+        }
+        else if (sample is null)
+        {
+            conformanceOutcome = TestLegOutcome.NotExercised;
+            conformanceLeg = new ConformanceLeg(
+                TestLegOutcomeNames.ToName(conformanceOutcome), null, 0, 0,
+                "No replayed output was produced, so the standards check did not run.");
         }
         else
         {
             var report = _conformance.Check(sample.DraftOutput!, format.Value);
+            conformanceOutcome = report.OverallPass ? TestLegOutcome.Passed : TestLegOutcome.Failed;
             conformanceLeg = new ConformanceLeg(
-                false, report.OverallPass, report.ProfileName, report.ErrorCount, report.WarningCount,
+                TestLegOutcomeNames.ToName(conformanceOutcome),
+                report.ProfileName, report.ErrorCount, report.WarningCount,
                 report.OverallPass ? null : "Replayed output failed its named standards profile.");
         }
 
@@ -690,19 +801,31 @@ public sealed class SupplierConnectionService : ISupplierConnectionService
         var parseFailures = parseLegs.Count(p => p.Status == "failed");
         var parseSkipped  = parseLegs.Count(p => p.Status == "skipped");
         var parseEligible = reParsed + parseFailures;
-        var parsePassed   = parseEligible == 0 || reParsed > 0;
+
+        // VACUOUS PASS #4 — `parseEligible == 0` satisfied the leg outright, so every order being a
+        // PDF/AI source (or storage being unavailable) counted as a parse check that passed.
+        // It is now NotExercised: honest non-evidence rather than evidence. Like #3 it does not
+        // deadlock publish on its own — a PDF-only supplier could never clear it — but the replay
+        // leg still has to have genuinely run for the pack to pass at all.
+        var parseOutcome =
+            parseFailures > 0  ? TestLegOutcome.Failed
+            : parseEligible == 0 ? TestLegOutcome.NotExercised
+                                 : TestLegOutcome.Passed;
         var parseNote = parseEligible == 0
-            ? "No replayed order had a re-parsable stored source file — parse leg skip-with-note."
+            ? "No replayed order had a re-parsable stored source file, so the source re-parse did not run."
             : parseFailures > 0
                 ? $"{parseFailures} of {parseEligible} order(s) with source files failed to re-parse under this revision's input mapping."
                 : parseChanges > 0
                     ? $"{parseChanges} order(s) would parse differently under this revision (informational, not a failure)."
                     : null;
-        var parseLegSummary = new ParseLegSummary(parsePassed, reParsed, parseChanges, parseFailures, parseSkipped, parseNote);
+        var parseLegSummary = new ParseLegSummary(
+            TestLegOutcomeNames.ToName(parseOutcome),
+            reParsed, parseChanges, parseFailures, parseSkipped, parseNote);
 
-        var passed = replayPassed && (conformanceLeg.Skipped || conformanceLeg.Passed == true) && parsePassed;
-        var summary = new TestPackSummary(replayLeg, conformanceLeg, Error: null, parseLegSummary);
-        return (passed, JsonSerializer.Serialize(summary, SummaryJsonOptions));
+        var outcome = RollUp(replayOutcome, conformanceOutcome, parseOutcome);
+        var summary = new TestPackSummary(
+            TestPackOutcomeNames.ToName(outcome), replayLeg, conformanceLeg, Error: null, parseLegSummary);
+        return (outcome, JsonSerializer.Serialize(summary, SummaryJsonOptions));
     }
 
     private static OutputFormat? ParseFormat(string? format) =>

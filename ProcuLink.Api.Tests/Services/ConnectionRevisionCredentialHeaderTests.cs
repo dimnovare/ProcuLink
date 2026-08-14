@@ -71,7 +71,9 @@ public class ConnectionRevisionCredentialHeaderTests
 
     private static SupplierConnectionService MakeSvc(ProcuLinkDbContext db, bool revisionAuthority = false) =>
         new(db,
-            new ReplayService(db, Array.Empty<ITransformService>()),
+            // Real transformer for the "xml" format these revisions carry, so the test pack's
+            // replay leg genuinely renders the seeded order instead of reporting an un-run pass.
+            new ReplayService(db, new ITransformService[] { new ProcuLink.Transform.Output.XmlTransformService() }),
             new ProcuLink.Transform.Conformance.ConformanceService(),
             new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
@@ -104,6 +106,33 @@ public class ConnectionRevisionCredentialHeaderTests
         var orgId = Guid.NewGuid();
         var supplierId = Guid.NewGuid();
         db.Suppliers.Add(new Supplier { Id = supplierId, OrgId = orgId, Name = "Acme OÜ", CreatedAt = DateTime.UtcNow });
+
+        // One fully-resolved order, because publish now refuses a test pack that ran against
+        // nothing. The subject here is the credential-header policy, not the evidence gate — but
+        // reaching Published legitimately requires the pack to have exercised the revision.
+        var orderId = Guid.NewGuid();
+        db.PurchaseOrders.Add(new PurchaseOrderEntity
+        {
+            Id         = orderId,
+            OrgId      = orgId,
+            SupplierId = supplierId,
+            PoNumber   = "PO-SEC-1",
+            BuyerName  = "Security Buyer",
+            OrderDate  = new DateOnly(2026, 6, 1),
+            Currency   = "EUR",
+            Status     = "ready",
+            CreatedAt  = DateTime.UtcNow,
+            UpdatedAt  = DateTime.UtcNow,
+            Lines =
+            {
+                new PurchaseOrderLineEntity
+                {
+                    Id = Guid.NewGuid(), OrderId = orderId, LineNumber = 1,
+                    BuyerItemCode = "B-1", SupplierItemCode = "SUP-1", Description = "Widget",
+                    Quantity = 1m, Unit = "EA", UnitPrice = 10m, NeedsReview = false, Confidence = 1.0f,
+                },
+            },
+        });
         await db.SaveChangesAsync();
 
         var connection = await svc.EnsureConnectionAsync(orgId, supplierId, "user", CancellationToken.None);

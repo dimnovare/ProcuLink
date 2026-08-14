@@ -1497,6 +1497,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.TestResultJson).HasColumnName("test_result_json").HasColumnType("jsonb");
             b.Property(x => x.TestedAt).HasColumnName("tested_at").HasColumnType("timestamptz");
             b.Property(x => x.TestPassed).HasColumnName("test_passed");
+            b.Property(x => x.TestOutcome).HasColumnName("test_outcome").HasMaxLength(32);
             // Bundle components (jsonb blobs kept component-shaped so existing readers re-point with no reshaping).
             b.Property(x => x.InputMappingJson).HasColumnName("input_mapping_json").HasColumnType("jsonb");
             b.Property(x => x.OutputMappingJson).HasColumnName("output_mapping_json").HasColumnType("jsonb");

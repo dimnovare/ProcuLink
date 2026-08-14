@@ -158,8 +158,8 @@ public sealed class HealthEndpointTests : IClassFixture<HealthTestFactory>
 
         var response = await client.GetAsync("/health/ready");
 
-        // InMemory DB CanConnect=true, Local storage signs a URL, migrations not
-        // failed → aggregate Healthy.
+        // InMemory DB CanConnect=true, local storage's probe writes and deletes a byte under the
+        // dev root (a real round trip, not a signature), migrations not failed → aggregate Healthy.
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 

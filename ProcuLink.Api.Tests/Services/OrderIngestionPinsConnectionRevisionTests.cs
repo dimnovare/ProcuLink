@@ -117,6 +117,10 @@ public class OrderIngestionPinsConnectionRevisionTests
         rev.TestPassed     = true;
         rev.TestedAt       = DateTime.UtcNow;
         rev.TestResultJson = "{}";
+        // TestOutcome is what the gate actually reads — TestPassed is only its fail-closed mirror,
+        // and a row carrying the boolean alone is refused (that is the point: a stored `true` from
+        // before this column existed may have come from a pack that exercised nothing).
+        rev.TestOutcome    = TestPackOutcomeNames.Passed;
         await db.SaveChangesAsync();
         var outcome = await conn.PublishAsync(orgId, connectionId, rev.Id, "u", CancellationToken.None);
         Assert.Equal(ConnectionPublishOutcome.Published, outcome);

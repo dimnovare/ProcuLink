@@ -69,6 +69,48 @@ public sealed class LocalFileStorageService : IFileStorageService
         }
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The local provider's "backend" is a directory, so the round trip is creating it and writing
+    /// a byte. That is a genuine check of the only thing that can be wrong here (the temp root not
+    /// being writable) rather than an inferred one, which keeps this provider honest for the same
+    /// reason the R2 probe is.
+    /// </remarks>
+    public async Task<StorageProbe> ProbeAsync(CancellationToken ct)
+    {
+        var probeKey = $"__healthcheck__/probe-{Guid.NewGuid():N}";
+        string? fullPath = null;
+        try
+        {
+            fullPath = GetFullPath(probeKey);
+            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+            await File.WriteAllBytesAsync(fullPath, new byte[] { 0x1 }, ct);
+
+            return StorageProbe.Reachable(
+                "Local dev storage root is present and writable.");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return StorageProbe.Unreachable(
+                $"Local dev storage root is not writable: {ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            try
+            {
+                if (fullPath is not null && File.Exists(fullPath)) File.Delete(fullPath);
+            }
+            catch
+            {
+                // Probe cleanup is best-effort; a leftover 1-byte temp file is not a health signal.
+            }
+        }
+    }
+
     // ── Internal helpers ───────────────────────────────────────────────────
 
     /// <summary>

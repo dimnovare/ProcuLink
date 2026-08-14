@@ -66,7 +66,111 @@ public sealed class ClientSuppliedCredentialsRefException : ArgumentException
 /// Evidence from one test-pack run over a revision (launch batch 3): the outcome, when it ran,
 /// and an honest summary JSON (replay leg + conformance leg + any execution error).
 /// </summary>
-public sealed record ConnectionTestEvidence(bool Passed, DateTime TestedAt, string SummaryJson);
+public sealed record ConnectionTestEvidence(TestPackOutcome Outcome, DateTime TestedAt, string SummaryJson)
+{
+    /// <summary>
+    /// Narrowing projection for callers that only have a yes/no to give. Deliberately FAIL-CLOSED:
+    /// <see cref="TestPackOutcome.NotExercised"/> reads as false, so a consumer that never learns
+    /// about the third state refuses rather than publishes.
+    /// </summary>
+    public bool Passed => Outcome == TestPackOutcome.Passed;
+}
+
+/// <summary>
+/// What one leg of the test pack actually did. The distinction this enum draws — between a leg
+/// that RAN and one that merely did not object — is the whole point of it.
+///
+/// <para>Every leg used to report a plain <c>bool Passed</c>, and every "there was nothing to run
+/// it on" path set that bool to <c>true</c>. The pack's verdict is a conjunction of the legs, so
+/// each of those paths became a pass for the whole pack, and the operator was told "checks passed"
+/// over a run that had executed nothing. A leg that did not run must never be spendable as
+/// evidence that it did.</para>
+/// </summary>
+public enum TestLegOutcome
+{
+    /// <summary>The leg ran against real material and found no fault.</summary>
+    Passed,
+
+    /// <summary>The leg ran and found a fault. Blocks publish.</summary>
+    Failed,
+
+    /// <summary>
+    /// The leg could not run because the material it needs does not exist YET — no orders for this
+    /// supplier, no replayed output, no re-parsable source file. This is not a pass and never
+    /// counts as one. It is distinct from <see cref="Failed"/> because nothing is broken: the
+    /// operator has simply not given us anything to check, and telling them their tests failed
+    /// would be its own lie. It is distinct from <see cref="NotApplicable"/> because the operator
+    /// CAN clear it, by putting an order through.
+    /// </summary>
+    NotExercised,
+
+    /// <summary>
+    /// No such check exists for this configuration, and no action by the operator would create one
+    /// — the standards leg over a CSV/JSON/XML output, none of which has a named profile to check
+    /// against (<c>ConformanceService.ProfileForFormat</c> returns null for all three).
+    ///
+    /// <para>Reported honestly and NEVER as a pass, but it does not block publish: those are
+    /// buildable, publishable output formats — CSV is the sample default — so refusing them would
+    /// permanently strand the most common configuration on a check that can never be satisfied.
+    /// What it must not do, and what it did before, is let the pack claim a standards check
+    /// happened.</para>
+    /// </summary>
+    NotApplicable,
+}
+
+/// <summary>Verdict for a whole test-pack run, rolled up from its legs.</summary>
+public enum TestPackOutcome
+{
+    /// <summary>The pack exercised the revision against a real order and every leg that ran passed.</summary>
+    Passed,
+
+    /// <summary>At least one leg found a fault.</summary>
+    Failed,
+
+    /// <summary>
+    /// No leg found a fault, but the pack never exercised the revision against a real order — so
+    /// it is no evidence that publishing is safe. Refused by the publish gate, with wording that
+    /// says what was not done rather than implying a failure.
+    /// </summary>
+    NotExercised,
+}
+
+/// <summary>
+/// Serialized string forms of <see cref="TestLegOutcome"/>, as they appear in the per-leg
+/// <c>outcome</c> field of the stored test summary JSON.
+/// </summary>
+public static class TestLegOutcomeNames
+{
+    public const string Passed        = "passed";
+    public const string Failed        = "failed";
+    public const string NotExercised  = "not_exercised";
+    public const string NotApplicable = "not_applicable";
+
+    public static string ToName(TestLegOutcome outcome) => outcome switch
+    {
+        TestLegOutcome.Passed        => Passed,
+        TestLegOutcome.Failed        => Failed,
+        TestLegOutcome.NotExercised  => NotExercised,
+        TestLegOutcome.NotApplicable => NotApplicable,
+        _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unmapped TestLegOutcome."),
+    };
+}
+
+/// <summary>Stored string forms of <see cref="TestPackOutcome"/> (the <c>test_outcome</c> column).</summary>
+public static class TestPackOutcomeNames
+{
+    public const string Passed       = "passed";
+    public const string Failed       = "failed";
+    public const string NotExercised = "not_exercised";
+
+    public static string ToName(TestPackOutcome outcome) => outcome switch
+    {
+        TestPackOutcome.Passed       => Passed,
+        TestPackOutcome.Failed       => Failed,
+        TestPackOutcome.NotExercised => NotExercised,
+        _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unmapped TestPackOutcome."),
+    };
+}
 
 /// <summary>Outcome of <see cref="ISupplierConnectionService.MarkTestAsync"/>.</summary>
 public enum ConnectionTestStatus
@@ -95,6 +199,18 @@ public enum ConnectionPublishOutcome
     /// publish attempts on draft/test revisions.
     /// </summary>
     EvidenceRequired,
+    /// <summary>
+    /// The test pack RAN and nothing failed, but it never exercised the revision — there was no
+    /// order to replay it against, so no output was ever built from this bundle. Distinct from
+    /// <see cref="EvidenceRequired"/> (which says "no fresh passing evidence") because the caller
+    /// must be told what was not done, not that a test failed: nothing failed, and nothing ran.
+    ///
+    /// <para>This is the state that used to publish. An empty pack hardcoded every leg to
+    /// <c>true</c>, so a supplier with zero orders — i.e. every newly configured supplier, the
+    /// exact population at onboarding — could publish a connection whose endpoint, credentials and
+    /// output format had never been exercised, and real deliveries then routed through it.</para>
+    /// </summary>
+    EvidenceNotExercised,
     /// <summary>Published: revision frozen, prior published revision archived, active pointer flipped.</summary>
     Published,
 }

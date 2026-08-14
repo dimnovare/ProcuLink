@@ -22,13 +22,21 @@ public class SupplierConnectionServiceTests
             .Options);
 
     /// <summary>
-    /// Service under test. The suppliers in this fixture have no orders, so the launch-batch-3
-    /// test pack short-circuits to pass-with-note (the replay engine is constructed but never
-    /// invoked); the lifecycle behaviour under test is unchanged.
+    /// Service under test, wired with REAL transformers for the formats <see cref="Bundle"/> uses.
+    ///
+    /// <para>This fixture used to register none and seed no orders, on the documented grounds that
+    /// "the test pack short-circuits to pass-with-note". That short-circuit was the defect: an
+    /// un-run pack is no longer a pass, so a fixture that publishes has to earn it the way a
+    /// customer does — a real transformer and a real order (see <see cref="SeedSupplier"/>). The
+    /// lifecycle behaviour under test is unchanged; only the fixture's honesty is.</para>
     /// </summary>
     private static SupplierConnectionService MakeSvc(ProcuLinkDbContext db) =>
         new(db,
-            new ReplayService(db, Array.Empty<ITransformService>()),
+            new ReplayService(db, new ITransformService[]
+            {
+                new ProcuLink.Transform.Output.XmlTransformService(),
+                new ProcuLink.Transform.Output.CsvTransformService(),
+            }),
             new ProcuLink.Transform.Conformance.ConformanceService());
 
     /// <summary>Evidence-gated publish: run the test pack (stores evidence) then publish.</summary>
@@ -57,11 +65,41 @@ public class SupplierConnectionServiceTests
                 new("B1", "S1", 1.0f, "manual"),
             });
 
+    /// <summary>
+    /// A supplier WITH one fully-resolved order. The order is what lets the test pack actually
+    /// exercise a revision — publish now refuses a pack that ran against nothing, which is exactly
+    /// the state a brand-new supplier is in.
+    /// </summary>
     private static async Task<(Guid orgId, Guid supplierId)> SeedSupplier(ProcuLinkDbContext db)
     {
         var orgId = Guid.NewGuid();
         var supplierId = Guid.NewGuid();
         db.Suppliers.Add(new Supplier { Id = supplierId, OrgId = orgId, Name = "Acme OÜ", CreatedAt = DateTime.UtcNow });
+
+        var orderId = Guid.NewGuid();
+        db.PurchaseOrders.Add(new PurchaseOrderEntity
+        {
+            Id         = orderId,
+            OrgId      = orgId,
+            SupplierId = supplierId,
+            PoNumber   = "PO-LIFECYCLE-1",
+            BuyerName  = "Lifecycle Buyer",
+            OrderDate  = new DateOnly(2026, 6, 1),
+            Currency   = "EUR",
+            Status     = "ready",
+            CreatedAt  = DateTime.UtcNow,
+            UpdatedAt  = DateTime.UtcNow,
+            Lines =
+            {
+                new PurchaseOrderLineEntity
+                {
+                    Id = Guid.NewGuid(), OrderId = orderId, LineNumber = 1,
+                    BuyerItemCode = "B-1", SupplierItemCode = "SUP-1", Description = "Widget",
+                    Quantity = 3m, Unit = "EA", UnitPrice = 10m, NeedsReview = false, Confidence = 1.0f,
+                },
+            },
+        });
+
         await db.SaveChangesAsync();
         return (orgId, supplierId);
     }
