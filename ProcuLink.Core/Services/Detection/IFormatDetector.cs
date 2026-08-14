@@ -69,7 +69,12 @@ public sealed record DetectedFormat(
     string Basis = FormatDetectionBasis.Heuristic);
 
 /// <summary>
-/// Values for <see cref="DetectedFormat.Basis"/>.
+/// Values for <see cref="DetectedFormat.Basis"/>. To be mirrored by the frontend's
+/// <c>DetectFormatResult</c> in <c>src/lib/api-client.ts</c>, whose <c>confidence</c> is still a
+/// non-nullable <c>number</c> — until it is nullable there,
+/// <c>UploadWorkbench.tsx</c> renders a null as <c>Math.round(null * 100)</c> = <b>0%</b>, which is
+/// a louder lie than the 95% this fix removed. Same shape as <c>MappingSuggestionBasis</c> and
+/// <c>AiMappingSuggestionBasis</c>.
 ///
 /// <para>The invariant, enforced by <c>FormatDetectorBasisInvariantTests</c>:
 /// <b><see cref="Heuristic"/> carries a number and the other two never do.</b></para>
