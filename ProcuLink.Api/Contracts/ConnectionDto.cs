@@ -12,9 +12,22 @@ public record ConnectionDetailDto(
     Guid? ActiveRevisionId, DateTime CreatedAt, DateTime UpdatedAt,
     IReadOnlyList<ConnectionRevisionSummaryDto> Revisions);
 
+/// <param name="Status">
+/// The revision's lifecycle status — draft / test / published / archived. NOTE that <c>"test"</c>
+/// means only that the pack RAN: <c>MarkTestAsync</c> sets it unconditionally, pass or fail. It is
+/// not a verdict, and rendering it as one is how a failed run reads as a tested one.
+/// </param>
+/// <param name="TestOutcome">
+/// Verdict of the last test-pack run — <c>passed</c> / <c>failed</c> / <c>not_exercised</c>
+/// (<see cref="ProcuLink.Core.Services.TestPackOutcomeNames"/>), or null when never tested.
+/// Carried here because <see cref="Status"/> cannot express it, so a list of revisions could not
+/// be honest about which ones actually hold evidence without it.
+/// </param>
+/// <param name="TestedAt">When that run happened; null when never tested.</param>
 public record ConnectionRevisionSummaryDto(
     Guid Id, int VersionNo, string Status,
-    DateTime? EffectiveFrom, DateTime? EffectiveTo, DateTime? PublishedAt, DateTime CreatedAt);
+    DateTime? EffectiveFrom, DateTime? EffectiveTo, DateTime? PublishedAt, DateTime CreatedAt,
+    string? TestOutcome = null, DateTime? TestedAt = null);
 
 public record ConnectionItemMappingDto(
     string BuyerItemCode, string SupplierItemCode, float? Confidence, string Source);
@@ -29,7 +42,10 @@ public record ConnectionRevisionDto(
     Guid? AcceptanceProfileId, int? AcceptanceVersionNo, string CatalogMode,
     IReadOnlyList<ConnectionItemMappingDto> ItemMappings,
     // Launch batch 3 — test evidence (null on never-tested / legacy revisions).
+    // TestPassed is the fail-closed narrowing of TestOutcome; TestOutcome is the authority and the
+    // only one of the two that can distinguish a pack that FAILED from one that never ran.
     bool? TestPassed = null, DateTime? TestedAt = null, string? TestResultJson = null,
+    string? TestOutcome = null,
     // Set when this revision's SAVED config carries a fault the write path now refuses: an endpoint
     // the transport policy rejects (written before TLS enforcement reached this path), a credential
     // sitting in the extra-headers map, or both. Delivery continues — refusing a stored bundle
@@ -45,7 +61,17 @@ public record ConnectionRevisionDto(
 /// conformance leg), its outcome, and the stored summary JSON. A failed pack is returned honestly
 /// (200 with <c>Passed=false</c>) — failure to PASS is not failure to RUN.
 /// </summary>
-public record ConnectionTestEvidenceDto(bool Passed, DateTime TestedAt, string SummaryJson);
+/// <param name="Passed">
+/// Narrowed mirror of <paramref name="Outcome"/>, true ONLY for <c>passed</c>. Fail-closed, so a
+/// client that never learns about <c>not_exercised</c> refuses rather than publishes — but it
+/// cannot tell "failed" from "never ran", so do not render words from it. Use
+/// <paramref name="Outcome"/> for anything a person reads.
+/// </param>
+/// <param name="Outcome">
+/// <c>passed</c> / <c>failed</c> / <c>not_exercised</c>
+/// (<see cref="ProcuLink.Core.Services.TestPackOutcomeNames"/>).
+/// </param>
+public record ConnectionTestEvidenceDto(bool Passed, DateTime TestedAt, string SummaryJson, string Outcome);
 
 /// <summary>Body for creating a new draft revision (clone-from-active by default).</summary>
 public record CreateConnectionRevisionRequest(

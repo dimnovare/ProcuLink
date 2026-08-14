@@ -81,10 +81,44 @@ public class ConnectionTestEvidenceAndRollbackTests
         await db.SaveChangesAsync();
     }
 
+    /// <summary>
+    /// An order the CSV transform REFUSES: an unresolved supplier item code makes
+    /// <c>CsvTransformService.ValidateOrder</c> throw <c>TransformValidationException</c>, which
+    /// replay records as a per-order <c>OutputError</c> rather than a crash. Seeded alongside a
+    /// resolvable order so the replay window contains both.
+    /// </summary>
+    private static async Task SeedUnrenderableOrderAsync(ProcuLinkDbContext db, Guid orgId, Guid supplierId)
+    {
+        var orderId = Guid.NewGuid();
+        db.PurchaseOrders.Add(new PurchaseOrderEntity
+        {
+            Id         = orderId,
+            OrgId      = orgId,
+            SupplierId = supplierId,
+            PoNumber   = "PO-EV-2-UNRESOLVED",
+            BuyerName  = "Evidence Buyer",
+            OrderDate  = new DateOnly(2026, 6, 2),
+            Currency   = "EUR",
+            Status     = "ready",
+            CreatedAt  = DateTime.UtcNow,
+            UpdatedAt  = DateTime.UtcNow,
+            Lines =
+            {
+                new PurchaseOrderLineEntity
+                {
+                    Id = Guid.NewGuid(), OrderId = orderId, LineNumber = 1,
+                    BuyerItemCode = "B-2", SupplierItemCode = null, Description = "Unmapped widget",
+                    Quantity = 1m, Unit = "EA", UnitPrice = 5m, NeedsReview = true, Confidence = null,
+                },
+            },
+        });
+        await db.SaveChangesAsync();
+    }
+
     // ── Test pack stores evidence ────────────────────────────────────────────
 
     [Fact]
-    public async Task MarkTest_NoOrders_StoresPassWithNoteEvidence_AndMarksTest()
+    public async Task MarkTest_NoOrders_RecordsNotExercised_NotAPass()
     {
         var db = MakeDb();
         var svc = MakeSvc(db);
@@ -94,17 +128,55 @@ public class ConnectionTestEvidenceAndRollbackTests
 
         var outcome = await svc.MarkTestAsync(orgId, conn.Id, v1!.Id, CancellationToken.None);
 
+        // The run itself SUCCEEDED (the revision is marked test, evidence is stored) — it just
+        // proved nothing, and that is a third thing, neither pass nor fail.
         Assert.Equal(ConnectionTestStatus.Completed, outcome.Status);
         Assert.NotNull(outcome.Evidence);
-        Assert.True(outcome.Evidence!.Passed); // 0 orders = pass-with-note
+        Assert.Equal(TestPackOutcome.NotExercised, outcome.Evidence!.Outcome);
+        Assert.False(outcome.Evidence.Passed);
 
         var rev = await svc.GetRevisionAsync(orgId, conn.Id, v1.Id, CancellationToken.None);
         Assert.Equal("test", rev!.Status);
-        Assert.True(rev.TestPassed);
+        Assert.Equal(TestPackOutcomeNames.NotExercised, rev.TestOutcome);
+        Assert.False(rev.TestPassed);   // narrowed mirror is fail-closed
         Assert.NotNull(rev.TestedAt);
         Assert.NotNull(rev.TestResultJson);
-        Assert.Contains("replay", rev.TestResultJson);      // summary JSON carries both legs
+        Assert.Contains("replay", rev.TestResultJson);      // summary JSON carries every leg
         Assert.Contains("conformance", rev.TestResultJson);
+
+        // No leg may report a pass: nothing ran.
+        Assert.DoesNotContain($"\"outcome\":\"{TestLegOutcomeNames.Passed}\"", rev.TestResultJson);
+    }
+
+    /// <summary>
+    /// THE DEFECT, VERBATIM. A supplier with ZERO orders — every newly configured supplier, i.e.
+    /// exactly the population that runs checks at onboarding — ran the pack, was told it passed,
+    /// and could publish a connection whose endpoint, credentials and output format had never been
+    /// exercised. Real deliveries then routed through it.
+    /// </summary>
+    [Fact]
+    public async Task Publish_SupplierWithZeroOrders_IsRefused_BecauseNothingWasExercised()
+    {
+        var db = MakeDb();
+        var svc = MakeSvc(db, new CsvTransformService());
+        var (orgId, supplierId) = await SeedSupplier(db);
+        // NO orders seeded for this supplier — this is the whole control.
+        var conn = await svc.EnsureConnectionAsync(orgId, supplierId, "u", CancellationToken.None);
+        var v1 = await svc.CreateDraftAsync(orgId, conn!.Id, Bundle("csv"), false, "u", CancellationToken.None);
+
+        var test = await svc.MarkTestAsync(orgId, conn.Id, v1!.Id, CancellationToken.None);
+        Assert.Equal(ConnectionTestStatus.Completed, test.Status);
+
+        var publish = await svc.PublishAsync(orgId, conn.Id, v1.Id, "u", CancellationToken.None);
+
+        // Refused — and refused with the state that says what was NOT done, not with the one that
+        // implies a test failed. Nothing failed. Nothing ran.
+        Assert.Equal(ConnectionPublishOutcome.EvidenceNotExercised, publish);
+
+        var rev = await svc.GetRevisionAsync(orgId, conn.Id, v1.Id, CancellationToken.None);
+        Assert.NotEqual("published", rev!.Status);
+        var after = await svc.GetAsync(orgId, conn.Id, CancellationToken.None);
+        Assert.Null(after!.ActiveRevisionId);   // active pointer never moved
     }
 
     [Fact]
@@ -121,10 +193,64 @@ public class ConnectionTestEvidenceAndRollbackTests
         var outcome = await svc.MarkTestAsync(orgId, conn.Id, v1!.Id, CancellationToken.None);
 
         Assert.Equal(ConnectionTestStatus.Completed, outcome.Status);
-        Assert.True(outcome.Evidence!.Passed);
+        Assert.Equal(TestPackOutcome.Passed, outcome.Evidence!.Outcome);
         Assert.Contains("\"orderCount\":1", outcome.Evidence.SummaryJson);
-        // CSV has no named standards profile → the conformance leg honestly reports skipped.
-        Assert.Contains("\"skipped\":true", outcome.Evidence.SummaryJson);
+
+        // CSV has no named standards profile, so the standards leg is NOT_APPLICABLE — reported,
+        // and specifically NOT reported as a pass. It used to say `"skipped":true` and then be
+        // counted as one by the pack's conjunction, which is how "checks passed" came to cover a
+        // standards check that is permanently vacuous for the most common output format.
+        Assert.Contains($"\"outcome\":\"{TestLegOutcomeNames.NotApplicable}\"", outcome.Evidence.SummaryJson);
+    }
+
+    /// <summary>
+    /// The standards leg being permanently inapplicable must not become a deadlock either: CSV,
+    /// JSON and XML are buildable, publishable formats (CSV is the sample default) and no operator
+    /// action can ever give them a named profile. Replay is the load-bearing leg — it ran, against
+    /// a real order — so publish proceeds.
+    /// </summary>
+    [Fact]
+    public async Task Publish_CsvOutput_WithRealOrder_Publishes_DespiteInapplicableStandardsLeg()
+    {
+        var db = MakeDb();
+        var svc = MakeSvc(db, new CsvTransformService());
+        var (orgId, supplierId) = await SeedSupplier(db);
+        await SeedResolvedOrderAsync(db, orgId, supplierId);
+        var conn = await svc.EnsureConnectionAsync(orgId, supplierId, "u", CancellationToken.None);
+        var v1 = await svc.CreateDraftAsync(orgId, conn!.Id, Bundle("csv"), false, "u", CancellationToken.None);
+
+        await svc.MarkTestAsync(orgId, conn.Id, v1!.Id, CancellationToken.None);
+
+        Assert.Equal(ConnectionPublishOutcome.Published,
+            await svc.PublishAsync(orgId, conn.Id, v1.Id, "u", CancellationToken.None));
+    }
+
+    /// <summary>
+    /// Replay renders one of two orders. The old criterion was `rendered > 0`, so this reported a
+    /// PASS while the summary printed its own contradiction underneath — "2 orders, 1 render
+    /// error". The replay window is the most RECENT orders, so a render error in it predicts real
+    /// orders dying at transform.
+    /// </summary>
+    [Fact]
+    public async Task RunTestPack_SomeOrdersRenderAndSomeDoNot_Fails_HeadlineMatchesDetail()
+    {
+        var db = MakeDb();
+        var svc = MakeSvc(db, new CsvTransformService());
+        var (orgId, supplierId) = await SeedSupplier(db);
+        await SeedResolvedOrderAsync(db, orgId, supplierId);
+        await SeedUnrenderableOrderAsync(db, orgId, supplierId);
+        var conn = await svc.EnsureConnectionAsync(orgId, supplierId, "u", CancellationToken.None);
+        var v1 = await svc.CreateDraftAsync(orgId, conn!.Id, Bundle("csv"), false, "u", CancellationToken.None);
+
+        var evidence = await svc.RunTestPackAsync(orgId, conn.Id, v1!.Id, CancellationToken.None);
+
+        Assert.NotNull(evidence);
+        Assert.Equal(TestPackOutcome.Failed, evidence!.Outcome);
+        Assert.Contains("\"outputErrors\":1", evidence.SummaryJson);
+        Assert.Contains($"\"outcome\":\"{TestLegOutcomeNames.Failed}\"", evidence.SummaryJson);
+
+        Assert.Equal(ConnectionPublishOutcome.EvidenceRequired,
+            await svc.PublishAsync(orgId, conn.Id, v1.Id, "u", CancellationToken.None));
     }
 
     [Fact]
@@ -141,9 +267,12 @@ public class ConnectionTestEvidenceAndRollbackTests
         var evidence = await svc.RunTestPackAsync(orgId, conn.Id, v1!.Id, CancellationToken.None);
 
         Assert.NotNull(evidence);
-        Assert.False(evidence!.Passed); // stored honestly, not thrown
+        Assert.Equal(TestPackOutcome.Failed, evidence!.Outcome); // stored honestly, not thrown
         var rev = await svc.GetRevisionAsync(orgId, conn.Id, v1.Id, CancellationToken.None);
         Assert.False(rev!.TestPassed);
+        // A real fault, so it is FAILED — distinct from the not-exercised state, which means
+        // nothing was found because nothing ran.
+        Assert.Equal(TestPackOutcomeNames.Failed, rev.TestOutcome);
         Assert.Contains("\"outputErrors\":1", rev.TestResultJson!);
 
         // ...and the failed evidence does NOT satisfy the publish gate.
@@ -175,12 +304,18 @@ public class ConnectionTestEvidenceAndRollbackTests
     public async Task Publish_WithPassingEvidence_Publishes()
     {
         var db = MakeDb();
-        var svc = MakeSvc(db);
+        // A real transformer AND a real order, so the pack genuinely exercises the revision.
+        // This test used to seed neither and still reach Published — which was the defect wearing
+        // a green tick.
+        var svc = MakeSvc(db, new CsvTransformService());
         var (orgId, supplierId) = await SeedSupplier(db);
+        await SeedResolvedOrderAsync(db, orgId, supplierId);
         var conn = await svc.EnsureConnectionAsync(orgId, supplierId, "u", CancellationToken.None);
-        var v1 = await svc.CreateDraftAsync(orgId, conn!.Id, Bundle(), false, "u", CancellationToken.None);
+        var v1 = await svc.CreateDraftAsync(orgId, conn!.Id, Bundle("csv"), false, "u", CancellationToken.None);
 
-        await svc.MarkTestAsync(orgId, conn.Id, v1!.Id, CancellationToken.None);
+        var test = await svc.MarkTestAsync(orgId, conn.Id, v1!.Id, CancellationToken.None);
+        Assert.Equal(TestPackOutcome.Passed, test.Evidence!.Outcome);
+
         var result = await svc.PublishAsync(orgId, conn.Id, v1.Id, "u", CancellationToken.None);
 
         Assert.Equal(ConnectionPublishOutcome.Published, result);
@@ -192,8 +327,9 @@ public class ConnectionTestEvidenceAndRollbackTests
     public async Task UpdateDraft_AfterTest_VoidsEvidence_PublishRequiresRetest()
     {
         var db = MakeDb();
-        var svc = MakeSvc(db);
+        var svc = MakeSvc(db, new CsvTransformService(), new XmlTransformService());
         var (orgId, supplierId) = await SeedSupplier(db);
+        await SeedResolvedOrderAsync(db, orgId, supplierId);
         var conn = await svc.EnsureConnectionAsync(orgId, supplierId, "u", CancellationToken.None);
         var v1 = await svc.CreateDraftAsync(orgId, conn!.Id, Bundle("csv"), false, "u", CancellationToken.None);
 
@@ -205,6 +341,9 @@ public class ConnectionTestEvidenceAndRollbackTests
         var edited = await svc.GetRevisionAsync(orgId, conn.Id, v1.Id, CancellationToken.None);
         Assert.Null(edited!.TestPassed);
         Assert.Null(edited.TestedAt);
+        // The verdict is voided with the rest of the evidence — a stale "passed" must not outlive
+        // the run that earned it and be read as a verdict on the edited bundle.
+        Assert.Null(edited.TestOutcome);
         Assert.NotNull(edited.UpdatedAt);
 
         // Publish is blocked until a fresh test run.
@@ -224,8 +363,12 @@ public class ConnectionTestEvidenceAndRollbackTests
         SeedTwoPublishedRevisionsAsync()
     {
         var db = MakeDb();
-        var svc = MakeSvc(db);
+        // Rollback is about the pointer, not the gate — but reaching a published revision at all
+        // now requires the pack to have genuinely exercised the bundle, so the fixture supplies
+        // the transformers and the order that lets it.
+        var svc = MakeSvc(db, new CsvTransformService(), new XmlTransformService());
         var (orgId, supplierId) = await SeedSupplier(db);
+        await SeedResolvedOrderAsync(db, orgId, supplierId);
         var conn = await svc.EnsureConnectionAsync(orgId, supplierId, "u", CancellationToken.None);
 
         var v1 = await svc.CreateDraftAsync(orgId, conn!.Id, Bundle("xml"), false, "u", CancellationToken.None);

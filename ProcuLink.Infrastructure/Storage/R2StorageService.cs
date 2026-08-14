@@ -128,6 +128,62 @@ public sealed class R2StorageService : IFileStorageService, IAsyncDisposable
         }
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// A HEAD (GetObjectMetadata) against a key that is not expected to exist. This is the cheapest
+    /// call that actually LEAVES THE PROCESS: it resolves <c>ServiceURL</c>, opens TLS, and gets the
+    /// request signature checked by R2.
+    ///
+    /// <para>A 404 is the SUCCESS case and the whole trick — being told "no such key" can only come
+    /// from a reachable endpoint that accepted our credentials and found the bucket. Contrast the
+    /// pre-signed-URL check this replaced, which produced a perfect-looking URL against a
+    /// misconfigured endpoint because signing never leaves the machine.</para>
+    ///
+    /// <para>A 403/401 is the failure this exists to catch: reachable host, rejected credentials
+    /// (or a bucket the key cannot see) — an upload would 403 for the same reason.</para>
+    /// </remarks>
+    public async Task<StorageProbe> ProbeAsync(CancellationToken ct)
+    {
+        const string probeKey = "__healthcheck__/probe";
+        try
+        {
+            await _client.GetObjectMetadataAsync(
+                new GetObjectMetadataRequest { BucketName = _bucketName, Key = probeKey }, ct);
+
+            // The probe key exists. Unexpected, but it still answers the only question asked.
+            return StorageProbe.Reachable("Storage answered a HEAD request for the probe key.");
+        }
+        catch (AmazonS3Exception ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // The point of the probe: a live, authenticated "no such key".
+            return StorageProbe.Reachable(
+                "Storage answered a HEAD request (404 for the probe key, which is expected).");
+        }
+        catch (AmazonS3Exception ex) when (
+            ex.StatusCode == System.Net.HttpStatusCode.Forbidden ||
+            ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            return StorageProbe.Unreachable(
+                $"Storage rejected our credentials ({(int)ex.StatusCode} {ex.ErrorCode}). " +
+                "Uploads and downloads will fail for the same reason.");
+        }
+        catch (AmazonS3Exception ex)
+        {
+            return StorageProbe.Unreachable(
+                $"Storage returned {(int)ex.StatusCode} {ex.ErrorCode} for a HEAD request.");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // DNS failure, connect refused, TLS error, probe timeout — a wrong ServiceURL lands here.
+            return StorageProbe.Unreachable(
+                $"Storage did not answer a HEAD request: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         _client.Dispose();

@@ -154,20 +154,38 @@ public sealed class MigrationReadinessHealthCheck : IHealthCheck
 }
 
 /// <summary>
-/// Lightweight storage (Cloudflare R2 / local) reachability check for the
-/// readiness endpoint. Tagged "ready".
+/// Storage (Cloudflare R2 / local) reachability check for the readiness endpoint. Tagged "ready".
 ///
-/// It exercises the real <see cref="IFileStorageService"/> via the cheapest
-/// available operation (<see cref="IFileStorageService.GetSignedDownloadUrlAsync"/>):
-/// for R2 this is a local signing round-trip that fails fast if the client/bucket
-/// config is broken; for the local dev provider it is a no-op path build. We do
-/// NOT perform a real network PUT/HEAD on the hot readiness path — that would add
-/// latency and could flap. If storage isn't configured (local dev / R2 keys
-/// absent) the check degrades to <c>Healthy</c> with a note rather than failing,
-/// so a dev environment without R2 still reports ready.
+/// <para><b>This check performs a REAL round trip</b> — <see cref="IFileStorageService.ProbeAsync"/>,
+/// a HEAD against a probe key on R2 — and reports only what came back.</para>
+///
+/// <para>It used to report <c>Healthy("Storage reachable.")</c> when
+/// <see cref="IFileStorageService.GetSignedDownloadUrlAsync"/> returned a non-empty string. Signing
+/// is LOCAL: <c>AmazonS3Client.GetPreSignedURL</c> is synchronous in AWSSDK.S3 v4 and makes no
+/// network call, so a wrong <c>ServiceURL</c> produces a perfectly-formed URL and the endpoint
+/// announced reachability it had never observed while every upload 403'd. This project has already
+/// lost time to that exact failure (an S3↔R2 <c>serviceUrl</c> mismatch), so the check now either
+/// observes reachability or does not claim it.</para>
+///
+/// <para><b>Latency.</b> One HEAD, bounded by <see cref="ProbeTimeout"/>. This is affordable here
+/// because <c>/health/ready</c> is NOT the container liveness probe — Railway probes <c>/health</c>,
+/// which stays dependency-free by design (see <see cref="HealthController.Health"/>). A slow or
+/// dead R2 therefore delays a readiness response; it cannot get the process killed.</para>
+///
+/// <para><b>Severity stays Degraded, never Unhealthy</b>, exactly as before: storage trouble should
+/// not on its own take the process out of rotation the way a dead DB does. So making this check
+/// truthful cannot newly flap the deployment — it can only change the words and the status on a
+/// page that was already reporting Degraded for real faults.</para>
+///
+/// <para>An unconfigured provider (local dev without R2 keys, or a double with no probe) reports
+/// <see cref="StorageProbeStatus.NotProbed"/> and this check returns Healthy with a note that says
+/// so — ready, but explicitly NOT claiming reachability was checked.</para>
 /// </summary>
 public sealed class StorageHealthCheck : IHealthCheck
 {
+    /// <summary>Upper bound on the probe round trip, so a hung backend cannot hang readiness.</summary>
+    public static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(5);
+
     private readonly IFileStorageService _storage;
 
     public StorageHealthCheck(IFileStorageService storage) => _storage = storage;
@@ -175,27 +193,38 @@ public sealed class StorageHealthCheck : IHealthCheck
     public async Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context, CancellationToken cancellationToken = default)
     {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(ProbeTimeout);
+
+        StorageProbe probe;
         try
         {
-            // Cheap, side-effect-free probe: minting a signed URL constructs the
-            // S3/R2 request signer (R2) or builds a local path (dev). A misconfigured
-            // bucket/endpoint/credentials throw here synchronously.
-            var url = await _storage.GetSignedDownloadUrlAsync(
-                key: "__healthcheck__/probe",
-                expiry: TimeSpan.FromMinutes(1),
-                ct: cancellationToken);
-
-            return string.IsNullOrWhiteSpace(url)
-                ? HealthCheckResult.Degraded("Storage returned an empty signed URL.")
-                : HealthCheckResult.Healthy("Storage reachable.");
+            probe = await _storage.ProbeAsync(timeout.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return HealthCheckResult.Degraded(
+                $"Storage did not answer within {ProbeTimeout.TotalSeconds:0}s.");
         }
         catch (Exception ex)
         {
-            // Degraded (not Unhealthy): storage signing trouble shouldn't, on its
-            // own, take the whole process out of rotation the way a dead DB should.
-            return HealthCheckResult.Degraded(
-                "Storage reachability probe failed.", ex);
+            // ProbeAsync is contracted not to throw. If one does anyway, that is still a probe
+            // result — and it is emphatically not reachability.
+            return HealthCheckResult.Degraded("Storage reachability probe failed.", ex);
         }
+
+        return probe.Status switch
+        {
+            StorageProbeStatus.Reachable => HealthCheckResult.Healthy(
+                $"Storage reachable. {probe.Detail}"),
+
+            // Ready, but say plainly that reachability was never established rather than
+            // borrowing the word from a check that did not run.
+            StorageProbeStatus.NotProbed => HealthCheckResult.Healthy(
+                $"Storage reachability not checked. {probe.Detail}"),
+
+            _ => HealthCheckResult.Degraded($"Storage unreachable. {probe.Detail}"),
+        };
     }
 }
 

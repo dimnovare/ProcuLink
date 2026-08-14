@@ -58,8 +58,28 @@ public class SupplierConnectionRevision
     public string? TestResultJson { get; set; }
     /// <summary>UTC timestamp of the last test-pack run. Null = never tested.</summary>
     public DateTime? TestedAt { get; set; }
-    /// <summary>Outcome of the last test-pack run. Null = never tested.</summary>
+    /// <summary>
+    /// Narrowed outcome of the last test-pack run. Null = never tested.
+    ///
+    /// <para>Kept for the API contract and for any consumer that only understands a boolean, but it
+    /// is NOT the authority — <see cref="TestOutcome"/> is. It is written FAIL-CLOSED: a pack that
+    /// ran without exercising anything stores <c>false</c> here, so a reader that never learns
+    /// about the third state refuses rather than publishes. Do not gate on this and then render
+    /// the word "failed" from it; read <see cref="TestOutcome"/> for anything a human sees.</para>
+    /// </summary>
     public bool? TestPassed { get; set; }
+    /// <summary>
+    /// Authoritative outcome of the last test-pack run — one of
+    /// <see cref="ProcuLink.Core.Services.TestPackOutcomeNames"/>. Null = never tested, and ALSO
+    /// null on rows last tested before this column existed.
+    ///
+    /// <para>Those legacy rows are deliberately not backfilled to <c>"passed"</c>. Their stored
+    /// <c>TestPassed = true</c> may have come from a pack that exercised nothing — that is the
+    /// defect — so backfilling would launder exactly the evidence this column exists to
+    /// distrust. They re-test, which is cheap; already-published revisions are untouched because
+    /// the gate only runs on draft/test.</para>
+    /// </summary>
+    public string? TestOutcome { get; set; }
 
     // ── Bundle: input / parse mapping ────────────────────────────────────────
     /// <summary>

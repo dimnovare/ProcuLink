@@ -269,10 +269,23 @@ public sealed class ConnectionsController : ControllerBase
         BadRequest(new { error = UnsupportedOutputFormatException.Code, message = ex.PolicyMessage });
 
     /// <summary>
-    /// Launch batch 3 — runs the REAL test pack (replay over recent orders + conformance check;
-    /// never delivers), stores the evidence on the revision, marks it <c>test</c>, and returns
-    /// the evidence summary. A FAILED pack still returns 200 with <c>Passed=false</c> — the run
+    /// Launch batch 3 — runs the test pack (replay over recent orders + standards check + source
+    /// re-parse), stores the evidence on the revision, marks it <c>test</c>, and returns the
+    /// evidence summary. A FAILED pack still returns 200 with <c>Outcome="failed"</c> — the run
     /// succeeded; the evidence is honest.
+    ///
+    /// <para><b>The pack NEVER contacts the supplier.</b> Replay is in-memory and non-mutating;
+    /// there is no delivery test-fire here, so a passing pack says the revision can BUILD the
+    /// outgoing document, not that the endpoint or credentials work. A genuine external test-fire
+    /// exists separately (<c>DeliveryService.TestFireAsync</c>) and the publish gate does not
+    /// consult it.</para>
+    ///
+    /// <para>An <c>Outcome</c> of <c>not_exercised</c> means the pack ran and found no fault while
+    /// proving nothing — there were no orders to replay against. It is not a pass and publish
+    /// refuses it.</para>
+    ///
+    /// <para>Marking the revision <c>test</c> is unconditional and happens on failure too: the
+    /// status records that a run occurred, never its verdict. Read <c>TestOutcome</c> for that.</para>
     /// </summary>
     [HttpPost("{connectionId:guid}/revisions/{revisionId:guid}/test")]
     [ProducesResponseType(typeof(ConnectionTestEvidenceDto), StatusCodes.Status200OK)]
@@ -286,7 +299,8 @@ public sealed class ConnectionsController : ControllerBase
             ConnectionTestStatus.NotFound      => NotFound(),
             ConnectionTestStatus.InvalidStatus => Conflict("Only draft/test revisions can be marked test."),
             _ => Ok(new ConnectionTestEvidenceDto(
-                result.Evidence!.Passed, result.Evidence.TestedAt, result.Evidence.SummaryJson)),
+                result.Evidence!.Passed, result.Evidence.TestedAt, result.Evidence.SummaryJson,
+                TestPackOutcomeNames.ToName(result.Evidence.Outcome))),
         };
     }
 
@@ -313,6 +327,13 @@ public sealed class ConnectionsController : ControllerBase
             ConnectionPublishOutcome.NotFound         => NotFound(),
             ConnectionPublishOutcome.InvalidStatus    => Conflict("Revision is already published/archived."),
             ConnectionPublishOutcome.EvidenceRequired => Conflict("Run tests on this revision before publishing."),
+            // Says what was NOT done. "Tests failed" would be false — nothing failed — and "run
+            // tests" would be false too, because they did run. What is missing is an order to run
+            // them against, and naming that is the only wording the operator can act on.
+            ConnectionPublishOutcome.EvidenceNotExercised => Conflict(
+                "The checks ran but did not exercise this version: there were no orders to replay it " +
+                "against, so no output was ever built from this configuration. Put one order through " +
+                "for this supplier, re-run the checks, then publish."),
             _ => NoContent(),
         };
     }
@@ -416,7 +437,8 @@ public sealed class ConnectionsController : ControllerBase
 
     // ── mappers ──────────────────────────────────────────────────────────────
     private static ConnectionRevisionSummaryDto ToRevisionSummary(SupplierConnectionRevision r) => new(
-        r.Id, r.VersionNo, r.Status, r.EffectiveFrom, r.EffectiveTo, r.PublishedAt, r.CreatedAt);
+        r.Id, r.VersionNo, r.Status, r.EffectiveFrom, r.EffectiveTo, r.PublishedAt, r.CreatedAt,
+        r.TestOutcome, r.TestedAt);
 
     private static ConnectionRevisionDto ToRevisionDto(SupplierConnectionRevision r) => new(
         r.Id, r.ConnectionId, r.VersionNo, r.Status,
@@ -427,7 +449,7 @@ public sealed class ConnectionsController : ControllerBase
         r.AcceptanceProfileId, r.AcceptanceVersionNo, r.CatalogMode,
         r.ItemMappings.Select(m => new ConnectionItemMappingDto(
             m.BuyerItemCode, m.SupplierItemCode, m.Confidence, m.Source)).ToList(),
-        r.TestPassed, r.TestedAt, r.TestResultJson,
+        r.TestPassed, r.TestedAt, r.TestResultJson, r.TestOutcome,
         // A revision written before enforcement reached this path keeps delivering, so the editor
         // has to be able to show BOTH faults it can now carry: an endpoint the transport policy
         // refuses, and a credential sitting in the extra-headers map. Same composer as the
