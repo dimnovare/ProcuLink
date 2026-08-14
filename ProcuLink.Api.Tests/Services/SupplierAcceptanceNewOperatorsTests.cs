@@ -58,10 +58,14 @@ public class SupplierAcceptanceNewOperatorsTests
         Assert.Contains(results, r => r.Status == "pass");
     }
 
+    /// <summary>
+    /// This test used to assert <c>pass</c>, and that assertion is why the vacuity survived: the
+    /// rule reported a clean check on a document from which no date was ever captured. Absence is
+    /// still not a FAILURE (that is 'required''s job) — but it is not a pass either.
+    /// </summary>
     [Fact]
-    public void Date_sanity_passes_when_there_is_no_date_like_token()
+    public void Date_sanity_is_not_evaluated_when_there_is_no_date_like_token()
     {
-        // Absence is handled by 'required', not date_sanity → pass (don't second-guess a missing date).
         var order = new PurchaseOrderEntity
         {
             Currency = "EUR",
@@ -69,7 +73,10 @@ public class SupplierAcceptanceNewOperatorsTests
         };
         var results = SupplierAcceptanceService.EvaluateProfile(
             Guid.NewGuid(), order.Id, Profile(Rule("order", "sourceDate", "date_sanity")), order, DateTime.UtcNow);
-        Assert.Contains(results, r => r.Status == "pass");
+
+        Assert.Contains(results, r => r.Status == OrderValidationResult.StatusNotEvaluated);
+        Assert.DoesNotContain(results, r => r.Status == OrderValidationResult.StatusPass);
+        Assert.DoesNotContain(results, r => r.Status == OrderValidationResult.StatusFail);
     }
 
     [Fact]
@@ -167,18 +174,26 @@ public class SupplierAcceptanceNewOperatorsTests
         Assert.Contains(results, r => r.Status == "pass");
     }
 
+    /// <summary>
+    /// The test that pinned the defect. It asserted <c>pass</c> under the comment "reconcile is
+    /// vacuously satisfied (qty × price IS the amount)" — which is precisely the problem: comparing
+    /// a value against itself is not a check, and the nine of eleven parsers that never populate
+    /// <c>LineAmount</c> made that the NORMAL case, not an edge case.
+    /// </summary>
     [Fact]
-    public void Line_amount_reconcile_passes_when_no_stated_amount()
+    public void Line_amount_reconcile_is_not_evaluated_when_no_stated_amount()
     {
         var order = new PurchaseOrderEntity
         {
             Currency = "EUR",
-            // No LineAmount → reconcile is vacuously satisfied (qty × price IS the amount).
+            // No LineAmount — nothing was printed to reconcile against.
             Lines = { new PurchaseOrderLineEntity { LineNumber = 1, Quantity = 3m, UnitPrice = 7m, LineAmount = null } },
         };
         var results = SupplierAcceptanceService.EvaluateProfile(
             Guid.NewGuid(), order.Id, Profile(Rule("line", "lineAmount", "line_amount_reconcile", expected: "0.01")), order, DateTime.UtcNow);
-        Assert.Contains(results, r => r.Status == "pass");
+
+        Assert.Contains(results, r => r.Status == OrderValidationResult.StatusNotEvaluated);
+        Assert.DoesNotContain(results, r => r.Status == OrderValidationResult.StatusPass);
     }
 
     [Fact]
@@ -224,8 +239,15 @@ public class SupplierAcceptanceNewOperatorsTests
         Assert.Contains(results, r => r.Status == "fail");
     }
 
+    /// <summary>
+    /// The generalisation of the two tests above, across all three absence-tolerant operators.
+    /// It asserted an "advisory pass" for each; an empty field now reports NOT-EVALUATED.
+    /// <para>The behaviour that matters — none of them REFUSES the order on absence, so 'required'
+    /// remains the only way to mandate a field — is unchanged and is asserted directly below by
+    /// checking that nothing failed.</para>
+    /// </summary>
     [Fact]
-    public void Empty_value_is_advisory_pass_for_all_new_operators_use_required_to_mandate()
+    public void Empty_value_is_not_evaluated_for_all_new_operators_and_still_never_fails()
     {
         var order = new PurchaseOrderEntity
         {
@@ -242,8 +264,12 @@ public class SupplierAcceptanceNewOperatorsTests
         var vatFormat = SupplierAcceptanceService.EvaluateProfile(
             Guid.NewGuid(), order.Id, Profile(Rule("order", "shipToVat", "vat_format")), order, DateTime.UtcNow);
 
-        Assert.Contains(dateSanity, r => r.Status == "pass");
-        Assert.Contains(notLabel, r => r.Status == "pass");
-        Assert.Contains(vatFormat, r => r.Status == "pass");
+        foreach (var results in new[] { dateSanity, notLabel, vatFormat })
+        {
+            Assert.Contains(results, r => r.Status == OrderValidationResult.StatusNotEvaluated);
+            Assert.DoesNotContain(results, r => r.Status == OrderValidationResult.StatusPass);
+            // Still advisory: absence is 'required''s business, so nothing here refuses the order.
+            Assert.DoesNotContain(results, r => r.Status == OrderValidationResult.StatusFail);
+        }
     }
 }

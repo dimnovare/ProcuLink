@@ -113,10 +113,22 @@ public class DashboardController : ControllerBase
         new(OrderStatusConstants.FailureBucket, StringComparer.Ordinal);
 
     // Exceptions = everything that failed, plus the orders parked awaiting a human.
-    // Also derived, for the same reason: it happened to be correct, by hand, today.
+    //
+    // The comment above is unchanged; the CODE now matches it. This set was derived from
+    // FailureBucket but then appended ONE hand-typed parked status, pending_review — and the
+    // sentence "the orders parked awaiting a human" covers three. unrouted and
+    // delivery_unconfirmed were both missing, which is the same hand-copy failure the
+    // FailedStatuses comment above describes, one line later and in the set that was supposed
+    // to be the safety net. AwaitingHumanBucket is now the canonical list, walked by an
+    // exhaustive partition test so a new parked status cannot land in no bucket at all.
     private static readonly HashSet<string> ExceptionStatuses =
-        new(OrderStatusConstants.FailureBucket.Append(OrderStatusConstants.PendingReview),
+        new(OrderStatusConstants.FailureBucket.Concat(OrderStatusConstants.AwaitingHumanBucket),
             StringComparer.Ordinal);
+
+    // The population a delivery success rate may be scored over: outcomes we actually know.
+    // Everything else — parsing, parked, held — is unmeasured, not successful.
+    private static readonly HashSet<string> SettledStatuses =
+        new(OrderStatusConstants.SettledDeliveryBucket, StringComparer.Ordinal);
 
     [HttpGet("topology")]
     [ProducesResponseType(typeof(DashboardTopologyDto), StatusCodes.Status200OK)]
@@ -151,6 +163,8 @@ public class DashboardController : ControllerBase
                 Total      = g.Count(),
                 Failed     = g.Count(x => FailedStatuses.Contains(x.Status)),
                 Exceptions = g.Count(x => ExceptionStatuses.Contains(x.Status)),
+                // Orders whose delivery outcome is KNOWN — the denominator of the score below.
+                Settled    = g.Count(x => SettledStatuses.Contains(x.Status)),
             })
             .ToListAsync(ct);
 
@@ -230,12 +244,26 @@ public class DashboardController : ControllerBase
             .Select(b => new TopologyBuyerDto(b.Id, b.Name, CodeFor(b.Name), $"{b.Total} ord"))
             .ToList();
 
+        // Delivery success rate = delivered / (delivered + failed), over orders whose outcome is
+        // actually KNOWN — NOT (total - failed) / total.
+        //
+        // The old formula had two buckets for a multi-bucket world, so every order that had not
+        // reached an outcome counted as a success. A supplier whose orders were all parked in
+        // delivery_unconfirmed after a crash scored 100% in green, and so did a supplier whose
+        // orders were all still parsing. Unknown is not success.
+        //
+        // When nothing has settled there is no rate to report, so the score is null — the score
+        // slot holds a measurement or nothing, never a fabricated 100. TopologySupplierDto.Health
+        // is nullable for exactly this.
         var suppliers = supplierRows
-            .Select(s => (Id: s.SupplierId?.ToString() ?? string.Empty, Name: s.SupplierName.Trim(), s.Total, s.Failed))
+            .Select(s => (Id: s.SupplierId?.ToString() ?? string.Empty, Name: s.SupplierName.Trim(),
+                          s.Total, s.Failed, s.Settled))
             .OrderByDescending(s => s.Total)
             .Select(s => new TopologySupplierDto(
                 s.Id, s.Name, CodeFor(s.Name), $"{s.Total} ord",
-                s.Total == 0 ? 100 : (int)Math.Round(100.0 * (s.Total - s.Failed) / s.Total)))
+                s.Settled == 0
+                    ? null
+                    : (int?)Math.Round(100.0 * (s.Settled - s.Failed) / s.Settled)))
             .ToList();
 
         var buyerIdByKey = buyMap.ToDictionary(kv => kv.Key, kv => kv.Value.Id);

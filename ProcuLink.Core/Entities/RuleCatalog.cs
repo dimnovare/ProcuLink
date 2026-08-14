@@ -148,7 +148,8 @@ public static class RuleCatalog
 
         Entry("line", "lineAmount", "line_amount_reconcile",
             "Line amount reconciles with qty × price",
-            "Reject lines where the printed line amount diverges from quantity × unit price beyond tolerance.",
+            "Reject lines where the printed line amount diverges from quantity × unit price beyond tolerance. "
+          + "Lines whose document printed no line amount are reported as not checked, not as passing.",
             defaultSeverity: "warning", defaultExpectedValue: "0.01",
             paramHint: "Absolute tolerance, e.g. 0.01",
             ubl: "cbc:LineExtensionAmount", edifact: "MOA C516/5004",

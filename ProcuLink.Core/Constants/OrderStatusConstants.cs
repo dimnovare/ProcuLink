@@ -103,4 +103,81 @@ public static class OrderStatusConstants
         DeliveryDeadLetter,
         RejectedBySupplier,
     };
+
+    /// <summary>
+    /// Every status where the order is PARKED: it has stopped moving and no job will move it —
+    /// only a human can. Distinct from <see cref="FailureBucket"/>, which is "we know this went
+    /// wrong"; a parked order may be perfectly fine, but nothing is happening to it.
+    ///
+    /// <para><b>Declared, not derived — and the omission this closes was real.</b>
+    /// <c>DashboardController</c> kept a private "exceptions" copy documented as "everything that
+    /// failed, plus the orders parked awaiting a human", and it listed exactly ONE parked status
+    /// (<see cref="PendingReview"/>). <see cref="Unrouted"/> and <see cref="DeliveryUnconfirmed"/>
+    /// were both missing, so a supplier whose every order was parked after a crash rendered a green
+    /// wire and, on the old <c>(total - failed) / total</c> formula, a 100% delivery success rate.
+    /// A hand-written list is what dropped them; this one is walked by an EXHAUSTIVE PARTITION test
+    /// (<c>OrderStatusBucketPartitionTests</c>) over <c>OrderStatusMachine.AllStatuses</c>, so a new
+    /// status that lands in no bucket fails the build instead of defaulting to "healthy".</para>
+    ///
+    /// <para><b><see cref="DeliveryUnconfirmed"/> belongs here, and that resolves a real
+    /// disagreement.</b> The two subsystems classified it oppositely: <c>OpsHealthSummary</c>
+    /// counts it in <c>TotalProblemOrders</c> ("a park is a FAULT"), while the dashboard counted it
+    /// as neither failure nor exception — i.e. as healthy. Ops health is right. It is NOT a
+    /// <see cref="FailureBucket"/> member either, though: the whole point of the status is that we
+    /// do not know the send failed. It is parked, which is what this bucket means.</para>
+    ///
+    /// <para><b><see cref="DeliveryHeld"/> is deliberately EXCLUDED — do not "fix" that.</b> A
+    /// billing hold is not waiting on a human acting ON THE ORDER: it releases itself when the org
+    /// returns to good standing (<c>IDeliveryService.ReleaseBillingHeldOrdersAsync</c>). The founder
+    /// call recorded on <c>OpsHealthSummary.DeliveryHeld</c> (2026-07-16) is that a deliberate,
+    /// self-releasing pause must never render as a failure; it is surfaced as its own count instead.
+    /// A held PARK restores to <see cref="DeliveryUnconfirmed"/>, where this bucket picks it up
+    /// again.</para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> AwaitingHumanBucket = new HashSet<string>(StringComparer.Ordinal)
+    {
+        PendingReview,
+        Unrouted,
+        DeliveryUnconfirmed,
+    };
+
+    /// <summary>
+    /// Every status where the pipeline is still WORKING on the order: a job holds it, or a job is
+    /// about to pick it up, and no human is needed. Nothing here is an outcome — an order in this
+    /// bucket has neither succeeded nor failed, and must never be counted as either.
+    ///
+    /// <para>Declared so the five buckets form an EXHAUSTIVE PARTITION of every known status
+    /// (<c>OrderStatusBucketPartitionTests</c>): failure, parked, in-flight, <see cref="Delivered"/>,
+    /// <see cref="DeliveryHeld"/>. Without a declared in-flight set, "everything else" is the
+    /// default arm — and a new parked status would silently land in it and read as healthy, which
+    /// is exactly the failure this packet fixed. With the partition, a status that no bucket claims
+    /// fails the build.</para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> InFlightBucket = new HashSet<string>(StringComparer.Ordinal)
+    {
+        PendingParse,
+        Parsing,
+        Ready,
+        Transforming,
+        ReadyToDeliver,
+        Delivering,
+    };
+
+    /// <summary>
+    /// Every status whose DELIVERY OUTCOME IS KNOWN — <see cref="Delivered"/> plus every member of
+    /// <see cref="FailureBucket"/>. This is the only population a delivery success rate may be
+    /// computed over.
+    ///
+    /// <para>The dashboard's supplier score was <c>(total - failed) / total</c>, which has only two
+    /// buckets and therefore counts every order whose outcome is NOT YET KNOWN as a success: an
+    /// order still parsing, an order parked awaiting a human, an order held for billing. A supplier
+    /// with ten orders and no outcomes scored 100%. Scoring over this set instead means an unknown
+    /// outcome is neither a success nor a failure — it is simply not yet measurable, and when
+    /// nothing is measurable the score is <c>null</c> rather than a fabricated 100.</para>
+    ///
+    /// <para>Derived from <see cref="FailureBucket"/>, so a sixth failure status joins the
+    /// denominator on the day it is declared rather than silently counting as a success.</para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> SettledDeliveryBucket =
+        new HashSet<string>(FailureBucket.Append(Delivered), StringComparer.Ordinal);
 }

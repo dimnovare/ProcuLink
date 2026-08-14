@@ -58,6 +58,32 @@ public static class AcceptanceMessages
         return $"{where}{why}{tail}".Trim();
     }
 
+    /// <summary>
+    /// A rule that COULD NOT RUN, as one plain sentence naming what was missing.
+    ///
+    /// <para>These used to be reported as passes, so a coordinator read "Line amount reconciles with
+    /// qty × price — OK" on an order whose document never printed a line amount. The sentence has to
+    /// say which input was absent, because "not checked" alone reads like a bug rather than like a
+    /// property of the document.</para>
+    /// </summary>
+    public static string ForNotEvaluated(string fieldPath, string @operator, int? lineNumber)
+    {
+        var field = Humanize(fieldPath);
+        var where = lineNumber is int ln ? $"Line {ln}: " : string.Empty;
+
+        var why = @operator switch
+        {
+            "line_amount_reconcile"
+                        => "not checked — this document didn't state a line amount to reconcile against.",
+            "date_sanity" => $"not checked — no printed date was captured for {field}.",
+            "not_label"   => $"not checked — {field} is empty.",
+            "vat_format"  => $"not checked — no VAT number was captured for {field}.",
+            _             => $"not checked — {field} isn't available on this order.",
+        };
+
+        return $"{where}{why}";
+    }
+
     /// <summary>The catalog Title for a (field, operator), or null when the pair isn't a known catalog rule.</summary>
     public static string? TitleFor(string fieldPath, string @operator) =>
         TitleForCode(RuleCatalog.CodeFor(fieldPath, @operator));

@@ -245,7 +245,9 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
         var blockers = new List<AcceptanceBlocker>();
         foreach (var r in EvaluateProfile(orgId, orderId, profile, order, DateTime.UtcNow))
         {
-            if (r.Status != "fail") continue;
+            // Only a real FAILURE blocks. A not-evaluated row is skipped here by the same test —
+            // deliberately: a rule that could not run must not start refusing orders.
+            if (r.Status != OrderValidationResult.StatusFail) continue;
             if (r.RuleId is not Guid ruleId) continue;                    // invariant / output row
             if (!ruleById.TryGetValue(ruleId, out var rule)) continue;
             if (!IsBlocking(rule)) continue;
@@ -392,103 +394,204 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
         {
             if (rule.Scope == "order")
             {
-                var (pass, val) = EvaluateOrderField(order, rule);
-                results.Add(MakeResult(orgId, orderId, profile.Id, rule, null, pass, val, now));
+                var (outcome, val) = EvaluateOrderField(order, rule);
+                results.Add(MakeResult(orgId, orderId, profile.Id, rule, null, outcome, val, now));
             }
             else
             {
                 foreach (var line in order.Lines)
                 {
-                    var (pass, val) = EvaluateLineField(line, rule);
-                    results.Add(MakeResult(orgId, orderId, profile.Id, rule, line.LineNumber, pass, val, now));
+                    var (outcome, val) = EvaluateLineField(line, rule);
+                    results.Add(MakeResult(orgId, orderId, profile.Id, rule, line.LineNumber, outcome, val, now));
                 }
             }
         }
         return results;
     }
 
+    /// <summary>
+    /// The three things that can happen when a rule meets an order — NOT two.
+    ///
+    /// <para><see cref="NotEvaluated"/> is the one that had to be added. Several operators answered
+    /// "pass" when the value they judge was absent, so the rule could not fail: the customer picked
+    /// it from the catalog, the UI showed it green, and nothing had been examined. The clearest case
+    /// was <c>line_amount_reconcile</c>, whose evaluator read
+    /// <c>stated = l.LineAmount ?? computed</c> — for the nine of eleven line-producing parsers that
+    /// never populate <c>LineAmount</c>, <c>stated == computed</c> BY CONSTRUCTION, so a rule sold as
+    /// "Reject lines where the printed line amount diverges from quantity × unit price" was
+    /// arithmetically incapable of rejecting anything.</para>
+    ///
+    /// <para>A not-evaluated rule never blocks (<see cref="GetBlockingFailuresAsync"/> collects only
+    /// failures), which is the same non-blocking behaviour absence had before. What changes is that
+    /// it no longer CLAIMS to have checked. Operators that fail closed on absence
+    /// (<c>required</c>, <c>equals</c>, <c>min</c>, …) are deliberately untouched — failing on a
+    /// missing value is a real judgement, not a vacuous one.</para>
+    /// </summary>
+    internal enum RuleOutcome
+    {
+        /// <summary>The rule ran and the order satisfied it.</summary>
+        Pass,
+        /// <summary>The rule ran and the order did not satisfy it.</summary>
+        Fail,
+        /// <summary>The value the rule judges was absent, so the rule did not run.</summary>
+        NotEvaluated,
+    }
+
+    /// <summary>Map a tri-state outcome onto the persisted status string.</summary>
+    private static string StatusFor(RuleOutcome outcome) => outcome switch
+    {
+        RuleOutcome.Pass => OrderValidationResult.StatusPass,
+        RuleOutcome.Fail => OrderValidationResult.StatusFail,
+        _                => OrderValidationResult.StatusNotEvaluated,
+    };
+
     private static OrderValidationResult MakeResult(
         Guid orgId, Guid orderId, Guid profileId, SupplierAcceptanceRule rule,
-        int? lineNumber, bool pass, string? actualValue, DateTime now) => new()
+        int? lineNumber, RuleOutcome outcome, string? actualValue, DateTime now) => new()
     {
         Id = Guid.NewGuid(), OrgId = orgId, OrderId = orderId,
         ProfileId = profileId, RuleId = rule.Id, LineNumber = lineNumber,
-        Severity = rule.Severity, Status = pass ? "pass" : "fail",
+        Severity = rule.Severity, Status = StatusFor(outcome),
         Code = $"{rule.FieldPath}.{rule.Operator}",
         // Transient (NotMapped) — the value this rule judged, carried to the gate so an operator
         // override is pinned to the failure it actually saw rather than to the rule's name.
         ActualValue = actualValue,
         // Plain-language, fixable message (was the developer template
         // "unitPrice ('100') failed rule max 50000"). See AcceptanceMessages.
-        Message = pass
-            ? AcceptanceMessages.ForPass(rule.FieldPath, rule.Operator)
-            : AcceptanceMessages.ForFail(rule.FieldPath, rule.Operator, actualValue, rule.ExpectedValue, lineNumber),
+        Message = outcome switch
+        {
+            RuleOutcome.Pass => AcceptanceMessages.ForPass(rule.FieldPath, rule.Operator),
+            RuleOutcome.Fail => AcceptanceMessages.ForFail(
+                                    rule.FieldPath, rule.Operator, actualValue, rule.ExpectedValue, lineNumber),
+            _                => AcceptanceMessages.ForNotEvaluated(rule.FieldPath, rule.Operator, lineNumber),
+        },
         DetectedAt = now,
     };
 
-    private static (bool pass, string? value) EvaluateOrderField(PurchaseOrderEntity o, SupplierAcceptanceRule rule)
+    private static (RuleOutcome outcome, string? value) EvaluateOrderField(PurchaseOrderEntity o, SupplierAcceptanceRule rule)
     {
-        string? v = rule.FieldPath switch
-        {
-            "currency"   => o.Currency,
-            "buyerName"  => o.BuyerName,
-            // Phase 2 (D slice): ship-to city/VAT resolve from the first shipTo party.
-            "shipToCity" => o.Parties.FirstOrDefault(p => string.Equals(p.Role, "shipTo", StringComparison.OrdinalIgnoreCase))?.City,
-            "shipToVat"  => o.Parties.FirstOrDefault(p => string.Equals(p.Role, "shipTo", StringComparison.OrdinalIgnoreCase))?.Vat,
-            "incoterms"  => o.Incoterms,
-            // Phase 2 (D slice): the ORIGINAL printed date string lives in the lossless SourceCapture
-            // raw-token bag — there is no typed raw-date column (DeliveryDate is a DateOnly that has
-            // already lost MM/DD vs DD/MM ambiguity). date_sanity inspects the raw printed string.
-            "sourceDate" => FirstDateLikeRawToken(o.SourceCapture),
-            _            => null,
-        };
+        // A field path this evaluator does not implement is NOT the same as a field that is present
+        // and empty, and collapsing the two is how a rule on a typo'd or unsupported path came to
+        // report green: the unknown path yielded null, and the absence-tolerant operators answered
+        // "pass" to null. Resolution is now reported separately from the value.
+        var resolved = TryResolveOrderField(o, rule.FieldPath, out var v);
+        if (!resolved) return (RuleOutcome.NotEvaluated, null);
 
         // vat_format needs the party's COUNTRY to cross-check the VAT prefix; pass it via the rule's
         // ExpectedValue slot when the author didn't set one (kept inside the pure evaluator).
         if (rule.Operator == "vat_format" && rule.FieldPath == "shipToVat")
         {
+            // Absence is governed by 'required', not by vat_format — but "absent" must report as
+            // not-evaluated rather than as a VAT that passed a format check nobody ran.
+            if (string.IsNullOrWhiteSpace(v)) return (RuleOutcome.NotEvaluated, v);
             var country = o.Parties.FirstOrDefault(p => string.Equals(p.Role, "shipTo", StringComparison.OrdinalIgnoreCase))?.Country;
-            return (EvaluateVatFormat(v, country), v);
+            return (EvaluateVatFormat(v, country) ? RuleOutcome.Pass : RuleOutcome.Fail, v);
         }
 
         return (Evaluate(rule, v), v);
     }
 
-    private static (bool pass, string? value) EvaluateLineField(PurchaseOrderLineEntity l, SupplierAcceptanceRule rule)
+    /// <summary>
+    /// Resolve an ORDER-scope field path to its value. Returns false when the path is not one this
+    /// evaluator implements — the caller must report that as not-evaluated, never as a pass.
+    /// <paramref name="value"/> may still be null on a TRUE return: that means the field is
+    /// implemented and genuinely empty on this order, which is a different fact.
+    /// </summary>
+    private static bool TryResolveOrderField(PurchaseOrderEntity o, string fieldPath, out string? value)
+    {
+        switch (fieldPath)
+        {
+            case "currency":   value = o.Currency;  return true;
+            case "buyerName":  value = o.BuyerName; return true;
+            // Phase 2 (D slice): ship-to city/VAT resolve from the first shipTo party.
+            case "shipToCity":
+                value = o.Parties.FirstOrDefault(p => string.Equals(p.Role, "shipTo", StringComparison.OrdinalIgnoreCase))?.City;
+                return true;
+            case "shipToVat":
+                value = o.Parties.FirstOrDefault(p => string.Equals(p.Role, "shipTo", StringComparison.OrdinalIgnoreCase))?.Vat;
+                return true;
+            case "incoterms":  value = o.Incoterms; return true;
+            // Phase 2 (D slice): the ORIGINAL printed date string lives in the lossless SourceCapture
+            // raw-token bag — there is no typed raw-date column (DeliveryDate is a DateOnly that has
+            // already lost MM/DD vs DD/MM ambiguity). date_sanity inspects the raw printed string.
+            case "sourceDate": value = FirstDateLikeRawToken(o.SourceCapture); return true;
+            default:           value = null; return false;
+        }
+    }
+
+    private static (RuleOutcome outcome, string? value) EvaluateLineField(PurchaseOrderLineEntity l, SupplierAcceptanceRule rule)
     {
         // line_amount_reconcile needs qty AND price, not just one value. Handle it here (inside the
         // pure evaluator) so Evaluate() — which only sees a single value — stays unchanged.
         if (rule.Operator == "line_amount_reconcile")
         {
             var computed = l.Quantity * l.UnitPrice;
-            var stated   = l.LineAmount ?? computed; // no stated amount → vacuously reconciled
-            var tol      = decimal.TryParse(rule.ExpectedValue, NumberStyles.Any, CultureInfo.InvariantCulture, out var t)
+
+            // NO PRINTED AMOUNT → THE RULE CANNOT RUN.
+            //
+            // This read was `l.LineAmount ?? computed`, commented "no stated amount → vacuously
+            // reconciled". That substitution made `stated == computed` an identity rather than a
+            // comparison, so the rule was arithmetically incapable of failing for any order from a
+            // parser that does not populate LineAmount — nine of the eleven line-producing parsers
+            // (only IDocOrders05Parser.cs:195 and OpenAiPdfOrderExtractor.cs:700 set it). The
+            // customer selects this rule from the catalog believing it rejects lines whose printed
+            // total disagrees with qty × price; on a CSV, XLSX, UBL, EDIFACT, X12, deterministic-PDF
+            // or email-body order it examined nothing and reported green.
+            //
+            // There is nothing to reconcile against, so the honest answer is "not evaluated".
+            if (l.LineAmount is not decimal stated)
+                return (RuleOutcome.NotEvaluated, null);
+
+            var tol = decimal.TryParse(rule.ExpectedValue, NumberStyles.Any, CultureInfo.InvariantCulture, out var t)
                 ? Math.Abs(t)
                 : 0.01m;
-            var pass     = Math.Abs(stated - computed) <= tol;
-            return (pass, stated.ToString(CultureInfo.InvariantCulture));
+            var pass = Math.Abs(stated - computed) <= tol;
+            return (pass ? RuleOutcome.Pass : RuleOutcome.Fail, stated.ToString(CultureInfo.InvariantCulture));
         }
 
-        string? v = rule.FieldPath switch
-        {
-            "supplierItemCode"       => l.SupplierItemCode,
-            "buyerItemCode"          => l.BuyerItemCode,
-            "description"            => l.Description,
-            "quantity"               => l.Quantity.ToString(CultureInfo.InvariantCulture),
-            "unitPrice"              => l.UnitPrice.ToString(CultureInfo.InvariantCulture),
-            "manufacturerPartNumber" => l.ManufacturerPartNumber,
-            "manufacturerName"       => l.ManufacturerName,
-            "lineAmount"             => (l.LineAmount ?? (l.Quantity * l.UnitPrice)).ToString(CultureInfo.InvariantCulture),
-            _                        => null,
-        };
+        // As in EvaluateOrderField: an unimplemented field path is reported as not-evaluated, not as
+        // an empty value that the absence-tolerant operators would wave through.
+        var resolved = TryResolveLineField(l, rule.FieldPath, out var v);
+        if (!resolved) return (RuleOutcome.NotEvaluated, null);
+
         return (Evaluate(rule, v), v);
+    }
+
+    /// <summary>
+    /// Resolve a LINE-scope field path to its value. Returns false when the path is not one this
+    /// evaluator implements — the caller reports that as not-evaluated. As with
+    /// <see cref="TryResolveOrderField"/>, a null <paramref name="value"/> on a true return means
+    /// "implemented and empty", which is a different fact from "not implemented".
+    /// </summary>
+    private static bool TryResolveLineField(PurchaseOrderLineEntity l, string fieldPath, out string? value)
+    {
+        switch (fieldPath)
+        {
+            case "supplierItemCode":       value = l.SupplierItemCode;       return true;
+            case "buyerItemCode":          value = l.BuyerItemCode;          return true;
+            case "description":            value = l.Description;            return true;
+            case "quantity":               value = l.Quantity.ToString(CultureInfo.InvariantCulture);  return true;
+            case "unitPrice":              value = l.UnitPrice.ToString(CultureInfo.InvariantCulture); return true;
+            case "manufacturerPartNumber": value = l.ManufacturerPartNumber; return true;
+            case "manufacturerName":       value = l.ManufacturerName;       return true;
+            // NOTE: this arm keeps the qty × price fallback ON PURPOSE, unlike
+            // line_amount_reconcile above. A generic operator on "lineAmount" (max, min, required…)
+            // is asking about the line's monetary value, which the computed extension answers
+            // faithfully. It is only the RECONCILE operator that is corrupted by the substitution,
+            // because reconciling a value against itself is not a check.
+            case "lineAmount":
+                value = (l.LineAmount ?? (l.Quantity * l.UnitPrice)).ToString(CultureInfo.InvariantCulture);
+                return true;
+            default:                       value = null;                     return false;
+        }
     }
 
     /// <summary>
     /// Resolve the raw printed date string from the lossless <see cref="SourceCapture"/> token bag:
     /// the first token whose label mentions "date" with a date-shaped value, else the first token
-    /// with a date-shaped value. Returns null when nothing date-like is present (date_sanity then
-    /// passes — absence is governed by 'required', not date_sanity). No new column is invented; the
+    /// with a date-shaped value. Returns null when nothing date-like is present — date_sanity then
+    /// reports NOT-EVALUATED (it is still not a failure; absence is governed by 'required', but the
+    /// rule no longer reports a pass it did not earn). No new column is invented; the
     /// original printed string is the only place the MM/DD vs DD/MM ambiguity survives.
     /// </summary>
     private static string? FirstDateLikeRawToken(SourceCapture? capture)
@@ -524,7 +627,29 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
         return numeric >= 2;
     }
 
-    private static bool Evaluate(SupplierAcceptanceRule rule, string? actual)
+    /// <summary>
+    /// Evaluate one operator against one already-resolved value.
+    ///
+    /// <para><b>Absence is tri-state here.</b> Three operators — <c>date_sanity</c>,
+    /// <c>not_label</c>, <c>vat_format</c> — are documented as leaving absence to <c>required</c>,
+    /// and they implemented that by returning TRUE on a blank value. Non-blocking was the right
+    /// call; reporting it as a PASS was not, because the customer then reads "Delivery date is
+    /// unambiguous — OK" about a document that printed no date at all. They now report
+    /// <see cref="RuleOutcome.NotEvaluated"/>: still non-blocking, but no longer claiming to have
+    /// looked. Every other operator keeps its exact behaviour, including failing closed on a blank
+    /// value, which is a real judgement rather than a vacuous one.</para>
+    /// </summary>
+    private static RuleOutcome Evaluate(SupplierAcceptanceRule rule, string? actual)
+    {
+        // The absence-tolerant operators: nothing to judge → the rule did not run.
+        if (string.IsNullOrWhiteSpace(actual)
+            && rule.Operator is "date_sanity" or "not_label" or "vat_format")
+            return RuleOutcome.NotEvaluated;
+
+        return EvaluateBool(rule, actual) ? RuleOutcome.Pass : RuleOutcome.Fail;
+    }
+
+    private static bool EvaluateBool(SupplierAcceptanceRule rule, string? actual)
     {
         switch (rule.Operator)
         {
@@ -567,7 +692,9 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
                 // A printed date string is "sane" only if it is UNAMBIGUOUS. With the first two
                 // numeric components both ≤ 12 (e.g. "06/12") MM/DD and DD/MM are both valid → fail
                 // and review-flag the flip risk. A component > 12 (a day or month) disambiguates →
-                // pass. Absence is handled by 'required', not here → pass on empty / non-date input.
+                // pass. Absence is handled by 'required', not here — and Evaluate() intercepts a
+                // BLANK value before this runs and reports not-evaluated, so this guard is now only
+                // a defensive floor for direct callers rather than the absence policy itself.
                 if (string.IsNullOrWhiteSpace(actual)) return true;
                 var parts   = actual.Split('/', '-', '.');
                 var numeric = parts.Where(p => int.TryParse(p.Trim(), out _)).Select(p => int.Parse(p.Trim())).ToArray();
@@ -581,6 +708,8 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
                 // VAT label "UIDNr." / "UIDNr " landing in ShipToCity) WITHOUT false-positiving a legitimate
                 // value that merely starts with the same letters (e.g. city "Cityville" vs label
                 // "City"). A bare StartsWith would wrongly trip the latter.
+                // Evaluate() intercepts a BLANK value before this runs and reports not-evaluated —
+                // an empty field has no label swept into it, but it is not a checked pass either.
                 if (string.IsNullOrWhiteSpace(actual)) return true;
                 var trimmed = actual.Trim();
                 var labels = (rule.ExpectedValue ?? "City,VAT,UID,UIDNr,Label,Tel,Fax")
@@ -713,7 +842,9 @@ public sealed class SupplierAcceptanceService : ISupplierAcceptanceService
     /// </summary>
     internal static bool EvaluateVatFormat(string? vat, string? country)
     {
-        if (string.IsNullOrWhiteSpace(vat)) return true; // absence handled by 'required'
+        // Absence is handled by 'required'. Both production callers now intercept a blank VAT before
+        // reaching here and report not-evaluated, so this is a defensive floor for direct callers.
+        if (string.IsNullOrWhiteSpace(vat)) return true;
         return IsPlausibleVat(vat, country);
     }
 

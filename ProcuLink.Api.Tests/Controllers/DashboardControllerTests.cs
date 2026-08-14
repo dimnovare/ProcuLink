@@ -320,6 +320,179 @@ public class DashboardControllerTests
         dto.Wires.Should().BeEmpty();
     }
 
+    // ── Parked orders are not successes ───────────────────────────────────────
+
+    /// <summary>
+    /// THE CONTROL FOR THE DEFECT. A supplier every one of whose orders is parked in
+    /// <c>delivery_unconfirmed</c> — a crash lost the delivery outcome, so nobody knows whether the
+    /// POs ever arrived — scored <b>100%</b> on the figure the dashboard labels "Delivery success
+    /// rate, last 30 days", and its wire rendered green "ok".
+    ///
+    /// <para>Two independent causes, both fixed: the status was in neither the failure set nor the
+    /// "exceptions" set (whose own comment claimed it covered "the orders parked awaiting a human"),
+    /// and the score was <c>(total - failed) / total</c>, which counts every non-failure as a
+    /// success — so even correcting the sets alone would have left the 100.</para>
+    /// </summary>
+    [Fact]
+    public async Task GetTopology_SupplierWhoseOrdersAreAllParkedUnconfirmed_DoesNotScoreOneHundred()
+    {
+        var (ctrl, orgId, db) = Build();
+        var supplierId = Guid.NewGuid();
+        db.Suppliers.Add(new Supplier
+        {
+            Id = supplierId, OrgId = orgId, Name = "Contoso Supplies",
+            CreatedAt = DateTime.UtcNow,
+        });
+        db.PurchaseOrders.AddRange(
+            MakeOrderWithBuyerColumn(orgId, supplierId, OrderStatusConstants.DeliveryUnconfirmed, "Contoso Buying OY"),
+            MakeOrderWithBuyerColumn(orgId, supplierId, OrderStatusConstants.DeliveryUnconfirmed, "Contoso Buying OY"));
+        await db.SaveChangesAsync();
+
+        var result = await ctrl.GetTopology(CancellationToken.None);
+        var ok     = result.Should().BeOfType<OkObjectResult>().Subject;
+        var dto    = ok.Value.Should().BeOfType<DashboardTopologyDto>().Subject;
+
+        dto.Suppliers.Should().ContainSingle();
+        dto.Suppliers[0].Health.Should().NotBe(
+            100, "no order reached a known outcome — a park is not a delivery success");
+        dto.Suppliers[0].Health.Should().BeNull(
+            "nothing settled, so there is no rate to report — the slot holds a measurement or nothing");
+
+        dto.Wires.Should().ContainSingle();
+        dto.Wires[0].Health.Should().NotBe(
+            "ok", "every order on this wire is parked awaiting a human");
+        dto.Wires[0].Health.Should().Be("risk");
+        dto.Wires[0].Alert.Should().Be(2, "both parked orders are exceptions needing attention");
+    }
+
+    /// <summary>
+    /// The generalisation, walked over <see cref="OrderStatusConstants.AwaitingHumanBucket"/> rather
+    /// than over a list re-typed here — a re-typed list is how <c>delivery_unconfirmed</c> and
+    /// <c>unrouted</c> went missing from the controller's private "exceptions" set in the first
+    /// place. No parked status may score a supplier 100 or leave its wire green.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(AwaitingHumanBucketMembers))]
+    public async Task GetTopology_EveryParkedStatus_IsAnExceptionAndNotASuccess(string status)
+    {
+        var (ctrl, orgId, db) = Build();
+        var supplierId = Guid.NewGuid();
+        db.Suppliers.Add(new Supplier
+        {
+            Id = supplierId, OrgId = orgId, Name = "Contoso Supplies",
+            CreatedAt = DateTime.UtcNow,
+        });
+        db.PurchaseOrders.Add(MakeOrderWithBuyerColumn(orgId, supplierId, status, "Contoso Buying OY"));
+        await db.SaveChangesAsync();
+
+        var result = await ctrl.GetTopology(CancellationToken.None);
+        var ok     = result.Should().BeOfType<OkObjectResult>().Subject;
+        var dto    = ok.Value.Should().BeOfType<DashboardTopologyDto>().Subject;
+
+        dto.Suppliers.Should().ContainSingle();
+        dto.Suppliers[0].Health.Should().NotBe(
+            100, "'{0}' is parked in OrderStatusConstants.AwaitingHumanBucket — not a delivered order", status);
+        dto.Wires.Should().ContainSingle();
+        dto.Wires[0].Health.Should().Be(
+            "risk", "'{0}' is parked awaiting a human, which is what the exception set means", status);
+    }
+
+    /// <summary>The statuses the theory above actually walked — enumerated from the bucket.</summary>
+    private static readonly IReadOnlyList<string> WalkedParkedStatuses =
+        OrderStatusConstants.AwaitingHumanBucket.ToList();
+
+    public static TheoryData<string> AwaitingHumanBucketMembers()
+    {
+        var data = new TheoryData<string>();
+        foreach (var status in WalkedParkedStatuses) data.Add(status);
+        return data;
+    }
+
+    /// <summary>
+    /// Anti-vacuity floor for the parked walk, matching the one the failure walk already carries.
+    /// It counts what was actually extracted from the canonical bucket, so the walk cannot shrink to
+    /// a subset — or to nothing — and keep reporting green.
+    /// </summary>
+    [Fact]
+    public void ParkedWalk_CoversEveryCanonicalParkedStatus_AndIsNotEmpty()
+    {
+        var walked = WalkedParkedStatuses;
+
+        AwaitingHumanBucketMembers().Count.Should().Be(
+            walked.Count, "every extracted status must become a theory case");
+        walked.Should().HaveCountGreaterThanOrEqualTo(
+            3, "the canonical parked bucket had three members when this floor was written");
+        walked.Should().BeEquivalentTo(
+            OrderStatusConstants.AwaitingHumanBucket,
+            "the walk must be the bucket itself, never a list re-typed beside it");
+        walked.Should().Contain(
+            OrderStatusConstants.DeliveryUnconfirmed,
+            "this is the member the controller's hand-written exception set dropped");
+        walked.Should().Contain(
+            OrderStatusConstants.Unrouted,
+            "and this is the other one it dropped");
+    }
+
+    /// <summary>
+    /// An in-flight order is not a success either. This is the same defect one step earlier in the
+    /// pipeline: under <c>(total - failed) / total</c> a supplier whose orders were all still
+    /// PARSING scored 100% before anything had been sent to it at all.
+    /// </summary>
+    [Fact]
+    public async Task GetTopology_SupplierWithOnlyInFlightOrders_HasNoScoreRatherThanOneHundred()
+    {
+        var (ctrl, orgId, db) = Build();
+        var supplierId = Guid.NewGuid();
+        db.Suppliers.Add(new Supplier
+        {
+            Id = supplierId, OrgId = orgId, Name = "Contoso Supplies",
+            CreatedAt = DateTime.UtcNow,
+        });
+        db.PurchaseOrders.AddRange(
+            MakeOrderWithBuyerColumn(orgId, supplierId, OrderStatusConstants.Parsing, "Contoso Buying OY"),
+            MakeOrderWithBuyerColumn(orgId, supplierId, OrderStatusConstants.ReadyToDeliver, "Contoso Buying OY"));
+        await db.SaveChangesAsync();
+
+        var result = await ctrl.GetTopology(CancellationToken.None);
+        var ok     = result.Should().BeOfType<OkObjectResult>().Subject;
+        var dto    = ok.Value.Should().BeOfType<DashboardTopologyDto>().Subject;
+
+        dto.Suppliers.Should().ContainSingle();
+        dto.Suppliers[0].Health.Should().BeNull(
+            "nothing has been delivered or failed yet, so there is no delivery success rate");
+    }
+
+    /// <summary>
+    /// A mixed window still scores over the SETTLED orders only: one delivered, one failed, and two
+    /// that have not finished. The old formula answered 75% (3 of 4 "not failed"); the honest figure
+    /// is 50% — of the two orders whose outcome is known, one succeeded.
+    /// </summary>
+    [Fact]
+    public async Task GetTopology_MixedWindow_ScoresOverSettledOrdersOnly()
+    {
+        var (ctrl, orgId, db) = Build();
+        var supplierId = Guid.NewGuid();
+        db.Suppliers.Add(new Supplier
+        {
+            Id = supplierId, OrgId = orgId, Name = "Contoso Supplies",
+            CreatedAt = DateTime.UtcNow,
+        });
+        db.PurchaseOrders.AddRange(
+            MakeOrderWithBuyerColumn(orgId, supplierId, OrderStatusConstants.Delivered, "Contoso Buying OY"),
+            MakeOrderWithBuyerColumn(orgId, supplierId, OrderStatusConstants.DeliveryFailed, "Contoso Buying OY"),
+            MakeOrderWithBuyerColumn(orgId, supplierId, OrderStatusConstants.DeliveryUnconfirmed, "Contoso Buying OY"),
+            MakeOrderWithBuyerColumn(orgId, supplierId, OrderStatusConstants.PendingReview, "Contoso Buying OY"));
+        await db.SaveChangesAsync();
+
+        var result = await ctrl.GetTopology(CancellationToken.None);
+        var ok     = result.Should().BeOfType<OkObjectResult>().Subject;
+        var dto    = ok.Value.Should().BeOfType<DashboardTopologyDto>().Subject;
+
+        dto.Suppliers.Should().ContainSingle();
+        dto.Suppliers[0].Health.Should().Be(
+            50, "1 delivered of 2 settled — the 2 unfinished orders are not evidence of success");
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private static PurchaseOrderEntity MakeOrder(Guid orgId, Guid supplierId, string status) =>
