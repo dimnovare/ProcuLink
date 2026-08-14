@@ -66,10 +66,22 @@ public sealed class OrderConfirmationService : IOrderConfirmationService
 
             var orderedQty   = ordered?.Quantity  ?? 0m;
             var orderedPrice = ordered?.UnitPrice ?? 0m;
-            // Purchase-order lines carry no per-line delivery date today; the ordered baseline
-            // is the caller's confirmed date unless the source provides separate context.
-            // We snapshot null so a confirmed date never spuriously reads as "changed".
-            DateOnly? orderedDate = null;
+            // The ordered baseline for the date is the ORDERED LINE's delivery date.
+            //
+            // This read used to be hardcoded `null`, under a comment claiming "purchase-order lines
+            // carry no per-line delivery date today". That was false at the time it was written:
+            // PurchaseOrderLineEntity.DeliveryDate exists and three of the eleven line-producing
+            // parsers populate it (CxmlOrderParser.cs:211, IDocOrders05Parser.cs:202,
+            // OpenAiPdfOrderExtractor.cs:703). Because the baseline was always null, the date arm of
+            // IsChanged could never be reached, so a supplier who confirmed the order but MOVED THE
+            // DELIVERY DATE was recorded as an unchanged "accepted" — the single change a buyer most
+            // needs to see, silently dropped.
+            //
+            // A null here still means "we never parsed an ordered date", NOT "the date changed":
+            // IsChanged only compares when BOTH sides are present, so the eight parsers that do not
+            // populate the field keep their current behaviour rather than reporting every confirmed
+            // date as a change.
+            DateOnly? orderedDate = ordered?.DeliveryDate;
 
             string state;
             if (pl.IsRejected)
