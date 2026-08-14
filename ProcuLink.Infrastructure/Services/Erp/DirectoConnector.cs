@@ -84,7 +84,9 @@ public sealed class DirectoConnector : IErpConnector
             // Verbatim body as well as the operator summary — see the sibling comment in
             // ErplyConnector: the classification's 400 split reads the original, not the summary.
             return response.IsSuccessStatusCode
-                ? new ErpDeliveryResult(true, null, code)
+                // Kept on SUCCESS as well — see the sibling note in ErplyConnector: a 2xx from an
+                // ERP is transport acceptance, not document acceptance.
+                ? new ErpDeliveryResult(true, null, code, ResponseBody: string.IsNullOrWhiteSpace(body) ? null : body)
                 : new ErpDeliveryResult(
                     false, BuildFailureMessage(code, body), code,
                     ResponseBody: string.IsNullOrWhiteSpace(body) ? null : body,

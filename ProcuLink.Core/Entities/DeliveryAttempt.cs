@@ -55,10 +55,30 @@ public class DeliveryAttempt
     public int? RetryAfterSeconds { get; set; }
 
     /// <summary>
-    /// ACK round-trip: UTC timestamp at which the supplier acknowledged receipt
-    /// (HTTP 2xx / successful dispatch). Null until the delivery is confirmed.
+    /// TRANSPORT acceptance: the UTC instant at which OUR dispatch call returned success — an HTTP
+    /// 2xx, an upload that did not throw, or an email provider that queued the message. Null when
+    /// the attempt did not succeed at the transport layer.
+    ///
+    /// <para><b>This is our clock, not theirs, and it is NOT an acknowledgement.</b> It was called
+    /// <c>AcknowledgedAt</c> and documented as "the UTC timestamp at which the supplier
+    /// acknowledged receipt" until 2026-08-14. Nothing ever observed a supplier acknowledging
+    /// anything: the value is written from the same <c>now</c> as <see cref="AttemptedAt"/> at the
+    /// moment we finished dispatching, and on SFTP, FTPS and SMTP there is no back-channel that
+    /// could carry an acknowledgement at all. The passport read this column and told the operator
+    /// the supplier had ACCEPTED the order.</para>
+    ///
+    /// <para><b>Existing rows needed no backfill.</b> Every value ever written here was already a
+    /// transport-acceptance instant — <c>result.Success ? now : null</c> — so the rename made the
+    /// column's name true without touching a single row. Only the name and this comment ever
+    /// claimed more than the code observed.</para>
+    ///
+    /// <para>A genuine supplier acknowledgement (997 / CONTRL / <c>ApplicationResponse</c> / MDN /
+    /// cXML <c>&lt;Response&gt;</c>) is not parsed anywhere in the product. When one is, it belongs
+    /// in its OWN column with its own provenance — never by widening the meaning of this one. Do
+    /// not add a nullable "supplier acknowledged" column before something can populate it: a column
+    /// that is permanently null is an absence the product never actually checked.</para>
     /// </summary>
-    public DateTime? AcknowledgedAt { get; set; }
+    public DateTime? TransportAcceptedAt { get; set; }
     /// <summary>
     /// 1-based attempt index within an order's delivery sequence; 0 for test-fire rows.
     /// ASCENDS across operator requeues (never restarts): if a supplier was hit four times,
@@ -97,7 +117,15 @@ public class DeliveryAttempt
     public const int MaxResponseBodyLength = 8_000;
 
     // ── Status values ───────────────────────────────────────────────────────────
-    /// <summary>Terminal: the supplier accepted the payload (HTTP 2xx / successful upload / send).</summary>
+    /// <summary>
+    /// Terminal: the TRANSPORT accepted the payload — an HTTP 2xx, an upload that did not throw, or
+    /// an email provider that queued the message. See <see cref="TransportAcceptedAt"/>.
+    ///
+    /// <para>This said "the supplier accepted the payload" until 2026-08-14. It is the handover that
+    /// succeeded, not the order: a 2xx can carry an application-level rejection, and a file dropped
+    /// on an SFTP server has been read by nobody. Nothing downstream may upgrade this to a supplier
+    /// verdict.</para>
+    /// </summary>
     public const string StatusSuccess = "success";
     /// <summary>Terminal: the attempt failed (transient 5xx / network, or an explicit 4xx rejection).</summary>
     public const string StatusFailed = "failed";

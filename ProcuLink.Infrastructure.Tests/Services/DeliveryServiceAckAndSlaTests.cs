@@ -13,14 +13,19 @@ using ProcuLink.Infrastructure.Tests.TestDoubles;
 namespace ProcuLink.Infrastructure.Tests.Services;
 
 /// <summary>
-/// Group O reliability — ACK round-trip, rejection-body capture, and SLA-window bookkeeping
-/// inside <see cref="DeliveryService.DispatchArtifactAsync"/>. Uses the full
+/// Group O reliability — transport-acceptance stamping, response-body capture, and SLA-window
+/// bookkeeping inside <see cref="DeliveryService.DispatchArtifactAsync"/>. Uses the full
 /// <see cref="ProcuLinkDbContext"/> on the InMemory provider so order + attempt state is exercised.
+///
+/// <para>These were "ACK round-trip" tests. Nothing here is an acknowledgement: the column records
+/// when OUR dispatch call returned, and <see cref="DeliveryAttempt.TransportAcceptedAt"/> now says
+/// so. The stamped-instant assertion below is deliberately kept and is the evidence — it passes
+/// only because the value lies between two clock reads taken in THIS process.</para>
 /// </summary>
 public class DeliveryServiceAckAndSlaTests
 {
     [Fact]
-    public async Task DispatchArtifactAsync_Success_StampsAcknowledgedAtAndClearsSlaWindow()
+    public async Task DispatchArtifactAsync_Success_StampsTransportAcceptedAtAndClearsSlaWindow()
     {
         await using var db = CreateDb();
         var encryption = CreateEncryption();
@@ -39,8 +44,13 @@ public class DeliveryServiceAckAndSlaTests
 
         var attempt = await db.DeliveryAttempts.SingleAsync(a => a.OrderId == ids.OrderId);
         attempt.Status.Should().Be("success");
-        attempt.AcknowledgedAt.Should().NotBeNull();
-        attempt.AcknowledgedAt!.Value.Should().BeOnOrAfter(before).And.BeOnOrBefore(after);
+        attempt.TransportAcceptedAt.Should().NotBeNull();
+        // OUR clock, provably: `before`/`after` are read in this process, and the stamped value sits
+        // between them. A supplier acknowledgement could not satisfy that — which is the whole
+        // reason this column may not be presented as one.
+        attempt.TransportAcceptedAt!.Value.Should().BeOnOrAfter(before).And.BeOnOrBefore(after);
+        // Same instant as the attempt itself. The column adds no independent fact.
+        attempt.TransportAcceptedAt!.Value.Should().Be(attempt.AttemptedAt);
 
         var order = await db.PurchaseOrders.SingleAsync(p => p.Id == ids.OrderId);
         order.Status.Should().Be(OrderStatusConstants.Delivered);
@@ -50,7 +60,7 @@ public class DeliveryServiceAckAndSlaTests
     }
 
     [Fact]
-    public async Task DispatchArtifactAsync_Failure_LeavesAcknowledgedAtNull()
+    public async Task DispatchArtifactAsync_Failure_LeavesTransportAcceptedAtNull()
     {
         await using var db = CreateDb();
         var encryption = CreateEncryption();
@@ -65,7 +75,42 @@ public class DeliveryServiceAckAndSlaTests
             ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: true, default);
 
         var attempt = await db.DeliveryAttempts.SingleAsync(a => a.OrderId == ids.OrderId);
-        attempt.AcknowledgedAt.Should().BeNull();
+        attempt.TransportAcceptedAt.Should().BeNull();
+    }
+
+    /// <summary>
+    /// A SUCCESSFUL delivery whose 2xx body carries an application-level refusal. The attempt is
+    /// still <c>success</c> — ProcuLink parses no acknowledgement and may not infer one — but the
+    /// body is persisted, which is the whole of what P0-12 asked for. Before this, the body was read
+    /// by the dispatcher and dropped on the success branch, so an operator whose order the supplier
+    /// silently never actioned had nothing at all to look at.
+    /// </summary>
+    [Fact]
+    public async Task DispatchArtifactAsync_SuccessWithBody_PersistsTheResponseBody()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption));
+        await db.SaveChangesAsync();
+
+        const string refusalInA200 = "{\"accepted\":false,\"reason\":\"buyer ACME-42 is not registered\"}";
+        var service = CreateService(
+            db,
+            new FakeDispatcher(new DeliveryResult(true, null, 200, ResponseBody: refusalInA200)),
+            encryption);
+
+        await service.DispatchArtifactAsync(
+            ids.OrgId, ids.OrderId, ids.ArtifactId, requireAutoDeliver: true, default);
+
+        var attempt = await db.DeliveryAttempts.SingleAsync(a => a.OrderId == ids.OrderId);
+        attempt.Status.Should().Be(DeliveryAttempt.StatusSuccess);
+        attempt.ResponseBody.Should().Be(refusalInA200);
+        // Verbatim and uninterpreted: we do not turn the supplier's words into a rejection, and we
+        // do not turn them into our own error message either.
+        attempt.RejectionReason.Should().BeNull();
+        attempt.ErrorMessage.Should().BeNull();
+        attempt.TransportAcceptedAt.Should().NotBeNull();
     }
 
     [Fact]

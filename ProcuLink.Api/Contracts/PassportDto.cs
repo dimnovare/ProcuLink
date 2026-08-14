@@ -178,7 +178,12 @@ public record PassportDeliveryAttempt(
     string   Destination,
     DateTime AttemptedAt,
     int?     ResponseCode,
-    DateTime? AcknowledgedAt,
+    /// <summary>
+    /// When OUR dispatch call returned success — see <see cref="Core.Entities.DeliveryAttempt.TransportAcceptedAt"/>.
+    /// Named <c>AcknowledgedAt</c> until 2026-08-14, which is what let the passport print "Accepted".
+    /// It is our clock, not a supplier's verdict, and no client may render it as one.
+    /// </summary>
+    DateTime? TransportAcceptedAt,
     string?  RejectionReason,
     string?  ErrorMessage,
     /// <summary>
@@ -200,16 +205,42 @@ public record PassportDeliveryAttempt(
 );
 
 /// <summary>
-/// Supplier acknowledgement / rejection, assembled from the existing delivery data
-/// (no dependency on the separate OrderConfirmation model being built elsewhere).
+/// What is known about the supplier's side of the delivery, assembled from the existing delivery
+/// data (no dependency on the separate OrderConfirmation model being built elsewhere).
+///
+/// <para>Only <c>rejected</c> is a supplier VERDICT. <c>delivered</c> says the handover succeeded
+/// and nothing more — ProcuLink parses no functional acknowledgement (997 / CONTRL /
+/// <c>ApplicationResponse</c> / MDN / cXML <c>&lt;Response&gt;</c>) on any channel.</para>
 /// </summary>
 public record PassportSupplierResponse(
-    /// <summary>acknowledged | rejected | unknown — derived from order status + the latest delivery attempt.</summary>
+    /// <summary>
+    /// <c>delivered</c> | <c>rejected</c> | <c>unknown</c> — derived from order status + the latest
+    /// delivery attempt.
+    ///
+    /// <para>This emitted <c>acknowledged</c> until 2026-08-14, and every successful delivery
+    /// satisfied it, so the passport rendered "Accepted" / "Acknowledged by supplier" for orders no
+    /// supplier had answered — including SFTP, FTPS and SMTP, which have no back-channel at all.
+    /// <c>delivered</c> replaces it because that is the whole of what the transport observed. Do not
+    /// reintroduce an <c>acknowledged</c> value until something actually parses an acknowledgement.</para>
+    /// </summary>
     string    Outcome,
-    DateTime? AcknowledgedAt,
+    /// <summary>
+    /// When OUR dispatch call returned success. See
+    /// <see cref="Core.Entities.DeliveryAttempt.TransportAcceptedAt"/>; not a supplier acknowledgement.
+    /// </summary>
+    DateTime? TransportAcceptedAt,
     string?   RejectionReason,
     int?      ResponseCode,
-    /// <summary>Supplier endpoint's raw response/NACK body, if captured on the latest attempt.</summary>
+    /// <summary>
+    /// The supplier endpoint's raw response body as captured on the latest attempt — on a rejection,
+    /// and (since 2026-08-14) on a 2xx too, because a 2xx can carry an application-level refusal and
+    /// dropping the body left an operator debugging a silent rejection with nothing to read.
+    ///
+    /// <para><b>Untrusted, supplier-controlled bytes.</b> Bounded to
+    /// <see cref="Core.Entities.DeliveryAttempt.MaxResponseBodyLength"/>. A client must attribute it
+    /// to the supplier and must never present it as ProcuLink's own words; ProcuLink does not parse
+    /// it and draws no conclusion from it.</para>
+    /// </summary>
     string?   ResponseBody
 );
 

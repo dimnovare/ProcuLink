@@ -269,7 +269,7 @@ public class DeliveriesControllerTests
             Status         = DeliveryAttempt.StatusSuccess,
             AttemptedAt    = DateTime.UtcNow,
             ResponseCode   = 200,
-            AcknowledgedAt = DateTime.UtcNow,
+            TransportAcceptedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync();
 
