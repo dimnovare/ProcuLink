@@ -363,14 +363,18 @@ public class OrderConfirmationServiceTests
             }), default);
 
         confirmation.Lines.Should().ContainSingle();
-        confirmation.Lines[0].OrderedDeliveryDate.Should().Be(
-            ordered, "the ordered baseline must be READ from the line, not snapshotted as null");
+
+        // The classification is the claim in this test's name, so it is asserted FIRST — a later
+        // assertion never reports when an earlier one throws, and the defect is the classification,
+        // not the baseline field that feeds it.
         confirmation.Lines[0].State.Should().Be(
             OrderConfirmationLineState.Changed,
             "the supplier moved delivery from {0} to {1}", ordered, moved);
         confirmation.Status.Should().Be(
             OrderConfirmationStatus.NeedsReview,
             "a changed line derives needs_review — this used to read 'accepted'");
+        confirmation.Lines[0].OrderedDeliveryDate.Should().Be(
+            ordered, "the ordered baseline must be READ from the line, not snapshotted as null");
     }
 
     /// <summary>
