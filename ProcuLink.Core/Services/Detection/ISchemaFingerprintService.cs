@@ -75,21 +75,40 @@ public static class FingerprintBoost
 
     /// <summary>
     /// Returns <paramref name="detected"/> unchanged when <paramref name="match"/> is null or empty;
-    /// otherwise returns a copy with boosted <see cref="DetectedFormat.Confidence"/>,
-    /// <see cref="DetectedFormat.SeenCount"/> populated, and an explanatory reasoning line appended.
+    /// otherwise returns a copy with <see cref="DetectedFormat.SeenCount"/> populated, a reasoning
+    /// line naming the recognised layout, and — only when a heuristic actually produced a number —
+    /// a boosted <see cref="DetectedFormat.Confidence"/>.
+    ///
+    /// <para><b>A null confidence stays null.</b> When the format came from a magic-byte match there
+    /// is no doubt to reduce: adding <c>0.03 × SeenCount</c> to a fact would be inventing the doubt
+    /// first and then arithmetically shrinking it. The guard is contractual today rather than
+    /// load-bearing — only the CSV arm populates <see cref="DetectedFormat.ColumnHeaders"/>, so only
+    /// a CSV heuristic can currently reach a fingerprint lookup at all — but it is the invariant that
+    /// has to hold the day a second arm learns to emit headers.</para>
+    ///
+    /// <para><b>The reasoning line no longer narrates the arithmetic.</b> It used to end
+    /// "Confidence boosted from 0.65 to 0.80", shown verbatim to the operator in the upload wizard's
+    /// "Why this format was detected" disclosure — presenting a sum over two tuning constants as
+    /// evidence. What is left is the part that is checkable: how many times this org has parsed this
+    /// exact layout.</para>
     /// </summary>
     public static DetectedFormat Apply(DetectedFormat detected, SchemaFingerprintMatch? match)
     {
         if (match is null || match.SeenCount <= 0) return detected;
 
-        var boost = Math.Min(MaxBoost, PerSightingBoost * match.SeenCount);
-        var boosted = Math.Min(ConfidenceCeiling, detected.Confidence + boost);
-
         var reasoning = new List<string>(detected.Reasoning)
         {
             $"Recognised column layout — your organisation has parsed this exact layout " +
-            $"{match.SeenCount} time(s) before. Confidence boosted from {detected.Confidence:0.00} to {boosted:0.00}.",
+            $"{match.SeenCount} time(s) before.",
         };
+
+        // Nothing scored this detection, so there is nothing to boost. SeenCount is still a real
+        // count and still worth surfacing.
+        if (detected.Confidence is not { } current)
+            return detected with { Reasoning = reasoning, SeenCount = match.SeenCount };
+
+        var boost = Math.Min(MaxBoost, PerSightingBoost * match.SeenCount);
+        var boosted = Math.Min(ConfidenceCeiling, current + boost);
 
         return detected with { Confidence = boosted, Reasoning = reasoning, SeenCount = match.SeenCount };
     }

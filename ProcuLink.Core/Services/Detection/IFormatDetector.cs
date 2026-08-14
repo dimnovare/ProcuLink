@@ -10,7 +10,22 @@ namespace ProcuLink.Core.Services.Detection;
 /// One of <c>"csv"</c>, <c>"xlsx"</c>, <c>"pdf"</c>, <c>"cxml"</c>, <c>"ubl"</c>,
 /// <c>"edifact"</c>, <c>"x12"</c>, <c>"xml"</c> (generic XML), or <c>"unknown"</c>.
 /// </param>
-/// <param name="Confidence">A value in [0.0, 1.0] representing the detector's certainty.</param>
+/// <param name="Confidence">
+/// A heuristic score in [0.0, 1.0], or <c>null</c> when nothing scored this detection.
+///
+/// <para><b>Only <see cref="FormatDetectionBasis.Heuristic"/> may carry a number.</b> This used to be
+/// a non-nullable <c>double</c> documented as "the detector's certainty", which left the arms that
+/// match a spec-mandated FILE HEADER no way to say "there is no score" — so they invented one.
+/// <c>%PDF-</c> at offset 0 shipped as <c>0.95</c>. The leading bytes either are that sequence or
+/// they are not; 0.95 fabricates a 5% doubt nobody measured, and
+/// <see cref="FingerprintBoost.Apply"/> then did arithmetic on the invented number and narrated the
+/// result to the operator ("Confidence boosted from 0.95 to 0.98"). The upload wizard printed it as
+/// a percentage next to the format name.</para>
+///
+/// <para><see cref="Basis"/> is how an arm says which kind of answer this is, so the UI can name the
+/// evidence instead of scoring it. Same shape as <c>AiMappingSuggestion.Basis</c> and
+/// <c>MappingSuggestionDto.Basis</c>, from the sibling fixes on the mapping-suggestion paths.</para>
+/// </param>
 /// <param name="SuggestedParser">
 /// Fully-qualified or simple class name of the recommended <c>IPurchaseOrderParser</c>
 /// implementation (e.g. <c>"CxmlOrderParser"</c>, <c>"UblOrderParser"</c>).
@@ -28,7 +43,7 @@ namespace ProcuLink.Core.Services.Detection;
 /// </param>
 public sealed record DetectedFormat(
     string Format,
-    double Confidence,
+    double? Confidence,
     string? SuggestedParser,
     string? DetectedPoNumber,
     string? DetectedSupplier,
@@ -45,7 +60,46 @@ public sealed record DetectedFormat(
     /// Passed to <see cref="ISchemaFingerprintService"/> to avoid a second file download.
     /// Null for header-less formats (XML, EDI, PDF).
     /// </summary>
-    IReadOnlyList<string>? ColumnHeaders = null);
+    IReadOnlyList<string>? ColumnHeaders = null,
+    /// <summary>
+    /// What kind of answer this is — see <see cref="FormatDetectionBasis"/>. The default is
+    /// <see cref="FormatDetectionBasis.Heuristic"/> because an arm that supplies a number and
+    /// forgets to state its basis is at worst over-modest, never over-confident.
+    /// </summary>
+    string Basis = FormatDetectionBasis.Heuristic);
+
+/// <summary>
+/// Values for <see cref="DetectedFormat.Basis"/>.
+///
+/// <para>The invariant, enforced by <c>FormatDetectorBasisInvariantTests</c>:
+/// <b><see cref="Heuristic"/> carries a number and the other two never do.</b></para>
+/// </summary>
+public static class FormatDetectionBasis
+{
+    /// <summary>
+    /// The format's own leading signature, at the offset the specification puts it — <c>%PDF-</c> at
+    /// byte 0, an <c>ISA</c> interchange header, the EDIFACT <c>UNA:+.?'</c> service string advice.
+    /// A byte comparison, so the answer is a FACT and <see cref="DetectedFormat.Confidence"/> is null:
+    /// there is no doubt here to express as a fraction, and no fraction to boost.
+    /// </summary>
+    public const string MagicBytes = "magic_bytes";
+
+    /// <summary>
+    /// Content sniffing with real ambiguity — a marker found somewhere in the peek window rather than
+    /// at a defined offset, a filename extension taken as evidence, a separator-frequency guess.
+    /// These carry a score, and only these may. The score is a hand-tuned prior expressing the
+    /// ordering between arms, not a measurement, which is exactly what a heuristic is.
+    /// </summary>
+    public const string Heuristic = "heuristic";
+
+    /// <summary>
+    /// Nothing matched, or the peek could not be read at all. <see cref="DetectedFormat.Format"/> is
+    /// <c>"unknown"</c> and <see cref="DetectedFormat.Confidence"/> is null — this used to be
+    /// <c>0.0</c>, which is a number on the same ramp where 0% reads as "certainly wrong" rather
+    /// than "not determined". The reasoning list says what was tried.
+    /// </summary>
+    public const string Undetermined = "undetermined";
+}
 
 /// <summary>
 /// Smart "drop any file" format detector. Implementations must:

@@ -18,9 +18,14 @@ public class FormatDetectorServiceTests
         var result = await _sut.DetectAsync(ms, "purchase-order.pdf", CancellationToken.None);
 
         result.Format.Should().Be("pdf");
-        result.Confidence.Should().BeGreaterOrEqualTo(0.9);
         result.SuggestedParser.Should().Be("PdfOrderParser");
         result.Reasoning.Should().Contain(r => r.Contains("%PDF-"));
+
+        // THE control for this fix. `%PDF-` at offset 0 either matched or it did not. This arm
+        // used to return 0.95 and the upload wizard printed "Detected: PDF · 95%" — a 5% doubt
+        // nobody measured, invented on the far side of a byte comparison.
+        result.Basis.Should().Be(FormatDetectionBasis.MagicBytes);
+        result.Confidence.Should().BeNull("a magic-byte match is a fact, and a fact carries no fraction");
     }
 
     [Fact]
@@ -35,6 +40,11 @@ public class FormatDetectorServiceTests
         result.Format.Should().Be("xlsx");
         result.Confidence.Should().BeGreaterOrEqualTo(0.9);
         result.SuggestedParser.Should().Be("XlsxOrderParser");
+
+        // Heuristic, deliberately: the ZIP magic is a fact, but "this ZIP is an Excel workbook" is
+        // not what those four bytes prove — we never open the container. A .docx renamed .xlsx lands
+        // here. Real uncertainty, so it keeps a score.
+        result.Basis.Should().Be(FormatDetectionBasis.Heuristic);
     }
 
     [Fact]
@@ -47,6 +57,7 @@ public class FormatDetectorServiceTests
 
         result.Format.Should().Be("xlsx");
         result.Confidence.Should().BeLessThan(0.9);
+        result.Basis.Should().Be(FormatDetectionBasis.Heuristic);
         result.Reasoning.Should().Contain(r => r.Contains("not end with .xlsx", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -87,6 +98,10 @@ public class FormatDetectorServiceTests
         result.Confidence.Should().BeGreaterOrEqualTo(0.9);
         result.SuggestedParser.Should().Be("CxmlOrderParser");
         result.DetectedPoNumber.Should().Be("PO-12345");
+
+        // Heuristic: a substring search anywhere in the 1 KiB peek, not a root element read at a
+        // defined offset. High score, because the evidence is strong — but it is evidence.
+        result.Basis.Should().Be(FormatDetectionBasis.Heuristic);
     }
 
     [Fact]
@@ -108,6 +123,7 @@ public class FormatDetectorServiceTests
 
         result.Format.Should().Be("ubl");
         result.Confidence.Should().BeGreaterOrEqualTo(0.9);
+        result.Basis.Should().Be(FormatDetectionBasis.Heuristic);
         result.SuggestedParser.Should().Be("UblOrderParser");
         result.DetectedPoNumber.Should().Be("PO-77");
         result.EstimatedLineCount.Should().Be(2);
@@ -123,9 +139,31 @@ public class FormatDetectorServiceTests
         var result = await _sut.DetectAsync(ms, "order.edi", CancellationToken.None);
 
         result.Format.Should().Be("edifact");
-        result.Confidence.Should().BeGreaterOrEqualTo(0.85);
         result.SuggestedParser.Should().Be("EdifactOrderParser");
         result.DetectedPoNumber.Should().Be("PO-EDI-9001");
+
+        // The UNA service string advice sits at offset 0 with the default separators — anchored and
+        // byte-exact, so this half of the old shared 0.90 is a fact.
+        result.Basis.Should().Be(FormatDetectionBasis.MagicBytes);
+        result.Confidence.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task DetectAsync_ReturnsScoredEdifact_ForUnbHeaderWithoutUnaSegment()
+    {
+        // The other half of the arm the fix split. UNA is optional in EDIFACT; without it we are
+        // looking for UNB+UNOC ANYWHERE in the first 200 characters, which is a window sniff and
+        // not an anchored match. Same format, genuinely weaker evidence, so this one still scores.
+        var ediText = "UNB+UNOC:3+ACMEBUYER+ACMESUPPLIER+240115:1200+12345'UNH+1+ORDERS:D:96A:UN'BGM+220+PO-EDI-7002+9'";
+        using var ms = new MemoryStream(Encoding.ASCII.GetBytes(ediText));
+
+        var result = await _sut.DetectAsync(ms, "order.edi", CancellationToken.None);
+
+        result.Format.Should().Be("edifact");
+        result.SuggestedParser.Should().Be("EdifactOrderParser");
+        result.DetectedPoNumber.Should().Be("PO-EDI-7002");
+        result.Basis.Should().Be(FormatDetectionBasis.Heuristic);
+        result.Confidence.Should().NotBeNull();
     }
 
     [Fact]
@@ -140,9 +178,13 @@ public class FormatDetectorServiceTests
         var result = await _sut.DetectAsync(ms, "order.x12", CancellationToken.None);
 
         result.Format.Should().Be("x12");
-        result.Confidence.Should().BeGreaterOrEqualTo(0.8);
         result.SuggestedParser.Should().Be("X12OrderParser");
         result.DetectedPoNumber.Should().Be("PO-X12-555");
+
+        // X12 puts the ISA interchange header at offset 0 and the element separator at a fixed
+        // position inside it. Anchored — this used to be 0.85.
+        result.Basis.Should().Be(FormatDetectionBasis.MagicBytes);
+        result.Confidence.Should().BeNull();
     }
 
     [Fact]
@@ -161,6 +203,10 @@ public class FormatDetectorServiceTests
         result.Format.Should().Be("csv");
         result.Confidence.Should().BeGreaterOrEqualTo(0.6);
         result.SuggestedParser.Should().Be("CsvOrderParser");
+
+        // The most heuristic arm in the detector — separator frequency over two lines — and the one
+        // the score genuinely belongs to.
+        result.Basis.Should().Be(FormatDetectionBasis.Heuristic);
     }
 
     [Fact]
@@ -176,8 +222,12 @@ public class FormatDetectorServiceTests
         var result = await _sut.DetectAsync(ms, "junk.bin", CancellationToken.None);
 
         result.Format.Should().Be("unknown");
-        result.Confidence.Should().Be(0.0);
         result.SuggestedParser.Should().BeNull();
+
+        // Nothing matched, so there is no score — not a score of zero. 0.0 sat on the same ramp the
+        // wizard colours, where 0% is the "certainly wrong" end rather than "not determined".
+        result.Basis.Should().Be(FormatDetectionBasis.Undetermined);
+        result.Confidence.Should().BeNull();
     }
 
     [Fact]

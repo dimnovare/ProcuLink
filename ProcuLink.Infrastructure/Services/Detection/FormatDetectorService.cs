@@ -22,6 +22,14 @@ namespace ProcuLink.Infrastructure.Services.Detection;
 /// Safety: <i>never throws</i>. Any exception during sniffing collapses the result to
 /// <c>Format = "unknown"</c> with the exception message in reasoning. Stream position is
 /// always restored to <c>0</c> before returning.
+///
+/// <para><b>Every arm states its <see cref="FormatDetectionBasis"/>, and only a heuristic carries a
+/// number.</b> Each of the arms below used to return a hardcoded confidence, including the ones that
+/// do nothing but compare bytes against a spec-mandated file header — <c>%PDF-</c> shipped as
+/// <c>0.95</c> to a wizard that printed "95%" beside the format name. A magic-byte match is not a
+/// probability: it either matched or it did not. The arms that really guess — a ZIP container named
+/// <c>.xlsx</c>, a namespace found somewhere in the peek window, a CSV separator count — do carry a
+/// score, because there the uncertainty is real and the ordering between them is information.</para>
 /// </summary>
 public sealed class FormatDetectorService : IFormatDetector
 {
@@ -63,7 +71,8 @@ public sealed class FormatDetectorService : IFormatDetector
             catch (Exception ex)
             {
                 reasoning.Add($"Failed to read peek buffer: {ex.Message}");
-                return new DetectedFormat("unknown", 0.0, null, null, null, null, reasoning);
+                return new DetectedFormat("unknown", null, null, null, null, null, reasoning,
+                                          Basis: FormatDetectionBasis.Undetermined);
             }
             finally
             {
@@ -74,7 +83,8 @@ public sealed class FormatDetectorService : IFormatDetector
             if (read == 0)
             {
                 reasoning.Add("Stream contained zero bytes.");
-                return new DetectedFormat("unknown", 0.0, null, null, null, null, reasoning);
+                return new DetectedFormat("unknown", null, null, null, null, null, reasoning,
+                                          Basis: FormatDetectionBasis.Undetermined);
             }
 
             // Decode a UTF-8 text view of the peek window once, used by every text-based check below.
@@ -91,20 +101,28 @@ public sealed class FormatDetectorService : IFormatDetector
                 {
                     reasoning.Add("First 5 bytes are %PDF- (PDF magic).");
                     var (poPdf, supplierPdf, linesPdf) = ExtractPdfMetadata(textHead);
-                    return new DetectedFormat("pdf", 0.95, "PdfOrderParser", poPdf, supplierPdf, linesPdf, reasoning);
+                    // No score: the leading bytes ARE the PDF header, at the offset ISO 32000 puts it.
+                    return new DetectedFormat("pdf", null, "PdfOrderParser", poPdf, supplierPdf, linesPdf, reasoning,
+                                              Basis: FormatDetectionBasis.MagicBytes);
                 }
 
                 // XLSX / ZIP — "PK\x03\x04" at offset 0
                 if (read >= 4 && buffer[0] == 0x50 && buffer[1] == 0x4B && buffer[2] == 0x03 && buffer[3] == 0x04)
                 {
+                    // The ZIP magic is a fact, but "xlsx" is not what it proves — we never open the
+                    // container to look for xl/workbook.xml, so a .docx, a .jar or a plain archive
+                    // reaches both arms below. The token we return is a guess about the CONTENT of a
+                    // container we did not open, which is what makes both of these heuristics.
                     reasoning.Add("First 4 bytes are PK\\x03\\x04 (ZIP container).");
                     if (string.Equals(ext, ".xlsx", StringComparison.OrdinalIgnoreCase))
                     {
-                        reasoning.Add("Filename ends with .xlsx — confident this is an Office Open XML workbook.");
-                        return new DetectedFormat("xlsx", 0.95, "XlsxOrderParser", null, null, null, reasoning);
+                        reasoning.Add("Filename ends with .xlsx — a ZIP container named as an Office Open XML workbook.");
+                        return new DetectedFormat("xlsx", 0.95, "XlsxOrderParser", null, null, null, reasoning,
+                                                  Basis: FormatDetectionBasis.Heuristic);
                     }
                     reasoning.Add("Filename did not end with .xlsx — could be any ZIP-based container. Lowering confidence.");
-                    return new DetectedFormat("xlsx", 0.7, "XlsxOrderParser", null, null, null, reasoning);
+                    return new DetectedFormat("xlsx", 0.7, "XlsxOrderParser", null, null, null, reasoning,
+                                              Basis: FormatDetectionBasis.Heuristic);
                 }
 
                 // XML — starts with "<?xml" or "<"
@@ -121,7 +139,12 @@ public sealed class FormatDetectorService : IFormatDetector
                     {
                         reasoning.Add("Detected <cXML root element or cxml.org/cXML namespace.");
                         var (poCxml, supplierCxml, linesCxml) = ExtractCxmlMetadata(textHead);
-                        return new DetectedFormat("cxml", 0.95, "CxmlOrderParser", poCxml, supplierCxml, linesCxml, reasoning);
+                        // Heuristic, not magic bytes: this is a substring found ANYWHERE in the peek
+                        // window, not a root element read at a defined offset. A comment or a text
+                        // node naming cXML inside some other document matches. Strong evidence, so
+                        // the score is high — but it is evidence, and a score is the right shape.
+                        return new DetectedFormat("cxml", 0.95, "CxmlOrderParser", poCxml, supplierCxml, linesCxml, reasoning,
+                                                  Basis: FormatDetectionBasis.Heuristic);
                     }
 
                     // UBL Order — root element <Order> with namespace urn:oasis:names:specification:ubl:schema:xsd:Order-2.
@@ -130,33 +153,55 @@ public sealed class FormatDetectorService : IFormatDetector
                     {
                         reasoning.Add($"Detected UBL Order-2 namespace ({ublOrderNs}).");
                         var (poUbl, supplierUbl, linesUbl) = ExtractUblMetadata(textHead);
-                        return new DetectedFormat("ubl", 0.95, "UblOrderParser", poUbl, supplierUbl, linesUbl, reasoning);
+                        // Same unanchored contains() shape as the cXML arm above — heuristic.
+                        return new DetectedFormat("ubl", 0.95, "UblOrderParser", poUbl, supplierUbl, linesUbl, reasoning,
+                                                  Basis: FormatDetectionBasis.Heuristic);
                     }
 
                     // Generic XML — we know it's XML but not which dialect.
+                    // A leading '<' is also HTML, SVG, or a bare fragment, and we did not identify a
+                    // dialect — genuinely uncertain on both counts, which is what the low score says.
                     reasoning.Add("Buffer is XML but does not match cXML or UBL Order namespaces.");
-                    return new DetectedFormat("xml", 0.40, null, null, null, null, reasoning);
+                    return new DetectedFormat("xml", 0.40, null, null, null, null, reasoning,
+                                              Basis: FormatDetectionBasis.Heuristic);
                 }
 
-                // EDIFACT — UNA:+.?' service advice or UNB+UNOC interchange header.
-                // EDIFACT-as-UTF8 may have stray whitespace before UNA in real-world traffic, so check
-                // both the raw first 8 bytes for UNA and the first 200 chars for UNB+UNOC.
+                // EDIFACT — the same format arrives here through two signals of very different
+                // quality, so it leaves through two different answers. They used to share one 0.90.
                 var head200 = textHead.Length <= 200 ? textHead : textHead.Substring(0, 200);
-                if (textHead.StartsWith("UNA:+.?'", StringComparison.Ordinal)
-                    || head200.Contains("UNB+UNOC", StringComparison.Ordinal))
+
+                // (a) UNA service string advice with the default separators, at offset 0. Anchored and
+                //     byte-exact: a fact. (This check does NOT tolerate leading whitespace, whatever
+                //     the comment here used to claim — a file with stray bytes before UNA falls
+                //     through to the UNB sniff below, which is the honest place for it.)
+                if (textHead.StartsWith("UNA:+.?'", StringComparison.Ordinal))
                 {
-                    reasoning.Add("Detected EDIFACT service advice (UNA) or interchange header (UNB+UNOC).");
-                    var poEdi = ExtractEdifactPoNumber(textHead);
-                    return new DetectedFormat("edifact", 0.90, "EdifactOrderParser", poEdi, null, null, reasoning);
+                    reasoning.Add("First 8 bytes are the EDIFACT UNA:+.?' service string advice.");
+                    return new DetectedFormat("edifact", null, "EdifactOrderParser",
+                                              ExtractEdifactPoNumber(textHead), null, null, reasoning,
+                                              Basis: FormatDetectionBasis.MagicBytes);
+                }
+
+                // (b) UNB+UNOC found somewhere in the first 200 characters. An unanchored window
+                //     sniff — strong evidence, not proof, so it scores.
+                if (head200.Contains("UNB+UNOC", StringComparison.Ordinal))
+                {
+                    reasoning.Add("Found an EDIFACT UNB+UNOC interchange header within the first 200 characters.");
+                    return new DetectedFormat("edifact", 0.90, "EdifactOrderParser",
+                                              ExtractEdifactPoNumber(textHead), null, null, reasoning,
+                                              Basis: FormatDetectionBasis.Heuristic);
                 }
 
                 // X12 — ISA envelope: literally starts with "ISA" + element separator (commonly '*').
                 if (textHead.StartsWith("ISA*", StringComparison.Ordinal)
                     || (textHead.StartsWith("ISA", StringComparison.Ordinal) && read > 3 && IsX12Separator(textHead[3])))
                 {
+                    // Anchored: X12 defines ISA as the interchange header at offset 0, and the
+                    // separator is read from the position the standard assigns it. A fact, not a score.
                     reasoning.Add("Detected X12 ISA interchange envelope.");
                     var poX12 = ExtractX12PoNumber(textHead);
-                    return new DetectedFormat("x12", 0.85, "X12OrderParser", poX12, null, null, reasoning);
+                    return new DetectedFormat("x12", null, "X12OrderParser", poX12, null, null, reasoning,
+                                              Basis: FormatDetectionBasis.MagicBytes);
                 }
 
                 // ── 2. CSV pass ────────────────────────────────────────────────
@@ -166,13 +211,15 @@ public sealed class FormatDetectorService : IFormatDetector
 
                 // ── Fallback ───────────────────────────────────────────────────
                 reasoning.Add("No magic bytes, XML namespace, EDIFACT/X12 envelope, or CSV signal matched.");
-                return new DetectedFormat("unknown", 0.0, null, null, null, null, reasoning);
+                return new DetectedFormat("unknown", null, null, null, null, null, reasoning,
+                                          Basis: FormatDetectionBasis.Undetermined);
             }
             catch (Exception ex)
             {
                 // Defensive: any unhandled sniffing exception collapses to "unknown".
                 reasoning.Add($"Detection failed with exception: {ex.GetType().Name}: {ex.Message}");
-                return new DetectedFormat("unknown", 0.0, null, null, null, null, reasoning);
+                return new DetectedFormat("unknown", null, null, null, null, null, reasoning,
+                                          Basis: FormatDetectionBasis.Undetermined);
             }
         }
         finally
@@ -256,8 +303,12 @@ public sealed class FormatDetectorService : IFormatDetector
                            .Where(h => h.Length > 0)
                            .ToList();
 
+        // Separator-frequency guessing over two lines. The most heuristic thing in the file, and the
+        // only arm that populates ColumnHeaders — so it is also the only arm FingerprintBoost can
+        // reach today, which is the one place a boost is meaningful.
         return new DetectedFormat("csv", 0.65, "CsvOrderParser", po, null, lineCount, reasoning,
-                                  ColumnHeaders: headers.Count > 0 ? headers : null);
+                                  ColumnHeaders: headers.Count > 0 ? headers : null,
+                                  Basis: FormatDetectionBasis.Heuristic);
     }
 
     /// <summary>
