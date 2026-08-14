@@ -24,6 +24,10 @@ namespace ProcuLink.Api.Tests.Services;
 /// punchout one (where "LTQ2500-BK-BTK1" is Litware's number, not something the supplier sells
 /// under).
 ///
+/// NOTE: the "0.95 confidence" above is history, not current behaviour. Both deterministic branches
+/// now carry NO confidence at all — see <c>DeterministicSuggestionsCarryNoConfidenceTests</c>.
+/// Nothing in this file asserts a confidence value; it is about WHICH CODE is suggested.
+///
 /// What is asserted here:
 ///   • Ariba punchout (Litware): the manufacturer part number is LOOKED UP in the catalog and
 ///     the suggestion is the supplier's OWN code for that product — never the manufacturer's;

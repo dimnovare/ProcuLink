@@ -388,6 +388,14 @@ internal sealed class OrderResolutionService
         {
             if (!line.NeedsReview) continue;
             if (string.IsNullOrWhiteSpace(line.AiSuggestedSupplierItemCode)) continue;
+            // A suggestion with no confidence can never clear a confidence threshold, and the
+            // `?? 0.0` says so. This now excludes the two DETERMINISTIC producers (an exact
+            // supplier-catalog hit on a manufacturer part number, and an echo of a part number the
+            // document states) — they used to arrive stamped 0.95 and were swept up by any
+            // threshold at or below that. Excluding them is the honest reading of "accept
+            // everything the model was at least this sure about": nothing was sure of anything
+            // here, because nothing measured it. Such a line stays in review for a one-click
+            // accept, where the operator sees the catalog evidence and decides.
             if ((line.AiSuggestionConfidence ?? 0.0) < minConfidence) continue;
 
             var chosen = line.AiSuggestedSupplierItemCode;

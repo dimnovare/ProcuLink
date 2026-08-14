@@ -2997,16 +2997,25 @@ public sealed class OrdersController : ControllerBase
         if (string.IsNullOrWhiteSpace(line.AiSuggestedSupplierItemCode))
             return null;
 
-        var rawConfidence = line.AiSuggestionConfidence ?? 0f;
+        // Null stays null. This was `?? 0f` into a non-nullable field, so a suggestion nothing
+        // scored — every deterministic catalog / source-document match — reached the mapper as a
+        // hard 0%, drawn on the same AI-violet confidence ramp as a real model score. An absent
+        // measurement is not a measurement of zero.
+        var rawConfidence = line.AiSuggestionConfidence;
 
         // V9 calibration overlay (display-only). When a calibration result was computed for this
         // line, surface it; otherwise fall back to raw passthrough (calibrated == raw, off). The
         // raw Confidence field below is ALWAYS the unmodified model confidence.
-        float calibratedConfidence = rawConfidence;
+        //
+        // With no raw score there is nothing to calibrate: BuildLineCalibrationsAsync already skips
+        // these lines ("calibration must never invent confidence for a suggestion that had none"),
+        // so the map lookup misses and both numbers stay null.
+        float? calibratedConfidence = rawConfidence;
         bool isCalibrated = false;
         string calibrationBasis = ProcuLink.Core.Services.ConfidenceCalibration.UncalibratedBasis;
 
-        if (calibrations is not null
+        if (rawConfidence.HasValue
+            && calibrations is not null
             && calibrations.TryGetValue(line.LineNumber, out var calibration))
         {
             calibratedConfidence = (float)calibration.CalibratedConfidence;
@@ -3021,6 +3030,31 @@ public sealed class OrdersController : ControllerBase
             line.AiSuggestionProvenance ?? string.Empty,
             CalibratedConfidence: calibratedConfidence,
             IsCalibrated: isCalibrated,
-            CalibrationBasis: calibrationBasis);
+            CalibrationBasis: calibrationBasis,
+            Basis: BasisFor(line));
+    }
+
+    /// <summary>
+    /// Names the evidence behind a line's stored AI suggestion, for a UI that must decide whether it
+    /// may print a percentage and call it AI.
+    ///
+    /// <para><b>That decision rests entirely on whether a confidence was recorded</b>, not on the
+    /// provenance text. Since the deterministic producers stopped stamping 0.95, a stored confidence
+    /// exists if and only if a scorer produced one, so <c>HasValue</c> is the whole safety property
+    /// and it is a fact about the row, not a parse.</para>
+    ///
+    /// <para>The provenance sniff below only chooses between two labels that are BOTH non-model, so
+    /// getting it wrong can downgrade a label but can never invent an AI attribution or a number.
+    /// It is a display nicety sitting on the safe side of the decision that matters.</para>
+    /// </summary>
+    private static string BasisFor(PurchaseOrderLineEntity line)
+    {
+        if (line.AiSuggestionConfidence.HasValue)
+            return ProcuLink.Core.Services.Ai.AiMappingSuggestionBasis.Model;
+
+        var provenance = line.AiSuggestionProvenance ?? string.Empty;
+        return provenance.StartsWith("catalog", StringComparison.OrdinalIgnoreCase)
+            ? ProcuLink.Core.Services.Ai.AiMappingSuggestionBasis.Catalog
+            : ProcuLink.Core.Services.Ai.AiMappingSuggestionBasis.SourceDocument;
     }
 }

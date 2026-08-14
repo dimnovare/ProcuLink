@@ -1898,8 +1898,8 @@ internal sealed class OrderIngestionService
             // real codes and rejects any code outside them — a hallucinated code can never
             // surface. With no catalog this returns the original mapping candidates unchanged
             // (offer ⇔ works — today's free suggestion).
-            // T4 — lines that already state a source manufacturer part number get the 0.95
-            // source suggestion below; exclude them from the (last-resort) web product search.
+            // T4 — lines that already state a source manufacturer part number get the deterministic
+            // source-document suggestion below; exclude them from the (last-resort) web product search.
             var sourceMpnLineNumbers = lines
                 .Where(l => !string.IsNullOrWhiteSpace(l.ManufacturerPartNumber))
                 .Select(l => l.LineNumber)
@@ -1955,16 +1955,21 @@ internal sealed class OrderIngestionService
                 {
                     suggestion = new AiMappingSuggestion(
                         SupplierItemCode: mpnLookup.Match.Code.Trim(),
-                        Confidence:       0.95f,
+                        // No score: this is an EXACT match in the supplier's own catalog, found by
+                        // an indexed query. It used to send 0.95f, which the review UI printed as
+                        // "AI confidence 95%" in AI-violet — wrong twice over, because no model ran
+                        // and a catalog hit is not a probability. Basis names the evidence instead.
+                        Confidence:       null,
                         Reason:           BuildManufacturerPartReason(line, mpnLookup),
                         Provenance:       mpnLookup.MatchedOnManufacturerPartNumber
                             ? "catalog: manufacturer part number"
-                            : "catalog: supplier code equals the manufacturer part number");
+                            : "catalog: supplier code equals the manufacturer part number",
+                        Basis:            AiMappingSuggestionBasis.Catalog);
                 }
                 // (b) The catalog knows this manufacturer part number but sells it under MORE THAN
                 // ONE code (bare unit vs kit, regional variant). There is no honest way to choose,
-                // and showing a 0.95 suggestion would invite a wrong one-click accept — so show
-                // none and let the operator pick. Note this also suppresses the (c) echo below:
+                // and showing one of them as THE suggestion would invite a wrong one-click accept —
+                // so show none and let the operator pick. Note this also suppresses the (c) echo below:
                 // once the catalog has told us this part number maps to several supplier codes,
                 // echoing it back as if it were one of them is provably wrong.
                 else if (mpnLookup is { Ambiguous: true })
@@ -1979,9 +1984,12 @@ internal sealed class OrderIngestionService
                 {
                     suggestion = new AiMappingSuggestion(
                         SupplierItemCode: line.ManufacturerPartNumber!.Trim(),
-                        Confidence:       0.95f,
+                        // No score: this is a literal echo of a code the document itself prints.
+                        // Nothing judged it — least of all a model — so it carries no number.
+                        Confidence:       null,
                         Reason:           "Manufacturer part number is stated in the source document.",
-                        Provenance:       "source document: manufacturer part number");
+                        Provenance:       "source document: manufacturer part number",
+                        Basis:            AiMappingSuggestionBasis.SourceDocument);
                 }
                 else
                 {
@@ -1991,9 +1999,16 @@ internal sealed class OrderIngestionService
                     // (e.g. "ACME-JSON-2" @ 0.60 for a Yubico YubiKey) is worse than no suggestion —
                     // it misleads the reviewer into accepting an unrelated code. Below the floor we
                     // DROP it so the UI shows "no confident match — enter manually" instead. This
-                    // applies ONLY to the AI/fuzzy-catalog path; the source-manufacturer-part-number
-                    // branch above is a real code stated in the document and stays at 0.95.
-                    if (suggestion is not null && suggestion.Confidence < AiSuggestionConfidenceFloor)
+                    // applies ONLY to this AI/fuzzy-catalog path; the two deterministic branches
+                    // above never reach here, and now carry no confidence to compare at all.
+                    //
+                    // The null check is not defensive padding: Confidence is nullable precisely
+                    // because a suggestion can have no score, and `null < floor` is false in C#, so
+                    // an unscored suggestion would otherwise slip past a floor it cannot be measured
+                    // against. A scorer that returned no number has told us nothing, which is not
+                    // the same as clearing the bar — drop it, exactly like a below-floor score.
+                    if (suggestion is not null
+                        && (suggestion.Confidence is null || suggestion.Confidence < AiSuggestionConfidenceFloor))
                         suggestion = null;
                 }
             }

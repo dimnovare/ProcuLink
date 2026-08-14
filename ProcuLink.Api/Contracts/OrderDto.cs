@@ -161,13 +161,24 @@ public record OrderLineDto(
 /// <summary>
 /// An AI mapping suggestion as surfaced to the resolve UI.
 ///
-/// <para><see cref="Confidence"/> is the RAW model confidence — it is never mutated by the
-/// calibration layer (the durable decision history must keep recording the raw value so the
+/// <para><b><see cref="Confidence"/> is null when nothing scored the suggestion</b>, which is the
+/// normal case for the two deterministic producers in <c>OrderIngestionService</c> (an exact
+/// supplier-catalog hit on a manufacturer part number, and an echo of a part number the document
+/// states). It was a non-nullable <c>float</c> filled from <c>AiSuggestionConfidence ?? 0f</c>, so
+/// a suggestion with no score arrived at the UI as a hard <b>0%</b> — the same "unknown renders as
+/// a number" failure the fabricated 0.95 caused, just at the other end of the ramp. Read
+/// <see cref="Basis"/> to find out what kind of answer this is; only <c>"model"</c> may carry a
+/// number.</para>
+///
+/// <para>When present, <see cref="Confidence"/> is the RAW model confidence — it is never mutated
+/// by the calibration layer (the durable decision history must keep recording the raw value so the
 /// empirical curve stays sound). The three <c>Calibrated*</c> fields are a V9 DISPLAY-ONLY
 /// overlay derived from this org's past accept/reject history:</para>
 /// <list type="bullet">
 ///   <item><see cref="CalibratedConfidence"/> — the empirically-adjusted confidence. Equals
-///   <see cref="Confidence"/> exactly when <see cref="IsCalibrated"/> is false.</item>
+///   <see cref="Confidence"/> exactly when <see cref="IsCalibrated"/> is false, and is null
+///   whenever <see cref="Confidence"/> is null: calibrating an absent score would manufacture
+///   one.</item>
 ///   <item><see cref="IsCalibrated"/> — true only when a sufficiently-sampled empirical rate
 ///   backed the number; false during cold-start / thin buckets / when the AI layer is off.</item>
 ///   <item><see cref="CalibrationBasis"/> — a truthful explanation: "calibrated from N of your
@@ -176,13 +187,17 @@ public record OrderLineDto(
 /// </summary>
 public record AiMappingSuggestionDto(
     string SupplierItemCode,
-    float Confidence,
+    float? Confidence,
     string Reason,
     string Provenance,
     // ── V9 confidence calibration (display-only; never alters the raw Confidence above) ──
-    float CalibratedConfidence,
+    float? CalibratedConfidence,
     bool IsCalibrated,
-    string CalibrationBasis
+    string CalibrationBasis,
+    /// <summary>"catalog" | "source_document" | "model" — see
+    /// <see cref="ProcuLink.Core.Services.Ai.AiMappingSuggestionBasis"/>. Tells the UI what
+    /// evidence produced this suggestion so it can name it rather than score it.</summary>
+    string Basis
 );
 
 /// <summary>Outbound artifact reference in the order response.</summary>

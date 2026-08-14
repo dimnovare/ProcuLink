@@ -99,8 +99,41 @@ public sealed record AiMappingCandidate(
     string? ManufacturerPartNumber = null,
     string? ManufacturerName = null);
 
+/// <summary>
+/// A suggested supplier item code for an unresolved line, with the evidence behind it.
+///
+/// <para><b><see cref="Confidence"/> is null unless a model scored this suggestion.</b> It used to
+/// be a non-nullable <c>float</c>, which left the two DETERMINISTIC producers in
+/// <c>OrderIngestionService</c> no way to say "there is no score" — so both stamped a literal
+/// <c>0.95f</c>: one for an exact supplier-catalog match on a manufacturer part number, one for a
+/// plain echo of the part number the document itself states. No model ran on either. The number
+/// then persisted to <c>PurchaseOrderLineEntity.AiSuggestionConfidence</c>, reached the order
+/// passport, and rendered in the review UI as "AI confidence 95%" in the violet reserved for
+/// AI-generated content. A deterministic lookup is a FACT about the supplier's catalog; scoring it
+/// 95% understates it and misattributes it at the same time.</para>
+///
+/// <para><see cref="Basis"/> is how a caller says which kind of answer this is, so the UI can name
+/// the evidence instead of scoring it. Same shape as <c>MappingSuggestionDto.Basis</c>, added by
+/// the sibling fix for the saved-mapping path.</para>
+/// </summary>
 public sealed record AiMappingSuggestion(
     string SupplierItemCode,
-    float Confidence,
+    float? Confidence,
     string Reason,
-    string Provenance);
+    string Provenance,
+    string Basis = AiMappingSuggestionBasis.Model);
+
+/// <summary>Values for <see cref="AiMappingSuggestion.Basis"/>. Mirrored by the frontend's
+/// <c>AiSuggestionBasis</c> union in src/types/procurement.ts.</summary>
+public static class AiMappingSuggestionBasis
+{
+    /// <summary>An exact lookup in the supplier's own catalog. A fact, never a probability.</summary>
+    public const string Catalog = "catalog";
+
+    /// <summary>A code the source document itself states, echoed back. Also a fact, not a score.</summary>
+    public const string SourceDocument = "source_document";
+
+    /// <summary>Produced by a scorer; <see cref="AiMappingSuggestion.Confidence"/> carries its
+    /// real number, and only this basis may carry one.</summary>
+    public const string Model = "model";
+}
