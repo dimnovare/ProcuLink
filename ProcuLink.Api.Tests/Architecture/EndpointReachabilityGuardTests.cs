@@ -1161,6 +1161,130 @@ public sealed class EndpointReachabilityGuardTests
         Assert.DoesNotContain("still gone", stripped, StringComparison.Ordinal);
     }
 
+    // ── Finding the frontend checkout ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// <b>The resolver's own worktree-safety</b>, proven without needing a real worktree: a
+    /// synthetic tree whose backend root sits at <c>&lt;sandbox&gt;/.claude/worktrees/&lt;name&gt;</c>,
+    /// which is exactly where <c>git worktree</c> puts a checkout here, with the frontend beside
+    /// <c>&lt;sandbox&gt;</c> where a developer really keeps it.
+    ///
+    /// <para>Only the immediate parent used to be tried, so from a worktree the sole candidate was
+    /// <c>&lt;repo&gt;/.claude/worktrees/project-proculink</c> — a path that never exists. The
+    /// resolver threw (it has no unable-to-check state, deliberately) and all six sweep-backed tests
+    /// in this class failed on a clean checkout, in the workspace CLAUDE.md tells every parallel
+    /// session to work in. That is how a real guard gets deleted rather than fixed.</para>
+    ///
+    /// <para>The configured path is passed in as <c>null</c> rather than cleared from the
+    /// environment: <c>PROCULINK_FRONTEND_PATH</c> is process-global, CI sets it for the whole job
+    /// (see the frontend-checkout step in <c>.github/workflows/ci.yml</c>), and a test that wrote it
+    /// would answer for every class running beside it — the hazard
+    /// <see cref="Meta.ProcessGlobalStateIsSerializedTests"/> exists for.</para>
+    /// </summary>
+    [Fact]
+    public void TheResolver_FindsTheFrontendWhenTheCheckoutItselfSitsUnderDotClaudeWorktrees()
+    {
+        var sandbox = NewSandbox();
+
+        try
+        {
+            var frontend = Path.Combine(sandbox, "project-proculink");
+            WriteSyntheticFrontend(frontend);
+
+            var backendRoot = Path.Combine(sandbox, ".claude", "worktrees", "pensive-chebyshev");
+            Directory.CreateDirectory(backendRoot);
+
+            Assert.Equal(
+                Path.GetFullPath(frontend),
+                FindFrontendRoot(backendRoot, configuredPath: null));
+        }
+        finally
+        {
+            Delete(sandbox);
+        }
+    }
+
+    /// <summary>
+    /// Widening the candidate list must not have weakened the gate on each candidate. A directory
+    /// named <c>project-proculink</c> that is not the frontend — here a stale checkout with a
+    /// <c>package.json</c> and no <c>src/lib/api-client.ts</c> — must be walked past rather than
+    /// accepted, and the search must go on to the real one further up.
+    ///
+    /// <para>Accepting it would be worse than the original defect: the sweep would load an empty
+    /// caller corpus and report every endpoint in the API unreachable, and the fix for THAT reads
+    /// as "the guard is noisy, declare them all".</para>
+    /// </summary>
+    [Fact]
+    public void TheResolver_WalksPastADirectoryNamedLikeTheFrontendThatIsNot()
+    {
+        var sandbox = NewSandbox();
+
+        try
+        {
+            var frontend = Path.Combine(sandbox, "project-proculink");
+            WriteSyntheticFrontend(frontend);
+
+            var decoy = Path.Combine(sandbox, ".claude", "worktrees", "project-proculink");
+            Directory.CreateDirectory(decoy);
+            File.WriteAllText(Path.Combine(decoy, "package.json"), "{}\n");
+
+            var backendRoot = Path.Combine(sandbox, ".claude", "worktrees", "pensive-chebyshev");
+            Directory.CreateDirectory(backendRoot);
+
+            Assert.Equal(
+                Path.GetFullPath(frontend),
+                FindFrontendRoot(backendRoot, configuredPath: null));
+        }
+        finally
+        {
+            Delete(sandbox);
+        }
+    }
+
+    /// <summary>
+    /// <b>There is still no unable-to-check state.</b> The whole point of this resolver is that it
+    /// refuses to shrug — <c>backendMirror.test.ts</c> was <c>skipIf(!BACKEND)</c> and reported
+    /// green for months having compared nothing. A wider search is one edit away from "…and if we
+    /// still cannot find it, carry on", so the throw is pinned rather than left to prose.
+    ///
+    /// <para>The backend root is the filesystem root, which is the one input with NO ancestors and
+    /// therefore no candidates at all. A temp-directory sandbox would have been the natural fixture
+    /// and is the wrong one: the walk climbs past the sandbox to the drive, so a developer who
+    /// happens to keep a project-proculink checkout in their home directory — above
+    /// <c>%TEMP%</c> — would see this test go red for a reason that has nothing to do with the
+    /// code. Producing a false red in one workspace is the defect this whole change removes from
+    /// another.</para>
+    /// </summary>
+    [Fact]
+    public void TheResolver_StillThrowsWhenThereIsNowhereLeftToLook()
+    {
+        var filesystemRoot = Path.GetPathRoot(Path.GetTempPath())!;
+
+        Assert.Null(Directory.GetParent(filesystemRoot));
+
+        var thrown = Assert.Throws<InvalidOperationException>(
+            () => FindFrontendRoot(filesystemRoot, configuredPath: null));
+
+        Assert.Contains("PROCULINK_FRONTEND_PATH", thrown.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>A private temp root, so the ancestor walk cannot reach another test's tree.</summary>
+    private static string NewSandbox() =>
+        Path.Combine(Path.GetTempPath(), $"plk-frontendroot-{Guid.NewGuid():N}");
+
+    /// <summary>The two files <c>LooksLikeTheFrontend</c> demands, and nothing else.</summary>
+    private static void WriteSyntheticFrontend(string root)
+    {
+        Directory.CreateDirectory(Path.Combine(root, "src", "lib"));
+        File.WriteAllText(Path.Combine(root, "package.json"), """{ "name": "project-proculink" }""");
+        File.WriteAllText(Path.Combine(root, "src", "lib", "api-client.ts"), "// synthetic\n");
+    }
+
+    private static void Delete(string sandbox)
+    {
+        if (Directory.Exists(sandbox)) Directory.Delete(sandbox, recursive: true);
+    }
+
     // ── Fixtures ─────────────────────────────────────────────────────────────────────────
 
     /// <summary>An endpoint with no in-repo caller, and the prose that accounts for it.</summary>
