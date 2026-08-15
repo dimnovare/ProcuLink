@@ -17,6 +17,14 @@ namespace ProcuLink.Transform.Mapping;
 /// </para>
 ///
 /// <para>
+/// "Confident" means at or above <see cref="HeuristicFieldMappingSuggester.MinAcceptScore"/> —
+/// the same floor the heuristic path applies, so this decorator cannot widen what the API
+/// emits below what the mapper editor renders. It previously merged any AI confidence in
+/// [0, 1] verbatim, which meant a 0.10 answer was sent over the wire and then discarded
+/// unrendered: a candidate the operator was never shown and could not ask to see.
+/// </para>
+///
+/// <para>
 /// Lives in ProcuLink.Transform alongside the heuristic matcher; it depends only on
 /// the provider-neutral Core <see cref="IAiMappingService"/> contract, not on any
 /// concrete provider, so there is no Infrastructure dependency or project cycle.
@@ -89,7 +97,8 @@ public sealed class AiAugmentedFieldMappingSuggester : IFieldMappingSuggester
     }
 
     /// <summary>
-    /// Merges AI answers into the heuristic baseline. AI may only fill fields the
+    /// Merges AI answers into the heuristic baseline. An AI answer must clear
+    /// <see cref="HeuristicFieldMappingSuggester.MinAcceptScore"/>, may only fill fields the
     /// heuristic was NOT confident about, and may not steal a source column the
     /// heuristic already assigned confidently. AI rows are tagged source="ai".
     /// </summary>
@@ -116,7 +125,8 @@ public sealed class AiAugmentedFieldMappingSuggester : IFieldMappingSuggester
 
         foreach (var s in ai
                      .Where(s => allowedFields.Contains(s.CanonicalField)
-                                 && allowedColumns.Contains(s.SuggestedColumn))
+                                 && allowedColumns.Contains(s.SuggestedColumn)
+                                 && s.Confidence >= HeuristicFieldMappingSuggester.MinAcceptScore)
                      .OrderByDescending(s => s.Confidence))
         {
             // AI cannot override a confident heuristic field, nor reuse a used column.
