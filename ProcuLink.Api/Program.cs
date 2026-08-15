@@ -11,11 +11,11 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
-using Sentry;
 using ProcuLink.Api.Auth;
 using ProcuLink.Api.Middleware;
 using ProcuLink.Api.Services;
 using ProcuLink.Api.Startup;
+using ProcuLink.Api.Telemetry;
 using ProcuLink.Api.Services.StarterTemplates;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
@@ -48,26 +48,16 @@ builder.WebHost.UseSentry(o =>
 {
     o.Dsn = builder.Configuration["Sentry:Dsn"] ?? string.Empty;
     o.TracesSampleRate = 0.1; // 10 % of transactions
+    // Breadcrumb level stays at Information ON PURPOSE. It is what makes a captured exception
+    // diagnosable, and raising it would not close the leak anyway (a secret logged at Error ships
+    // just as fast). The targeted fix is redaction — UseProcuLinkScrubbing below — not silence.
     o.MinimumBreadcrumbLevel = Microsoft.Extensions.Logging.LogLevel.Information;
     o.MinimumEventLevel = Microsoft.Extensions.Logging.LogLevel.Error;
 
-    // Scrub the inbound-email webhook's ?token= secret out of any captured
-    // request URL / query string before it leaves the process. Postmark can only
-    // pass the shared secret in the webhook URL, so a sampled transaction would
-    // otherwise persist it to Sentry. (Sentry already redacts the Authorization
-    // header used by the Basic-Auth alternative.)
-    o.SetBeforeSend((e, _) => { ScrubRequest(e.Request); return e; });
-    o.SetBeforeSendTransaction((t, _) => { ScrubRequest(t.Request); return t; });
-
-    static void ScrubRequest(SentryRequest? r)
-    {
-        if (r is null) return;
-        if (!string.IsNullOrEmpty(r.Url)) r.Url = ScrubToken(r.Url);
-        if (!string.IsNullOrEmpty(r.QueryString)) r.QueryString = ScrubToken(r.QueryString);
-    }
-
-    static string ScrubToken(string s) =>
-        System.Text.RegularExpressions.Regex.Replace(s, @"(?i)(token=)[^&\s]*", "$1[redacted]");
+    // Redact secrets out of breadcrumbs, event messages, exception values, Extra and the captured
+    // request before anything leaves the process. Shared with ProcuLink.Worker so the two hosts
+    // cannot drift; this subsumes the inbound-email ?token= rule that used to live inline here.
+    o.UseProcuLinkScrubbing();
 });
 
 // ── Stripe SDK ────────────────────────────────────────────────────────────

@@ -3,6 +3,7 @@ using Hangfire.PostgreSql;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Jobs;
 using ProcuLink.Api.Services;
+using ProcuLink.Api.Telemetry;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Alerting;
@@ -33,7 +34,7 @@ using Sentry.Extensions.Logging;
 var builder = Host.CreateApplicationBuilder(args);
 
 // ── Sentry error tracking — no-op when DSN is absent ─────────────────────────
-// The API wires Sentry on its WebHost (Api/Program.cs:42-48). The Worker is a
+// The API wires Sentry on its WebHost (see the UseSentry block in Api/Program.cs). The Worker is a
 // generic host with no WebHost, so background-job exceptions were previously
 // invisible. Wire Sentry through the logging pipeline instead: AddSentry routes
 // log events >= Error to Sentry, and AddSentry also initialises the global
@@ -43,8 +44,16 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.AddSentry(o =>
 {
     o.Dsn = builder.Configuration["Sentry:Dsn"] ?? string.Empty;
+    // Breadcrumb level stays at Information ON PURPOSE — see the same note in the API host. It is
+    // what makes a captured job exception diagnosable, and raising it would not close the leak
+    // (a secret logged at Error ships just as fast). Redaction is the targeted fix.
     o.MinimumBreadcrumbLevel = LogLevel.Information;
     o.MinimumEventLevel = LogLevel.Error;
+
+    // P1 telemetry hygiene: this host had NO BeforeSend of any kind, so nothing was scrubbed at
+    // all — while being the host that fires customer webhooks, whose URLs ARE the credential.
+    // Same shared registration the API uses, so the two hosts cannot drift.
+    o.UseProcuLinkScrubbing();
 });
 
 // ── R2 clock-skew correction ────────────────────────────────────────────────
