@@ -1,4 +1,4 @@
-using ProcuLink.Core.Services.Mapping;
+﻿using ProcuLink.Core.Services.Mapping;
 
 namespace ProcuLink.Transform.Mapping;
 
@@ -21,13 +21,49 @@ namespace ProcuLink.Transform.Mapping;
 /// </summary>
 public sealed class HeuristicFieldMappingSuggester : IFieldMappingSuggester
 {
-    /// <summary>Below this score a match is considered too weak to surface at all.</summary>
-    public const double MinAcceptScore = 0.45;
+    /// <summary>
+    /// Below this score a match is considered too weak to surface at all — the single
+    /// accept floor for everything <c>POST /api/suppliers/{id}/mapping/suggest-fields</c>
+    /// returns, whatever the provenance. <see cref="AiAugmentedFieldMappingSuggester"/>
+    /// applies the same number to AI answers, and the mapper editor renders every
+    /// suggestion it receives without a floor of its own.
+    ///
+    /// <para>
+    /// It is 0.50 because that is where the editor's own <c>ADOPT_THRESHOLD</c> stood while
+    /// this constant said 0.45: two floors, neither aware of the other, and the lower one
+    /// therefore dead. Whoever changes this number owns both ends — a backend floor below
+    /// the number the editor renders from means suggestions that are scored, serialized,
+    /// sent, and then silently dropped, which is indistinguishable to the operator from
+    /// the backend having had no candidate at all.
+    /// </para>
+    ///
+    /// <para>
+    /// Raising 0.45 → 0.50 discarded nothing that this scorer can produce: the weakest
+    /// non-zero score is <c>0.5 + 0.4/|Tokens| - 0.05</c> for a single token hit on a
+    /// long header, which stays at or above 0.50 while no field carries more than eight
+    /// signal tokens. That bound is not a happy accident to rely on silently — it is
+    /// pinned by <c>HeuristicFieldMappingSuggesterTests</c>.
+    /// </para>
+    /// </summary>
+    public const double MinAcceptScore = 0.50;
+
+    /// <summary>
+    /// The canonical fields and their signal tokens, exposed read-only so the token-count
+    /// bound behind <see cref="MinAcceptScore"/> can be asserted rather than assumed.
+    /// </summary>
+    public static IReadOnlyList<CanonicalField> CanonicalFields => Fields;
 
     /// <summary>
     /// Canonical PO fields in display order (header first, then line fields), each
     /// with the tokens/aliases that signal a match. Tokens are already normalized
     /// (lowercase, no separators). Order here is the order suggestions are returned in.
+    ///
+    /// <para>
+    /// A field's <c>tokens</c> list must stay at or under eight entries: the weakest
+    /// partial match it can produce is <c>0.45 + 0.4/|tokens|</c>, which drops below
+    /// <see cref="MinAcceptScore"/> at nine. Pinned by
+    /// <c>HeuristicFieldMappingSuggesterTests.NoCanonicalFieldHasMoreSignalTokensThanTheFloorAllows</c>.
+    /// </para>
     /// </summary>
     private static readonly IReadOnlyList<CanonicalField> Fields = new[]
     {

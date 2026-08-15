@@ -253,4 +253,97 @@ public class HeuristicFieldMappingSuggesterTests
     {
         HeuristicFieldMappingSuggester.Normalize(raw).Should().Be(expected);
     }
+
+    // ── The accept floor ──────────────────────────────────────────────────────
+    //
+    // MinAcceptScore is the ONLY floor between the scorer and the operator's screen.
+    // The mapper editor (project-proculink, src/components/bridge/PoMappingEditor.tsx)
+    // renders every suggestion the API returns and applies no threshold of its own —
+    // it used to hold ADOPT_THRESHOLD = 0.50 while this constant said 0.45, so the
+    // backend's floor was dead and the band between them was scored, serialized, sent,
+    // and dropped without ever being drawn. The tests below pin the number and the two
+    // things that make it true: nothing this scorer emits falls under it, and nothing in
+    // the field table can drift to make that stop holding.
+
+    [Fact]
+    public void MinAcceptScore_IsTheNumberTheMapperEditorRendersFrom()
+    {
+        // Changing this is a two-repo change. The editor has no floor of its own, so
+        // lowering it here is what puts un-renderable suggestions back on the wire;
+        // raising it here is what silently stops surfacing candidates the operator
+        // used to see. Neither is wrong — both need the other end looked at.
+        HeuristicFieldMappingSuggester.MinAcceptScore.Should().Be(0.50);
+    }
+
+    [Fact]
+    public void Suggest_NeverEmitsAnythingBelowTheFloor()
+    {
+        var corpus = new[]
+        {
+            "PO Number", "Customer PO Number", "Order Date", "Buyer Name", "Currency",
+            "Line", "SKU", "Manufacturer Part Number", "Description", "Qty",
+            "UOM", "Unit Price", "Extended Amount", "Warehouse", "Notes",
+            "supplier_article_code_for_this_line", "Delivery Date", "Net", "Row", "Item",
+        };
+
+        var result = Suggest(corpus);
+
+        result.Should().NotBeEmpty();
+        result.Should().OnlyContain(s => s.Confidence >= HeuristicFieldMappingSuggester.MinAcceptScore);
+    }
+
+    /// <summary>
+    /// The partial-match branch scores <c>0.5 + 0.4·(hits/|Tokens|) − lengthPenalty</c>. With a
+    /// single token hit on a header long enough to take the 0.05 penalty, that is
+    /// <c>0.45 + 0.4/|Tokens|</c> — which sits at exactly the floor at eight signal tokens and
+    /// dips under it at nine. So "no suggestion is emitted below the floor" is not a property of
+    /// the constant; it is a property of the field table staying under that width. Adding a ninth
+    /// alias to a field's <c>tokens</c> list is a one-line change that would quietly reopen the
+    /// invisible band, which is why the bound is asserted rather than trusted.
+    /// </summary>
+    [Fact]
+    public void NoCanonicalFieldHasMoreSignalTokensThanTheFloorAllows()
+    {
+        var tooWide = HeuristicFieldMappingSuggester.CanonicalFields
+            .Where(f => f.Tokens.Count > MaxSignalTokensPerField)
+            .Select(f => $"{f.Name} ({f.Tokens.Count} tokens)")
+            .ToList();
+
+        tooWide.Should().BeEmpty(
+            "a field with more than {0} signal tokens can score a single-token match below " +
+            "MinAcceptScore, which the API would emit and the mapper editor would never draw",
+            MaxSignalTokensPerField);
+    }
+
+    [Theory]
+    [InlineData(MaxSignalTokensPerField, true)]      // exactly at the bound — still renderable
+    [InlineData(MaxSignalTokensPerField + 1, false)] // one token wider — falls into the dead band
+    public void SignalTokenCount_DecidesWhetherAWeakMatchClearsTheFloor(int tokenCount, bool clearsFloor)
+    {
+        // A header long enough (>24 chars) to take the 0.05 length penalty, containing exactly
+        // one of the field's signal tokens and none of its aliases — the weakest match the
+        // partial-overlap branch can produce for a field of this width.
+        const string hitToken = "zeta";
+        var column = hitToken + new string('x', 25);
+
+        var tokens = new[] { hitToken }
+            .Concat(Enumerable.Range(0, tokenCount - 1).Select(i => $"tok{i}qqq"))
+            .ToArray();
+
+        var field = new HeuristicFieldMappingSuggester.CanonicalField(
+            "Synthetic",
+            exact: Array.Empty<string>(),
+            tokens: tokens,
+            mustHaveAny: new[] { hitToken });
+
+        var (score, _) = HeuristicFieldMappingSuggester.Score(field, column);
+
+        score.Should().BeApproximately(0.45 + 0.4 / tokenCount, 1e-9,
+            "the weakest partial match a field of this width can produce is 0.5 + 0.4/N - 0.05");
+        (score >= HeuristicFieldMappingSuggester.MinAcceptScore).Should().Be(clearsFloor);
+    }
+
+    /// <summary>Widest signal-token list a canonical field may carry — see
+    /// <see cref="NoCanonicalFieldHasMoreSignalTokensThanTheFloorAllows"/>.</summary>
+    private const int MaxSignalTokensPerField = 8;
 }
