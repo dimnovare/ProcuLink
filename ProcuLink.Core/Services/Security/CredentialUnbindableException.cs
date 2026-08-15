@@ -10,6 +10,15 @@ public enum CredentialFailureReason
     UnknownVersion,
 
     /// <summary>
+    /// A well-formed version-1 envelope was presented for a purpose that no longer accepts one.
+    /// Distinct from <see cref="AuthenticationFailed"/> on purpose: the blob may decrypt perfectly
+    /// — it is refused because it carries no tenant binding, so accepting it would let a ciphertext
+    /// from one row be replayed into another. Only the purposes in
+    /// <see cref="CredentialPurpose.AllowsUnboundLegacyEnvelope"/> still accept version 1.
+    /// </summary>
+    UnboundLegacyEnvelopeRefused,
+
+    /// <summary>
     /// The GCM tag did not verify: the wrong deployment key, a corrupted blob, or — the case this
     /// whole change exists for — a blob encrypted for a DIFFERENT organisation, purpose, or scope.
     /// </summary>
@@ -41,6 +50,11 @@ public sealed class CredentialUnbindableException : Exception
             $"Stored credential for purpose '{scope.Purpose}' is not a well-formed envelope.",
         CredentialFailureReason.UnknownVersion =>
             $"Stored credential for purpose '{scope.Purpose}' has an unsupported envelope version.",
+        CredentialFailureReason.UnboundLegacyEnvelopeRefused =>
+            $"Stored credential for purpose '{scope.Purpose}' is still in the pre-binding (version 1) " +
+            $"envelope, which carries no tenant binding and is no longer accepted for this purpose. " +
+            $"Re-save the credential to rewrite it in the bound envelope " +
+            $"(org {scope.OrgId}, scope {scope.ScopeId}).",
         _ =>
             $"Stored credential for purpose '{scope.Purpose}' failed authentication — wrong key, " +
             $"or encrypted for a different organisation or scope " +

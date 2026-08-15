@@ -113,6 +113,11 @@ public class DeliveryEncryptionServiceAadTests
         Convert.FromBase64String(blob)[0].Should().Be(2);
     }
 
+    // NOTE: every legacy assertion in this class uses DeliveryScope, i.e. the
+    // SupplierDeliveryCredentials purpose — the ONE purpose that still accepts a version-1
+    // envelope, because the binding backfill provably cannot rewrite those two columns. Every other
+    // purpose refuses version 1 outright; that guard and its negatives live in
+    // DeliveryEncryptionServiceLegacyGuardTests.
     [Fact]
     public void Decrypt_LegacyVersion1Blob_ReadsUnderAnyScope()
     {
@@ -121,8 +126,9 @@ public class DeliveryEncryptionServiceAadTests
         svc.Decrypt(LegacyV1Blob, DeliveryScope(OrgA, SupX)).Should().Be(LegacyV1Plaintext);
     }
 
-    // A version-1 blob carries no binding at all, so it reads under any scope. That is the
-    // accepted residual, pinned here so it is a decision rather than a surprise.
+    // A version-1 blob carries no binding at all, so for the one purpose that still accepts one it
+    // reads under any org and any supplier. That is the accepted residual, pinned here so it is a
+    // decision rather than a surprise — and it is why the exemption list has exactly one entry.
     [Fact]
     public void Decrypt_LegacyVersion1Blob_IsNotBoundToAnyOrg()
     {
