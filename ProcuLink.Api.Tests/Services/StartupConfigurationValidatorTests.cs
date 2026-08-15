@@ -33,6 +33,10 @@ public class StartupConfigurationValidatorTests
             ["Security:ApiKeyHashSecret"]           = "a-sufficiently-long-secret-value-here",
             ["Frontend:Url"]                        = "https://app.proculink.com",
             ["DataProtection:EncryptionKey"]        = key32,
+            // Not in ApiRequiredKeys, but Production refuses a host with no outbound email
+            // transport (ValidateOutboundEmailTransport). "All valid" now includes being able
+            // to send the email a supplier may be configured to receive.
+            [StartupConfigurationValidator.EmailProviderTokenKey] = "pm-token",
         };
         foreach (var (k, v) in overrides)
             d[k] = v;

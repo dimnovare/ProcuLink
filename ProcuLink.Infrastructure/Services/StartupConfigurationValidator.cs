@@ -66,11 +66,13 @@ public static class StartupConfigurationValidator
         // On a host that RAISES alerts, that combination is a hard failure; see
         // ValidateOperatorAlertDestination.
         "Alerting:Email:To",
-        // The provider token every emailed alert — and every emailed purchase order — depends on.
-        // It was previously in NEITHER list, so setting only Alerting:Email:To produced a silent
-        // startup and one unread warning per alert: the destination was validated, the transport
-        // it needs was not.
-        "Email:Postmark:ServerToken",
+        // NOTE: Email:Postmark:ServerToken used to live HERE, labelled optional. It is not
+        // optional — it is the only outbound email transport this product ships with enabled, and
+        // "optional" is why a Sentry-only deploy booted clean with every emailed purchase order
+        // dead. It is now governed by ValidateOutboundEmailTransport, which refuses Production
+        // unless a transport exists or its absence is DECLARED. Do not re-add it to this list:
+        // an optional-key warning is the exact non-signal that let this ship.
+        //
         // Yearly price variants are optional until annual billing is exposed in the
         // pricing UI. (The MONTHLY Distributor price is required — see ApiRequiredKeys
         // above — because Distributor is a sold, self-serve tier.)
@@ -118,6 +120,15 @@ public static class StartupConfigurationValidator
 
         if (raisesOperatorAlerts)
             ValidateOperatorAlertDestination(configuration, logger, environmentName, isProduction, componentName);
+
+        // Deliberately NOT behind raisesOperatorAlerts, and deliberately not behind any other
+        // host-supplied flag: both hosts register EmailApiDeliveryDispatcher unconditionally
+        // (ProcuLink.Api/Program.cs, ProcuLink.Worker/Program.cs), so both can be handed an
+        // 'email' delivery they cannot perform. Riding the Validate seam with no parameter is
+        // what makes a third host inherit this check by existing rather than by remembering —
+        // and RevisionAuthorityHostCoverageTests already asserts every declared host calls
+        // Validate.
+        ValidateOutboundEmailTransport(configuration, logger, environmentName, isProduction, componentName);
 
         // Production hardening: a PRESENT Delivery:EncryptionKey must still not be the
         // all-zero placeholder (or otherwise invalid). Absence is covered by the
@@ -287,6 +298,97 @@ public static class StartupConfigurationValidator
         logger.LogWarning(
             "{Component} startup ({Env}): {Message} This will fail-fast in Production.",
             componentName, environmentName, brokenEmailMessage);
+    }
+
+    /// <summary>The one outbound-email transport that the <c>email</c> delivery channel has.</summary>
+    public const string EmailProviderTokenKey = "Email:Postmark:ServerToken";
+
+    /// <summary>
+    /// The operator's explicit declaration that this deployment is not expected to send email at
+    /// all. Absence of a capability is a configuration accident; this key is what turns it into a
+    /// decision. Set <c>DELIVERY__ALLOWNOEMAILCHANNEL=true</c>.
+    /// </summary>
+    public const string AllowNoEmailChannelKey = "Delivery:AllowNoEmailChannel";
+
+    /// <summary>
+    /// Refuses a Production host that cannot send email, unless the operator has DECLARED that.
+    ///
+    /// <para><b>What was wrong.</b> <see cref="EmailProviderTokenKey"/> sat in
+    /// <see cref="OptionalKeys"/> — a warning — and the only hard failure touching it was
+    /// <see cref="ValidateOperatorAlertDestination"/>, which fires only when a DIFFERENT key
+    /// (<c>Alerting:Email:To</c>) is set. So a deploy that set <c>Sentry:Dsn</c> and no alert
+    /// address booted completely clean with no email transport at all, and every <c>email</c>-channel
+    /// purchase order then failed one at a time at
+    /// <c>EmailApiDeliveryDispatcher</c> — "Email delivery is not configured on this deployment
+    /// (no email-API provider token)." A per-send failure on a process that started up healthy is
+    /// the shape that reaches a customer before it reaches an operator.</para>
+    ///
+    /// <para><b>Why refuse to boot rather than warn.</b> The choice turns on whether startup can
+    /// tell that email is actually needed here. It cannot, and not because the data is hidden:
+    /// <c>supplier_delivery_configs.protocol</c> is a plain, unencrypted text column, so a
+    /// cross-org <c>AnyAsync(c =&gt; c.Protocol == "email")</c> is trivially available. It is the
+    /// QUESTION that startup cannot answer — that row is per-tenant and mutable, an org can add an
+    /// email supplier an hour after boot (and <c>SampleOrderService</c> writes one for anybody who
+    /// opens the sample order), so a boot-time "nobody needs email" is stale by construction and
+    /// would re-open this exact hole for the next tenant. A probe that must be re-run continuously
+    /// to stay true is not a startup check.</para>
+    ///
+    /// <para><b>Why the escape hatch is a key and not an inference.</b> A self-hosted deployment
+    /// really can have no email channel, so an unconditional hard requirement would be wrong. But
+    /// the escape hatch is a DECLARATION, never a side effect of some other setting — that is the
+    /// precise defect being fixed here. In particular <c>Delivery:EnableSmtp</c> does NOT satisfy
+    /// this check even though it is also "email": <c>SmtpDeliveryDispatcher.Protocol</c> is
+    /// <c>smtp</c> and <c>EmailApiDeliveryDispatcher.Protocol</c> is <c>email</c>, and
+    /// <c>DeliveryService</c> keys dispatchers by protocol — so enabling SMTP delivers nothing for
+    /// a supplier saved on the offered <c>email</c> channel. Letting it pass this gate would
+    /// rebuild the original bug with a different pair of keys.</para>
+    ///
+    /// <para><b>Why refusing is safe.</b> Same trade the validator already makes for
+    /// <c>DataProtection:EncryptionKey</c>: configuration does not change by itself, so this can
+    /// only fire on a deploy, in front of the person deploying, who sees it within a minute. The
+    /// alternative is discovered by a supplier who never received a purchase order.</para>
+    /// </summary>
+    private static void ValidateOutboundEmailTransport(
+        IConfiguration configuration,
+        ILogger logger,
+        string environmentName,
+        bool isProduction,
+        string componentName)
+    {
+        if (!string.IsNullOrWhiteSpace(configuration[EmailProviderTokenKey]))
+            return;
+
+        // The declared-incapacity path. Loud, at Error, in EVERY environment — the Worker serves no
+        // HTTP, so there is no readiness surface on which this could otherwise be observed, and a
+        // Warning here would be indistinguishable from the optional-key noise this check replaced.
+        if (configuration.GetValue<bool>(AllowNoEmailChannelKey, false))
+        {
+            logger.LogError(
+                "{Component} startup ({Env}): {AllowKey}=true and {TokenKey} is not set — this deployment " +
+                "CANNOT SEND EMAIL. Every supplier saved on the 'email' delivery channel will fail at " +
+                "dispatch with 'Email delivery is not configured on this deployment', and every emailed " +
+                "operator alert is dropped. This is a declared configuration, not a fault; unset " +
+                "DELIVERY__ALLOWNOEMAILCHANNEL and set EMAIL__POSTMARK__SERVERTOKEN to restore email.",
+                componentName, environmentName, AllowNoEmailChannelKey, EmailProviderTokenKey);
+            return;
+        }
+
+        const string message =
+            "Email:Postmark:ServerToken is not set, so this host has NO outbound email transport: every " +
+            "purchase order on the 'email' delivery channel fails at dispatch, one supplier at a time, " +
+            "on a process that started up looking healthy. Set EMAIL__POSTMARK__SERVERTOKEN. If this " +
+            "deployment genuinely has no email channel, declare it with DELIVERY__ALLOWNOEMAILCHANNEL=true " +
+            "— note that Delivery:EnableSmtp does NOT satisfy this, because the retired 'smtp' dispatcher " +
+            "does not serve the offered 'email' channel.";
+
+        if (isProduction)
+            throw new StartupConfigurationException(
+                $"{componentName} cannot start in Production: {message}",
+                new[] { EmailProviderTokenKey });
+
+        logger.LogWarning(
+            "{Component} startup ({Env}): {Message} This will fail-fast in Production.",
+            componentName, environmentName, message);
     }
 
     /// <summary>

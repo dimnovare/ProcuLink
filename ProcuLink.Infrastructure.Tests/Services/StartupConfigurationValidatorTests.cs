@@ -199,6 +199,10 @@ public class StartupConfigurationValidatorTests
             dict[k] = "configured-value";
         dict["Delivery:EncryptionKey"] = encryptionKey;
         dict["DataProtection:EncryptionKey"] = ValidKey;
+        // Also not in ApiRequiredKeys, and also required in Production: a host with no outbound
+        // email transport is refused (ValidateOutboundEmailTransport). These fixtures exist to
+        // isolate the ENCRYPTION-KEY rules, so they carry a token and never trip that one.
+        dict[StartupConfigurationValidator.EmailProviderTokenKey] = "pm-token";
         dict["Delivery:AllowPrivateNetworkTargets"] = allowPrivateNetworkTargets ? "true" : "false";
         return new ConfigurationBuilder().AddInMemoryCollection(dict).Build();
     }
@@ -226,6 +230,10 @@ public class StartupConfigurationValidatorTests
         // DataProtection:EncryptionKey is not in ApiRequiredKeys (it is a separate
         // production-hardening guard), but Production validation requires it to be set.
         dict["DataProtection:EncryptionKey"] = ValidKey;
+        // Also not in ApiRequiredKeys, and also required in Production: a host with no outbound
+        // email transport is refused (ValidateOutboundEmailTransport). These fixtures exist to
+        // isolate the ENCRYPTION-KEY rules, so they carry a token and never trip that one.
+        dict[StartupConfigurationValidator.EmailProviderTokenKey] = "pm-token";
         return new ConfigurationBuilder().AddInMemoryCollection(dict).Build();
     }
 
