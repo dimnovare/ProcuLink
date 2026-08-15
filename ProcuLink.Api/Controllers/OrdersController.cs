@@ -289,6 +289,7 @@ public sealed class OrdersController : ControllerBase
     public async Task<IActionResult> Upload(
         IFormFile file,
         [FromForm] Guid supplierId,
+        [FromServices] IStubOrderCreator stubOrders,
         CancellationToken ct = default)
     {
         if (file is null || file.Length == 0)
@@ -313,22 +314,34 @@ public sealed class OrdersController : ControllerBase
 
         var orgId = _tenant.OrganisationId;
 
-        // ── Idempotency-Key short-circuit ───────────────────────────────────
-        // If the client retries an upload with the same Idempotency-Key + same
-        // org inside the 24 h window, return the original order instead of
-        // creating a duplicate. Outside the window the key is treated as new.
+        // ── Idempotency: CLAIM-FIRST, not check-then-create ─────────────────
+        // The browser upload is the path a pilot actually uses, and a 60-second client timeout
+        // makes a user-initiated retry a normal event — two clicks on the same file must produce
+        // one order, one transform, one supplier delivery.
+        //
+        // This used to be TryGetExistingOrderIdAsync (read) followed by BindAsync (write) after
+        // the order was created. IIdempotencyService.ClaimAsync names that pair as the defect it
+        // was written to fix: two concurrent uploads carrying the same key both saw "no row" and
+        // both created an order, and a crash between create and bind duplicated on the next
+        // retry. The claim row is now committed BEFORE the order exists, and the composite
+        // primary key (org_id, key) is the real guard — the loser of the insert race is handed
+        // the winner's pre-generated order id. Same shape IngressController.ReceiveOrder uses.
         var idempotencyKey = ExtractIdempotencyKey(Request);
+        IdempotencyClaim? claim = null;
         if (idempotencyKey is not null)
         {
-            var existingOrderId = await _idempotency.TryGetExistingOrderIdAsync(idempotencyKey, orgId, ct);
-            if (existingOrderId is not null)
+            claim = await _idempotency.ClaimAsync(idempotencyKey, orgId, ct);
+
+            if (!claim.IsNew)
             {
-                var existingOrder = await _orders.GetByIdAsync(orgId, existingOrderId.Value, ct);
+                // A live claim already exists: this is a replay, or we lost a concurrent race.
+                // Either way the answer is the claim's order — never a second one.
+                var existingOrder = await _orders.GetByIdAsync(orgId, claim.OrderId, ct);
                 if (existingOrder.IsSuccess)
                 {
                     _logger.LogInformation(
                         "Idempotent upload replay for key {Key}, org {OrgId} → existing order {OrderId}",
-                        idempotencyKey, orgId, existingOrderId.Value);
+                        idempotencyKey, orgId, claim.OrderId);
 
                     return Ok(new
                     {
@@ -338,15 +351,23 @@ public sealed class OrdersController : ControllerBase
                     });
                 }
 
-                // Mapped order vanished (e.g. hard-deleted) — fall through and
-                // create a fresh one, then re-bind the key below.
-                _logger.LogWarning(
-                    "Idempotency key {Key} mapped to missing order {OrderId}; creating a new order",
-                    idempotencyKey, existingOrderId.Value);
+                // The claim exists but its order does not. Two ways to get here, and the same
+                // action serves both: a transient failure abandoned an earlier attempt (RESUME),
+                // or the winner of a concurrent race has claimed but not yet committed (we create
+                // under its id). Creation is a find-or-create on that primary key, so neither can
+                // yield a second order, and a key whose order was never created is never
+                // permanently blocked.
+                _logger.LogInformation(
+                    "Idempotency key {Key} for org {OrgId} claims order {OrderId} which does not exist yet; " +
+                    "creating under the claimed id (resume).",
+                    idempotencyKey, orgId, claim.OrderId);
             }
         }
 
         // ── Billing limit check ────────────────────────────────────────────
+        // Placed AFTER the idempotency short-circuit on purpose — the same reason
+        // IngressController states: a retry of an upload that was already accepted must keep
+        // returning that order, not start 429-ing once the account state changes.
         var limitCheck = await _billing.CheckOrderLimitAsync(orgId, ct);
         if (!limitCheck.Allowed)
         {
@@ -360,22 +381,22 @@ public sealed class OrdersController : ControllerBase
         }
 
         await using var stream = file.OpenReadStream();
-        var result = await _orders.CreateStubAsync(
-            orgId, supplierId, stream, file.FileName, file.ContentType, ct);
+
+        // Create under the CLAIMED id when a key was supplied (find-or-create on that primary
+        // key). No BindAsync afterwards: the claim is already durable, so there is no longer a
+        // window between the order existing and the key pointing at it — which is exactly the
+        // window that used to duplicate. With no key there is nothing to claim and the id is
+        // generated by the creator as before.
+        var result = claim is not null
+            ? await stubOrders.CreateStubAsync(
+                orgId, supplierId, claim.OrderId, stream, file.FileName, file.ContentType, ct)
+            : await _orders.CreateStubAsync(
+                orgId, supplierId, stream, file.FileName, file.ContentType, ct);
 
         if (!result.IsSuccess)
             return BadRequest(new { error = result.Error });
 
         var stub = result.Value!;
-
-        // Bind the idempotency key to the new order. If a stale row exists
-        // (>24h or pointing at a deleted order), refresh it in place; otherwise
-        // insert a fresh row. We do this before enqueueing so a retry that
-        // races the job sees the same order id.
-        if (idempotencyKey is not null)
-        {
-            await _idempotency.BindAsync(idempotencyKey, orgId, stub.Id, ct);
-        }
 
         // Enqueue async parse — returns before parsing completes
         ParseOrderJob.Enqueue(_jobs, stub.Id, orgId);
