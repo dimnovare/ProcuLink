@@ -213,15 +213,19 @@ internal sealed class OrderIngestionService
         var sourceCapture = await BuildSourceCaptureFromBytesAsync(
             buffer.ToArray(), extension, organisationId, now, ct);
 
+        // Value + comparison key resolved together so they cannot drift; a document that supplied
+        // no PO number gets a per-order-unique placeholder and a null key (takes part in no
+        // duplicate comparison). See PoNumberIdentity.
+        var poNumber = PoNumberIdentity.Resolve(parsedOrder.PoNumber, now, orderId);
+
         var entity = new PurchaseOrderEntity
         {
             Id           = orderId,
             OrgId        = organisationId,
             SupplierId   = supplierId,
             ConnectionRevisionId = connectionRevisionId,
-            PoNumber     = string.IsNullOrWhiteSpace(parsedOrder.PoNumber)
-                               ? $"PO-{now:yyyyMMddHHmmss}"
-                               : parsedOrder.PoNumber,
+            PoNumber           = poNumber.Value,
+            PoNumberNormalized = poNumber.Normalized,
             BuyerName    = string.IsNullOrWhiteSpace(parsedOrder.BuyerName)
                                ? null
                                : parsedOrder.BuyerName.Trim(),
@@ -354,7 +358,15 @@ internal sealed class OrderIngestionService
             SupplierId    = supplierId,
             Supplier      = supplier!,
             ConnectionRevisionId = connectionRevisionId,
-            PoNumber      = $"PO-{now:yyyyMMddHHmmss}",
+            // A stub has not been parsed yet, so it NEVER has a real PO number — always a
+            // placeholder. It used to be `$"PO-{now:yyyyMMddHHmmss}"`, truncated to whole seconds,
+            // so every stub created in the same UTC second on any channel got the byte-identical
+            // string; the order id in the suffix is what makes them tell apart in the queue.
+            // Normalized key stays null: a placeholder is not a PO number anyone asserted, so it
+            // must never be compared against another order's. The real number (if the document
+            // carries one) is written back by the parse stage below, which sets both fields.
+            PoNumber           = PoNumberIdentity.MakePlaceholder(now, newOrderId),
+            PoNumberNormalized = null,
             OrderDate     = DateOnly.FromDateTime(now),
             Currency      = "EUR",
             Status        = "parsing",
@@ -541,6 +553,8 @@ internal sealed class OrderIngestionService
             ? await ResolveConnectionRevisionAsync(organisationId, sidRev, ct)
             : (Guid?)null;
 
+        var poNumber = PoNumberIdentity.Resolve(order.PoNumber, now, newOrderId);
+
         var entity = new PurchaseOrderEntity
         {
             Id            = newOrderId,
@@ -548,9 +562,11 @@ internal sealed class OrderIngestionService
             SupplierId    = supplierId,
             Supplier      = supplier!,
             ConnectionRevisionId = connectionRevisionId,
-            PoNumber      = string.IsNullOrWhiteSpace(order.PoNumber)
-                                ? $"PO-{now:yyyyMMddHHmmss}"
-                                : order.PoNumber!,
+            // This path (REST ingress, email-body extraction) never enqueues ParseOrderJob, so
+            // whatever is resolved here is the order's PO number permanently — there is no later
+            // write-back to correct it.
+            PoNumber           = poNumber.Value,
+            PoNumberNormalized = poNumber.Normalized,
             BuyerName     = string.IsNullOrWhiteSpace(order.BuyerName)
                                 ? null
                                 : order.BuyerName.Trim(),
@@ -1091,9 +1107,14 @@ internal sealed class OrderIngestionService
             // mutually consistent (see OrderResolutionService, which mirrors header edits
             // into both) and update that test.
             var now = DateTime.UtcNow;
-            var newPoNumber = string.IsNullOrWhiteSpace(parsedOrder.PoNumber)
-                                ? $"PO-{now:yyyyMMddHHmmss}"
-                                : parsedOrder.PoNumber;
+            // The stub already carries a placeholder; if the document turned out to carry no PO
+            // number either, this mints a fresh one rather than keeping the stub's. Either way the
+            // normalized key stays null, so a parse that found nothing never enters the order into
+            // duplicate comparison. When the document DID carry a number, this is the moment the
+            // order becomes comparable — and the SafeReconcileExceptionsAsync call at the end of
+            // this method is what turns that into a visible duplicate_po_number exception.
+            var (newPoNumber, newPoNumberNormalized) =
+                PoNumberIdentity.Resolve(parsedOrder.PoNumber, now, orderId);
             var newOrderDate = parsedOrder.OrderDate.HasValue
                                 ? DateOnly.FromDateTime(parsedOrder.OrderDate.Value)
                                 : DateOnly.FromDateTime(now);
@@ -1189,6 +1210,11 @@ internal sealed class OrderIngestionService
                          && o.Status == OrderStatusConstants.Parsing)
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(o => o.PoNumber,     newPoNumber)
+                    // Written in the SAME ExecuteUpdate as PoNumber: if the two ever landed in
+                    // separate statements, a crash between them would leave an order whose
+                    // comparison key disagrees with its PO number — silently invisible to, or
+                    // falsely flagged by, duplicate detection.
+                    .SetProperty(o => o.PoNumberNormalized, newPoNumberNormalized)
                     .SetProperty(o => o.OrderDate,    newOrderDate)
                     .SetProperty(o => o.Currency,     newCurrency)
                     .SetProperty(o => o.Status,       newStatus)
@@ -1350,6 +1376,7 @@ internal sealed class OrderIngestionService
 
             // Reflect changes on the in-memory entity so callers see the final state.
             entity.PoNumber  = newPoNumber;
+            entity.PoNumberNormalized = newPoNumberNormalized;
             entity.OrderDate = newOrderDate;
             entity.Currency  = newCurrency;
             entity.Status    = newStatus;

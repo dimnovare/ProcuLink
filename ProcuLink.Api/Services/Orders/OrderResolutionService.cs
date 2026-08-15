@@ -206,6 +206,12 @@ internal sealed class OrderResolutionService
             {
                 var trimmed = header.PoNumber.Trim();
                 entity.PoNumber = trimmed;                  // po_number column (read path source)
+                // Comparison key moves with the value, ALWAYS. This is also the clearing path for a
+                // duplicate_po_number exception: the operator retyping the number changes the key,
+                // the SafeReconcileExceptionsAsync at the end of this method re-derives, and the
+                // exception auto-resolves because the condition no longer holds. Leaving the key
+                // stale here would strand an open exception the operator had already fixed.
+                entity.PoNumberNormalized = PoNumberIdentity.Normalize(trimmed);
                 canonicalUpdates["poNumber"] = trimmed;     // canonical_json mirror (transform/Scriban)
                 changedHeaderFields.Add("poNumber");
             }

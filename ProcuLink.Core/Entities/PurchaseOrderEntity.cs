@@ -22,6 +22,22 @@ public class PurchaseOrderEntity
     public string PoNumber { get; set; } = string.Empty;
 
     /// <summary>
+    /// The comparison key for <see cref="PoNumber"/> — trimmed and upper-cased — or <c>null</c> when
+    /// this order carries no PO number anyone asserted (i.e. <see cref="PoNumber"/> is a minted
+    /// placeholder, because the source document supplied none).
+    ///
+    /// <para><b>Null has exactly one meaning: "takes part in no duplicate comparison."</b> It is not
+    /// "unknown" and not "not computed yet" — the migration that added the column backfilled every
+    /// pre-existing row. Duplicate detection reads only non-null keys, which is what stops two
+    /// placeholders minted in the same second from being reported to the operator as the same PO.</para>
+    ///
+    /// <para>Always written together with <see cref="PoNumber"/> via
+    /// <c>PoNumberIdentity.Resolve</c>; never set by hand. The two drifting apart would either hide
+    /// real duplicates or invent fake ones.</para>
+    /// </summary>
+    public string? PoNumberNormalized { get; set; }
+
+    /// <summary>
     /// Buyer name extracted from CanonicalJson at parse time.
     /// Null while the order is still parsing or if no buyer name was found.
     /// Denormalised from CanonicalJson for SQL-filterable search.
