@@ -286,6 +286,196 @@ public sealed class S3IngressClaimFirstPostgresTests(PostgresContainerFixture po
             "the processed-object row survives but is tombstoned (Guid.Empty) so the object is permanently skipped");
     }
 
+    // ── re-upload (ETag changed) at an already-imported key ─────────────────
+    // A supplier who corrects a PO overwrites the SAME object key; S3/R2 stamp a new ETag on the
+    // re-upload. Treating an already-seen key as SEEN FOREVER would silently drop the correction,
+    // leaving the buyer to send the superseded quantities. The re-claim path must import it as a
+    // NEW order under a FRESH pre-generated id, without destroying the original.
+
+    [DockerRequiredFact]
+    public async Task ReUploadedObject_ChangedETag_IsImported_NotSilentlyDropped()
+    {
+        const string key = "incoming/po-reupload.csv";
+        var original  = "po,qty\r\n7781,100"u8.ToArray();
+        var corrected = "po,qty\r\n7781,120"u8.ToArray();   // same key, ONE digit different
+
+        var orgId = await SeedOrgSupplierConfigAsync();
+        var orders = new CountingOrderService(_options!);
+        var enqueuer = new CountingParseEnqueuer();
+        var bucket = new MutableObjectS3(key, "\"etag-1\"", original);
+
+        await using (var db1 = new ProcuLinkDbContext(_options!))
+            (await NewService(db1, orders, enqueuer, bucket.Client).PollAsync(orgId, CancellationToken.None))
+                .Should().Be(1, "the first poll imports the original PO");
+
+        Guid originalOrderId;
+        await using (var afterFirst = new ProcuLinkDbContext(_options!))
+        {
+            var claim = await afterFirst.Set<ImportedS3Object>().SingleAsync(f => f.OrgId == orgId && f.ObjectKey == key);
+            claim.ETag.Should().Be("\"etag-1\"", "the claim records the ETag of the original object");
+            originalOrderId = claim.OrderId;
+        }
+
+        // The supplier corrects the PO and overwrites the SAME key — a new ETag.
+        bucket.ETag = "\"etag-2\"";
+        bucket.Content = corrected;
+
+        await using (var db2 = new ProcuLinkDbContext(_options!))
+            (await NewService(db2, orders, enqueuer, bucket.Client).PollAsync(orgId, CancellationToken.None))
+                .Should().Be(1, "a re-upload at an already-imported key is a NEW order, not a duplicate");
+
+        (await OrderCountAsync(orgId)).Should().Be(2,
+            "both the original and the correction exist — the correction is not silently dropped, and the " +
+            "original is not destroyed behind the operator's back");
+        orders.TotalCreates.Should().Be(2);
+        enqueuer.Count.Should().Be(2, "the corrected order gets its own parse job");
+
+        await using var verify = new ProcuLinkDbContext(_options!);
+        var updated = await verify.Set<ImportedS3Object>().SingleAsync(f => f.OrgId == orgId && f.ObjectKey == key);
+        updated.ETag.Should().Be("\"etag-2\"",
+            "the claim is UPDATED in place to the new ETag — (OrgId, BucketName, ObjectKey) is unique, so a second row is impossible");
+        updated.OrderId.Should().NotBe(originalOrderId, "the re-upload is claimed under a FRESH pre-generated order id");
+        (await verify.PurchaseOrders.AnyAsync(o => o.Id == updated.OrderId)).Should().BeTrue();
+        (await verify.PurchaseOrders.AnyAsync(o => o.Id == originalOrderId)).Should().BeTrue();
+    }
+
+    // ── concurrent polls of ONE re-upload create ONE new order ──────────────
+    // The re-claim is an UPDATE ... WHERE etag = <old>. Without that guard every concurrent poll
+    // would stamp its own fresh order id over the row and import the re-upload N times — N supplier
+    // deliveries and N x EUR0.50 overage for one corrected PO.
+
+    [DockerRequiredFact]
+    public async Task ConcurrentPolls_OfOneReUpload_CreateExactlyOneNewOrder()
+    {
+        const int workers = 8;
+        const string key = "incoming/po-concurrent-reupload.csv";
+        var original  = "po,qty\r\n9001,10"u8.ToArray();
+        var corrected = "po,qty\r\n9001,11"u8.ToArray();
+
+        var orgId = await SeedOrgSupplierConfigAsync();
+        var orders = new CountingOrderService(_options!);   // shared across all polls
+        var enqueuer = new CountingParseEnqueuer();
+        var bucket = new MutableObjectS3(key, "\"etag-1\"", original);
+
+        await using (var db1 = new ProcuLinkDbContext(_options!))
+            (await NewService(db1, orders, enqueuer, bucket.Client).PollAsync(orgId, CancellationToken.None))
+                .Should().Be(1);
+
+        // One re-upload, many simultaneous pollers racing to claim it.
+        bucket.ETag = "\"etag-2\"";
+        bucket.Content = corrected;
+        var tasks = Enumerable.Range(0, workers).Select(async _ =>
+        {
+            await using var db = new ProcuLinkDbContext(_options!);
+            return await NewService(db, orders, enqueuer, bucket.Client).PollAsync(orgId, CancellationToken.None);
+        });
+        await Task.WhenAll(tasks);
+
+        (await OrderCountAsync(orgId)).Should().Be(2,
+            "one original + ONE re-upload — the losers of the re-claim race must skip, not re-import");
+
+        await using var verify = new ProcuLinkDbContext(_options!);
+        (await verify.Set<ImportedS3Object>().CountAsync(f => f.OrgId == orgId && f.ObjectKey == key))
+            .Should().Be(1, "exactly one ledger row survives the concurrent re-claim race");
+        (await verify.Set<ImportedS3Object>().SingleAsync(f => f.OrgId == orgId && f.ObjectKey == key))
+            .ETag.Should().Be("\"etag-2\"");
+    }
+
+    // ── a re-upload at a TERMINAL claim's key must import too ───────────────
+    // "We rejected the object that used to be at this key" must not become "we will never look at
+    // this key again". A permanently-bad object the supplier then FIXED is the same lost order.
+
+    [DockerRequiredFact]
+    public async Task TerminalClaim_ThenReUploadedObject_IsImported()
+    {
+        const string key = "incoming/po-was-bad.csv";
+        var bad = "h1,h2\r\nbad,bad"u8.ToArray();
+        var fixedUp = "h1,h2\r\ngood,good"u8.ToArray();
+
+        var orgId = await SeedOrgSupplierConfigAsync();
+        var behavior = StubBehavior.FailPermanent;
+        var orders = new CountingOrderService(_options!, () => behavior);
+        var enqueuer = new CountingParseEnqueuer();
+        var bucket = new MutableObjectS3(key, "\"etag-bad\"", bad);
+
+        await using (var db1 = new ProcuLinkDbContext(_options!))
+            (await NewService(db1, orders, enqueuer, bucket.Client).PollAsync(orgId, CancellationToken.None))
+                .Should().Be(0, "the permanently-bad object imports nothing and its claim is marked terminal");
+
+        await using (var afterBad = new ProcuLinkDbContext(_options!))
+            (await afterBad.Set<ImportedS3Object>().SingleAsync(f => f.OrgId == orgId && f.ObjectKey == key))
+                .OrderId.Should().Be(Guid.Empty, "precondition: the claim really is terminal");
+
+        // Re-polling the SAME object must still be bounded — terminal means terminal for it.
+        await using (var db2 = new ProcuLinkDbContext(_options!))
+            (await NewService(db2, orders, enqueuer, bucket.Client).PollAsync(orgId, CancellationToken.None))
+                .Should().Be(0);
+        orders.TotalCreates.Should().Be(1, "the unchanged bad object is attempted ONCE, then bounded");
+
+        // The supplier fixes the file and re-uploads it to the same key — a new ETag.
+        behavior = StubBehavior.Succeed;
+        bucket.ETag = "\"etag-fixed\"";
+        bucket.Content = fixedUp;
+
+        await using (var db3 = new ProcuLinkDbContext(_options!))
+            (await NewService(db3, orders, enqueuer, bucket.Client).PollAsync(orgId, CancellationToken.None))
+                .Should().Be(1, "a terminal claim bounds the BAD OBJECT, not the KEY — the re-upload must import");
+
+        (await OrderCountAsync(orgId)).Should().Be(1, "the corrected object produced the one and only order");
+
+        await using var verify = new ProcuLinkDbContext(_options!);
+        var claim = await verify.Set<ImportedS3Object>().SingleAsync(f => f.OrgId == orgId && f.ObjectKey == key);
+        claim.ETag.Should().Be("\"etag-fixed\"");
+        claim.OrderId.Should().NotBe(Guid.Empty, "the terminal marker is replaced by the re-upload's fresh order id");
+        (await verify.PurchaseOrders.AnyAsync(o => o.Id == claim.OrderId)).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// One-object bucket whose ETag and bytes can CHANGE between polls — models a supplier
+    /// overwriting the same key with a corrected PO (S3/R2 stamp a fresh ETag on re-upload).
+    /// Both the listing and the download are evaluated per call, so a mutation between polls is
+    /// what the service actually sees.
+    /// </summary>
+    private sealed class MutableObjectS3
+    {
+        private readonly string _key;
+        private string _etag;
+        private byte[] _content;
+
+        public MutableObjectS3(string key, string etag, byte[] content)
+        {
+            _key = key;
+            _etag = etag;
+            _content = content;
+
+            var s3 = new Mock<IAmazonS3>(MockBehavior.Loose);
+            s3.Setup(c => c.ListObjectsV2Async(It.IsAny<ListObjectsV2Request>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync(() => new ListObjectsV2Response
+              {
+                  S3Objects = new List<S3Object> { new() { Key = _key, ETag = ETag } },
+                  IsTruncated = false,
+              });
+            s3.Setup(c => c.GetObjectAsync(Bucket, It.IsAny<string>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync(() => new GetObjectResponse { ResponseStream = new MemoryStream(Content) });
+            Client = s3.Object;
+        }
+
+        /// <summary>Current ETag; volatile because the concurrency proof reads it from many pollers.</summary>
+        public string ETag
+        {
+            get => Volatile.Read(ref _etag);
+            set => Volatile.Write(ref _etag, value);
+        }
+
+        public byte[] Content
+        {
+            get => Volatile.Read(ref _content);
+            set => Volatile.Write(ref _content, value);
+        }
+
+        public IAmazonS3 Client { get; }
+    }
+
     /// <summary>Parse-job enqueuer that throws — models a crash in the post-order-commit step.</summary>
     private sealed class ThrowingParseEnqueuer : IParseJobEnqueuer
     {
