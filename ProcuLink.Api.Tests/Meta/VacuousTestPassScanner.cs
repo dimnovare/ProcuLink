@@ -2,6 +2,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
+using ProcuLink.Api.Tests.Architecture;
 
 namespace ProcuLink.Api.Tests.Meta;
 
@@ -70,29 +71,9 @@ public sealed record VacuousPass(
 public static class VacuousTestPassScanner
 {
     /// <summary>
-    /// Path segments never scanned: build output, VCS, and the full repo copies parallel agents
-    /// keep under <c>.claude/worktrees</c> (reading those reports another session's in-progress
-    /// code as if it were ours).
+    /// Top-level project-directory suffixes that hold test code.
     ///
-    /// <para>Matched against the path RELATIVE to the repo root, never the absolute path. This
-    /// checkout may itself sit inside <c>.claude/worktrees/…</c>, and matching absolutely would
-    /// then exclude every file in the repository — leaving the guard scanning nothing and passing
-    /// vacuously, which is the exact bug it exists to catch. <see cref="TestSourceFiles"/> has a
-    /// companion assertion in <c>NoVacuousTestPassTests.TheGuardActuallyReadsTheTestProjects</c>.</para>
-    /// </summary>
-    private static readonly string[] ExcludedSegments =
-    {
-        "obj/",
-        "bin/",
-        ".git/",
-        "node_modules/",
-        ".claude/worktrees/",
-    };
-
-    /// <summary>
-    /// Top-level project-directory globs that hold test code.
-    ///
-    /// <para><c>*.TestSupport</c> is here because <c>ProcuLink.TestSupport</c> is compiled into two
+    /// <para><c>.TestSupport</c> is here because <c>ProcuLink.TestSupport</c> is compiled into two
     /// of the three test assemblies through a linked <c>&lt;Compile Include&gt;</c> item, yet its
     /// directory name does not end in <c>.Tests</c>. It held zero <c>[Fact]</c>s when this was
     /// found, so the hole was latent rather than live — but a shared file compiled into every test
@@ -100,45 +81,50 @@ public static class VacuousTestPassScanner
     /// has a companion assertion that no other top-level directory with "Test" in its name is
     /// silently left out.</para>
     /// </summary>
-    private static readonly string[] TestProjectGlobs = { "*.Tests", "*.TestSupport" };
+    private static readonly string[] TestProjectSuffixes = { ".Tests", ".TestSupport" };
 
     /// <summary>
     /// Walks up from the test assembly's output directory to the folder holding
     /// <c>ProcuLink.slnx</c>. Throws rather than returning null: a scanner that cannot find the
     /// source tree must fail loudly, not quietly scan nothing.
     /// </summary>
-    public static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "ProcuLink.slnx")))
-                return dir.FullName;
-            dir = dir.Parent;
-        }
+    public static string FindRepoRoot() => RepoSourceCorpus.FindRepoRoot();
 
-        throw new InvalidOperationException(
-            $"Could not locate ProcuLink.slnx walking up from '{AppContext.BaseDirectory}'. " +
-            "The vacuous-pass guard cannot scan the source tree and must not report a pass.");
-    }
-
-    /// <summary>The top-level directories this scanner treats as test code, repo-root-relative.</summary>
+    /// <summary>
+    /// The top-level directories this scanner treats as test code, repo-root-relative.
+    ///
+    /// <para>Which top-level directories belong to this checkout is
+    /// <see cref="RepoSourceCorpus.TopLevelDirectories"/>'s question — dot-directories and anything
+    /// git does not track are not this repository, however plausibly they are named. A copy of the
+    /// repo dropped beside the projects contains an <c>*.Tests</c> directory too.</para>
+    /// </summary>
     public static IReadOnlyList<string> TestCodeRoots(string repoRoot) =>
-        TestProjectGlobs
-            .SelectMany(glob => Directory.EnumerateDirectories(repoRoot, glob, SearchOption.TopDirectoryOnly))
-            .Select(d => Path.GetFileName(d))
+        RepoSourceCorpus.TopLevelDirectories(repoRoot)
+            .Where(IsTestProjectDirectory)
             .OrderBy(d => d, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-    /// <summary>Every C# source file belonging to a test project, build output excluded.</summary>
-    public static IReadOnlyList<string> TestSourceFiles(string repoRoot) =>
-        TestProjectGlobs
-            .SelectMany(glob => Directory.EnumerateDirectories(repoRoot, glob, SearchOption.TopDirectoryOnly))
-            .SelectMany(d => Directory.EnumerateFiles(d, "*.cs", SearchOption.AllDirectories))
-            .Where(p => !IsExcluded(RelativePath(repoRoot, p)))
+    /// <summary>Every C# source file belonging to a test project of this checkout.</summary>
+    public static IReadOnlyList<string> TestSourceFiles(string repoRoot)
+    {
+        var roots = TestCodeRoots(repoRoot).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return RepoSourceCorpus.CsFiles(repoRoot)
+            .Where(f => roots.Contains(TopLevelOf(f.Relative)))
+            .Select(f => f.FullPath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private static bool IsTestProjectDirectory(string name) =>
+        TestProjectSuffixes.Any(suffix => name.EndsWith(suffix, StringComparison.Ordinal));
+
+    private static string TopLevelOf(string relative)
+    {
+        var slash = relative.IndexOf('/');
+        return slash < 0 ? relative : relative[..slash];
+    }
 
     /// <summary>Scans every test source file under <paramref name="repoRoot"/>.</summary>
     public static IReadOnlyList<VacuousPass> ScanRepository(string repoRoot) =>
@@ -149,11 +135,6 @@ public static class VacuousTestPassScanner
     /// <summary>Repo-root-relative, forward-slashed — the form used for both filtering and reporting.</summary>
     public static string RelativePath(string repoRoot, string absolutePath) =>
         Path.GetRelativePath(repoRoot, absolutePath).Replace('\\', '/');
-
-    private static bool IsExcluded(string relativePath) =>
-        ExcludedSegments.Any(seg =>
-            relativePath.StartsWith(seg, StringComparison.OrdinalIgnoreCase)
-            || relativePath.Contains($"/{seg}", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Scans one compilation unit. <paramref name="displayPath"/> is only for reporting.</summary>
     public static IReadOnlyList<VacuousPass> Scan(string source, string displayPath)

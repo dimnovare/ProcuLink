@@ -267,39 +267,31 @@ public class RetiredSubsystemsStayRetiredTests
     }
 
     /// <summary>
-    /// Every checked-in C# file, minus build output and minus the historical migration bodies.
+    /// Every C# file of THIS checkout, minus the historical migration bodies.
     ///
     /// <para>Old migrations and their <c>.Designer.cs</c> snapshots are DELIBERATELY excluded: they
     /// are an append-only record of what the model used to be, and they must keep mentioning the
     /// dropped entities. <c>ProcuLinkDbContextModelSnapshot.cs</c> is deliberately NOT excluded —
     /// it describes the CURRENT model, so a leftover mention there means the drop migration did not
     /// actually drop the entity.</para>
+    ///
+    /// <para>Which files are this checkout's at all is <see cref="RepoSourceCorpus"/>'s question.
+    /// It matters here more than anywhere: this scan walked the repository root, and an untracked
+    /// copy of an OLDER revision left beside the projects still contained every entity Wave 1
+    /// deleted — so all three assertions below failed, reporting a retirement that had in fact
+    /// happened months earlier as though it had been undone.</para>
     /// </summary>
-    private static IEnumerable<string> SourceFiles()
-    {
-        var root = RepoRoot();
-        return Directory
-            .EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+    private static IEnumerable<string> SourceFiles() =>
+        RepoSourceCorpus.CsFiles(RepoRoot())
             .Where(f =>
             {
-                var rel = Path.GetRelativePath(root, f).Replace('\\', '/');
-                if (rel.Contains("/bin/") || rel.Contains("/obj/")) return false;
-                if (rel.StartsWith("bin/") || rel.StartsWith("obj/")) return false;
-                if (rel.StartsWith(".claude/")) return false;
-                if (rel.Contains("/Migrations/"))
-                    return rel.EndsWith("/ProcuLinkDbContextModelSnapshot.cs");
+                var rel = f.Relative;
+                if (rel.Contains("/Migrations/", StringComparison.Ordinal))
+                    return rel.EndsWith("/ProcuLinkDbContextModelSnapshot.cs", StringComparison.Ordinal);
                 // This file names the retired identifiers on purpose.
-                return !rel.EndsWith("/" + nameof(RetiredSubsystemsStayRetiredTests) + ".cs");
-            });
-    }
+                return !rel.EndsWith("/" + nameof(RetiredSubsystemsStayRetiredTests) + ".cs", StringComparison.Ordinal);
+            })
+            .Select(f => f.FullPath);
 
-    private static string RepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "ProcuLink.slnx")))
-            dir = dir.Parent;
-
-        dir.Should().NotBeNull("the tests must run from inside the ProcuLink checkout (ProcuLink.slnx not found above the test binaries)");
-        return dir!.FullName;
-    }
+    private static string RepoRoot() => RepoSourceCorpus.FindRepoRoot();
 }
