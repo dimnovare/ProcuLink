@@ -291,35 +291,21 @@ public class SampleExclusionIsDeclaredNotAssumedTests
         string.Join("\n", sites.Select(s => $"  {s.File}:{s.Line}\n      {s.Statement}"));
 
     /// <summary>
-    /// Checked-in production C#: no test projects (they seed practice orders on purpose), no
-    /// build output, no worktrees, and no migration bodies (an append-only record of a past model,
-    /// which cannot be edited to satisfy a convention introduced later).
+    /// Production C# belonging to THIS checkout: no test projects (they seed practice orders on
+    /// purpose), and no migration bodies (an append-only record of a past model, which cannot be
+    /// edited to satisfy a convention introduced later).
+    ///
+    /// <para>Build output, worktrees and untracked copies of the repository are
+    /// <see cref="RepoSourceCorpus"/>'s business. This scan used to walk the repository root behind
+    /// a skip list of names, and flagged sites in
+    /// <c>.git-audit-e/ProcuLink.Infrastructure/Services/OpsHealthService.cs</c> — a directory
+    /// nobody here wrote, in a copy that will never ship.</para>
     /// </summary>
-    private static IEnumerable<string> ProductionSourceFiles()
-    {
-        var root = RepoRoot();
-        return Directory
-            .EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
-            .Where(f =>
-            {
-                var rel = Path.GetRelativePath(root, f).Replace('\\', '/');
-                if (rel.Contains("/bin/") || rel.Contains("/obj/")) return false;
-                if (rel.StartsWith("bin/") || rel.StartsWith("obj/")) return false;
-                if (rel.StartsWith(".claude/")) return false;
-                if (rel.Contains("/Migrations/")) return false;
-                if (rel.Contains(".Tests/")) return false;
-                return true;
-            });
-    }
+    private static IEnumerable<string> ProductionSourceFiles() =>
+        RepoSourceCorpus.CsFiles(RepoRoot())
+            .Where(f => !f.Relative.Contains("/Migrations/", StringComparison.Ordinal))
+            .Where(f => !f.Relative.Contains(".Tests/", StringComparison.Ordinal))
+            .Select(f => f.FullPath);
 
-    private static string RepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "ProcuLink.slnx")))
-            dir = dir.Parent;
-
-        dir.Should().NotBeNull(
-            "the tests must run from inside the ProcuLink checkout (ProcuLink.slnx not found above the test binaries)");
-        return dir!.FullName;
-    }
+    private static string RepoRoot() => RepoSourceCorpus.FindRepoRoot();
 }

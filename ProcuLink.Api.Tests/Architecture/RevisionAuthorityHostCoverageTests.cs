@@ -165,10 +165,23 @@ public class RevisionAuthorityHostCoverageTests
         {
             WriteSyntheticSource(root, "ProcuLink.Api/Program.cs");
             WriteSyntheticSource(root, "ProcuLink.Worker/Program.cs");
+            // Premise, checked rather than assumed: a synthetic tree in TMPDIR is not a git
+            // checkout, so this exercises RepoSourceCorpus's fallback walk. If TMPDIR ever sits
+            // inside a repository the corpus answers from git instead — every file here is
+            // untracked, so it would come back empty and the failure would name the wrong cause.
+            RepoSourceCorpus.GitCsFiles(root).Should().BeNull(
+                $"this scan's worktree-safety is proven against a synthetic tree at '{root}', which "
+                + "must sit outside any git repository for the fallback walk to be what runs");
             WriteSyntheticSource(root, "ProcuLink.Api/bin/Debug/net8.0/Generated.cs");
             WriteSyntheticSource(root, "ProcuLink.Api/obj/Debug/net8.0/Generated.cs");
             WriteSyntheticSource(root, "ProcuLink.Api.Tests/SomethingTests.cs");
             WriteSyntheticSource(root, ".claude/worktrees/other-session/ProcuLink.Api/Program.cs");
+
+            // The shape that broke a clean main: another session's untracked full copy of the
+            // repository, sitting at the root under a name nothing had ever heard of. It was read
+            // as a deployable host project.
+            WriteSyntheticSource(root, ".git-audit-e/ProcuLink.Api/Program.cs");
+            WriteSyntheticSource(root, ".git-audit-e/ProcuLink.Worker/Program.cs");
 
             var found = ProductionSourceFiles(root)
                 .Select(f => RelativeTo(root, f.Path))
@@ -179,7 +192,8 @@ public class RevisionAuthorityHostCoverageTests
                 new[] { "ProcuLink.Api/Program.cs", "ProcuLink.Worker/Program.cs" },
                 "a checkout that itself sits under .claude/worktrees must still see its OWN "
                 + "production sources — and must still see nothing from build output, from the test "
-                + "projects, or from a sibling session's nested worktree");
+                + "projects, from a sibling session's nested worktree, or from an untracked copy of "
+                + "the repository dropped beside them");
         }
         finally
         {
@@ -200,48 +214,30 @@ public class RevisionAuthorityHostCoverageTests
     private sealed record SourceFile(string Project, string Path);
 
     /// <summary>
-    /// Every checked-in production .cs file, tagged with its owning project directory. Excludes
-    /// build output, other sessions' worktrees under <c>.claude/</c>, and the test projects — a
-    /// test naming the resolver is not a host resolving a config with it, which is precisely how a
-    /// real host would hide from a naive scan.
+    /// Every production .cs file of THIS checkout, tagged with its owning project directory. The
+    /// test projects are dropped here — a test naming the resolver is not a host resolving a config
+    /// with it, which is precisely how a real host would hide from a naive scan.
     ///
-    /// <para><b>Exclusions match the path RELATIVE to the repo root, never the absolute path.</b>
-    /// They used to match absolutely, and CLAUDE.md's own instruction to do parallel work in
-    /// isolated worktrees puts the checkout at
-    /// <c>&lt;repo&gt;/.claude/worktrees/&lt;name&gt;</c> — where every absolute path under the root
-    /// contains <c>/.claude/</c>, so the <c>.claude</c> rule excluded the ENTIRE repository and the
-    /// scan found nothing. Both callers treat an empty result as a failure (correctly), so the
-    /// guard did not go false-green; it went unusable in the workspace the project documents. The
-    /// two sibling source scans already match relatively —
-    /// <see cref="RetiredSubsystemsStayRetiredTests"/> and <c>OrphanDetector.IsExcluded</c>, which
-    /// <see cref="AcceptanceGateSingleDoorTests"/> goes through — and
-    /// <c>VacuousTestPassScanner.ExcludedSegments</c> documents this exact trap. Pinned by
-    /// <see cref="TheScan_FindsSourcesWhenTheCheckoutItselfSitsUnderDotClaudeWorktrees"/>.</para>
+    /// <para>Which files belong to this checkout at all is <see cref="RepoSourceCorpus"/>'s
+    /// question, and it is not a question of names. This scan used to walk the repository root and
+    /// subtract <c>obj</c>, <c>bin</c> and <c>.claude</c>, which meant an untracked full copy of the
+    /// repository left beside the projects by a parallel session was read as production code: a
+    /// directory called <c>.git-audit-e</c> made this very test report
+    /// <c>{".git-audit-e", "ProcuLink.Api", "ProcuLink.Worker"}</c> as the set of deployable hosts
+    /// on a clean <c>main</c>. Exclusions also match the path RELATIVE to the repo root, never the
+    /// absolute path — a worktree root IS <c>&lt;repo&gt;/.claude/worktrees/&lt;name&gt;</c>, and
+    /// matching absolutely once excluded the entire repository (PR #132). Both traps are pinned by
+    /// <see cref="TheScan_FindsSourcesWhenTheCheckoutItselfSitsUnderDotClaudeWorktrees"/> and by
+    /// <see cref="RepoSourceCorpusTests"/>.</para>
     /// </summary>
     private static IEnumerable<SourceFile> ProductionSourceFiles(string root) =>
-        Directory
-            .EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
-            .Select(path => (Path: path, Relative: RelativeTo(root, path)))
-            .Where(f => !IsExcluded(f.Relative))
-            .Select(f => new SourceFile(ProjectOf(f.Relative), f.Path))
+        RepoSourceCorpus.CsFiles(root)
+            .Select(f => new SourceFile(ProjectOf(f.Relative), f.FullPath))
             .Where(f => f.Project.Length > 0 && !f.Project.EndsWith("Tests", StringComparison.Ordinal));
 
     /// <summary>Repo-root-relative and forward-slashed — the one form every rule below matches.</summary>
     private static string RelativeTo(string root, string path) =>
         Path.GetRelativePath(root, path).Replace('\\', '/');
-
-    /// <summary>
-    /// Build output, and the full repo copies parallel sessions keep under <c>.claude/worktrees/</c>
-    /// — reading those would mix another session's in-progress code into the answer. The nested
-    /// form is kept as well as the leading one so a worktree inside a worktree stays excluded.
-    /// </summary>
-    private static bool IsExcluded(string relative) =>
-        relative.StartsWith("obj/", StringComparison.Ordinal)
-        || relative.StartsWith("bin/", StringComparison.Ordinal)
-        || relative.StartsWith(".claude/", StringComparison.Ordinal)
-        || relative.Contains("/obj/", StringComparison.Ordinal)
-        || relative.Contains("/bin/", StringComparison.Ordinal)
-        || relative.Contains("/.claude/", StringComparison.Ordinal);
 
     /// <summary>The top-level project directory a file belongs to, relative to the repo root.</summary>
     private static string ProjectOf(string relative)
@@ -302,17 +298,5 @@ public class RevisionAuthorityHostCoverageTests
         }
     }
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "ProcuLink.slnx")))
-                return dir.FullName;
-            dir = dir.Parent;
-        }
-
-        throw new InvalidOperationException(
-            $"could not find ProcuLink.slnx walking up from {AppContext.BaseDirectory}");
-    }
+    private static string FindRepoRoot() => RepoSourceCorpus.FindRepoRoot();
 }

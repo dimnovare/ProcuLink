@@ -1,4 +1,5 @@
 using FluentAssertions;
+using ProcuLink.Api.Tests.Architecture;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Meta;
@@ -864,11 +865,13 @@ public class NoVacuousTestPassTests
         var scanned = VacuousTestPassScanner.TestCodeRoots(repoRoot);
 
         // Directories holding C# — `TestResults` and friends carry no source and are not test code.
-        var looksLikeTestCode = Directory.EnumerateDirectories(repoRoot)
-            .Where(path => Path.GetFileName(path).Contains("Test", StringComparison.OrdinalIgnoreCase)
-                && !Path.GetFileName(path).StartsWith('.')
-                && Directory.EnumerateFiles(path, "*.cs", SearchOption.AllDirectories).Any())
-            .Select(Path.GetFileName)
+        // The candidate list comes from RepoSourceCorpus, so an untracked copy of the repository
+        // sitting beside the projects (`.git-audit-e/`, `audit-2026-08/`) does not get to nominate
+        // its own `*.Tests` directory as one this guard has failed to scan.
+        var looksLikeTestCode = RepoSourceCorpus.TopLevelDirectories(repoRoot)
+            .Where(name => name.Contains("Test", StringComparison.OrdinalIgnoreCase))
+            .Where(name => Directory
+                .EnumerateFiles(Path.Combine(repoRoot, name), "*.cs", SearchOption.AllDirectories).Any())
             .ToList();
 
         looksLikeTestCode.Should().NotBeEmpty("the repo has test projects, so this check must have input");
