@@ -3,12 +3,14 @@ using System.Data.Common;
 using System.Security.Claims;
 using System.Text;
 using FluentAssertions;
+using Hangfire;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using ProcuLink.Api.Controllers;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Constants;
@@ -623,6 +625,307 @@ public sealed class IngestDedupePostgresTests : IClassFixture<IngestDedupeFixtur
         return (Guid)prop!.GetValue(value)!;
     }
 
+    // ── Gap 3: browser upload idempotency ───────────────────────────────────────────────────────
+
+    private const string UploadKey = "upload-selection-b5-001";
+
+    private static readonly byte[] UploadCsvBytes =
+        Encoding.UTF8.GetBytes("po,qty\r\nB5-UPLOAD-1,3\r\n");
+
+    private static IFormFile UploadFile(string fileName = "po.csv") =>
+        new FormFile(new MemoryStream(UploadCsvBytes.ToArray()), 0, UploadCsvBytes.Length, "file", fileName)
+        {
+            Headers     = new HeaderDictionary(),
+            ContentType = "text/csv",
+        };
+
+    /// <summary>
+    /// An <see cref="OrdersController"/> wired for the upload path only: the REAL
+    /// <see cref="IdempotencyService"/> over the container (so the claim row and its primary key are
+    /// the actual guard), permissive billing, and the same double behind both order seams.
+    /// </summary>
+    private OrdersController BuildUpload(
+        ProcuLinkDbContext db, Guid orgId, IOrderService orders, string? idempotencyKey = UploadKey,
+        bool billingAllows = true)
+    {
+        var tenant = new Mock<ICurrentTenantService>();
+        tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
+
+        var billing = new Mock<IBillingService>();
+        billing.Setup(b => b.CheckOrderLimitAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+               .ReturnsAsync(new LimitCheckResult(
+                   Allowed: billingAllows, PilotExpired: false, Plan: "operations", Limit: 1000));
+
+        var http = new DefaultHttpContext();
+        if (idempotencyKey is not null)
+            http.Request.Headers["Idempotency-Key"] = idempotencyKey;
+
+        return new OrdersController(
+            orders,
+            tenant.Object,
+            new Mock<IBackgroundJobClient>().Object,
+            db,
+            NullLogger<OrdersController>.Instance,
+            billing.Object,
+            new IdempotencyService(db),
+            new Mock<IOrderExceptionService>().Object,
+            new Mock<ISupplierAcceptanceService>().Object,
+            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
+            new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
+            new Mock<IFileStorageService>().Object,
+            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
+            Array.Empty<ITransformService>())
+        {
+            ControllerContext = new ControllerContext { HttpContext = http },
+        };
+    }
+
+    /// <summary>Digs the order id out of the upload response's <c>order</c> DTO.</summary>
+    private static Guid UploadedOrderIdOf(OkObjectResult ok)
+    {
+        var order = ok.Value!.GetType().GetProperty("order")?.GetValue(ok.Value);
+        order.Should().NotBeNull("the upload response must carry the order");
+        return ((ProcuLink.Api.Contracts.OrderDto)order!).Id;
+    }
+
+    private static bool IsReplay(OkObjectResult ok) =>
+        ok.Value!.GetType().GetProperty("idempotentReplay")?.GetValue(ok.Value) as bool? == true;
+
+    /// <summary>
+    /// B-5, the P0 the whole finding is about: two uploads of the same file selection land at once —
+    /// the double-click, or the retry after the 60-second client timeout. They must create ONE
+    /// order, and the loser must be handed the winner's, not an error and not a second order.
+    ///
+    /// <para>The interleave is forced at the loser's read of <c>idempotency_keys</c>, which is
+    /// exactly the window the old check-then-create pair left open: under
+    /// <c>TryGetExistingOrderIdAsync</c> + a much-later <c>BindAsync</c>, both requests saw "no row"
+    /// and both created an order.</para>
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task ConcurrentIdenticalUploadKeys_CreateOneOrder_AndLoserGetsWinnersOrder()
+    {
+        var (orgId, _)  = await SeedOrgAsync();
+        var supplierId  = await SeedSupplierAsync(orgId);
+        var orders      = new PersistingOrderService(Options);
+
+        IActionResult? winnerResult = null;
+        var interceptor = new FireOnSelectInterceptor("idempotency_keys", async () =>
+        {
+            await using var db = NewContext();
+            winnerResult = await BuildUpload(db, orgId, orders)
+                .Upload(UploadFile(), supplierId, orders, CancellationToken.None);
+        });
+
+        var racingOptions = IngestDedupeFixture.NpgsqlOptions(_fx.ConnectionString)
+            .AddInterceptors(interceptor)
+            .Options;
+
+        IActionResult loserResult;
+        await using (var db = new ProcuLinkDbContext(racingOptions))
+        {
+            loserResult = await BuildUpload(db, orgId, orders)
+                .Upload(UploadFile(), supplierId, orders, CancellationToken.None);
+        }
+
+        interceptor.Fired.Should().BeTrue("the uploads must actually have interleaved, or this proves nothing");
+
+        (await OrderCountAsync(orgId)).Should().Be(1,
+            "two concurrent uploads with the same Idempotency-Key must create EXACTLY ONE order");
+
+        var winnerId = UploadedOrderIdOf(winnerResult.Should().BeOfType<OkObjectResult>().Subject);
+        var loserOk  = loserResult.Should().BeOfType<OkObjectResult>(
+            "the loser of an upload race is a successful replay, not an error").Subject;
+        UploadedOrderIdOf(loserOk).Should().Be(winnerId, "the loser must receive the winner's order id");
+
+        await using var verify = NewContext();
+        (await verify.IdempotencyKeys.CountAsync(k => k.OrgId == orgId)).Should().Be(1,
+            "exactly one claim row survives the race");
+    }
+
+    /// <summary>
+    /// The sequential half of B-5: the user clicks upload, the response is lost, they click again.
+    /// One order, and the second response says so.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task SameUploadKeyTwice_CreatesOneOrder_AndSecondIsFlaggedAsReplay()
+    {
+        var (orgId, _) = await SeedOrgAsync();
+        var supplierId = await SeedSupplierAsync(orgId);
+        var orders     = new PersistingOrderService(Options);
+
+        OkObjectResult first, second;
+        await using (var db = NewContext())
+            first = (await BuildUpload(db, orgId, orders)
+                .Upload(UploadFile(), supplierId, orders, CancellationToken.None))
+                .Should().BeOfType<OkObjectResult>().Subject;
+
+        await using (var db = NewContext())
+            second = (await BuildUpload(db, orgId, orders)
+                .Upload(UploadFile(), supplierId, orders, CancellationToken.None))
+                .Should().BeOfType<OkObjectResult>().Subject;
+
+        (await OrderCountAsync(orgId)).Should().Be(1,
+            "a repeat upload of the same file selection must not create a second order");
+        UploadedOrderIdOf(second).Should().Be(UploadedOrderIdOf(first));
+        IsReplay(second).Should().BeTrue("the second response must identify itself as a replay");
+        IsReplay(first).Should().BeFalse("the first response created the order; it is not a replay");
+    }
+
+    /// <summary>
+    /// A crash between the order's creation and the key's binding. Under check-then-create the bind
+    /// came LAST, so the retry saw an unbound key and created a SECOND order — the same duplicate
+    /// the header was supposed to prevent. Claim-first has no such window.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task UploadCrashAfterCreateBeforeBind_Retry_CreatesNoSecondOrder()
+    {
+        var (orgId, _) = await SeedOrgAsync();
+        var supplierId = await SeedSupplierAsync(orgId);
+
+        var attempt = 0;
+        var orders = new PersistingOrderService(Options,
+            () => Interlocked.Increment(ref attempt) == 1 ? CreateBehavior.SucceedThenThrow : CreateBehavior.Succeed);
+
+        await using (var db = NewContext())
+        {
+            var controller = BuildUpload(db, orgId, orders);
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => controller.Upload(UploadFile(), supplierId, orders, CancellationToken.None));
+        }
+
+        (await OrderCountAsync(orgId)).Should().Be(1, "the first attempt did commit its order");
+
+        await using (var db = NewContext())
+        {
+            var retry = await BuildUpload(db, orgId, orders)
+                .Upload(UploadFile(), supplierId, orders, CancellationToken.None);
+            retry.Should().BeOfType<OkObjectResult>("the retry must succeed, never a permanently-blocked key");
+        }
+
+        (await OrderCountAsync(orgId)).Should().Be(1,
+            "the retry must NOT create a second order for the same Idempotency-Key");
+    }
+
+    /// <summary>
+    /// A crash between claim and create must never permanently block the key — the failure mode that
+    /// makes "claim first" unsafe if creation is not a find-or-create on the claimed id.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task UploadCrashAfterClaimBeforeCreate_Retry_StillCreatesTheOrder()
+    {
+        var (orgId, _) = await SeedOrgAsync();
+        var supplierId = await SeedSupplierAsync(orgId);
+
+        var attempt = 0;
+        var orders = new PersistingOrderService(Options,
+            () => Interlocked.Increment(ref attempt) == 1 ? CreateBehavior.ThrowTransient : CreateBehavior.Succeed);
+
+        await using (var db = NewContext())
+        {
+            var controller = BuildUpload(db, orgId, orders);
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => controller.Upload(UploadFile(), supplierId, orders, CancellationToken.None));
+        }
+
+        (await OrderCountAsync(orgId)).Should().Be(0, "the transient failure created no order");
+
+        Guid resumedId;
+        await using (var db = NewContext())
+        {
+            var ok = (await BuildUpload(db, orgId, orders)
+                .Upload(UploadFile(), supplierId, orders, CancellationToken.None))
+                .Should().BeOfType<OkObjectResult>(
+                    "a key whose order was never created must remain resumable, never permanently blocked").Subject;
+            resumedId = UploadedOrderIdOf(ok);
+            resumedId.Should().NotBe(Guid.Empty, "the retry must return a real order id");
+        }
+
+        (await OrderCountAsync(orgId)).Should().Be(1, "the retry creates the order exactly once");
+
+        // The order must live under the CLAIMED id, not a fresh one. Creating under a fresh id would
+        // leave the claim pointing at an order that will never exist, so every later retry resumes
+        // again and mints another order — the duplicate, arriving one attempt later.
+        await using (var verify = NewContext())
+        {
+            var claim = await verify.IdempotencyKeys.SingleAsync(k => k.OrgId == orgId);
+            claim.OrderId.Should().Be(resumedId, "the order must be created under the claimed id");
+        }
+
+        await using (var db = NewContext())
+        {
+            var third = await BuildUpload(db, orgId, orders)
+                .Upload(UploadFile(), supplierId, orders, CancellationToken.None);
+            third.Should().BeOfType<OkObjectResult>();
+        }
+
+        (await OrderCountAsync(orgId)).Should().Be(1, "a further retry is a replay, not a third order");
+    }
+
+    /// <summary>
+    /// The idempotency short-circuit must run BEFORE the billing gate — the same ordering
+    /// <c>IngressController</c> states and for the same reason: an upload that was already accepted
+    /// must keep returning its order when the client retries, not start 429-ing because the account
+    /// crossed a limit in between. Gate-first would answer a duplicate-suppression request with
+    /// "upgrade", and the client would reasonably retry again.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task UploadReplay_AfterTheAccountStopsAllowingOrders_StillReturnsTheOriginalOrder()
+    {
+        var (orgId, _) = await SeedOrgAsync();
+        var supplierId = await SeedSupplierAsync(orgId);
+        var orders     = new PersistingOrderService(Options);
+
+        Guid originalId;
+        await using (var db = NewContext())
+        {
+            var ok = (await BuildUpload(db, orgId, orders)
+                .Upload(UploadFile(), supplierId, orders, CancellationToken.None))
+                .Should().BeOfType<OkObjectResult>().Subject;
+            originalId = UploadedOrderIdOf(ok);
+        }
+
+        await using (var db = NewContext())
+        {
+            var replay = await BuildUpload(db, orgId, orders, billingAllows: false)
+                .Upload(UploadFile(), supplierId, orders, CancellationToken.None);
+
+            var ok = replay.Should().BeOfType<OkObjectResult>(
+                "a replay of an already-accepted upload must not be refused with 429").Subject;
+            UploadedOrderIdOf(ok).Should().Be(originalId);
+        }
+
+        (await OrderCountAsync(orgId)).Should().Be(1);
+    }
+
+    /// <summary>
+    /// The negative control, and the reason the frontend half of B-5 exists: with NO
+    /// <c>Idempotency-Key</c> header there is nothing to claim, so two uploads are two orders. Any
+    /// change that makes this pass by accident (deriving a key from the file bytes, say) would also
+    /// swallow a deliberate re-send of a corrected PO.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task TwoUploadsWithNoIdempotencyKey_StillCreateTwoOrders()
+    {
+        var (orgId, _) = await SeedOrgAsync();
+        var supplierId = await SeedSupplierAsync(orgId);
+        var orders     = new PersistingOrderService(Options);
+
+        for (var i = 0; i < 2; i++)
+        {
+            await using var db = NewContext();
+            var result = await BuildUpload(db, orgId, orders, idempotencyKey: null)
+                .Upload(UploadFile(), supplierId, orders, CancellationToken.None);
+            result.Should().BeOfType<OkObjectResult>();
+        }
+
+        (await OrderCountAsync(orgId)).Should().Be(2,
+            "without a key the server has nothing to deduplicate on — the client must send one");
+
+        await using var verify = NewContext();
+        (await verify.IdempotencyKeys.CountAsync(k => k.OrgId == orgId)).Should().Be(0,
+            "no key was supplied, so no claim row may be invented");
+    }
+
     // ── Doubles ─────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>How the <see cref="PersistingOrderService"/> behaves on a given creation call.</summary>
@@ -642,7 +945,7 @@ public sealed class IngestDedupePostgresTests : IClassFixture<IngestDedupeFixtur
     /// under the same id can never produce a second order. Only the entry points these ingress paths
     /// use are implemented; the rest throw, so an unexpected call fails loudly.
     /// </summary>
-    private sealed class PersistingOrderService : IOrderService, IClaimedOrderCreator
+    private sealed class PersistingOrderService : IOrderService, IClaimedOrderCreator, IStubOrderCreator
     {
         private readonly DbContextOptions<ProcuLinkDbContext> _options;
         private readonly Func<CreateBehavior>? _behavior;
@@ -688,6 +991,18 @@ public sealed class IngestDedupePostgresTests : IClassFixture<IngestDedupeFixtur
             Guid organisationId, Guid? supplierId, Guid orderId, ExtractedOrder order, string source,
             string? inboundSenderDomain, CancellationToken ct)
             => PersistAsync(organisationId, supplierId, orderId, ct);
+
+        // ── IStubOrderCreator: the browser upload creates under the idempotency claim's id ──
+
+        public Task<Result<PurchaseOrderEntity>> CreateStubAsync(
+            Guid organisationId, Guid supplierId, Guid orderId, Stream fileStream, string filename,
+            string contentType, CancellationToken ct)
+            => PersistAsync(organisationId, supplierId, orderId, ct);
+
+        public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
+            Guid organisationId, Guid orderId, Stream fileStream, string filename, string contentType,
+            CancellationToken ct)
+            => PersistAsync(organisationId, supplierId: null, orderId, ct);
 
         private async Task<Result<PurchaseOrderEntity>> PersistAsync(
             Guid orgId, Guid? supplierId, Guid? orderId, CancellationToken ct)

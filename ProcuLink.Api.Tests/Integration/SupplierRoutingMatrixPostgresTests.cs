@@ -385,9 +385,13 @@ public sealed class SupplierRoutingMatrixPostgresTests
         await using var db = NewDb();
         var ctrl = BuildOrdersController(db, orgId, recorder);
 
+        // No Idempotency-Key header on this cell, so the claim-first branch never runs and the
+        // narrow IStubOrderCreator seam must not be touched — a Strict mock proves that rather
+        // than quietly absorbing a call.
         var result = await ctrl.Upload(
             FormFileFor(fileName, bytes, contentType),
             useEmptySupplierId ? Guid.Empty : supplierId,
+            new Mock<IStubOrderCreator>(MockBehavior.Strict).Object,
             CancellationToken.None);
 
         return (await ObserveAsync(orgId, HttpStatusOf(result)), supplierId);
