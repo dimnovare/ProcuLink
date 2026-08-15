@@ -35,7 +35,13 @@ public class AlertingDestinationStartupValidationTests
     [Fact]
     public void Production_sentryOnly_starts()
     {
-        var act = () => Validate(Config(sentryDsn: "https://k@o0.ingest.example.com/1"), "Production");
+        // The provider token is present so this test can only fail on the ALERTING rule. Without
+        // it the host is refused by ValidateOutboundEmailTransport instead — a real refusal, but
+        // not this test's claim, and it would report "Sentry alone is not enough" for the wrong
+        // reason.
+        var act = () => Validate(
+            Config(sentryDsn: "https://k@o0.ingest.example.com/1", postmarkToken: "pm-token"),
+            "Production");
 
         act.Should().NotThrow("Sentry alone still reaches the operator");
     }
@@ -75,7 +81,8 @@ public class AlertingDestinationStartupValidationTests
     [Fact]
     public void Production_hostThatRaisesNoAlerts_isUnaffected()
     {
-        var act = () => Validate(Config(), "Production", raisesOperatorAlerts: false);
+        var act = () => Validate(
+            Config(postmarkToken: "pm-token"), "Production", raisesOperatorAlerts: false);
 
         act.Should().NotThrow("only the host running the alert sweep needs a destination");
     }
@@ -91,16 +98,25 @@ public class AlertingDestinationStartupValidationTests
         log.Entries.Should().Contain(e => e.Message.Contains("ALERTING__EMAIL__TO"));
     }
 
+    /// <summary>
+    /// This test used to assert the opposite — that an absent provider token with no alert address
+    /// produced a startup WARNING and the host came up. That warning was the whole defect: a
+    /// Sentry-only Production deploy booted clean while every emailed purchase order was dead,
+    /// because the only hard failure touching the token was gated on <c>Alerting:Email:To</c>, a
+    /// different key entirely. The token is no longer an optional-key gap; it is a boot refusal
+    /// owned by <c>ValidateOutboundEmailTransport</c>. Kept here, inverted, so the old behaviour
+    /// cannot come back by someone restoring a deleted test.
+    /// </summary>
     [Fact]
-    public void MissingProviderToken_isReportedAsAnOptionalKeyGapEvenWithNoAlertAddress()
+    public void MissingProviderToken_refusesProduction_evenWithNoAlertAddressAndAHealthySentry()
     {
-        var log = new RecordingLogger();
+        var act = () => Validate(
+            Config(sentryDsn: "https://k@o0.ingest.example.com/1"), "Production");
 
-        Validate(Config(sentryDsn: "https://k@o0.ingest.example.com/1"), "Production", logger: log);
-
-        log.Entries.Should().Contain(e => e.Message.Contains("Email:Postmark:ServerToken"),
-            "the Worker also emails purchase orders — an absent token deserves a startup warning "
-          + "even when alerting routes elsewhere");
+        act.Should().Throw<StartupConfigurationException>(
+                "the alerting route is fine here — it is SUPPLIER email that has no transport, and "
+              + "a warning about it reaches nobody on a host that serves no HTTP")
+            .Which.MissingKeys.Should().Contain(StartupConfigurationValidator.EmailProviderTokenKey);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────
