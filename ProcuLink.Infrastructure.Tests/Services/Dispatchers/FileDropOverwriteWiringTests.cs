@@ -8,6 +8,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure.Services.Dispatchers;
 using ProcuLink.Infrastructure.Services.Security;
+using ProcuLink.Infrastructure.Tests.TestDoubles;
 using Renci.SshNet;
 
 namespace ProcuLink.Infrastructure.Tests.Services.Dispatchers;
@@ -42,31 +43,33 @@ public class FileDropOverwriteWiringTests
     [Fact]
     public async Task Sftp_DispatchAsync_WithOverwriteOffInTheSavedConfig_RefusesToReplace()
     {
-        var session = new FakeSftpSession();
-        session.Files[RemotePath] = "THE-SUPPLIERS-EXISTING-FILE"u8.ToArray();
+        var server = new FakeSftpServer();
+        server.Files[RemotePath] = "THE-SUPPLIERS-EXISTING-FILE"u8.ToArray();
 
-        var result = await DispatchSftpAsync(session, overwriteExisting: false);
+        var result = await DispatchSftpAsync(server, overwriteExisting: false);
 
         result.Success.Should().BeFalse(
             "the operator turned replace-existing OFF for this supplier, and the live path must honour it");
         result.ErrorMessage.Should().Contain("already on the supplier's server");
-        session.Uploads.Should().Be(0, "nothing may be written to the supplier when the setting says do not replace");
-        Encoding.UTF8.GetString(session.Files[RemotePath]).Should().Be("THE-SUPPLIERS-EXISTING-FILE");
+        server.Uploads.Should().Be(0, "nothing may be written to the supplier when the setting says do not replace");
+        Encoding.UTF8.GetString(server.Files[RemotePath]).Should().Be("THE-SUPPLIERS-EXISTING-FILE");
     }
 
     [Fact]
-    public async Task Sftp_DispatchAsync_WithOverwriteOffInTheSavedConfig_TellsTheUploadItMayNotOverride()
+    public async Task Sftp_DispatchAsync_WithOverwriteOffInTheSavedConfig_TellsTheMoveItMayNotReplace()
     {
-        // The refusal above is one of two ways the setting reaches the wire. This is the other:
-        // when the path is FREE the upload still happens, and it must be told it may not override —
-        // otherwise a file appearing between the check and the write is silently replaced.
-        var session = new FakeSftpSession();
+        // The refusal above is one of two ways the setting reaches the wire. This is the other: when
+        // the path is FREE the transfer still happens, and the move onto the supplier's file name
+        // must be the non-clobbering rename — otherwise a file appearing while we upload is
+        // silently replaced. Before B-14 this assertion was about the WRITE's canOverride; the
+        // guarantee moved to the rename, which enforces it atomically instead of after a check.
+        var server = new FakeSftpServer();
 
-        var result = await DispatchSftpAsync(session, overwriteExisting: false);
+        var result = await DispatchSftpAsync(server, overwriteExisting: false);
 
         result.Success.Should().BeTrue();
-        session.LastCanOverride.Should().BeFalse(
-            "the saved setting must reach the upload call itself, not only the pre-write existence check");
+        server.Renames.Should().ContainSingle().Which.ReplaceExisting.Should().BeFalse(
+            "the saved setting must reach the publish itself, not only the pre-transfer existence check");
     }
 
     [Fact]
@@ -74,27 +77,27 @@ public class FileDropOverwriteWiringTests
     {
         // The compatibility half of the same wire: every SFTP connection configured before this
         // setting existed has no such key and must keep replacing its own earlier file.
-        var session = new FakeSftpSession();
-        session.Files[RemotePath] = "TRUNCATED-BY-A-CRASH"u8.ToArray();
+        var server = new FakeSftpServer();
+        server.Files[RemotePath] = "TRUNCATED-BY-A-CRASH"u8.ToArray();
 
-        var result = await DispatchSftpAsync(session, overwriteExisting: null);
+        var result = await DispatchSftpAsync(server, overwriteExisting: null);
 
         result.Success.Should().BeTrue();
-        session.LastCanOverride.Should().BeTrue();
-        Encoding.UTF8.GetString(session.Files[RemotePath]).Should().Be("NEW-COMPLETE-DOCUMENT");
+        server.Renames.Should().ContainSingle().Which.ReplaceExisting.Should().BeTrue();
+        Encoding.UTF8.GetString(server.Files[RemotePath]).Should().Be("NEW-COMPLETE-DOCUMENT");
     }
 
     [Fact]
     public async Task Sftp_DispatchAsync_WithOverwriteOnInTheSavedConfig_Overwrites()
     {
-        var session = new FakeSftpSession();
-        session.Files[RemotePath] = "TRUNCATED-BY-A-CRASH"u8.ToArray();
+        var server = new FakeSftpServer();
+        server.Files[RemotePath] = "TRUNCATED-BY-A-CRASH"u8.ToArray();
 
-        var result = await DispatchSftpAsync(session, overwriteExisting: true);
+        var result = await DispatchSftpAsync(server, overwriteExisting: true);
 
         result.Success.Should().BeTrue();
-        session.LastCanOverride.Should().BeTrue();
-        Encoding.UTF8.GetString(session.Files[RemotePath]).Should().Be("NEW-COMPLETE-DOCUMENT");
+        server.Renames.Should().ContainSingle().Which.ReplaceExisting.Should().BeTrue();
+        Encoding.UTF8.GetString(server.Files[RemotePath]).Should().Be("NEW-COMPLETE-DOCUMENT");
     }
 
     // ── FTPS ──────────────────────────────────────────────────────────────────
@@ -102,46 +105,46 @@ public class FileDropOverwriteWiringTests
     [Fact]
     public async Task Ftps_DispatchAsync_WithOverwriteOffInTheSavedConfig_RefusesToReplace()
     {
-        var session = new FakeFtpsServer();
-        session.Files[RemotePath] = "THE-SUPPLIERS-EXISTING-FILE"u8.ToArray();
+        var server = new FakeFtpsServer();
+        server.Files[RemotePath] = "THE-SUPPLIERS-EXISTING-FILE"u8.ToArray();
 
-        var result = await DispatchFtpsAsync(session, overwriteExisting: false);
+        var result = await DispatchFtpsAsync(server, overwriteExisting: false);
 
         result.Success.Should().BeFalse();
         result.ErrorMessage.Should().Contain("already on the supplier's server");
-        session.LastExistsMode.Should().Be(FtpRemoteExists.Skip);
-        Encoding.UTF8.GetString(session.Files[RemotePath]).Should().Be("THE-SUPPLIERS-EXISTING-FILE");
+        server.Uploads.Should().Be(0, "nothing may be written to the supplier when the setting says do not replace");
+        Encoding.UTF8.GetString(server.Files[RemotePath]).Should().Be("THE-SUPPLIERS-EXISTING-FILE");
     }
 
     [Fact]
     public async Task Ftps_DispatchAsync_WithNoSettingSaved_Overwrites()
     {
-        var session = new FakeFtpsServer();
-        session.Files[RemotePath] = "TRUNCATED-BY-A-CRASH"u8.ToArray();
+        var server = new FakeFtpsServer();
+        server.Files[RemotePath] = "TRUNCATED-BY-A-CRASH"u8.ToArray();
 
-        var result = await DispatchFtpsAsync(session, overwriteExisting: null);
+        var result = await DispatchFtpsAsync(server, overwriteExisting: null);
 
         result.Success.Should().BeTrue();
-        session.LastExistsMode.Should().Be(FtpRemoteExists.Overwrite);
-        Encoding.UTF8.GetString(session.Files[RemotePath]).Should().Be("NEW-COMPLETE-DOCUMENT");
+        server.Moves.Should().ContainSingle().Which.ExistsMode.Should().Be(FtpRemoteExists.Overwrite);
+        Encoding.UTF8.GetString(server.Files[RemotePath]).Should().Be("NEW-COMPLETE-DOCUMENT");
     }
 
     [Fact]
     public async Task Ftps_DispatchAsync_WithOverwriteOnInTheSavedConfig_Overwrites()
     {
-        var session = new FakeFtpsServer();
-        session.Files[RemotePath] = "TRUNCATED-BY-A-CRASH"u8.ToArray();
+        var server = new FakeFtpsServer();
+        server.Files[RemotePath] = "TRUNCATED-BY-A-CRASH"u8.ToArray();
 
-        var result = await DispatchFtpsAsync(session, overwriteExisting: true);
+        var result = await DispatchFtpsAsync(server, overwriteExisting: true);
 
         result.Success.Should().BeTrue();
-        session.LastExistsMode.Should().Be(FtpRemoteExists.Overwrite);
+        server.Moves.Should().ContainSingle().Which.ExistsMode.Should().Be(FtpRemoteExists.Overwrite);
     }
 
     // ── Harness ───────────────────────────────────────────────────────────────
 
     private static Task<ProcuLink.Core.Services.Delivery.DeliveryResult> DispatchSftpAsync(
-        FakeSftpSession session, bool? overwriteExisting)
+        FakeSftpServer session, bool? overwriteExisting)
     {
         var dispatcher = new SftpDeliveryDispatcher(
             NullLogger<SftpDeliveryDispatcher>.Instance, AllowAllGuard(), _ => session);
@@ -206,47 +209,6 @@ public class FileDropOverwriteWiringTests
         return new OutboundRequestGuard(cfg, NullLogger<OutboundRequestGuard>.Instance);
     }
 
-    private sealed class FakeSftpSession : SftpDeliveryDispatcher.ISftpUploadSession
-    {
-        public Dictionary<string, byte[]> Files { get; } = new(StringComparer.Ordinal);
-        public int Uploads { get; private set; }
-        public bool? LastCanOverride { get; private set; }
-
-        public bool Exists(string path) => Files.ContainsKey(path);
-        public void CreateDirectory(string path) { }
-
-        public void UploadFile(Stream input, string path, bool canOverride)
-        {
-            LastCanOverride = canOverride;
-            Uploads++;
-            using var ms = new MemoryStream();
-            input.CopyTo(ms);
-            Files[path] = ms.ToArray();
-        }
-    }
-
-    /// <summary>
-    /// An FTPS server the way FluentFTP reports one: <c>Skip</c> mode over an occupied path is a
-    /// <c>Skipped</c> transfer that writes nothing, anything else overwrites and succeeds.
-    /// </summary>
-    private sealed class FakeFtpsServer : FtpsDeliveryDispatcher.IFtpsUploadSession
-    {
-        public Dictionary<string, byte[]> Files { get; } = new(StringComparer.Ordinal);
-        public FtpRemoteExists? LastExistsMode { get; private set; }
-
-        public async Task<FtpStatus> UploadStream(
-            Stream input, string remotePath, FtpRemoteExists existsMode,
-            bool createRemoteDir, CancellationToken token)
-        {
-            LastExistsMode = existsMode;
-
-            if (existsMode == FtpRemoteExists.Skip && Files.ContainsKey(remotePath))
-                return FtpStatus.Skipped;
-
-            using var ms = new MemoryStream();
-            await input.CopyToAsync(ms, token);
-            Files[remotePath] = ms.ToArray();
-            return FtpStatus.Success;
-        }
-    }
+    // The two servers live in TestDoubles/FakeFileDropServers.cs — see the note there on why they
+    // are shared rather than copied per test file.
 }
