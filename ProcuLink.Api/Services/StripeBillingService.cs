@@ -19,7 +19,11 @@ public sealed class StripeBillingService : IBillingService
     /// flip, 2026-06-11). Absent/false — the default — keeps the historical meter: every
     /// non-sample order counts against quota/overage the moment it enters processing
     /// (CreatedAt), which is exactly what the pricing FAQ and Terms currently describe, so
-    /// flag OFF keeps the published copy true. True switches both the quota count
+    /// flag OFF keeps the published copy true. (One exception, and it is not this flag's: the
+    /// PILOT hard cap subtracts <see cref="PilotForgivenFailureStatuses"/> in BOTH flag
+    /// positions — see <see cref="CountOrdersAsync"/>. Pilot is a free trial that accrues no
+    /// overage, so no published price copy describes its meter.)
+    /// True switches both the quota count
     /// (<see cref="CountOrdersAsync"/>) and the overage meter
     /// (<see cref="ComputePeriodOverageOrdersAsync"/>) to count only orders that REACHED
     /// the supplier — see those methods for the exact status set and the late-delivery
@@ -817,8 +821,46 @@ public sealed class StripeBillingService : IBillingService
     }
 
     /// <summary>
+    /// Statuses where ProcuLink itself failed to produce a delivery, so the order never reached
+    /// the supplier and the customer received nothing for it. Derived from
+    /// <see cref="OrderStatusConstants.FailureBucket"/> minus
+    /// <see cref="OrderStatusConstants.RejectedBySupplier"/> — a rejection means the document WAS
+    /// delivered and the supplier declined it as a business decision, which is the same reason the
+    /// delivered-only meter treats a rejection as billable. Derived, not hand-listed, so a sixth
+    /// failure status is forgiven on the day it is declared.
+    ///
+    /// <para>Consumed ONLY by the Pilot branch of <see cref="CountOrdersAsync"/>. See there for why
+    /// the HARD cap and the SOFT cap deliberately meter differently.</para>
+    /// </summary>
+    private static readonly string[] PilotForgivenFailureStatuses =
+        OrderStatusConstants.FailureBucket
+            .Where(s => s != OrderStatusConstants.RejectedBySupplier)
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .ToArray();
+
+    /// <summary>
     /// Counts the org's quota-relevant orders: cumulative since trial start for Pilot,
     /// UTC-calendar-month-to-date for paid plans. Sample orders never count in either mode.
+    ///
+    /// <para><b>The Pilot HARD cap forgives ProcuLink-side failures; the paid SOFT cap does not.</b>
+    /// The two caps have opposite failure modes, so they are metered differently ON PURPOSE.
+    /// Pilot's 20 is the ONLY hard cap in the product: reaching it flips the org to
+    /// <c>trial_expired</c> and refuses every ingest path, and no client-side order delete exists,
+    /// so an order counted here can never be reclaimed. Over-counting it therefore DENIES SERVICE —
+    /// five malformed uploads in the first hour of a trial silently burn a quarter of it. A paid
+    /// plan's cap is soft: going over never blocks, it accrues €0.50/order that a customer can see
+    /// and dispute. Over-counting the soft cap costs money that is recoverable; over-counting the
+    /// hard cap costs the trial, which is not.
+    /// So the Pilot branch — and ONLY the Pilot branch — subtracts
+    /// <see cref="PilotForgivenFailureStatuses"/>. The paid monthly count and the invoiced overage
+    /// window (<see cref="ComputePeriodOverageOrdersAsync"/>) are byte-identical to before: the
+    /// published pricing/Terms copy describes the paid meter, and Pilot accrues no overage at all
+    /// (<c>chargesOverage</c> is false for Pilot), so this changes a GATE and never a charge.
+    /// Only orders ProcuLink failed to deliver are forgiven — an order parked in
+    /// <c>pending_review</c>, <c>unrouted</c> or <c>delivery_unconfirmed</c>, or still in flight,
+    /// still counts, because the customer can still act on it and the cap must stay reachable.
+    /// The forgiveness is bidirectional through <see cref="MarkPilotExpiredIfNeededAsync"/>: a
+    /// failed order stops counting the moment it fails, and counts again if a retry delivers it.</para>
     ///
     /// <para><b>Delivered-only meter (<see cref="CountDeliveredOnlyFlagKey"/>, default OFF).</b>
     /// Flag OFF: every non-sample order counts when it enters processing (CreatedAt) —
@@ -838,7 +880,9 @@ public sealed class StripeBillingService : IBillingService
         if (NormalizePlan(org.Plan) == PlanConstants.Pilot)
         {
             var pilotOrders = _db.PurchaseOrders
-                .Where(o => o.OrgId == org.Id && !o.IsSample && o.CreatedAt >= org.TrialStartedAt);
+                .Where(o => o.OrgId == org.Id && !o.IsSample && o.CreatedAt >= org.TrialStartedAt)
+                // Hard-cap forgiveness — Pilot only. See the remarks above.
+                .Where(o => !PilotForgivenFailureStatuses.Contains(o.Status));
             return await ApplyMeterStatusFilter(pilotOrders).CountAsync(ct);
         }
 
