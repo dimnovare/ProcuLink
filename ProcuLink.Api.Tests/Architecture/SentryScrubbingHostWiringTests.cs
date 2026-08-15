@@ -232,11 +232,27 @@ public class SentryScrubbingHostWiringTests
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
+    /// <summary>
+    /// Host source with comments stripped.
+    ///
+    /// <para>Stripping is not cosmetic. The first draft of this guard matched the raw file, and
+    /// the mutation check caught it: commenting the call out — <c>// o.UseProcuLinkScrubbing();</c>
+    /// — left the guard GREEN while the Worker shipped with no scrubbing at all. That is precisely
+    /// the defect this file exists to catch, and it is the same trap the other cross-host guards in
+    /// this directory avoid by going through <see cref="OrphanDetector.StripComments"/>. It also
+    /// keeps <see cref="NeitherHost_keepsItsOwnInlineScrubber"/> from tripping on a comment that
+    /// merely mentions <c>SetBeforeSend</c> — such as the one this file's own prose contains.</para>
+    /// </summary>
     private static string HostSource(string relativePath)
     {
         var full = Path.Combine(RepoSourceCorpus.FindRepoRoot(), relativePath.Replace('/', Path.DirectorySeparatorChar));
         Assert.True(File.Exists(full), $"{full} not found — the host moved and this guard is now blind.");
-        return File.ReadAllText(full);
+        var stripped = OrphanDetector.StripComments(File.ReadAllText(full));
+
+        // Anti-vacuity: the stripper must not have swallowed the composition root. It has done
+        // exactly that before on ProcuLink.Api/Program.cs — see the note in AcceptanceGateSingleDoorTests.
+        Assert.Contains("builder.Build()", stripped);
+        return stripped;
     }
 
     /// <summary>
