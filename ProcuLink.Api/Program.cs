@@ -629,6 +629,9 @@ builder.Services.AddScoped<ISchemaInferencer, OpenAiSchemaInferencer>();
 builder.Services.AddScoped<IEmailBodyOrderExtractor, OpenAiEmailBodyOrderExtractor>();
 builder.Services.AddScoped<IInboundAddressService, InboundAddressService>();
 builder.Services.AddScoped<IInboundEmailRouter, InboundEmailRouter>();
+// Outbound direction of the same provider relationship: Postmark's bounce / spam-complaint
+// webhook. Without it a mistyped supplier address leaves the order reading 'delivered' forever.
+builder.Services.AddScoped<IDeliveryBounceHandler, ProcuLink.Infrastructure.Services.Delivery.DeliveryBounceHandler>();
 builder.Services.AddScoped<IParseJobEnqueuer, ProcuLink.Api.Controllers.HangfireParseJobEnqueuer>();
 
 // ── Wave 2: pull-ingress (SFTP / S3-R2) + OCR fallback ────────────────────

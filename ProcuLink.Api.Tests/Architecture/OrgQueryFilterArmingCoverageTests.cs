@@ -56,13 +56,19 @@ public sealed class OrgQueryFilterArmingCoverageTests
             ["InboundEmailController.Postmark"] =
                 "The organisation is derived from the recipient address, never the caller. " +
                 "Token-authenticated rather than scheme-authenticated, so no tenant resolves today.",
+
+            ["InboundEmailController.PostmarkBounce"] =
+                "The OUTBOUND direction of the same provider relationship. The organisation is " +
+                "derived from the delivery attempt the bounce metadata resolves to, never from the " +
+                "caller; that lookup is the query which DISCOVERS the tenant, so it cannot be " +
+                "scoped to one. Same shared-token authentication as the inbound endpoint.",
         };
 
     /// <summary>
-    /// Detection floor. Three opt-outs exist; if the reflection ever stops finding them, "the
+    /// Detection floor. Four opt-outs exist; if the reflection ever stops finding them, "the
     /// unexpected set is empty" stays technically true while protecting nothing.
     /// </summary>
-    private const int MinimumCrossOrganisationEndpointsDetected = 3;
+    private const int MinimumCrossOrganisationEndpointsDetected = 4;
 
     /// <summary>Corpus floor — 37 controllers today.</summary>
     private const int MinimumControllersScanned = 30;

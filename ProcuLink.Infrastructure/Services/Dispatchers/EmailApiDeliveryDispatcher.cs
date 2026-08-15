@@ -108,6 +108,15 @@ public sealed class EmailApiDeliveryDispatcher : IDeliveryDispatcher
             ? null
             : new[] { new EmailApiHeader("Message-ID", $"<{idempotencyKey}@proculink.eu>") };
 
+        // Bounce attribution. The provider's Bounce / SpamComplaint webhooks echo METADATA, never
+        // custom MIME headers, so the deterministic Message-ID above cannot carry this. The delivery
+        // idempotency key is already persisted on DeliveryAttempt.IdempotencyKey, so stamping it
+        // here resolves a later bounce to exactly the attempt that sent the message — and through it
+        // to the order — with no new column. Null only on a test fire, which has no order to move.
+        var metadata = string.IsNullOrWhiteSpace(idempotencyKey)
+            ? null
+            : new Dictionary<string, string> { [DeliveryBounceMetadata.IdempotencyKeyField] = idempotencyKey };
+
         var message = new EmailApiMessage(
             From: from,
             To: recipients,
@@ -115,7 +124,8 @@ public sealed class EmailApiDeliveryDispatcher : IDeliveryDispatcher
             TextBody: bodyText,
             Attachments: new[] { new EmailApiAttachment(attachmentName, contentType, content) },
             ReplyTo: string.IsNullOrWhiteSpace(cfg.ReplyTo) ? null : cfg.ReplyTo,
-            Headers: headers);
+            Headers: headers,
+            Metadata: metadata);
 
         var result = await _email.SendAsync(message, ct);
         return result.Success

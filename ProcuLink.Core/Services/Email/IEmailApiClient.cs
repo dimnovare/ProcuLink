@@ -33,6 +33,12 @@ public interface IEmailApiClient
 }
 
 /// <summary>One outbound email. <paramref name="Attachments"/> may be null/empty.</summary>
+/// <param name="Metadata">
+/// Provider metadata echoed back on that provider's asynchronous webhooks (bounce, spam complaint).
+/// This is the ONLY thing that makes such a webhook attributable: the provider knows nothing about
+/// orders, and a bounce payload does not echo custom MIME headers. The supplier delivery channel
+/// stamps <c>DeliveryBounceMetadata.IdempotencyKeyField</c> here — see <c>IDeliveryBounceHandler</c>.
+/// </param>
 public sealed record EmailApiMessage(
     string From,
     IReadOnlyList<string> To,
@@ -40,7 +46,8 @@ public sealed record EmailApiMessage(
     string TextBody,
     IReadOnlyList<EmailApiAttachment>? Attachments = null,
     string? ReplyTo = null,
-    IReadOnlyList<EmailApiHeader>? Headers = null);
+    IReadOnlyList<EmailApiHeader>? Headers = null,
+    IReadOnlyDictionary<string, string>? Metadata = null);
 
 /// <summary>A single binary attachment (the generated artifact for delivery, etc.).</summary>
 public sealed record EmailApiAttachment(string FileName, string ContentType, byte[] Content);

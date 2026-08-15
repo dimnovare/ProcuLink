@@ -90,6 +90,12 @@ public sealed class PostmarkEmailApiClient : IEmailApiClient
             Headers = message.Headers is { Count: > 0 }
                 ? message.Headers.Select(h => new PostmarkHeader { Name = h.Name, Value = h.Value }).ToList()
                 : null,
+            // Metadata is echoed back on Postmark's Bounce and SpamComplaint webhooks; custom
+            // headers are NOT. It is therefore the only field on this request that can make an
+            // asynchronous delivery failure attributable to an order.
+            Metadata = message.Metadata is { Count: > 0 }
+                ? new Dictionary<string, string>(message.Metadata)
+                : null,
         };
 
         try
@@ -169,6 +175,7 @@ public sealed class PostmarkEmailApiClient : IEmailApiClient
         public string MessageStream { get; set; } = "outbound";
         public List<PostmarkAttachment>? Attachments { get; set; }
         public List<PostmarkHeader>? Headers { get; set; }
+        public Dictionary<string, string>? Metadata { get; set; }
     }
 
     private sealed class PostmarkAttachment
