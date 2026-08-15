@@ -200,6 +200,9 @@ public sealed class IngestDedupePostgresTests : IClassFixture<IngestDedupeFixtur
         => new(db, orders, enqueuer,
             bodyExtractor ?? NoOrderBodyExtractor.Instance,
             InboundAddressTestHarness.Create(db),
+            // These cells are about the dedupe claim, not the billing gate; the gate itself is
+            // pinned by IngestPathBillingGateTests.
+            TestDoubles.PermissiveBilling.Service(),
             InboundAddressTestHarness.Configuration(),
             NullLogger<InboundEmailRouter>.Instance);
 

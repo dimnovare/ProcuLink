@@ -520,6 +520,7 @@ public sealed class SupplierRoutingMatrixPostgresTests
             new CountingParseEnqueuer(),
             proseOnly ? OneOrderBodyExtractor.Instance : NoOrderBodyExtractor.Instance,
             InboundAddressTestHarness.Create(db),
+            TestDoubles.PermissiveBilling.Service(),
             InboundAddressTestHarness.Configuration(),
             NullLogger<InboundEmailRouter>.Instance);
 

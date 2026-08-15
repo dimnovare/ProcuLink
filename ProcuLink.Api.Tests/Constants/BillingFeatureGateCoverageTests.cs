@@ -59,7 +59,7 @@ public class BillingFeatureGateCoverageTests
             [BillingFeature.Cxml]                = "SuppliersController.UpsertDeliveryConfig (OutputFormat = cxml)",
             [BillingFeature.AdvancedAudit]       = "AuditController.GetAuditLog (org-wide trail; per-order audit stays open)",
             [BillingFeature.WebhookDelivery]     = "SuppliersController.UpsertDeliveryConfig (Protocol = http)",
-            [BillingFeature.EmailIngestion]      = "SettingsController.UpdateEmail + EmailPollOrgJob",
+            [BillingFeature.EmailIngestion]      = "SettingsController.UpdateEmail + EmailPollOrgJob + InboundEmailRouter.RouteAsync",
             [BillingFeature.SftpIngestion]       = "SettingsController.UpdateSftp + SuppliersController.UpsertCatalogSource + SftpPollOrgJob",
             [BillingFeature.S3Ingestion]         = "SettingsController.UpdateS3 + S3PollOrgJob",
             [BillingFeature.ErpConnectors]       = "SuppliersController.UpsertDeliveryConfig (Protocol = erp_*)",

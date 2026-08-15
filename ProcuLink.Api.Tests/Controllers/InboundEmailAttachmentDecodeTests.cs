@@ -216,6 +216,7 @@ public class InboundEmailAttachmentDecodeTests
             new NoOpEnqueuer(),
             NoOpBodyExtractor.Instance,
             InboundAddressTestHarness.Create(db, config),
+            TestDoubles.PermissiveBilling.Service(),
             config,
             NullLogger<InboundEmailRouter>.Instance);
 

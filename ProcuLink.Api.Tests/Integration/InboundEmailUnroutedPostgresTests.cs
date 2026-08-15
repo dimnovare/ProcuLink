@@ -402,7 +402,9 @@ public sealed class InboundEmailUnroutedPostgresTests(PostgresContainerFixture p
 
         return new InboundEmailRouter(
             db, orders, enqueuer, NoOpBodyExtractor.Instance,
-            InboundAddressTestHarness.Create(db, config), config,
+            InboundAddressTestHarness.Create(db, config),
+            TestDoubles.PermissiveBilling.Service(),
+            config,
             NullLogger<InboundEmailRouter>.Instance);
     }
 
