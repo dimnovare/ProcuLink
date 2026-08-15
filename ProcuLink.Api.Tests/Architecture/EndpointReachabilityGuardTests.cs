@@ -125,6 +125,19 @@ public sealed class EndpointReachabilityGuardTests
             + "The other half of the integration is ProcuLink.Api/Services/StripeBillingService.cs. "
             + "A frontend caller would be a bug. Permanent entry."),
 
+        new("POST /api/inbound-email/postmark-bounce",
+            "2026-08-15 — Postmark calls this, not the browser, and the URL is configured in the " + 
+            "Postmark dashboard rather than in code (contract: " + 
+            "https://postmarkapp.com/developer/webhooks/bounce-webhook). It is the OUTBOUND half of the " + 
+            "provider relationship: Postmark POSTs here when a purchase order ProcuLink emailed " + 
+            "to a supplier hard-bounces or is reported as spam, and the handler moves the order " + 
+            "off 'delivered'. The URL is configured in the Postmark dashboard rather than in " + 
+            "code, and authentication is the shared token, not a session — so a frontend caller " + 
+            "would be a bug. The handler is " + 
+            "ProcuLink.Infrastructure/Services/Delivery/DeliveryBounceHandler.cs and its sibling " + 
+            "POST /api/inbound-email/postmark is the inbound half. " + 
+            "Permanent entry."),
+
         // ── Operator tooling with a documented out-of-band caller ─────────────────────────
         new("POST /api/admin/organisations/{}/account-status",
             "2026-08-13 — run by hand from the admin runbook rather than from a screen: "
@@ -327,7 +340,7 @@ public sealed class EndpointReachabilityGuardTests
         MachineFacing.Concat(UncalledPendingDecision).ToDictionary(e => e.Key, e => e, StringComparer.Ordinal);
 
     /// <summary>
-    /// The union as landed, 2026-08-13. <b>SHRINK-ONLY.</b> An entry may be deleted — when the
+    /// The union as landed, 2026-08-15 (was 2026-08-13; moved once, for the entry named below). <b>SHRINK-ONLY.</b> An entry may be deleted — when the
     /// endpoint gains a caller, or is removed — but nothing may ever be added: a NEW caller-less
     /// endpoint has to be fixed, not excused.
     ///
@@ -335,7 +348,7 @@ public sealed class EndpointReachabilityGuardTests
     /// If a genuinely caller-less endpoint is unavoidable — another provider webhook, another
     /// machine-facing ingress — that is a conversation with a reviewer, in the PR, in the open.</para>
     /// </summary>
-    private static readonly IReadOnlySet<string> BaselineAt_2026_08_13 =
+    private static readonly IReadOnlySet<string> BaselineAt_2026_08_15 =
         new HashSet<string>(StringComparer.Ordinal)
         {
             "DELETE /api/admin/organisations/{}/orders/{}",
@@ -347,6 +360,10 @@ public sealed class EndpointReachabilityGuardTests
             "GET /api/billing/ai-usage",
             "GET /api/dev/files/{**}",
             "GET /api/ingress/{}/ping",
+            // Moved into the baseline on 2026-08-15, deliberately and in the open, exactly as the
+            // failure text asks: the Postmark bounce webhook is caller-less BY CONSTRUCTION — the
+            // caller is the mail provider. It is the second provider webhook here, beside Stripe's.
+            "POST /api/inbound-email/postmark-bounce",
             "GET /api/invoices/{}/validate-peppol",
             "GET /api/order-confirmations/{}",
             "GET /api/orders/{}/ai-decisions",
@@ -743,7 +760,7 @@ public sealed class EndpointReachabilityGuardTests
     {
         var added = MachineFacing.Concat(UncalledPendingDecision)
             .Select(e => e.Key)
-            .Where(key => !BaselineAt_2026_08_13.Contains(key))
+            .Where(key => !BaselineAt_2026_08_15.Contains(key))
             .OrderBy(key => key, StringComparer.Ordinal)
             .ToList();
 
@@ -751,7 +768,7 @@ public sealed class EndpointReachabilityGuardTests
         {
             Assert.Fail(
                 "The declaration list may only ever SHRINK. These entries are new since the "
-                + "2026-08-13 baseline:" + Environment.NewLine
+                + "2026-08-15 baseline:" + Environment.NewLine
                 + string.Join(Environment.NewLine, added.Select(a => $"  • {a}")) + Environment.NewLine
                 + Environment.NewLine
                 + "A new endpoint nothing can reach is the defect this guard exists to catch. Give it "
@@ -760,8 +777,8 @@ public sealed class EndpointReachabilityGuardTests
                 + "deliberately. Do not slip it in.");
         }
 
-        Assert.True(AccountedFor.Count <= BaselineAt_2026_08_13.Count,
-            $"the declaration list grew from {BaselineAt_2026_08_13.Count} to {AccountedFor.Count}");
+        Assert.True(AccountedFor.Count <= BaselineAt_2026_08_15.Count,
+            $"the declaration list grew from {BaselineAt_2026_08_15.Count} to {AccountedFor.Count}");
     }
 
     // ── The detector itself, on synthetic input ──────────────────────────────────────────
