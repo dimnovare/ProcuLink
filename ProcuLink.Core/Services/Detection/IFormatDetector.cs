@@ -69,12 +69,16 @@ public sealed record DetectedFormat(
     string Basis = FormatDetectionBasis.Heuristic);
 
 /// <summary>
-/// Values for <see cref="DetectedFormat.Basis"/>. To be mirrored by the frontend's
-/// <c>DetectFormatResult</c> in <c>src/lib/api-client.ts</c>, whose <c>confidence</c> is still a
-/// non-nullable <c>number</c> — until it is nullable there,
-/// <c>UploadWorkbench.tsx</c> renders a null as <c>Math.round(null * 100)</c> = <b>0%</b>, which is
-/// a louder lie than the 95% this fix removed. Same shape as <c>MappingSuggestionBasis</c> and
-/// <c>AiMappingSuggestionBasis</c>.
+/// Values for <see cref="DetectedFormat.Basis"/>, mirrored by the frontend's
+/// <c>DetectFormatResult</c> in <c>src/lib/api-client.ts</c>. Same shape as
+/// <c>MappingSuggestionBasis</c> and <c>AiMappingSuggestionBasis</c>.
+///
+/// <para>The frontend half landed FIRST, deliberately — project-proculink#206. Until it did, its
+/// <c>confidence</c> was a non-nullable <c>number</c> and <c>UploadWorkbench.tsx</c> rendered a null
+/// as <c>Math.round(null * 100)</c> = <b>0%</b>, because <c>null * 100</c> is 0 rather than NaN.
+/// On a percentage ramp 0% reads as "certainly wrong", so shipping this side first would have
+/// replaced a fabricated 95% with a louder lie, on the one detection this detector is certain about.
+/// The frontend now reads <see cref="MagicBytes"/> and names the evidence instead of scoring it.</para>
 ///
 /// <para>The invariant, enforced by <c>FormatDetectorBasisInvariantTests</c>:
 /// <b><see cref="Heuristic"/> carries a number and the other two never do.</b></para>
