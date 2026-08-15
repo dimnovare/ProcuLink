@@ -45,16 +45,28 @@ public sealed class StuckDeliveryDetectionService : IStuckDeliveryDetectionServi
     // compiling; both live hosts register IIntegrationTriggerService, so production always notifies.
     private readonly IIntegrationTriggerService? _integrationTrigger;
 
+    // Optional exception-reconcile seam, same shape and same reason as the two seams above. The
+    // customer-facing webhook is only half of "tell someone": the IN-APP surface is the exception
+    // list, and 'dead_letter' is the single 'critical' severity OrderExceptionService raises.
+    // DeliveryService.DeadLetterAsync reconciles, so ITS dead-letters open that row; the orders
+    // dead-lettered here reached the same terminal, undeliverable status showing no problem at all
+    // in GET /api/exceptions or the inbox. Optional rather than required so the existing positional
+    // test constructors keep compiling; both live hosts register IOrderExceptionService, so
+    // production always reconciles.
+    private readonly IOrderExceptionService? _exceptions;
+
     public StuckDeliveryDetectionService(
         ProcuLinkDbContext db,
         ILogger<StuckDeliveryDetectionService> logger,
         IRetryDeliveryEnqueuer? retryEnqueuer = null,
-        IIntegrationTriggerService? integrationTrigger = null)
+        IIntegrationTriggerService? integrationTrigger = null,
+        IOrderExceptionService? exceptions = null)
     {
         _db = db;
         _logger = logger;
         _retryEnqueuer = retryEnqueuer;
         _integrationTrigger = integrationTrigger;
+        _exceptions = exceptions;
     }
 
     public async Task<int> RunAsync(TimeSpan stuckThreshold, CancellationToken ct)
@@ -193,6 +205,44 @@ public sealed class StuckDeliveryDetectionService : IStuckDeliveryDetectionServi
         }
 
         await _db.SaveChangesAsync(ct);
+
+        // ── Raise the in-app problem for the stranded order ───────────────────────
+        // Ordered AFTER the commit for the same reason as the fan-out below: Reconcile derives the
+        // problem from the order's CURRENT status, so it must read the committed
+        // 'delivery_dead_letter' — running it before the save would derive 'delivering', which maps
+        // to no problem at all, and the row would silently not be opened.
+        //
+        // Reconcile is idempotent by suppression (it will not add a second open row for a code that
+        // already has one), so re-entry is safe. Best-effort and swallowed per order, mirroring
+        // DeliveryService.SafeReconcileExceptionsAsync: exception generation is operational
+        // observability data and must never undo a committed terminal status, and because this
+        // sweep is cross-tenant, letting one org's reconcile throw would abandon every remaining
+        // org's row — the same silence this block exists to remove.
+        if (deadLettered.Count > 0)
+        {
+            if (_exceptions is null)
+            {
+                _logger.LogWarning(
+                    "StuckDeliveryDetection: {Count} order(s) dead-lettered but no IOrderExceptionService is registered in this process — no dead_letter exceptions were opened for them.",
+                    deadLettered.Count);
+            }
+            else
+            {
+                foreach (var (orderId, orgId, _, _, _) in deadLettered)
+                {
+                    try
+                    {
+                        await _exceptions.ReconcileAsync(orgId, orderId, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex,
+                            "StuckDeliveryDetection: failed to reconcile exceptions for dead-lettered order {OrderId} (org {OrgId}) — the order IS dead-lettered; only the exception row was lost.",
+                            orderId, orgId);
+                    }
+                }
+            }
+        }
 
         // ── Tell the customer the stranded order is not coming ────────────────────
         // Fired only after the terminal status is committed, which is what makes this at-most-once:
