@@ -7,8 +7,11 @@ using ProcuLink.Api.Controllers;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Services.Email;
+using ProcuLink.TestSupport;
 using ProcuLink.Worker.Jobs;
 using Xunit;
 
@@ -280,5 +283,217 @@ public class IngestPathBillingGateTests
 
         sftp.Verify(s => s.PollAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
         s3.Verify(s => s.PollAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // ── Inbound email (Postmark PUSH webhook) ────────────────────────────────
+    //
+    // B-8, the fourth path. The IMAP PULL channel has re-checked EmailIngestion every cycle since
+    // it shipped; the PUSH webhook checked NOTHING — no plan gate and no order-limit gate — and the
+    // inbound address is auto-minted for every org on every plan. A comment on the router asserted
+    // that "monthly limits are enforced downstream by ParseOrderJob"; that file contains no billing
+    // code of any kind, and the comment is why nobody looked. Pilot's 20-order cap is the model's
+    // only HARD cap, and email walked around it.
+    //
+    // B-9 lived in the same method: a hand-written 2-of-4 copy of the read-only status set, missing
+    // past_due and cancelled, so a delinquent org kept ingesting by email — and kept being billed —
+    // while every other path refused it.
+
+    private const string EmailToken = "acme-inbound";
+
+    private sealed record EmailHarness(
+        InboundEmailRouter Router,
+        Guid OrgId,
+        Mock<IClaimedOrderCreator> Orders,
+        Mock<IBillingService> Billing);
+
+    /// <summary>
+    /// A router over a seeded org with a live inbound address. Order creation ALWAYS succeeds, for
+    /// the same reason the ingress harness does it: the gate is then the only thing under test, so a
+    /// missing gate shows up as an order being created rather than as an incidental crash.
+    /// </summary>
+    private static EmailHarness BuildEmail(
+        bool hasEmailIngestion,
+        LimitCheckResult limit,
+        string accountStatus = AccountStatusConstants.Active)
+    {
+        var db = NewDb();
+        var orgId = Guid.NewGuid();
+
+        db.Organisations.Add(new Organisation
+        {
+            Id = orgId,
+            Name = "Acme",
+            Slug = "acme",
+            ClerkOrgId = "org_" + Guid.NewGuid().ToString("N"),
+            AccountStatus = accountStatus,
+            CreatedAt = DateTime.UtcNow,
+        });
+        db.SaveChanges();
+
+        var config = InboundAddressTestHarness.Configuration();
+        InboundAddressTestHarness.SeedAddress(db, orgId, EmailToken, config);
+
+        var billing = new Mock<IBillingService>();
+        billing.Setup(b => b.HasFeatureAsync(orgId, BillingFeature.EmailIngestion, It.IsAny<CancellationToken>()))
+               .ReturnsAsync(hasEmailIngestion);
+        billing.Setup(b => b.CheckOrderLimitAsync(orgId, It.IsAny<CancellationToken>()))
+               .ReturnsAsync(limit);
+
+        var orders = new Mock<IClaimedOrderCreator>();
+        orders.Setup(o => o.CreateClaimedStubAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<Guid>(), It.IsAny<Stream>(),
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid org, Guid? sup, Guid id, Stream _, string _, string _, string? _, CancellationToken _) =>
+                Result<PurchaseOrderEntity>.Ok(new PurchaseOrderEntity
+                {
+                    Id = id, OrgId = org, SupplierId = sup, PoNumber = "PO-EMAIL-1", Status = "parsing",
+                }));
+
+        var router = new InboundEmailRouter(
+            db, orders.Object, new NoOpEnqueuer(), NoOrderBody.Instance,
+            InboundAddressTestHarness.Create(db, config),
+            billing.Object, config,
+            NullLogger<InboundEmailRouter>.Instance);
+
+        return new EmailHarness(router, orgId, orders, billing);
+    }
+
+    private static InboundEmailPayload EmailPayload() => new(
+        FromEmail: "buyer@heinrich.example.com",
+        ToEmail: $"orders@{EmailToken}.proculink.eu",
+        Subject: "PO attached",
+        Attachments: new[]
+        {
+            new InboundAttachment("po.csv", "text/csv", System.Text.Encoding.UTF8.GetBytes("po,qty\r\nB8-1,4\r\n")),
+        });
+
+    private static void VerifyNoOrderCreated(EmailHarness h, string because) =>
+        h.Orders.Verify(o => o.CreateClaimedStubAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<Guid>(), It.IsAny<Stream>(),
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()),
+            Times.Never, because);
+
+    /// <summary>
+    /// The anti-vacuity control for every "never creates an order" assertion below: a healthy org on
+    /// a plan that includes email ingestion DOES get an order out of this harness. Without this, a
+    /// harness that never created one would make all four refusal tests pass having proved nothing.
+    /// </summary>
+    [Fact]
+    public async Task InboundEmail_HealthyOrgOnAPlanWithEmailIngestion_CreatesTheOrder()
+    {
+        var h = BuildEmail(hasEmailIngestion: true, new LimitCheckResult(
+            Allowed: true, PilotExpired: false, Plan: PlanConstants.Growth, Limit: 150));
+
+        var result = await h.Router.RouteAsync(EmailPayload(), CancellationToken.None);
+
+        result.CreatedOrderIds.Should().HaveCount(1,
+            "the harness must be able to create an order, or every refusal assertion below is vacuous");
+    }
+
+    /// <summary>
+    /// <i>"I'm on the free Pilot and I've put 400 orders through by email."</i>
+    /// </summary>
+    [Fact]
+    public async Task InboundEmail_WithTheOrderAllowanceExhausted_IsRefused_AndNeverCreatesAnOrder()
+    {
+        var h = BuildEmail(hasEmailIngestion: true, new LimitCheckResult(
+            Allowed: false, PilotExpired: true, Plan: PlanConstants.Pilot, Limit: 20));
+
+        var result = await h.Router.RouteAsync(EmailPayload(), CancellationToken.None);
+
+        result.Success.Should().BeFalse("Pilot's cap is the billing model's only HARD cap");
+        result.CreatedOrderIds.Should().BeEmpty();
+        VerifyNoOrderCreated(h, "an exhausted allowance must not ingest by email either");
+    }
+
+    [Fact]
+    public async Task InboundEmail_OnAPlanWithoutEmailIngestion_IsRefused_AndNeverCreatesAnOrder()
+    {
+        // The address exists — it is auto-minted for every org on every plan — but the plan does
+        // not include the channel. IMAP has refused this since it shipped.
+        var h = BuildEmail(hasEmailIngestion: false, new LimitCheckResult(
+            Allowed: true, PilotExpired: false, Plan: PlanConstants.Pilot, Limit: 20));
+
+        var result = await h.Router.RouteAsync(EmailPayload(), CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.CreatedOrderIds.Should().BeEmpty();
+        VerifyNoOrderCreated(h, "a plan without EmailIngestion must not ingest by email");
+    }
+
+    /// <summary>
+    /// B-9. Permissive billing on purpose: these two statuses must be refused by the router's OWN
+    /// status gate, which is what the stale 2-of-4 local copy failed to do. A test that let billing
+    /// refuse them instead would pass with the old set still in place.
+    /// </summary>
+    [Theory]
+    [InlineData(AccountStatusConstants.PastDue)]
+    [InlineData(AccountStatusConstants.Cancelled)]
+    [InlineData(AccountStatusConstants.ReadOnly)]
+    [InlineData(AccountStatusConstants.TrialExpired)]
+    public async Task InboundEmail_ForAReadOnlyAccountStatus_IsRefused_AndNeverCreatesAnOrder(string status)
+    {
+        var h = BuildEmail(
+            hasEmailIngestion: true,
+            new LimitCheckResult(Allowed: true, PilotExpired: false, Plan: PlanConstants.Growth, Limit: 150),
+            accountStatus: status);
+
+        var result = await h.Router.RouteAsync(EmailPayload(), CancellationToken.None);
+
+        result.Success.Should().BeFalse(
+            "every other ingest path refuses '{0}' via AccountStatusConstants.IsReadOnly", status);
+        result.CreatedOrderIds.Should().BeEmpty();
+        VerifyNoOrderCreated(h, $"'{status}' blocks ingest on every other path");
+    }
+
+    /// <summary>
+    /// THE soft-cap invariant, restated for this channel: a paid org over its monthly allowance is
+    /// still Allowed, because CanProcessOrders ignores volume for an active paid plan. The overage
+    /// is billed, never blocked. If this fails, the new gate turned a soft cap into a hard one.
+    /// </summary>
+    [Fact]
+    public async Task InboundEmail_OverTheSoftCap_OnAPaidPlan_StillCreatesTheOrder()
+    {
+        var h = BuildEmail(hasEmailIngestion: true, new LimitCheckResult(
+            Allowed: true, PilotExpired: false, Plan: PlanConstants.Growth, Limit: 150));
+
+        var result = await h.Router.RouteAsync(EmailPayload(), CancellationToken.None);
+
+        result.CreatedOrderIds.Should().HaveCount(1,
+            "going over a paid plan's cap accrues overage, never a block");
+    }
+
+    /// <summary>
+    /// Every billing refusal must be TRANSIENT. A Permanent rejection answers Postmark 200, which
+    /// ends re-delivery for good — so a purchase order held back by a reversible billing state
+    /// would be lost rather than delayed. Transient keeps it re-fireable for ~10.5 hours.
+    /// </summary>
+    [Fact]
+    public async Task InboundEmail_BillingRefusals_AreTransient_SoTheOrderSurvivesTheFix()
+    {
+        var overCap = await BuildEmail(hasEmailIngestion: true, new LimitCheckResult(
+            Allowed: false, PilotExpired: true, Plan: PlanConstants.Pilot, Limit: 20))
+            .Router.RouteAsync(EmailPayload(), CancellationToken.None);
+
+        var noFeature = await BuildEmail(hasEmailIngestion: false, new LimitCheckResult(
+            Allowed: true, PilotExpired: false, Plan: PlanConstants.Pilot, Limit: 20))
+            .Router.RouteAsync(EmailPayload(), CancellationToken.None);
+
+        overCap.RejectionKind.Should().Be(InboundEmailRejectionKind.Transient);
+        noFeature.RejectionKind.Should().Be(InboundEmailRejectionKind.Transient);
+    }
+
+    private sealed class NoOpEnqueuer : IParseJobEnqueuer
+    {
+        public Task EnqueueAsync(Guid orderId, Guid orgId, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private sealed class NoOrderBody : ProcuLink.Core.Services.Ai.IEmailBodyOrderExtractor
+    {
+        public static readonly NoOrderBody Instance = new();
+        public Task<ProcuLink.Core.Services.Ai.EmailBodyExtractionResult> ExtractAsync(
+            string emailBody, CancellationToken ct) =>
+            Task.FromResult(new ProcuLink.Core.Services.Ai.EmailBodyExtractionResult(
+                Success: false, Confidence: 0, Order: null, FailureReason: "test double"));
     }
 }

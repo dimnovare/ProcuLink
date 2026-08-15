@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -1219,7 +1220,7 @@ public class InboundEmailRouterTests
         var orders = new FakeOrderService();
         var router = new InboundEmailRouter(
             db, orders, new RecordingEnqueuer(), FakeBodyExtractor.NoOp,
-            InboundAddressTestHarness.Create(db, config), config,
+            InboundAddressTestHarness.Create(db, config), PermissiveBilling(), config,
             NullLogger<InboundEmailRouter>.Instance);
 
         var result = await router.RouteAsync(new InboundEmailPayload(
@@ -1249,7 +1250,7 @@ public class InboundEmailRouterTests
 
         var router = new InboundEmailRouter(
             db, new FakeOrderService(), new RecordingEnqueuer(), FakeBodyExtractor.NoOp,
-            InboundAddressTestHarness.Create(db, broken), broken,
+            InboundAddressTestHarness.Create(db, broken), PermissiveBilling(), broken,
             NullLogger<InboundEmailRouter>.Instance);
 
         var result = await router.RouteAsync(new InboundEmailPayload(
@@ -1319,6 +1320,25 @@ public class InboundEmailRouterTests
         return logger;
     }
 
+    /// <summary>
+    /// An <see cref="IBillingService"/> that says yes, for the tests whose subject is NOT the
+    /// billing gate. A bare <c>Mock&lt;IBillingService&gt;</c> answers <c>false</c>/<c>default</c>,
+    /// which would fail every one of them at the gate instead of exercising what they were written
+    /// to exercise. Never pass this to a test that is ABOUT a gate — <c>default</c> answers are how
+    /// a gate test goes vacuously green.
+    /// </summary>
+    private static IBillingService PermissiveBilling()
+    {
+        var billing = new Mock<IBillingService>();
+        billing.Setup(b => b.HasFeatureAsync(
+                It.IsAny<Guid>(), It.IsAny<BillingFeature>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        billing.Setup(b => b.CheckOrderLimitAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new LimitCheckResult(
+                Allowed: true, PilotExpired: false, Plan: PlanConstants.Enterprise, Limit: int.MaxValue));
+        return billing.Object;
+    }
+
     private static InboundEmailRouter MakeRouter(
         ProcuLinkDbContext db,
         IClaimedOrderCreator orders,
@@ -1327,7 +1347,8 @@ public class InboundEmailRouterTests
         Guid orgId,
         IEmailBodyOrderExtractor? extractor = null,
         string? inboundDomain = null,
-        ILogger<InboundEmailRouter>? logger = null)
+        ILogger<InboundEmailRouter>? logger = null,
+        IBillingService? billing = null)
     {
         var settings = new Dictionary<string, string?>();
         if (inboundDomain is not null)
@@ -1345,6 +1366,7 @@ public class InboundEmailRouterTests
             db, orders, enqueuer,
             extractor ?? FakeBodyExtractor.NoOp,
             InboundAddressTestHarness.Create(db, config),
+            billing ?? PermissiveBilling(),
             config,
             logger ?? NullLogger<InboundEmailRouter>.Instance);
     }

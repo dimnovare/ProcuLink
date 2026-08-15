@@ -22,9 +22,13 @@ namespace ProcuLink.Infrastructure.Services.Email;
 /// <c>unrouted</c> for <c>POST /api/orders/{id}/assign-supplier</c> — the same hold the pull
 /// channels use. The caller therefore answers 200; a false <c>InboundEmailResult.Success</c>
 /// is reserved for messages this product cannot act on: an unparseable recipient, a recipient
-/// that is not a live inbound address, a missing organisation, and an organisation whose account
-/// status blocks ingest. Each of those also carries an <c>InboundEmailRejectionKind</c>, which is what
-/// decides whether the mail provider re-delivers the message — see that enum.
+/// that is not a live inbound address, a missing organisation, and an organisation billing refuses
+/// to ingest for — a read-only / delinquent account status, a plan without
+/// <c>BillingFeature.EmailIngestion</c>, or an exhausted order allowance. Each of those also carries
+/// an <c>InboundEmailRejectionKind</c>, which is what decides whether the mail provider re-delivers
+/// the message — see that enum. All three billing refusals are <c>Transient</c>: every one is
+/// reversible by the customer, and Postmark's ~10.5 hours of re-delivery is the window in which the
+/// purchase order survives the fix.
 ///
 /// Tenant resolution runs against <c>org_inbound_addresses</c>: the recipient address is a
 /// per-organisation CREDENTIAL, and the organisation follows from the credential presented
@@ -74,19 +78,6 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
     };
 
     /// <summary>
-    /// Account statuses that block ingest. Mirrors the read-only gate used by
-    /// <c>OrdersController.Upload</c> via <c>IBillingService.CheckOrderLimitAsync</c>.
-    /// We can't reuse that path verbatim because billing also enforces monthly
-    /// volume limits; for the inbound webhook we only gate on account status —
-    /// monthly limits are enforced downstream by <c>ParseOrderJob</c>.
-    /// </summary>
-    private static readonly HashSet<string> BlockedAccountStatuses = new(StringComparer.OrdinalIgnoreCase)
-    {
-        AccountStatusConstants.ReadOnly,
-        AccountStatusConstants.TrialExpired,
-    };
-
-    /// <summary>
     /// Default host suffix used when parsing the recipient address. The full
     /// recipient is <c>orders@{slug}.proculink.eu</c>; if the founder hosts
     /// the inbound MX on a different domain (e.g. <c>inbound.proculink.eu</c>),
@@ -127,6 +118,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
     private readonly IParseJobEnqueuer _enqueuer;
     private readonly IEmailBodyOrderExtractor _bodyExtractor;
     private readonly IInboundAddressService _addresses;
+    private readonly IBillingService _billing;
     private readonly IConfiguration _config;
     private readonly ILogger<InboundEmailRouter> _logger;
 
@@ -136,6 +128,10 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         IParseJobEnqueuer enqueuer,
         IEmailBodyOrderExtractor bodyExtractor,
         IInboundAddressService addresses,
+        // Required, never optional: a default would let a test — or a second host's DI — construct
+        // a router whose plan and volume gates silently do not run, which is the state this class
+        // shipped in for months.
+        IBillingService billing,
         IConfiguration config,
         ILogger<InboundEmailRouter> logger)
     {
@@ -144,6 +140,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         _enqueuer = enqueuer;
         _bodyExtractor = bodyExtractor;
         _addresses = addresses;
+        _billing = billing;
         _config = config;
         _logger = logger;
     }
@@ -221,7 +218,12 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                 InboundEmailRejectionKind.Transient);
         }
 
-        if (BlockedAccountStatuses.Contains(org.AccountStatus))
+        // Derived from the canonical set, never a local copy. This used to be a hand-written
+        // 2-of-4 HashSet holding only ReadOnly and TrialExpired, so a past_due or cancelled org —
+        // refused by upload, REST ingress, SFTP, S3 and IMAP alike, all of which route through
+        // AccountStatusConstants.IsReadOnly via StripeBillingService — kept ingesting by email and
+        // kept being billed for it.
+        if (AccountStatusConstants.IsReadOnly(org.AccountStatus))
         {
             _logger.LogWarning(
                 "Inbound email for org {OrgId} ignored: account_status={Status} blocks ingest.",
@@ -233,6 +235,50 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                 // minutes, and Postmark keeps re-delivering for ~10.5 hours before filing
                 // the mail under Failed, where it stays re-fireable by hand. Refusing the
                 // retries here would turn a reversible freeze into a lost purchase order.
+                InboundEmailRejectionKind.Transient);
+        }
+
+        // ── 2b. Plan gate ────────────────────────────────────────────────────
+        // Hosted inbound email is BillingFeature.EmailIngestion — Growth and up — and the inbound
+        // address is auto-minted for EVERY org on EVERY plan by SettingsController.GetInboundAddresses,
+        // with no admin check. The IMAP pull channel has re-checked this every cycle since it
+        // shipped (EmailPollOrgJob); the PUSH webhook checked nothing, so a Pilot could route
+        // unlimited orders through the one channel nobody was watching.
+        if (!await _billing.HasFeatureAsync(org.Id, BillingFeature.EmailIngestion, ct))
+        {
+            _logger.LogWarning(
+                "Inbound email for org {OrgId} ignored: the plan does not include email ingestion.",
+                org.Id);
+            await WriteAuditAsync(org.Id, "inbound_email.rejected_plan_gate", payload, ct);
+            return new InboundEmailResult(false, OrgId: orgId, Array.Empty<Guid>(),
+                "Organisation's plan does not include inbound email ingestion.",
+                // Transient for the same reason the status gate is: an upgrade is minutes away and
+                // Postmark's ~10.5 hours of re-delivery is the window in which the order survives.
+                InboundEmailRejectionKind.Transient);
+        }
+
+        // ── 2c. Volume gate ──────────────────────────────────────────────────
+        // The SAME gate OrdersController.Upload and IngressController apply. A doc comment here
+        // used to assert that "monthly limits are enforced downstream by ParseOrderJob" — that file
+        // contains no billing, limit, overage, quota, plan, meter or usage code of any kind, and the
+        // comment is why nobody looked. Pilot's 20-order cap is the billing model's only HARD cap,
+        // and email walked around it.
+        //
+        // CheckOrderLimitAsync is the SOFT-CAP-SAFE gate: its Allowed flag is
+        // BillingStatus.CanProcessOrders, which for an active paid plan ignores volume entirely.
+        // Going over the monthly allowance still succeeds here and accrues €0.50/order overage;
+        // only a non-processing account status or an expired Pilot refuses.
+        var limitCheck = await _billing.CheckOrderLimitAsync(org.Id, ct);
+        if (!limitCheck.Allowed)
+        {
+            _logger.LogWarning(
+                "Inbound email for org {OrgId} ignored: plan {Plan}, pilotExpired={PilotExpired}, limit={Limit}.",
+                org.Id, limitCheck.Plan, limitCheck.PilotExpired, limitCheck.Limit);
+            await WriteAuditAsync(org.Id, "inbound_email.rejected_order_limit", payload, ct);
+            return new InboundEmailResult(false, OrgId: orgId, Array.Empty<Guid>(),
+                limitCheck.PilotExpired
+                    ? "Organisation's Pilot has ended and cannot ingest new orders."
+                    : "Organisation has reached its plan's order limit.",
                 InboundEmailRejectionKind.Transient);
         }
 
