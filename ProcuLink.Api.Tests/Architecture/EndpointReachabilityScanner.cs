@@ -420,16 +420,45 @@ public static class EndpointReachabilityScanner
     /// that, and it is refusing to have an "unable to check" state at all. CI supplies the checkout
     /// (see the frontend-checkout step in <c>.github/workflows/ci.yml</c>); a developer supplies it
     /// by having the two repositories side by side.</para>
+    ///
+    /// <para><b>Side by side with ANY ancestor</b>, nearest first — because the backend root is
+    /// <c>&lt;repo&gt;/.claude/worktrees/&lt;name&gt;</c> whenever the suite runs from a worktree,
+    /// which is the workspace CLAUDE.md tells every parallel session to use. Pinned by
+    /// <see cref="EndpointReachabilityGuardTests.TheResolver_FindsTheFrontendWhenTheCheckoutItselfSitsUnderDotClaudeWorktrees"/>,
+    /// with the throw itself pinned by
+    /// <see cref="EndpointReachabilityGuardTests.TheResolver_StillThrowsWhenThereIsNowhereLeftToLook"/>.</para>
     /// </summary>
-    public static string FindFrontendRoot(string backendRoot)
+    public static string FindFrontendRoot(string backendRoot) =>
+        FindFrontendRoot(backendRoot, Environment.GetEnvironmentVariable("PROCULINK_FRONTEND_PATH"));
+
+    /// <summary>
+    /// The search itself, with the configured path passed in rather than read from the environment.
+    ///
+    /// <para>The seam exists so the resolver can be driven over a synthetic tree without writing
+    /// <c>PROCULINK_FRONTEND_PATH</c>: that variable is process-global, CI sets it for the whole
+    /// job, and a test that cleared it would decide the answer for every class running beside it.
+    /// Passing it explicitly keeps the search under test and the environment out of it.</para>
+    /// </summary>
+    public static string FindFrontendRoot(string backendRoot, string? configuredPath)
     {
         var candidates = new List<string>();
 
-        var configured = Environment.GetEnvironmentVariable("PROCULINK_FRONTEND_PATH");
-        if (!string.IsNullOrWhiteSpace(configured)) candidates.Add(configured);
+        if (!string.IsNullOrWhiteSpace(configuredPath)) candidates.Add(configuredPath);
 
-        var parent = Directory.GetParent(backendRoot)?.FullName;
-        if (parent is not null) candidates.Add(Path.Combine(parent, "project-proculink"));
+        // Beside EVERY ancestor, nearest first — not only beside the immediate parent. CLAUDE.md
+        // tells every parallel session to work in an isolated worktree, which puts the checkout at
+        // <repo>/.claude/worktrees/<name>; the immediate parent is then <repo>/.claude/worktrees,
+        // whose sibling project-proculink never exists, and the resolver threw on a clean checkout
+        // in the workspace the project documents. The walk reaches <repo>'s own parent, which is
+        // where the two repositories really sit side by side, from either layout.
+        //
+        // Widening the list cannot pick up the wrong tree: LooksLikeTheFrontend gates every
+        // candidate on package.json AND src/lib/api-client.ts, and nearest-first means a real
+        // sibling checkout still wins over anything further up.
+        for (var ancestor = Directory.GetParent(backendRoot); ancestor is not null; ancestor = ancestor.Parent)
+        {
+            candidates.Add(Path.Combine(ancestor.FullName, "project-proculink"));
+        }
 
         foreach (var candidate in candidates.Where(LooksLikeTheFrontend))
         {
@@ -441,7 +470,8 @@ public static class EndpointReachabilityScanner
             + "'unable to check' state on purpose — a cross-repo guard that shrugs is the "
             + "backendMirror.test.ts failure (green for months on skipIf(!BACKEND)).\n\n"
             + "Supply it either way:\n"
-            + "  • clone dimnovare/project-proculink beside this repository, or\n"
+            + "  • clone dimnovare/project-proculink beside this repository (or beside any directory\n"
+            + "    above it — a worktree under .claude/worktrees/ still finds it), or\n"
             + "  • set PROCULINK_FRONTEND_PATH=/path/to/project-proculink\n\n"
             + "Looked in:\n  "
             + string.Join("\n  ", candidates.DefaultIfEmpty("(nowhere — no env var, and no parent directory)"))
