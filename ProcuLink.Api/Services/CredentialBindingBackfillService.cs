@@ -42,6 +42,8 @@ public sealed class CredentialBindingBackfillService : ICredentialBindingBackfil
         if (rewritten > 0)
             await _db.SaveChangesAsync(ct);
 
+        await ReportUnmigratableDeliveryCredentialsAsync(ct);
+
         return rewritten;
     }
 
@@ -62,15 +64,54 @@ public sealed class CredentialBindingBackfillService : ICredentialBindingBackfil
     }
 
     /// <summary>
-    /// Decrypts a legacy blob and re-encrypts it under <paramref name="scope"/>. Returns null when
-    /// the blob cannot be read, so the caller can skip that row rather than fail the whole pass.
+    /// Whether a row is worth handing to <see cref="TryRebind"/> at all.
+    ///
+    /// <para>A version-1 blob always is. A version-2 blob normally is not — but during a key
+    /// rotation it may still be encrypted under the retiring key, and only a decrypt can tell, so
+    /// while <c>Delivery:PreviousEncryptionKey</c> is configured every readable envelope is
+    /// attempted. With no rotation in progress this is exactly <see cref="IsLegacy"/> and the pass
+    /// costs what it always did.</para>
+    /// </summary>
+    private bool NeedsRebindAttempt(string? blob)
+    {
+        if (string.IsNullOrWhiteSpace(blob)) return false;
+
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromBase64String(blob);
+        }
+        catch (FormatException)
+        {
+            return false; // not an envelope at all — leave it alone rather than guess
+        }
+
+        if (bytes.Length == 0) return false;
+        return bytes[0] == VersionLegacy || _encryption.HasPreviousKey;
+    }
+
+    /// <summary>
+    /// Decrypts a blob and re-encrypts it under <paramref name="scope"/> and the primary key.
+    /// Returns null when the row needs no rewrite, and also when the blob cannot be read at all, so
+    /// the caller can skip that row rather than fail the whole pass.
+    ///
+    /// <para>Reads with <see cref="LegacyEnvelopeAccess.PermitForMigration"/>: this is the one
+    /// caller that must be able to read a version-1 envelope for a purpose whose production reads
+    /// now refuse one. Without it the backfill could never migrate the columns it covers, because
+    /// its own read would be the thing the downgrade guard rejected.</para>
     /// </summary>
     private string? TryRebind(string blob, CredentialScope scope, string rowDescription)
     {
         try
         {
-            var plaintext = _encryption.Decrypt(blob, scope);
-            return _encryption.Encrypt(plaintext, scope);
+            var read = _encryption.DecryptDetailed(blob, scope, LegacyEnvelopeAccess.PermitForMigration);
+
+            // Already bound AND already under the primary key — nothing to do. Re-encrypting would
+            // change the bytes for no gain, and this is what keeps the pass idempotent on every boot.
+            if (!read.WasUnboundLegacyEnvelope && !read.WasEncryptedUnderPreviousKey)
+                return null;
+
+            return _encryption.Encrypt(read.Plaintext, scope);
         }
         // CredentialUnbindableException is Decrypt failing to read the blob. ArgumentException is
         // the re-Encrypt's scope.ToAssociatedData() rejecting a malformed scope (e.g. OrgId ==
@@ -97,7 +138,7 @@ public sealed class CredentialBindingBackfillService : ICredentialBindingBackfil
         var count = 0;
         foreach (var row in rows)
         {
-            if (!IsLegacy(row.EncryptedSecret)) continue;
+            if (!NeedsRebindAttempt(row.EncryptedSecret)) continue;
 
             var scope = CredentialScope.ForSupplier(
                 row.OrganisationId, CredentialPurpose.OrgIntegrationWebhookSecret, row.Id);
@@ -118,7 +159,7 @@ public sealed class CredentialBindingBackfillService : ICredentialBindingBackfil
         var count = 0;
         foreach (var row in rows)
         {
-            if (!IsLegacy(row.EncryptedPassword)) continue;
+            if (!NeedsRebindAttempt(row.EncryptedPassword)) continue;
 
             var scope = CredentialScope.ForOrg(row.OrgId, CredentialPurpose.OrgIngressSftpPassword);
             var rebound = TryRebind(row.EncryptedPassword, scope, $"SFTP ingress config {row.Id}");
@@ -138,7 +179,7 @@ public sealed class CredentialBindingBackfillService : ICredentialBindingBackfil
         var count = 0;
         foreach (var row in rows)
         {
-            if (!IsLegacy(row.EncryptedSecretKey)) continue;
+            if (!NeedsRebindAttempt(row.EncryptedSecretKey)) continue;
 
             var scope = CredentialScope.ForOrg(row.OrgId, CredentialPurpose.OrgIngressS3SecretKey);
             var rebound = TryRebind(row.EncryptedSecretKey, scope, $"S3 ingress config {row.Id}");
@@ -170,7 +211,7 @@ public sealed class CredentialBindingBackfillService : ICredentialBindingBackfil
         foreach (var row in rows)
         {
             var config = EmailPollingConfig.FromJson(row.EmailConfigJson);
-            if (!IsLegacy(config.PasswordCiphertext)) continue;
+            if (!NeedsRebindAttempt(config.PasswordCiphertext)) continue;
 
             var scope = CredentialScope.ForOrg(row.Id, CredentialPurpose.OrgEmailImapPassword);
             var rebound = TryRebind(config.PasswordCiphertext!, scope, $"IMAP config for org {row.Id}");
@@ -190,7 +231,7 @@ public sealed class CredentialBindingBackfillService : ICredentialBindingBackfil
         var count = 0;
         foreach (var row in rows)
         {
-            if (IsLegacy(row.EncryptedPassword))
+            if (NeedsRebindAttempt(row.EncryptedPassword))
             {
                 var scope = CredentialScope.ForSupplier(
                     row.OrgId, CredentialPurpose.SupplierCatalogPassword, row.Id);
@@ -202,7 +243,7 @@ public sealed class CredentialBindingBackfillService : ICredentialBindingBackfil
                 }
             }
 
-            if (IsLegacy(row.AuthConfigEncrypted))
+            if (NeedsRebindAttempt(row.AuthConfigEncrypted))
             {
                 var scope = CredentialScope.ForSupplier(
                     row.OrgId, CredentialPurpose.SupplierCatalogAuthConfig, row.Id);
@@ -229,7 +270,7 @@ public sealed class CredentialBindingBackfillService : ICredentialBindingBackfil
         var count = 0;
         foreach (var row in rows)
         {
-            if (!IsLegacy(row.EncryptedCxmlSharedSecret)) continue;
+            if (!NeedsRebindAttempt(row.EncryptedCxmlSharedSecret)) continue;
 
             var scope = CredentialScope.ForSupplier(
                 row.OrgId, CredentialPurpose.SupplierDeliveryCxmlSecret, row.SupplierId);
@@ -242,5 +283,60 @@ public sealed class CredentialBindingBackfillService : ICredentialBindingBackfil
         }
 
         return count;
+    }
+
+    /// <summary>
+    /// Counts — and never rewrites — the delivery-credential blobs still in the unbound version-1
+    /// envelope, on both the live config and the revision byte-copy.
+    ///
+    /// <para>These are the only credentials this service cannot migrate, and
+    /// <c>CredentialPurpose.AllowsUnboundLegacyEnvelope</c> therefore still accepts version 1 for
+    /// them. That residual is the whole remaining exposure, and until now nothing measured it: the
+    /// exclusion was documented in a comment and invisible at runtime. Reporting it on every boot
+    /// turns "some unknown number of portable ciphertexts" into a number that reaches zero when the
+    /// last operator re-saves their delivery config — and a zero is the precondition for removing
+    /// the exemption.</para>
+    ///
+    /// <para>Read-only and independently try/caught: a counting query must never be the reason a
+    /// migration pass that already rewrote rows reports failure.</para>
+    /// </summary>
+    private async Task ReportUnmigratableDeliveryCredentialsAsync(CancellationToken ct)
+    {
+        try
+        {
+            var liveBlobs = await _db.SupplierDeliveryConfigs
+                .Where(x => x.EncryptedCredentials != null && x.EncryptedCredentials != "")
+                .Select(x => x.EncryptedCredentials)
+                .ToListAsync(ct);
+
+            var revisionBlobs = await _db.SupplierConnectionRevisions
+                .Where(x => x.CredentialsRef != null && x.CredentialsRef != "")
+                .Select(x => x.CredentialsRef)
+                .ToListAsync(ct);
+
+            var liveLegacy = liveBlobs.Count(IsLegacy);
+            var revisionLegacy = revisionBlobs.Count(IsLegacy);
+
+            if (liveLegacy == 0 && revisionLegacy == 0)
+            {
+                _logger.LogInformation(
+                    "Credential binding: no delivery credentials remain in the unbound envelope.");
+                return;
+            }
+
+            _logger.LogWarning(
+                "Credential binding: {LiveCount} live delivery config(s) and {RevisionCount} pinned " +
+                "revision copy(ies) are still in the unbound (version 1) envelope. These cannot be " +
+                "migrated automatically — the revision copy is compared byte-for-byte and frozen on " +
+                "published revisions — so they stay tenant-portable until an operator re-saves each " +
+                "supplier's delivery config, which rewrites both sides together.",
+                liveLegacy, revisionLegacy);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Credential binding: could not count remaining unbound delivery credentials. " +
+                "Rebinding itself was unaffected.");
+        }
     }
 }
