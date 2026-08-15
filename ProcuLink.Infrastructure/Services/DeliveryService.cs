@@ -937,7 +937,7 @@ public sealed class DeliveryService : IDeliveryService
         // "A second operation was started on this context instance".
         await _integrationTrigger.EnqueueAsync(
             order.OrgId,
-            "order.failed",
+            IntegrationEventTypes.OrderFailed,
             new { order_id = order.Id, failed_at = now, error },
             ct);
 
@@ -1119,7 +1119,7 @@ public sealed class DeliveryService : IDeliveryService
             // must not be able to mark a PO supplier-confirmed off a timestamp we invented.
             await _integrationTrigger.EnqueueAsync(
                 order.OrgId,
-                "order.delivered",
+                IntegrationEventTypes.OrderDelivered,
                 new { order_id = order.Id, delivered_at = now },
                 ct);
         }
@@ -1127,7 +1127,7 @@ public sealed class DeliveryService : IDeliveryService
         {
             await _integrationTrigger.EnqueueAsync(
                 order.OrgId,
-                "order.rejected",
+                IntegrationEventTypes.OrderRejected,
                 new { order_id = order.Id, rejected_at = now, reason = result.ErrorMessage },
                 ct);
         }
@@ -1135,7 +1135,7 @@ public sealed class DeliveryService : IDeliveryService
         {
             await _integrationTrigger.EnqueueAsync(
                 order.OrgId,
-                "order.failed",
+                IntegrationEventTypes.OrderFailed,
                 new { order_id = order.Id, failed_at = now, error = failureMessage },
                 ct);
         }
@@ -1859,6 +1859,40 @@ public sealed class DeliveryService : IDeliveryService
         // Reconcile exceptions: dead-letter opens the critical dead_letter exception and
         // supersedes any earlier delivery_failed exception for the order.
         await SafeReconcileExceptionsAsync(order.OrgId, order.Id, ct);
+
+        // ── Tell the customer the order is not coming ─────────────────────────────
+        // Every surface this transition had was PULL-based (the dead_letter exception row, the ops
+        // dead-letter list, the badge count) — all of which require somebody to already be looking.
+        // Nothing left the system, so the first notice a procurement team got that a PO would never
+        // be sent was the supplier phoning to ask where it was.
+        //
+        // This is NOT derivable from the per-attempt order.failed event fired in DispatchArtifactAsync:
+        // that one fires on every failed attempt and is compatible with the order still arriving on
+        // the next retry, and the attempt cap is server-side config a subscriber cannot see, so no
+        // amount of counting order.failed tells it which failure was the last one.
+        //
+        // Emitted AFTER SaveChangesAsync deliberately — see the idempotency note below.
+        //
+        // Awaited, not fire-and-forget: IntegrationTriggerService shares this scoped DbContext, so a
+        // detached `_ =` task would race the next query on _db and throw "A second operation was
+        // started on this context instance" (same reason as the order.failed site above).
+        //
+        // IDEMPOTENCY. DeadLetterAsync is reached only from RetryDeliveryAsync, which re-reads the
+        // order and returns NotRetryable at its `order.Status == DeliveryDeadLetter` guard before
+        // either call site. So once this status is committed, a Hangfire retry of the delivery job
+        // cannot re-enter here and cannot emit a second time. Ordering the enqueue AFTER the commit
+        // is what makes that guard load-bearing: the barrier is durable before the notification is
+        // raised. The residual failure mode is therefore a LOST notification if the process dies in
+        // the gap, never a duplicated one — the deliberate direction, because five "your PO is dead"
+        // webhooks for one order trains a customer to ignore the sixth.
+        await _integrationTrigger.EnqueueAsync(
+            order.OrgId,
+            IntegrationEventTypes.OrderDeadLettered,
+            // Same `now` already written to the order and the audit row, so the payload is
+            // byte-stable across Hangfire retries of the fan-out job — which is what lets
+            // FireIntegrationTriggerJob's deterministic event id dedupe on the subscriber side.
+            new { order_id = order.Id, dead_lettered_at = now, attempt_count = attemptCount, error = lastError },
+            ct);
 
         _logger.LogWarning(
             "Order {OrderId} (org {OrgId}) dead-lettered after {Attempts} attempt(s). Last error: {Error}",

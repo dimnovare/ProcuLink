@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
 
 namespace ProcuLink.Infrastructure.Services;
@@ -35,14 +36,25 @@ public sealed class StuckDeliveryDetectionService : IStuckDeliveryDetectionServi
     // it pinned in the stuck window where the next sweep would double-act on it.
     private readonly IRetryDeliveryEnqueuer? _retryEnqueuer;
 
+    // Optional notification seam, same shape and same reason as _retryEnqueuer above. This class is
+    // the SECOND dead-letter writer in the system (DeliveryService.DeadLetterAsync is the first),
+    // and the customer-facing order.dead_lettered event has to fire from both — an order that
+    // stranded in 'delivering' past its requeue budget is just as undeliverable as one that spent
+    // its retry budget, and a notification wired to only one of the two paths is silence that looks
+    // like coverage. Optional rather than required so the existing positional test constructors keep
+    // compiling; both live hosts register IIntegrationTriggerService, so production always notifies.
+    private readonly IIntegrationTriggerService? _integrationTrigger;
+
     public StuckDeliveryDetectionService(
         ProcuLinkDbContext db,
         ILogger<StuckDeliveryDetectionService> logger,
-        IRetryDeliveryEnqueuer? retryEnqueuer = null)
+        IRetryDeliveryEnqueuer? retryEnqueuer = null,
+        IIntegrationTriggerService? integrationTrigger = null)
     {
         _db = db;
         _logger = logger;
         _retryEnqueuer = retryEnqueuer;
+        _integrationTrigger = integrationTrigger;
     }
 
     public async Task<int> RunAsync(TimeSpan stuckThreshold, CancellationToken ct)
@@ -65,6 +77,11 @@ public sealed class StuckDeliveryDetectionService : IStuckDeliveryDetectionServi
         // Collect retry re-drives to fire AFTER the status/timestamp changes are committed —
         // an enqueued retry job could otherwise start before its bumped UpdatedAt is persisted.
         var retryRequeues = new List<(Guid OrderId, Guid OrgId)>();
+
+        // Same deal for dead-letter notifications: collected here, fired only after the terminal
+        // status is committed (see the emit block at the end of this method for why that ordering
+        // is what makes the notification at-most-once).
+        var deadLettered = new List<(Guid OrderId, Guid OrgId, DateTime At, int RequeueCount, string Detail)>();
 
         foreach (var order in stuck)
         {
@@ -137,6 +154,11 @@ public sealed class StuckDeliveryDetectionService : IStuckDeliveryDetectionServi
                 order.DeliveryDueAt = null;
                 order.SlaBreached = false;
 
+                var stuckDetail =
+                    $"Order re-driven {order.DeliveryRequeueCount} time(s) and kept stranding in 'delivering' — dead-lettered.";
+
+                deadLettered.Add((order.Id, order.OrgId, now, order.DeliveryRequeueCount, stuckDetail));
+
                 var failPayload = JsonSerializer.Serialize(new
                 {
                     reason = "StuckDeliveryDeadLettered",
@@ -147,7 +169,7 @@ public sealed class StuckDeliveryDetectionService : IStuckDeliveryDetectionServi
                     requeueCount = order.DeliveryRequeueCount,
                     maxRequeues = MaxRequeues,
                     deadLettered = true,
-                    detail = $"Order re-driven {order.DeliveryRequeueCount} time(s) and kept stranding in 'delivering' — dead-lettered.",
+                    detail = stuckDetail,
                 });
 
                 _db.AuditEvents.Add(new AuditEvent
@@ -171,6 +193,54 @@ public sealed class StuckDeliveryDetectionService : IStuckDeliveryDetectionServi
         }
 
         await _db.SaveChangesAsync(ct);
+
+        // ── Tell the customer the stranded order is not coming ────────────────────
+        // Fired only after the terminal status is committed, which is what makes this at-most-once:
+        // the sweep selects on `Status == Delivering`, so an order that is already
+        // 'delivery_dead_letter' can never be picked up by a later sweep and notified twice. Order
+        // the enqueue BEFORE the commit and a crash in the gap would leave the order still
+        // 'delivering', re-selected next sweep, and notified again — duplicates being the one
+        // outcome worse than none here. The residual failure mode is a lost notification, chosen
+        // deliberately.
+        //
+        // Each event is enqueued independently and a failure is swallowed per order: the sweep is a
+        // cross-tenant maintenance pass, so letting one org's fan-out throw would abandon the
+        // remaining orgs' notifications — the same silence this block exists to remove.
+        if (deadLettered.Count > 0)
+        {
+            if (_integrationTrigger is null)
+            {
+                _logger.LogWarning(
+                    "StuckDeliveryDetection: {Count} order(s) dead-lettered but no IIntegrationTriggerService is registered in this process — no order.dead_lettered events were emitted for them.",
+                    deadLettered.Count);
+            }
+            else
+            {
+                foreach (var (orderId, orgId, at, requeueCount, detail) in deadLettered)
+                {
+                    try
+                    {
+                        await _integrationTrigger.EnqueueAsync(
+                            orgId,
+                            IntegrationEventTypes.OrderDeadLettered,
+                            new
+                            {
+                                order_id = orderId,
+                                dead_lettered_at = at,
+                                attempt_count = requeueCount,
+                                error = detail,
+                            },
+                            ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex,
+                            "StuckDeliveryDetection: failed to emit order.dead_lettered for order {OrderId} (org {OrgId}) — the order IS dead-lettered; only the notification was lost.",
+                            orderId, orgId);
+                    }
+                }
+            }
+        }
 
         // Fire retry re-drives only after the bumped UpdatedAt rows are committed.
         if (retryRequeues.Count > 0)

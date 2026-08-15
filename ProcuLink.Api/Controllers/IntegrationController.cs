@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Auth;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
@@ -65,7 +66,11 @@ public sealed class IntegrationController : ControllerBase
         if (string.IsNullOrWhiteSpace(req.TargetUrl))
             return BadRequest(new { error = "TargetUrl is required." });
 
-        var validEvents = new[] { "order.created", "order.delivered", "order.failed" };
+        // Read off IntegrationEventTypes rather than a local literal array: this list and the emit
+        // sites are the two ends of one contract, and when they were maintained separately they
+        // drifted — order.rejected was emitted by DeliveryService for months while absent here, so
+        // no subscription for it could be created and every one of those events reached nobody.
+        var validEvents = IntegrationEventTypes.Subscribable;
         if (!validEvents.Contains(req.EventType))
             return BadRequest(new { error = $"EventType must be one of: {string.Join(", ", validEvents)}" });
 
