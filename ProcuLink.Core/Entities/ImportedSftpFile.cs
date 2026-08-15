@@ -3,8 +3,9 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace ProcuLink.Core.Entities;
 
 /// <summary>
-/// Tracks every remote file that has been successfully ingested via SFTP pull,
-/// keyed by (OrgId, RemotePath) to prevent duplicate imports.
+/// Tracks every remote file that has been claimed for ingest via SFTP pull, keyed by
+/// (OrgId, RemotePath) — one row per path, unique — with <see cref="FileHash"/> deciding whether
+/// the file currently at that path is still the one the row was claimed for.
 /// EF table: <c>imported_sftp_files</c>.
 /// </summary>
 [Table("imported_sftp_files")]
@@ -18,7 +19,24 @@ public class ImportedSftpFile
     /// <summary>Full remote path as returned by the SFTP server (e.g. <c>/incoming/po-001.csv</c>).</summary>
     public string RemotePath { get; set; } = string.Empty;
 
-    /// <summary>SHA-256 hex digest of the downloaded file bytes — used for content-level dedupe.</summary>
+    /// <summary>
+    /// SHA-256 hex digest of the bytes this claim was taken for, read by
+    /// <c>SftpIngressService.PollAsync</c> on every poll: the file at <see cref="RemotePath"/> is
+    /// the same file only when its hash still matches, and a mismatch means the supplier
+    /// overwrote the path with a corrected order, which is imported as a NEW order under a fresh
+    /// <see cref="OrderId"/> (an atomic conditional update guarded by the old hash — the row is
+    /// updated in place, never duplicated, because (OrgId, RemotePath) is unique).
+    ///
+    /// <para><b>This column had no reader at all until 2026-08-15</b> (audit finding B-7): it was
+    /// written once and never compared, while a doc comment here claimed it was "used for
+    /// content-level dedupe". Dedupe was path-only, so a corrected re-send at an already-seen path
+    /// was silently dropped — never imported, no audit row, no retry, no notification. Do not
+    /// re-describe this field by what it sounds like it should do; the reader is in
+    /// <c>SftpIngressService</c> and nowhere else.</para>
+    ///
+    /// <para>It is deliberately NOT a cross-path identity: identical bytes at two different remote
+    /// paths are two imports, not one. See the claim-first comment in <c>SftpIngressService</c>.</para>
+    /// </summary>
     public string FileHash { get; set; } = string.Empty;
 
     /// <summary>

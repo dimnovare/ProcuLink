@@ -57,16 +57,21 @@ public class SftpIngressServiceTests
         sftpFactory.ConnectCalls.Should().Be(0, "disabled config must not trigger a connection");
     }
 
-    // ── 3. Already imported file → skipped ───────────────────────────────────
+    // ── 3. Already imported file, UNCHANGED content → skipped ────────────────
+    // The genuine-duplicate direction of B-7. It must keep colliding for real: the seeded
+    // FileHash is the actual SHA-256 of the bytes the fake serves, asserted below, because
+    // this fixture used to seed the literal "aabbcc" and passed anyway — nothing read the
+    // column, so the dedupe test never actually collided on content.
 
     [Fact]
-    public async Task AlreadyImportedFile_IsSkipped_CountIsZero()
+    public async Task AlreadyImportedFile_UnchangedContent_IsSkipped_CountIsZero()
     {
         await using var db = CreateDb();
         var orgId = Guid.NewGuid();
         await SeedConfigAsync(db, orgId, isEnabled: true);
 
         const string remotePath = "/incoming/po-001.csv";
+        var content = "po,date\r\n001,2026-05-28"u8.ToArray();
 
         // Seed the dedupe record so the service thinks it was already imported.
         db.Set<ImportedSftpFile>().Add(new ImportedSftpFile
@@ -74,12 +79,12 @@ public class SftpIngressServiceTests
             Id = Guid.NewGuid(),
             OrgId = orgId,
             RemotePath = remotePath,
-            FileHash = "aabbcc",
+            FileHash = Sha256Hex(content),
             ImportedAt = DateTime.UtcNow.AddHours(-1),
         });
         await db.SaveChangesAsync();
 
-        var fakeSftp = new SingleFileFakeSftpFactory(remotePath, content: "po,date\r\n001,2026-05-28"u8.ToArray());
+        var fakeSftp = new SingleFileFakeSftpFactory(remotePath, content);
         var orders = new RecordingOrderService();
         var svc = MakeService(db, orders, fakeSftp);
 
@@ -87,6 +92,12 @@ public class SftpIngressServiceTests
 
         result.Should().Be(0, "already-imported file must not produce a new order stub");
         orders.CreateStubCalls.Should().Be(0);
+
+        // Anti-vacuity: the skip above must be a decision made against the REAL content hash,
+        // not a claim row that happens to hold whatever string the fixture felt like.
+        var claim = await db.Set<ImportedSftpFile>().SingleAsync(f => f.OrgId == orgId && f.RemotePath == remotePath);
+        claim.FileHash.Should().Be(Sha256Hex(content),
+            "the skip must be a genuine content collision — the stored hash IS the hash of the file on the server");
     }
 
     // ── 4. Phase 1b: no default supplier → file imported UNROUTED, not dropped ──
@@ -152,17 +163,18 @@ public class SftpIngressServiceTests
         await SeedConfigAsync(db, orgId, isEnabled: true, createDefaultSupplier: false);
 
         const string remotePath = "/incoming/po-dup.csv";
+        var content = "header1,header2\r\nval1,val2"u8.ToArray();
         db.Set<ImportedSftpFile>().Add(new ImportedSftpFile
         {
             Id = Guid.NewGuid(),
             OrgId = orgId,
             RemotePath = remotePath,
-            FileHash = "ddeeff",
+            FileHash = Sha256Hex(content),
             ImportedAt = DateTime.UtcNow.AddHours(-1),
         });
         await db.SaveChangesAsync();
 
-        var fakeSftp = new SingleFileFakeSftpFactory(remotePath, "header1,header2\r\nval1,val2"u8.ToArray());
+        var fakeSftp = new SingleFileFakeSftpFactory(remotePath, content);
         var orders = new RecordingOrderService();
         var svc = MakeService(db, orders, fakeSftp);
 
@@ -171,6 +183,73 @@ public class SftpIngressServiceTests
         result.Should().Be(0, "re-polling the same file in unrouted mode must not duplicate the order");
         orders.UnroutedStubCalls.Should().Be(0);
         orders.CreateStubCalls.Should().Be(0);
+    }
+
+    // ── B-7: a claim whose stored hash cannot be compared falls back to path-only ──
+    // Defensive: no production writer leaves file_hash blank. Pinned anyway because the
+    // fallback direction is the one that matters — an uncomparable hash must SKIP, never
+    // re-import, because the cost of guessing wrong is a duplicate supplier delivery.
+
+    [Fact]
+    public async Task ClaimWithBlankHash_IsStillSkipped_NeverReImported()
+    {
+        await using var db = CreateDb();
+        var orgId = Guid.NewGuid();
+        await SeedConfigAsync(db, orgId, isEnabled: true);
+
+        const string remotePath = "/incoming/po-blank-hash.csv";
+        db.Set<ImportedSftpFile>().Add(new ImportedSftpFile
+        {
+            Id = Guid.NewGuid(),
+            OrgId = orgId,
+            RemotePath = remotePath,
+            FileHash = "",                       // uncomparable
+            ImportedAt = DateTime.UtcNow.AddHours(-1),
+        });
+        await db.SaveChangesAsync();
+
+        var fakeSftp = new SingleFileFakeSftpFactory(remotePath, "header1,header2\r\nval1,val2"u8.ToArray());
+        var orders = new RecordingOrderService();
+        var svc = MakeService(db, orders, fakeSftp);
+
+        (await svc.PollAsync(orgId, default)).Should().Be(0,
+            "a claim whose hash cannot be compared must fall back to path-only semantics and SKIP");
+        orders.CreateStubCalls.Should().Be(0);
+        orders.UnroutedStubCalls.Should().Be(0);
+    }
+
+    // ── B-7 duplicate-path half: identical bytes at TWO paths are TWO imports ─────
+    // The decision this fix deliberately does NOT make. Content dedupe is scoped to a single
+    // remote path; it is not a cross-path content identity. Suppressing the second drop would
+    // be a new silent drop of exactly the class B-7 is about.
+
+    [Fact]
+    public async Task IdenticalContentAtTwoPaths_ImportsBoth()
+    {
+        await using var db = CreateDb();
+        var orgId = Guid.NewGuid();
+        await SeedConfigAsync(db, orgId, isEnabled: true);
+
+        var content = "po,date\r\n7781,2026-08-15"u8.ToArray();
+        var fakeSftp = new MultiFileFakeSftpFactory(
+            new Dictionary<string, byte[]>
+            {
+                ["/incoming/po-001.csv"]      = content,
+                ["/incoming/po-001-copy.csv"] = content,   // byte-identical, different path
+            });
+        var orders = new RecordingOrderService();
+        var svc = MakeService(db, orders, fakeSftp);
+
+        (await svc.PollAsync(orgId, default)).Should().Be(2,
+            "two paths are two supplier drops — content dedupe is per-path, never cross-path");
+        orders.CreateStubCalls.Should().Be(2);
+
+        var claims = await db.Set<ImportedSftpFile>().Where(f => f.OrgId == orgId).ToListAsync();
+        claims.Should().HaveCount(2);
+        claims.Select(c => c.FileHash).Distinct().Should().ContainSingle(
+            "the two claims really do hold the SAME content hash — this is a genuine content " +
+            "collision that was deliberately not suppressed, not two files that merely differ");
+        claims.Select(c => c.OrderId).Distinct().Should().HaveCount(2, "each drop gets its own order");
     }
 
     // ── 4. Unsupported extension → skipped ───────────────────────────────────
@@ -491,6 +570,13 @@ public class SftpIngressServiceTests
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// The exact digest <c>SftpIngressService</c> stores and compares — same algorithm, same
+    /// casing. Tests seed this, never a literal, so a dedupe fixture cannot go vacuous again.
+    /// </summary>
+    private static string Sha256Hex(byte[] content) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(content)).ToLowerInvariant();
+
     private static SftpIngressService MakeService(
         ProcuLinkDbContext db,
         IStubOrderCreator orders,
@@ -661,6 +747,30 @@ public class SftpIngressServiceTests
         public ISftpSession Connect(
             string host, int port, string username, string password, SshHostKeyVerifier verifier)
             => new SingleFileSftpSession(_remotePath, _content);
+    }
+
+    /// <summary>SFTP factory presenting several paths, each with its own content.</summary>
+    private sealed class MultiFileFakeSftpFactory : ISftpClientFactory
+    {
+        private readonly IReadOnlyDictionary<string, byte[]> _files;
+
+        public MultiFileFakeSftpFactory(IReadOnlyDictionary<string, byte[]> files) => _files = files;
+
+        public ISftpSession Connect(
+            string host, int port, string username, string password, SshHostKeyVerifier verifier)
+            => new MultiFileSftpSession(_files);
+    }
+
+    private sealed class MultiFileSftpSession : ISftpSession
+    {
+        private readonly IReadOnlyDictionary<string, byte[]> _files;
+
+        public MultiFileSftpSession(IReadOnlyDictionary<string, byte[]> files) => _files = files;
+
+        public IEnumerable<string> ListFileNames(string remoteDirectory) => _files.Keys;
+        public MemoryStream DownloadFile(string remotePath) => new(_files[remotePath]);
+        public Stream OpenRead(string remotePath) => new MemoryStream(_files[remotePath]);
+        public void Dispose() { }
     }
 
     private sealed class EmptySftpSession : ISftpSession

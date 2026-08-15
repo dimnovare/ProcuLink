@@ -230,21 +230,15 @@ public sealed class SftpIngressService : ISftpIngressService
                 continue;
             }
 
-            // ── dedupe / resume-on-conflict by (OrgId, RemotePath) ───────────
+            // ── dedupe / resume-on-conflict by (OrgId, RemotePath) + FileHash ─
             // A pre-existing claim (a prior scheduled poll or a Hangfire retry) is either already
             // satisfied (SKIP) or an abandoned claim whose order a transient failure never created
             // (RESUME under the same pre-generated id). See IngressDedupe for the full contract.
+            //
+            // Tracked (not AsNoTracking): the same-content resume path and the permanent-failure
+            // terminal marker both mutate this row.
             var existingClaim = await _db.Set<ImportedSftpFile>()
                 .FirstOrDefaultAsync(f => f.OrgId == organisationId && f.RemotePath == remotePath, ct);
-
-            if (existingClaim is not null &&
-                await IngressDedupe.ClaimSatisfiedAsync(_db, organisationId, existingClaim.OrderId, ct))
-            {
-                _logger.LogDebug(
-                    "SFTP ingress: org {OrgId} already imported {Path}. Skipping.",
-                    organisationId, remotePath);
-                continue;
-            }
 
             // ── bounded download + hash (H2) ─────────────────────────────────
             // Stream through the shared bounded-read helper so a lying/endless remote
@@ -252,6 +246,16 @@ public sealed class SftpIngressService : ISftpIngressService
             // DownloadFile materialized the WHOLE file before the size check — an OOM
             // vector). At most MaxFileBytes+1 bytes are ever read; overflow throws
             // CatalogFileTooLargeException, which we catch and skip the file.
+            //
+            // ORDERING (B-7): the download now happens BEFORE the skip decision, not after it.
+            // An SFTP directory listing carries no content signal at all — no ETag, no digest,
+            // and ISftpSession.ListFileNames returns names only. S3 gets its ETag from
+            // ListObjectsV2 and can decide without a GET; SFTP cannot. Reading the bytes is the
+            // ONLY way to know whether the file at this path is still the file we imported, so a
+            // re-poll of an already-imported directory now costs a download per file. That cost
+            // buys the thing the old fast path silently gave away: a supplier who overwrites
+            // /incoming/po-001.csv with a CORRECTED order used to satisfy the path-only claim and
+            // hit `continue` — never imported, no audit row, no retry, no notification.
             MemoryStream fileBytes;
             try
             {
@@ -268,21 +272,92 @@ public sealed class SftpIngressService : ISftpIngressService
 
             using var _fileBytes = fileBytes;
             fileBytes.Position = 0;
+            var contentHash = ComputeSha256Hex(fileBytes);
+            fileBytes.Position = 0;
+
+            // Is the file at this path still the file the claim was taken for?
+            //
+            // A BLANK stored hash cannot be compared, so it falls back to the old path-only
+            // semantics (treat as unchanged → skip/resume). No production writer leaves it blank —
+            // this service is the only writer of the column and has always populated it, and
+            // `file_hash` has been NOT NULL since the table was created — so this is a defensive
+            // fallback for a state that is not known to exist, not a documented legacy shape. It
+            // fails toward SKIP deliberately: the cost of guessing wrong on an uncomparable hash is
+            // a DUPLICATE order (a real supplier delivery and a €0.50 overage), and a duplicate
+            // that never happens is worth more than a re-import that might not be needed.
+            var contentUnchanged = existingClaim is not null
+                && (string.IsNullOrEmpty(existingClaim.FileHash)
+                    || string.Equals(existingClaim.FileHash, contentHash, StringComparison.OrdinalIgnoreCase));
+
+            if (existingClaim is not null && contentUnchanged &&
+                await IngressDedupe.ClaimSatisfiedAsync(_db, organisationId, existingClaim.OrderId, ct))
+            {
+                _logger.LogDebug(
+                    "SFTP ingress: org {OrgId} already imported {Path} (unchanged content). Skipping.",
+                    organisationId, remotePath);
+                continue;
+            }
 
             var fileName = Path.GetFileName(remotePath);
             var contentType = ExtensionToContentType(extension);
 
             Guid orderId;
             ImportedSftpFile claim;
-            if (existingClaim is not null)
+            if (existingClaim is not null && contentUnchanged)
             {
-                // RESUME: the order under this pre-generated id was never created (transient failure).
-                // Recreate it under the SAME id — CreateStubAsync is a find-or-create on that key.
+                // RESUME: same content, unsatisfied claim — the order under this pre-generated id was
+                // never created (transient failure). Recreate it under the SAME id — CreateStubAsync
+                // is a find-or-create on that key.
                 claim = existingClaim;
                 orderId = existingClaim.OrderId;
                 _logger.LogInformation(
                     "SFTP ingress: org {OrgId} — resuming abandoned import of {Path} (order {OrderId} was never created).",
                     organisationId, remotePath, orderId);
+            }
+            else if (existingClaim is not null)
+            {
+                // RE-SEND: same path, DIFFERENT bytes — the supplier corrected and re-dropped the PO.
+                // This is a NEW order, not a duplicate. Claim it with an ATOMIC conditional update
+                // guarded by the OLD hash, stamping a FRESH pre-generated order id — the same shape
+                // S3IngressService uses for an ETag change, because the unique index on
+                // (OrgId, RemotePath) means the re-send must UPDATE this row, never insert a second.
+                // Two concurrent polls of the same re-send both read the old hash; only the one whose
+                // UPDATE ... WHERE file_hash = old affects a row (rows == 1) proceeds — the loser
+                // (rows == 0) skips. Npgsql-only, like the atomic claims elsewhere.
+                //
+                // A TERMINAL claim (OrderId == Guid.Empty) is re-claimed here too, and that is the
+                // point: "we rejected the file that used to be at this path" must not become "we will
+                // never look at this path again". A permanently-bad file the supplier then FIXED is
+                // exactly the lost-order case. It does not resurrect a GDPR-erased order either — the
+                // erased order's bytes are gone and these are different bytes; the erasure tombstone
+                // still permanently skips the unchanged file it was written for.
+                orderId = Guid.NewGuid();
+                var claimed = await _db.Set<ImportedSftpFile>()
+                    .Where(f => f.OrgId == organisationId
+                             && f.RemotePath == remotePath
+                             && f.FileHash == existingClaim.FileHash)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(f => f.FileHash, contentHash)
+                        .SetProperty(f => f.OrderId, orderId)
+                        .SetProperty(f => f.ImportedAt, DateTime.UtcNow), ct);
+                if (claimed == 0)
+                {
+                    _logger.LogInformation(
+                        "SFTP ingress: org {OrgId} — re-send of {Path} claimed concurrently; skipping duplicate import.",
+                        organisationId, remotePath);
+                    continue;
+                }
+
+                _logger.LogInformation(
+                    "SFTP ingress: org {OrgId} — {Path} changed since it was imported (content hash differs); " +
+                    "importing the re-sent file as order {OrderId}.",
+                    organisationId, remotePath, orderId);
+
+                // ExecuteUpdate bypasses the tracker — re-read the tracked row so the terminal
+                // marker below (on a permanent stub failure) mutates a fresh, consistent entity.
+                _db.Entry(existingClaim).State = EntityState.Detached;
+                claim = await _db.Set<ImportedSftpFile>().FirstAsync(
+                    f => f.OrgId == organisationId && f.RemotePath == remotePath, ct);
             }
             else
             {
@@ -293,17 +368,25 @@ public sealed class SftpIngressService : ISftpIngressService
                 // SKIPS (it must not resume — the winner is mid-flight), so the file can never be
                 // imported as a DUPLICATE order. The stored OrderId lets a LATER retry tell a
                 // transient-abandoned claim (resume) from a completed one (skip).
+                //
+                // Deliberately keyed on the PATH, not on the content hash: identical bytes dropped at
+                // two different paths are TWO imports, not one. A remote path is the supplier's own
+                // identifier for a drop and is what they can see and re-drive; two paths holding the
+                // same bytes (a re-drop under a new name after "did you get it?", the same standing
+                // order filed per branch) are two real orders far more often than they are an
+                // accident. Suppressing the second would be a NEW silent drop — the same failure
+                // class B-7 is about — and the two errors are not symmetric: a duplicate order is
+                // visible in the review queue and reversible, a lost order is neither.
                 orderId = Guid.NewGuid();
                 claim = new ImportedSftpFile
                 {
                     Id = Guid.NewGuid(),
                     OrgId = organisationId,
                     RemotePath = remotePath,
-                    FileHash = ComputeSha256Hex(fileBytes),
+                    FileHash = contentHash,
                     OrderId = orderId,
                     ImportedAt = DateTime.UtcNow,
                 };
-                fileBytes.Position = 0;
                 _db.Set<ImportedSftpFile>().Add(claim);
                 try
                 {
