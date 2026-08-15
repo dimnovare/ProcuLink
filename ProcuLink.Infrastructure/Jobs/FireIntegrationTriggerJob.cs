@@ -128,6 +128,18 @@ public class FireIntegrationTriggerJob
         var deliveryId = DeterministicId(subscriptionId.ToString("N"), sub.EventType, payloadJson);
         var eventId    = DeterministicId(sub.EventType, payloadJson);
 
+        // ── The only form of the target URL this job may log (P1 telemetry hygiene) ────────────
+        // A Slack / Teams / Zapier / Discord incoming-webhook URL IS the credential — the secret is
+        // the path, and there is no separate token. This job used to log sub.TargetUrl whole, at
+        // Information, ON THE SUCCESS PATH, so every successful customer webhook wrote a working
+        // credential into the log sink — which, with MinimumBreadcrumbLevel = Information, is also
+        // the Sentry surface. Failure paths leaked exactly as hard.
+        //
+        // Scheme + host is what an operator can actually act on ("Slack is 500ing"), and the
+        // subscription id that accompanies it is the stored config id they use to look the full
+        // target up in the database. Never widen this back to sub.TargetUrl.
+        var destination = TelemetryRedactor.SafeDestination(sub.TargetUrl);
+
         string? sigHeader = null;
         if (!string.IsNullOrEmpty(sub.EncryptedSecret))
         {
@@ -162,8 +174,8 @@ public class FireIntegrationTriggerJob
         if (!guardResult.Allowed)
         {
             _logger.LogWarning(
-                "FireIntegrationTriggerJob: SSRF guard blocked webhook to '{Url}' for sub {SubId}: {Reason}",
-                sub.TargetUrl, subscriptionId, guardResult.Reason);
+                "FireIntegrationTriggerJob: SSRF guard blocked webhook to '{Destination}' for sub {SubId}: {Reason}",
+                destination, subscriptionId, guardResult.Reason);
             // Treat as a delivery failure and apply the existing retry/deactivate flow.
             await RecordFailureAsync(sub, isFinalAttempt, ct);
             throw new InvalidOperationException(
@@ -211,8 +223,11 @@ public class FireIntegrationTriggerJob
             // The SEND ITSELF failed (connection refused / DNS / TLS / client-side timeout). Nothing
             // was delivered → a genuine delivery failure.
             await RecordFailureAsync(sub, isFinalAttempt, ct);
+            // The exception message is telemetry too — it becomes the Sentry event title — so it
+            // carries the redacted destination, and the inner message is scrubbed because transport
+            // exceptions sometimes echo the request URI back.
             throw new InvalidOperationException(
-                $"Webhook send to {sub.TargetUrl} failed: {ex.Message}", ex);
+                $"Webhook send to {destination} (sub {subscriptionId}) failed: {TelemetryRedactor.Redact(ex.Message)}", ex);
         }
 
         using (response)
@@ -222,7 +237,7 @@ public class FireIntegrationTriggerJob
                 // Subscriber rejected the delivery (non-2xx) → a genuine delivery failure.
                 await RecordFailureAsync(sub, isFinalAttempt, ct);
                 throw new InvalidOperationException(
-                    $"Delivery failed: HTTP {(int)response.StatusCode} from {sub.TargetUrl}");
+                    $"Delivery failed: HTTP {(int)response.StatusCode} from {destination} (sub {subscriptionId})");
             }
         }
 
@@ -238,15 +253,16 @@ public class FireIntegrationTriggerJob
             sub.UpdatedAt    = DateTime.UtcNow;
             await _db.SaveChangesAsync(ct);
             _logger.LogInformation(
-                "FireIntegrationTriggerJob delivered to {Url}, status={Status}, delivery={DeliveryId}",
-                sub.TargetUrl, response.StatusCode, deliveryId);
+                "FireIntegrationTriggerJob delivered to {Destination} for sub {SubId}, status={Status}, delivery={DeliveryId}",
+                destination, subscriptionId, response.StatusCode, deliveryId);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex,
-                "FireIntegrationTriggerJob: webhook to {Url} was DELIVERED (delivery={DeliveryId}) but the " +
-                "success-persist failed; NOT recording a failure and NOT retrying, to avoid a duplicate POST.",
-                sub.TargetUrl, deliveryId);
+                "FireIntegrationTriggerJob: webhook to {Destination} for sub {SubId} was DELIVERED " +
+                "(delivery={DeliveryId}) but the success-persist failed; NOT recording a failure and " +
+                "NOT retrying, to avoid a duplicate POST.",
+                destination, subscriptionId, deliveryId);
             // Swallow — a delivered webhook is a success regardless of our bookkeeping write.
         }
     }
