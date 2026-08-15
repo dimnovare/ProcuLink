@@ -127,7 +127,7 @@ public class DeliveryTestFireRefusalTests
         await db.SaveChangesAsync();
 
         // The state after ONE successful "Send a test now" on this connection.
-        var remote = new FakeSftpSession();
+        var remote = new FakeSftpServer();
         remote.Files[TestFilePath] = "AN-EARLIER-TEST"u8.ToArray();
 
         var service = CreateService(db, SftpWith(remote), encryption);
@@ -171,7 +171,7 @@ public class DeliveryTestFireRefusalTests
         });
         await db.SaveChangesAsync();
 
-        var remote = new FakeSftpSession();
+        var remote = new FakeSftpServer();
         var service = CreateService(db, SftpWith(remote), encryption);
 
         var result = await service.TestFireAsync(orgId, supplierId, default);
@@ -183,7 +183,7 @@ public class DeliveryTestFireRefusalTests
 
     // ── Harness ───────────────────────────────────────────────────────────────
 
-    private static SftpDeliveryDispatcher SftpWith(FakeSftpSession session) =>
+    private static SftpDeliveryDispatcher SftpWith(FakeSftpServer session) =>
         new(NullLogger<SftpDeliveryDispatcher>.Instance, AllowAllGuard(), _ => session);
 
     // Fictional hostnames do not resolve; the guard's own behaviour is covered by
@@ -226,21 +226,6 @@ public class DeliveryTestFireRefusalTests
             new FakeAnalyticsService(),
             new OrderExceptionService(db),
             NullLogger<DeliveryService>.Instance);
-
-    private sealed class FakeSftpSession : SftpDeliveryDispatcher.ISftpUploadSession
-    {
-        public Dictionary<string, byte[]> Files { get; } = new(StringComparer.Ordinal);
-
-        public bool Exists(string path) => Files.ContainsKey(path);
-        public void CreateDirectory(string path) { }
-
-        public void UploadFile(Stream input, string path, bool canOverride)
-        {
-            using var ms = new MemoryStream();
-            input.CopyTo(ms);
-            Files[path] = ms.ToArray();
-        }
-    }
 
     private sealed class NoOpIntegrationTriggerService : IIntegrationTriggerService
     {

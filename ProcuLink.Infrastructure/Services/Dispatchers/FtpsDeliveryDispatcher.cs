@@ -129,10 +129,15 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
         var remoteDir = NormaliseRemoteDir(cfg.RemotePath);
         var remotePath = $"{remoteDir.TrimEnd('/')}/{SanitiseFileName(fileName)}";
         var makeDirectories = cfg.MakeDirectories;
-        var timeoutSeconds = cfg.TimeoutSeconds is > 0 ? cfg.TimeoutSeconds!.Value : 30;
+        var timeoutSeconds = cfg.TimeoutSeconds is > 0
+            ? cfg.TimeoutSeconds!.Value
+            : SftpDeliveryDispatcher.DefaultTimeoutSeconds;
         var timeoutMs = timeoutSeconds * 1000;
 
         // Linked token source so we can enforce our own timeout on top of the caller's token.
+        // Unlike SFTP before this packet, this channel always HAD a deadline covering the transfer;
+        // what it did not have was a deadline that holds when the transfer ignores the token. That
+        // is enforced in UploadCoreAsync — see the WaitAsync note there.
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs));
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
         var token = linkedCts.Token;
@@ -196,7 +201,7 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             // Our own timeout fired, not the caller's cancellation.
-            return new DeliveryResult(false, "FTPS delivery timed out.");
+            return new DeliveryResult(false, SftpDeliveryDispatcher.TransferTimedOut("FTPS", timeoutSeconds));
         }
         catch (FtpAuthenticationException)
         {
@@ -256,10 +261,24 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
               "for this supplier.";
 
     /// <summary>
-    /// The upload itself, once connected: the overwrite decision, the transfer, and the mapping of
-    /// FluentFTP's status to a delivery outcome. Split out from the transport so the overwrite
-    /// behaviour — a live-path decision about real purchase orders — is covered by a test that
-    /// fails when it changes.
+    /// The upload itself, once connected: the overwrite decision, the transfer to a temporary name,
+    /// the move onto the supplier's file name, and the mapping of FluentFTP's status to a delivery
+    /// outcome. Split out from the transport so the overwrite behaviour — a live-path decision about
+    /// real purchase orders — is covered by a test that fails when it changes.
+    ///
+    /// <para><b>Nothing is ever written directly to the name the supplier reads</b>, for the same
+    /// reason as SFTP: an FTP <c>STOR</c> creates the file at its final name and fills it, so a
+    /// supplier polling the drop directory can collect it mid-transfer and import half a purchase
+    /// order. The bytes go to <see cref="SftpDeliveryDispatcher.PartialUploadPath"/> in the same
+    /// directory, and only a completed transfer is moved onto the real name — <c>RNFR</c>/<c>RNTO</c>,
+    /// which the server performs as a single filesystem rename.
+    /// </para>
+    /// <para>
+    /// Every remote call is wrapped in <c>WaitAsync(token)</c> as well as being handed the token.
+    /// The token alone is a request the transfer may decline; <c>WaitAsync</c> returns on the
+    /// deadline regardless, and the client disposal in <see cref="DispatchAsync"/> ends whatever was
+    /// abandoned. An order that sat in <c>delivering</c> for hours is what the difference costs.
+    /// </para>
     /// </summary>
     internal static async Task<DeliveryResult> UploadCoreAsync(
         IFtpsUploadSession session,
@@ -269,33 +288,89 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
         bool overwriteExisting,
         CancellationToken token)
     {
+        var partialPath = SftpDeliveryDispatcher.PartialUploadPath(remotePath);
+
+        // Refuse before spending the transfer, mirroring the SFTP path. The move below refuses
+        // again — that one is the enforcement, this one is the courtesy.
+        if (!overwriteExisting &&
+            await session.FileExists(remotePath, token).WaitAsync(token).ConfigureAwait(false))
+        {
+            return new DeliveryResult(false, SftpDeliveryDispatcher.RefusedBecauseFileExists(remotePath));
+        }
+
         await using var ms = new MemoryStream(content);
         var status = await session.UploadStream(
             ms,
-            remotePath,
-            RemoteExistsModeFor(overwriteExisting),
+            partialPath,
+            // Always Overwrite, whatever the operator set: this is OUR temporary name, and a
+            // partial left by a crashed earlier attempt must be replaceable or the supplier is
+            // wedged for good. The operator's setting governs the destination, in the move below.
+            FtpRemoteExists.Overwrite,
             createRemoteDir: makeDirectories,
-            token: token).ConfigureAwait(false);
+            token: token).WaitAsync(token).ConfigureAwait(false);
 
-        return status switch
+        if (status != FtpStatus.Success)
         {
-            FtpStatus.Success => new DeliveryResult(true, null),
-            // Skipped is only reachable when the operator turned overwrite off AND a file is already
-            // there. FluentFTP treats that as a benign no-op; a purchase order that was not sent is
-            // not benign, so it becomes an explicit failure with the reason spelled out.
-            FtpStatus.Skipped => new DeliveryResult(false,
-                SftpDeliveryDispatcher.RefusedBecauseFileExists(remotePath)),
-            _ => new DeliveryResult(false, "FTPS upload did not complete successfully."),
-        };
+            return new DeliveryResult(false, "FTPS upload did not complete successfully.");
+        }
+
+        var moved = await session
+            .MoveFile(partialPath, remotePath, RemoteExistsModeFor(overwriteExisting), token)
+            .WaitAsync(token)
+            .ConfigureAwait(false);
+
+        if (moved)
+        {
+            return new DeliveryResult(true, null);
+        }
+
+        await TryDeleteAsync(session, partialPath, token).ConfigureAwait(false);
+
+        // A move that declined under Skip mode means a file is at the destination — the operator's
+        // "do not replace" doing its job, and it has to read to them exactly as the pre-transfer
+        // refusal does. FluentFTP reports it as a bare false, so the reason is re-established here.
+        return await ExistsQuietlyAsync(session, remotePath, token).ConfigureAwait(false)
+            ? new DeliveryResult(false, SftpDeliveryDispatcher.RefusedBecauseFileExists(remotePath))
+            : new DeliveryResult(false, SftpDeliveryDispatcher.CouldNotPublish(remotePath));
     }
 
     /// <summary>
-    /// How the transfer treats a file already at the remote path. Overwrite (the default) keeps a
-    /// crash-recovery re-drive able to repair its own partial upload; Skip refuses to touch what is
-    /// there and <see cref="UploadCoreAsync"/> turns that refusal into a failed delivery.
+    /// How the MOVE onto the supplier's file name treats a file already there. Overwrite (the
+    /// default) keeps a crash-recovery re-drive able to repair its own earlier delivery; Skip
+    /// refuses to touch what is there and <see cref="UploadCoreAsync"/> turns that refusal into a
+    /// failed delivery.
+    ///
+    /// <para>
+    /// This used to govern the UPLOAD. It governs the move now because the upload no longer targets
+    /// the supplier's file name at all — but the setting it carries, and what each value means to an
+    /// operator, are unchanged.
+    /// </para>
     /// </summary>
     internal static FtpRemoteExists RemoteExistsModeFor(bool overwriteExisting) =>
         overwriteExisting ? FtpRemoteExists.Overwrite : FtpRemoteExists.Skip;
+
+    /// <summary>
+    /// Best-effort removal of our own temporary file. Never changes a delivery outcome the caller
+    /// has already decided — a directory the account cannot delete from is not a delivery failure.
+    /// </summary>
+    private static async Task TryDeleteAsync(
+        IFtpsUploadSession session, string path, CancellationToken token)
+    {
+        try { await session.DeleteFile(path, token).WaitAsync(token).ConfigureAwait(false); }
+        catch (OperationCanceledException) { /* deadline already fired; client disposal cleans up */ }
+        catch (Exception) { /* leftover temp is litter, not a delivery outcome */ }
+    }
+
+    /// <summary>
+    /// An existence probe used only to CHOOSE A SENTENCE after a failure has already been decided.
+    /// A probe that throws must not be able to change the outcome, so it answers false.
+    /// </summary>
+    private static async Task<bool> ExistsQuietlyAsync(
+        IFtpsUploadSession session, string path, CancellationToken token)
+    {
+        try { return await session.FileExists(path, token).WaitAsync(token).ConfigureAwait(false); }
+        catch (Exception) { return false; }
+    }
 
     /// <summary>
     /// Determines whether a server certificate should be accepted.
@@ -341,14 +416,27 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
     // ── Upload seam ───────────────────────────────────────────────────────────
 
     /// <summary>
-    /// The one FluentFTP call the upload makes. Exists so <see cref="UploadCoreAsync"/> — which owns
-    /// the overwrite decision for real purchase orders — is testable without an FTPS server.
+    /// The FluentFTP calls the upload makes. Exists so <see cref="UploadCoreAsync"/> — which owns
+    /// the overwrite decision and the move onto the supplier's file name for real purchase orders —
+    /// is testable without an FTPS server.
     /// </summary>
     internal interface IFtpsUploadSession
     {
+        Task<bool> FileExists(string path, CancellationToken token);
+
         Task<FtpStatus> UploadStream(
             Stream input, string remotePath, FtpRemoteExists existsMode,
             bool createRemoteDir, CancellationToken token);
+
+        /// <returns>
+        /// False when the destination was occupied and <paramref name="existsMode"/> was
+        /// <see cref="FtpRemoteExists.Skip"/> — FluentFTP's way of saying it declined, not that it
+        /// broke. <see cref="UploadCoreAsync"/> turns that into the operator's refusal message.
+        /// </returns>
+        Task<bool> MoveFile(
+            string path, string dest, FtpRemoteExists existsMode, CancellationToken token);
+
+        Task DeleteFile(string path, CancellationToken token);
     }
 
     private sealed class FluentFtpUploadSession : IFtpsUploadSession
@@ -356,9 +444,22 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
         private readonly AsyncFtpClient _client;
         public FluentFtpUploadSession(AsyncFtpClient client) => _client = client;
 
+        public Task<bool> FileExists(string path, CancellationToken token) =>
+            _client.FileExists(path, token);
+
         public Task<FtpStatus> UploadStream(
             Stream input, string remotePath, FtpRemoteExists existsMode,
             bool createRemoteDir, CancellationToken token) =>
             _client.UploadStream(input, remotePath, existsMode, createRemoteDir, progress: null, token: token);
+
+        // FluentFTP's MoveFile checks the destination itself and, under Overwrite, deletes it before
+        // issuing RNFR/RNTO — the same delete-then-rename an SFTP server without posix-rename needs,
+        // and with the same property: the window exposes an ABSENT destination, never a partial one.
+        public Task<bool> MoveFile(
+            string path, string dest, FtpRemoteExists existsMode, CancellationToken token) =>
+            _client.MoveFile(path, dest, existsMode, token);
+
+        public Task DeleteFile(string path, CancellationToken token) =>
+            _client.DeleteFile(path, token);
     }
 }
