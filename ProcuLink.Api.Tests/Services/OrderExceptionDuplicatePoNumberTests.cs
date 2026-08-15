@@ -374,14 +374,31 @@ public class OrderExceptionDuplicatePoNumberTests
 
         var svc = new OrderExceptionService(db);
         await svc.ReconcileAsync(orgId, second, CancellationToken.None);
-        // A SECOND pass is the regression: the single-problem shape opened both and then resolved
-        // one of them here.
+
+        // Capture the row IDENTITY, not just its state. The single-problem shape resolves the
+        // duplicate row and then — because the recreate step sees no live row for that code any
+        // more — immediately opens a REPLACEMENT. "Two open rows, one per code" therefore still
+        // holds under the regression, and an assertion that stops at open-state/count cannot see
+        // it. What the regression actually destroys is row continuity: a warning the operator
+        // ignored or was reading is replaced by a different row on every pipeline touch, and the
+        // resolved corpses pile up. So pin the id.
+        var dupBefore = await db.OrderExceptions.SingleAsync(
+            e => e.OrderId == second && e.Code == OrderExceptionService.DuplicatePoNumberCode);
+
+        // A SECOND pass is the regression: the single-problem shape churned the row here.
         await svc.ReconcileAsync(orgId, second, CancellationToken.None);
 
         var open = await OpenExceptionsFor(db, second);
         Assert.Contains(open, e => e.Code == OrderExceptionService.DuplicatePoNumberCode);
         Assert.Contains(open, e => e.Code == "unresolved_mapping");
         Assert.Equal(2, open.Count);
+
+        // Same row, still open, and no second one was ever created for this code.
+        var dupAfter = await db.OrderExceptions.SingleAsync(
+            e => e.OrderId == second && e.Code == OrderExceptionService.DuplicatePoNumberCode);
+        Assert.Equal(dupBefore.Id, dupAfter.Id);
+        Assert.Equal("open", dupAfter.State);
+        Assert.Null(dupAfter.ResolvedAt);
     }
 
     /// <summary>Repeated reconciles never accumulate rows.</summary>
@@ -400,10 +417,15 @@ public class OrderExceptionDuplicatePoNumberTests
         await svc.ReconcileAsync(orgId, second, CancellationToken.None);
         await svc.ReconcileAsync(orgId, second, CancellationToken.None);
 
+        // Counted across EVERY state, not just open. Counting only open rows would call a service
+        // that resolves-and-recreates on each pass "idempotent" — it always leaves exactly one open
+        // row while quietly accumulating a resolved one per reconcile. Idempotent means no new rows.
         Assert.Equal(1, await db.OrderExceptions.CountAsync(
             e => e.OrderId == second
-              && e.Code == OrderExceptionService.DuplicatePoNumberCode
-              && e.State == "open"));
+              && e.Code == OrderExceptionService.DuplicatePoNumberCode));
+        Assert.Equal("open", (await db.OrderExceptions.SingleAsync(
+            e => e.OrderId == second
+              && e.Code == OrderExceptionService.DuplicatePoNumberCode)).State);
     }
 
     /// <summary>
