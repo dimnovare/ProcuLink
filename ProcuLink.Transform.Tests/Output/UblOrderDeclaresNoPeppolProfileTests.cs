@@ -154,7 +154,19 @@ public class UblOrderDeclaresNoPeppolProfileTests
             "behalf a conformance we never checked");
         markdown.Should().NotContainEquivalentOf("BIS Order");
         markdown.Should().Contain("- **Profile:**", "the anti-vacuity floor: the report must really render");
-        markdown.Should().Contain("Not a schema validation and not a certification",
+
+        // The scope statement, which is now made PER ROW instead of in one blanket sentence.
+        //
+        // This assertion used to pin the literal "Not a schema validation and not a certification".
+        // That sentence was false in both directions on this very document, and pinning it is why it
+        // survived: most rows are self-checks whose asserted value the emitter itself just wrote, so
+        // they cannot fail on our own output — while `ubl.xsd` IS a schema validation, against the
+        // vendored OASIS UBL 2.1 grammar. Under-claiming a real check is its own false statement.
+        markdown.Should().Contain("**Self-check.**",
+            "a forwardable PASS must say which of its rows only restate ProcuLink's own output back to us");
+        markdown.Should().Contain("Published schema",
+            "and must not bury the one verdict here that a third party actually produced");
+        markdown.Should().Contain("not a certification against any profile",
             "a forwardable PASS that does not state its scope reads as a conformance guarantee");
     }
 

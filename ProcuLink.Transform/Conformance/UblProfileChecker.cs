@@ -171,7 +171,8 @@ internal sealed class UblProfileChecker : IProfileChecker
             // as "valid" is the exact failure this whole packet exists to remove.
             b.Add("ubl.xsd", false, SchemaProfileRef,
                 "Schema validation could not run, so this document is UNVERIFIED against the OASIS " +
-                $"schema — not known-good. {ex.Message}");
+                $"schema — not known-good. {ex.Message}",
+                evidence: SchemaEvidence);
             return;
         }
 
@@ -183,7 +184,8 @@ internal sealed class UblProfileChecker : IProfileChecker
             // next to a green result. Say what was checked; say nothing about what was not.
             b.Add("ubl.xsd", true, SchemaProfileRef,
                 "Valid against the OASIS UBL 2.1 Order schema — element order, cardinality and " +
-                "datatypes. A grammar check, not a statement that the supplier will accept the order.");
+                "datatypes. A grammar check, not a statement that the supplier will accept the order.",
+                evidence: SchemaEvidence);
             return;
         }
 
@@ -192,10 +194,20 @@ internal sealed class UblProfileChecker : IProfileChecker
 
         b.Add("ubl.xsd", false, SchemaProfileRef,
             $"{result.Findings.Count}{(result.Truncated ? "+" : string.Empty)} schema violation(s): " +
-            string.Join(" · ", shown) + suffix);
+            string.Join(" · ", shown) + suffix,
+            evidence: SchemaEvidence);
     }
 
     private const string SchemaProfileRef = "OASIS UBL 2.1 Order-2 XSD";
+
+    /// <summary>
+    /// <c>ubl.xsd</c> is the only row in any ProcuLink conformance report whose verdict comes from a
+    /// third party. It carries this class on EVERY path it is emitted on — pass, violations,
+    /// validator-unavailable, and not-well-formed — because the class describes what the row is
+    /// about, not how it turned out. A code whose evidence class changed with its outcome would be
+    /// unreadable in the table and unstable for anything keying on it.
+    /// </summary>
+    private const ConformanceEvidence SchemaEvidence = ConformanceEvidence.ExternalArtifact;
 
     private static void FailRemaining(ConformanceCheckBuilder b)
     {
@@ -214,7 +226,8 @@ internal sealed class UblProfileChecker : IProfileChecker
                      ("ubl.lineItem.item", "cac:LineItem/cac:Item"),
                      ("ubl.xsd", SchemaProfileRef),
                  })
-            b.Add(code, false, @ref, "Not checked — document is not well-formed.");
+            b.Add(code, false, @ref, "Not checked — document is not well-formed.",
+                evidence: code == "ubl.xsd" ? SchemaEvidence : ConformanceEvidence.SelfCheck);
     }
 
     private static XElement? Child(XElement parent, string localName) =>

@@ -21,12 +21,17 @@ internal sealed class ConformanceCheckBuilder
         _profileVersion = profileVersion;
     }
 
-    /// <summary>Adds a named check.</summary>
+    /// <summary>
+    /// Adds a named check. <paramref name="evidence"/> defaults to
+    /// <see cref="ConformanceEvidence.SelfCheck"/> — the weaker claim — so a check must name the
+    /// third-party artifact it was validated against in order to be reported as one.
+    /// </summary>
     public ConformanceCheckBuilder Add(
         string code, bool passed, string profileRef, string message,
-        ConformanceSeverity severity = ConformanceSeverity.Error)
+        ConformanceSeverity severity = ConformanceSeverity.Error,
+        ConformanceEvidence evidence = ConformanceEvidence.SelfCheck)
     {
-        _checks.Add(new ConformanceCheck(code, severity, passed, message, profileRef));
+        _checks.Add(new ConformanceCheck(code, severity, passed, message, profileRef, evidence));
         return this;
     }
 
@@ -39,9 +44,22 @@ internal sealed class ConformanceCheckBuilder
         ConformanceSeverity severity = ConformanceSeverity.Error) =>
         Add(code, present, profileRef, present ? okMessage : failMessage, severity);
 
+    /// <summary>
+    /// Seals the accumulated checks into a report.
+    ///
+    /// <para><b>The <c>Count > 0</c> term is a floor, not a formality.</b> <c>All()</c> is true on an
+    /// empty sequence, so without it a builder that added nothing produced
+    /// <c>OverallPass == true</c> and rendered "**Result:** PASS" into a document customers are
+    /// invited to forward as evidence — a pass over an examination that never happened. No live
+    /// checker reaches it today, because all five add a first check unconditionally, which is
+    /// exactly why it belongs here rather than being left to that coincidence: an early return, a
+    /// guard clause, or a sixth checker is all it would take. Pinned by
+    /// <c>ConformanceCheckBuilderFloorTests</c>.</para>
+    /// </summary>
     public ConformanceReport Build()
     {
-        var overallPass = _checks.All(c => c.Passed || c.Severity != ConformanceSeverity.Error);
+        var overallPass = _checks.Count > 0
+                          && _checks.All(c => c.Passed || c.Severity != ConformanceSeverity.Error);
         return new ConformanceReport(_profile, _profileName, _profileVersion, overallPass, _checks);
     }
 }
