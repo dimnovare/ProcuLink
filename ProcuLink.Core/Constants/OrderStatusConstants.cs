@@ -38,7 +38,11 @@ public static class OrderStatusConstants
     /// until an operator confirms it. The flag DEFAULTS OFF (<c>StripeBillingService</c>) and is in
     /// no checked-in config, so the SHIPPED default is the historical count-at-creation meter, which
     /// counts every order whatever its status — a parked order included. Not a park-specific charge:
-    /// <see cref="DeliveryFailed"/> meters identically today.
+    /// <see cref="DeliveryFailed"/> meters identically today ON A PAID PLAN. It no longer does on
+    /// the PILOT hard cap, which forgives <see cref="FailureBucket"/> minus
+    /// <see cref="RejectedBySupplier"/> in both flag positions (<c>StripeBillingService</c>
+    /// <c>PilotForgivenFailureStatuses</c>); a park is NOT forgiven there, because a human can
+    /// still resolve it.
     /// </para>
     /// </summary>
     public const string DeliveryUnconfirmed = "delivery_unconfirmed";
