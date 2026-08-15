@@ -29,7 +29,13 @@
          (Docker-verified; see docs/verification/native-deps.md). -->
     <PackageReference Include="RapidOcrNet" Version="2.0.0" />
     <PackageReference Include="PostHog" Version="2.7.1" />
-    <PackageReference Include="SSH.NET" Version="2024.2.0" />
+    <!-- 2026.0.0 is the FIRST version clearing GHSA-q939-rpr3-3284 / CVE-2026-48798 (HIGH,
+         CVSS 7.1): a path traversal in ScpClient.Download()'s recursive mode, where a hostile
+         server returns "../" names and the client writes outside the target directory. Every
+         version <= 2025.1.0 is affected, so there is no smaller bump. This repo uses SftpClient
+         only — grep for ScpClient returns nothing — so the flaw was never reachable here; the
+         upgrade exists to clear the NU1903 audit warning that was riding on every restore. -->
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
     <PackageReference Include="Hangfire.Core" Version="1.8.18" />
   </ItemGroup>
 
