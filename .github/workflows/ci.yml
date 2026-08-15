@@ -168,6 +168,38 @@ jobs:
       - name: Restore
         run: dotnet restore ProcuLink.slnx
 
+      # Directory.Build.props sets NuGetAuditMode=all. Whether the BUILD step above enforces
+      # that depends on an SDK nothing here pins: `setup-dotnet` installs 8.0.424, whose
+      # NuGet 6.11 audits direct PackageReferences only and ignores the mode entirely (the
+      # mode lands in NuGet 6.12 / the .NET 9 SDK) — but global.json is
+      # `8.0.100` + `rollForward: latestMajor`, so `dotnet` actually runs the newest SDK on
+      # the runner image. Proof that it does: 8.0.424 cannot read a .slnx at all
+      # (`error MSB4068: The element <Solution> is unrecognized` in the sdk:8.0 container),
+      # yet the Restore step above is green. Which SDK that resolves to is GitHub's choice,
+      # not ours, and it can change under us without a commit.
+      #
+      # So this step holds the transitive half explicitly, on every SDK. Measured 2026-08-15:
+      # with the vulnerable transitive System.Security.Cryptography.Xml 8.0.2 back in the
+      # graph, `docker build -f Dockerfile .` (sdk:8.0.424, the Railway image path) is green
+      # with zero NU19xx lines, while the same tree is red under the .NET 10 SDK. Relying on
+      # the property alone would be the same shape as the unread NU1903 warning that
+      # Directory.Build.props was created to kill.
+      #
+      # The advisory database is a LIVE feed: this step can go red on a commit that changed
+      # no dependency, because a new advisory was published against one the repo already had.
+      # That is news, not a regression — fix or document it, do not delete the step.
+      #
+      # It must stay AFTER Restore: `dotnet list package` reads the restore assets.
+      - name: Audit transitive NuGet advisories
+        run: |
+          set -o pipefail
+          dotnet list ProcuLink.slnx package --vulnerable --include-transitive | tee nuget-audit.txt
+          if grep -qE '\b(High|Critical)\b' nuget-audit.txt; then
+            echo "::error::HIGH or CRITICAL NuGet advisory in the dependency graph — see the listing above"
+            exit 1
+          fi
+          echo "No high/critical NuGet advisories in the full dependency graph." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Build (Release)
         run: dotnet build ProcuLink.slnx --no-restore --configuration Release
 

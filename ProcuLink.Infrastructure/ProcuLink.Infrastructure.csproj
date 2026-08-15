@@ -13,10 +13,18 @@
     <PackageReference Include="AWSSDK.S3" Version="4.0.23.3" />
     <PackageReference Include="FluentFTP" Version="54.2.0" />
     <PackageReference Include="MailKit" Version="4.17.0" />
-    <PackageReference Include="Microsoft.AspNetCore.DataProtection.EntityFrameworkCore" Version="8.0.11" />
+    <!-- 8.0.30 (not 8.0.11) because DataProtection is the ONLY thing in this repo that pulls
+         System.Security.Cryptography.Xml, and 8.0.11 pinned it to 8.0.2 — which carries eight
+         HIGH advisories (GHSA-37gx-xxp4-5rgx, -w3x6-4m5h-cxqf, -g8r8-53c2-pm3f, -8q5v-6pqq-x66h,
+         -cvvh-rhrc-wg4q, -23rf-6693-g89p, -mmjf-rqrv-855v, -6588-8gv4-xfgh). The last of those
+         is first patched in 8.0.4, and DataProtection 8.0.29 is the first release to bind it.
+         Upgrading the parent rather than pinning the transitive keeps the graph self-maintaining.
+         8.0.30 requires Microsoft.EntityFrameworkCore 8.0.30, which is why the EF pins below
+         moved off 8.0.16 in lockstep (a lower direct pin is an NU1605 downgrade error). -->
+    <PackageReference Include="Microsoft.AspNetCore.DataProtection.EntityFrameworkCore" Version="8.0.30" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.1" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.16" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="8.0.16" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.30" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="8.0.30" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.11" />
     <PackageReference Include="OpenAI" Version="2.10.0" />
     <!-- PDF rasterization for the vision fallback (scanned/no-text PDFs). PDFtoImage (MIT)
@@ -37,6 +45,16 @@
          upgrade exists to clear the NU1903 audit warning that was riding on every restore. -->
     <PackageReference Include="SSH.NET" Version="2026.0.0" />
     <PackageReference Include="Hangfire.Core" Version="1.8.18" />
+    <!-- Newtonsoft.Json is NOT used by this project's own code — it is pinned here purely to
+         lift Hangfire.Core's transitive floor. Hangfire.Core's netstandard2.0 group declares
+         `Newtonsoft.Json >= 11.0.1`, and 11.0.1 carries GHSA-5crp-9r3c-p9vr (HIGH, first patched
+         in 13.0.1). That floor is unchanged in the newest Hangfire.Core (1.8.24 verified), so no
+         parent upgrade clears it — a direct pin is the only fix. The floor is a MINIMUM, not an
+         exact version, so 13.0.3 satisfies Hangfire. 13.0.3 and not something newer because that
+         is what ProcuLink.Api and ProcuLink.Worker already resolve to via their own graphs; this
+         pin aligns Infrastructure with them instead of introducing a third version.
+         Delete this line if Hangfire ever drops Newtonsoft or raises its floor past 13.0.1. -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 
   <ItemGroup>

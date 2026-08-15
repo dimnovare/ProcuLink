@@ -13,33 +13,72 @@
     NU1901 low · NU1902 moderate · NU1903 high · NU1904 critical.
     NuGetAuditLevel=high already suppresses NU1901/NU1902, so only 1903/1904 can ever fire.
 
-    WHY MODE IS `direct` AND NOT `all` — this is load-bearing, do not "tighten" it casually.
-    The repo has two HIGH advisories in TRANSITIVE packages that no first-party change can
-    currently clear, both pre-dating this file:
+    WHY MODE IS `all`
+    This started at `direct` because two HIGH advisories lived in TRANSITIVE packages that no
+    first-party change could clear at the time, and under `all` they fail the build on a clean
+    checkout — including the Railway Docker image build, which would mean no deploys. Both are
+    now cleared, so the audit covers the whole graph:
 
-      · Newtonsoft.Json 11.0.1              GHSA-5crp-9r3c-p9vr   (via Hangfire.Core 1.8.18)
-      · System.Security.Cryptography.Xml 8.0.2  GHSA-37gx-xxp4-5rgx
+      · Newtonsoft.Json 11.0.1 (GHSA-5crp-9r3c-p9vr) arrived via Hangfire.Core, whose
+        netstandard2.0 dependency group declares `Newtonsoft.Json >= 11.0.1`. That floor is
+        unchanged in the newest Hangfire.Core (1.8.24 verified), so no parent upgrade clears
+        it — ProcuLink.Infrastructure carries a direct pin to 13.0.3 instead, explained there.
+      · System.Security.Cryptography.Xml 8.0.2 (eight HIGH advisories) arrived via
+        Microsoft.AspNetCore.DataProtection.EntityFrameworkCore 8.0.11. Upgrading that parent
+        to 8.0.30 binds 8.0.4, which clears all eight; the EF Core pins moved to 8.0.30 in
+        lockstep because 8.0.30 requires it.
 
-    Under mode `all` those two fail the build on a clean checkout — including the Railway
-    Docker image build, which would mean no deploys. Under mode `direct` the audit covers
-    exactly the set this repo can actually act on: a direct <PackageReference> with a known
-    HIGH advisory is upgradable by definition, which is the whole class the SSH.NET finding
-    belonged to. Verify with `dotnet list ProcuLink.slnx package` plus the `vulnerable` and
-    `include-transitive` switches before changing this to `all`; flip it only once those two
-    are resolved.
+    `direct` would have covered only the class the SSH.NET finding belonged to: a direct
+    <PackageReference> with a known HIGH advisory, upgradable by definition. Neither of the two
+    above is in that class, and both were real. Re-check the whole graph with
+    `dotnet list ProcuLink.slnx package` plus the `vulnerable` and `include-transitive`
+    switches — that is the command that tells you whether a fix is available before you weaken
+    anything here.
 
-    Setting `direct` explicitly is NOT redundant. The .NET 8 SDK (what CI and both Dockerfiles
-    use) defaults to `direct` and ignores this property entirely, but the .NET 9+ SDK defaults
-    to `all` — so on a developer machine running a newer SDK, omitting this line is what would
-    fail the build on the two transitive advisories above.
+    `all` DOES NOTHING ON THE .NET 8 SDK — READ THIS BEFORE TRUSTING THIS FILE.
+    NuGet 6.11, which .NET SDK 8.0.4xx ships, audits DIRECT PackageReferences only and reads
+    neither value of this property; transitive coverage arrives with NuGet 6.12 / the .NET 9
+    SDK. Both Dockerfiles build on `mcr.microsoft.com/dotnet/sdk:8.0` (8.0.424 / NuGet 6.11.2
+    at the time of writing), so THE RAILWAY IMAGE BUILD CANNOT FAIL ON A TRANSITIVE ADVISORY
+    no matter what this file says.
 
-    ESCAPE HATCH: if a HIGH advisory lands on a direct dependency with no fixed version yet and
-    a deploy cannot wait, build with `-p:NuGetAudit=false` and open an issue the same day. Do
-    not delete this file to unblock yourself.
+    Measured, not assumed — mutation on the real deploy path, 2026-08-15:
+      · Revert DataProtection.EntityFrameworkCore to 8.0.11 (drags in the vulnerable
+        transitive System.Security.Cryptography.Xml 8.0.2): `docker build -f Dockerfile .`
+        is GREEN, zero NU19xx lines, with the restore layer verified re-run from a cold
+        cache. The same tree is RED locally under the .NET 10 SDK, 40 NU1903 errors.
+      · Revert SSH.NET to 2024.2.0 (a vulnerable DIRECT reference): the same Docker build
+        FAILS with `error NU1903`. Direct auditing works there; only the mode is ignored.
+
+    CI's SDK is NOT the 8.0.424 that its `setup-dotnet` step installs, and is not pinned by
+    anything in this repo: global.json asks for 8.0.100 with `rollForward: latestMajor`, so
+    `dotnet` selects the highest SDK present on the runner image. The evidence that this
+    already happens is that CI restores ProcuLink.slnx successfully while 8.0.424 cannot —
+    `dotnet restore ProcuLink.slnx` inside the sdk:8.0 container fails with
+    `error MSB4068: The element <Solution> is unrecognized`, because .slnx support post-dates
+    that SDK. So CI probably DOES enforce `all` today, on an SDK chosen by GitHub's image
+    contents rather than by us, and that can change under the repo without a commit.
+
+    A control that depends on which SDK a runner image happened to ship is not a control.
+    That is why CI also carries an explicit `Audit transitive NuGet advisories` step running
+    `dotnet list ProcuLink.slnx package` with the `vulnerable` and `include-transitive`
+    switches and failing on High/Critical. It holds the transitive half on every SDK.
+    (Spelling those switches with their leading dashes is what breaks this file: an XML
+    comment may not contain a double hyphen, and MSBuild answers with a parse error on
+    Directory.Build.props that reads nothing like the cause.)
+
+    Keeping the property at `all` is still right: it is the correct declaration, it protects
+    developer machines today, and it enforces itself wherever the SDK is new enough. Just do
+    not read a green Docker build as proof the graph is clean.
+
+    ESCAPE HATCH: if a HIGH advisory lands with no fixed version yet and a deploy cannot wait,
+    build with `-p:NuGetAudit=false` and open an issue the same day. Do not delete this file
+    and do not quietly drop the mode back to `direct` to unblock yourself — `direct` hides
+    exactly the two findings above, which took a parent upgrade and a transitive pin to fix.
   -->
   <PropertyGroup>
     <NuGetAudit>true</NuGetAudit>
-    <NuGetAuditMode>direct</NuGetAuditMode>
+    <NuGetAuditMode>all</NuGetAuditMode>
     <NuGetAuditLevel>high</NuGetAuditLevel>
     <WarningsAsErrors>$(WarningsAsErrors);NU1903;NU1904</WarningsAsErrors>
   </PropertyGroup>
