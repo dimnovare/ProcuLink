@@ -4,6 +4,7 @@ using Hangfire;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using ProcuLink.Api.Jobs;
+using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Infrastructure.Tenancy;
 
@@ -294,6 +295,143 @@ public sealed class InboundEmailController : ControllerBase
     private static readonly Regex HtmlTagRegex = new(@"<[^>]+>", RegexOptions.Compiled);
     private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
 
+    // ── POST /api/inbound-email/postmark-bounce ──────────────────────────────
+
+    /// <summary>
+    /// Postmark Bounce / SpamComplaint webhook. This is the OUTBOUND direction: Postmark POSTs here
+    /// when a message ProcuLink sent to a supplier bounces or is reported as spam.
+    /// </summary>
+    /// <remarks>
+    /// Until this existed, "delivered" on the email channels meant only that the first hop accepted
+    /// the handoff — a Postmark 2xx. A mistyped supplier address is accepted at that moment and
+    /// bounces seconds later, and the order read <c>delivered</c> permanently. Nothing anywhere
+    /// consumed a bounce.
+    ///
+    /// <para>Authentication is the SAME shared token the inbound endpoint uses, because it is the
+    /// same relay and the same trust question: did this POST come from our provider. Postmark's
+    /// outbound webhooks CAN send a custom header, but the token is resolved through the same
+    /// header/query/basic-auth ladder so one configured value serves both URLs.</para>
+    ///
+    /// <para>The status code is a retry instruction. 200 ends Postmark's interest; a bounce that
+    /// cannot be attributed is still answered 200, because ten re-deliveries of the same payload
+    /// reach the same verdict — the operator learns about it from the Warning the handler logs, not
+    /// from Postmark trying again. Non-200 is reserved for a token the operator must fix (401) and
+    /// for our own failure to persist (500), where re-delivery is the point.</para>
+    /// </remarks>
+    [HttpPost("postmark-bounce")]
+    [CrossOrganisationRead(
+        "Postmark outbound bounce webhook: the organisation is derived from the DELIVERY ATTEMPT the " +
+        "bounce metadata resolves to, never from the caller. Authenticated by the same shared token " +
+        "as the inbound endpoint rather than an ASP.NET auth scheme, so no tenant resolves from the " +
+        "request and the attempt lookup necessarily runs unfiltered — it is the query that DISCOVERS " +
+        "the tenant. Scoping it would make every bounce unattributable while the endpoint kept " +
+        "answering 200, which is exactly how Postmark is told the bounce was handled. Declared so " +
+        "the safety is deliberate rather than incidental.")]
+    [EnableRateLimiting("upload")]
+    [Consumes("application/json")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> PostmarkBounce(
+        [FromBody] PostmarkBouncePayload? body,
+        [FromServices] IDeliveryBounceHandler handler,
+        CancellationToken ct)
+    {
+        var expected = _config["Inbound:Postmark:WebhookToken"];
+        if (string.IsNullOrWhiteSpace(expected))
+        {
+            _logger.LogError("Postmark bounce webhook called but Inbound:Postmark:WebhookToken is not configured.");
+            return Unauthorized(new { error = "Inbound webhook is not configured." });
+        }
+
+        if (!CryptoEquals(expected, ResolvePresentedToken(Request)))
+        {
+            _logger.LogWarning("Postmark bounce webhook rejected: bad or missing token.");
+            return Unauthorized(new { error = "Invalid webhook token." });
+        }
+
+        var proxySecret = _config["Inbound:Postmark:ProxySecret"];
+        if (!string.IsNullOrWhiteSpace(proxySecret)
+            && !CryptoEquals(proxySecret, Request.Headers["X-Inbound-Proxy-Secret"].FirstOrDefault() ?? string.Empty))
+        {
+            _logger.LogWarning("Postmark bounce webhook rejected: bad or missing X-Inbound-Proxy-Secret.");
+            return Unauthorized(new { error = "Invalid webhook token." });
+        }
+
+        if (body is null)
+        {
+            _logger.LogWarning("Postmark bounce webhook rejected: empty body.");
+            return Ok(new { handled = false, reason = "empty_body" });
+        }
+
+        var kind = ClassifyBounce(body);
+        if (kind is null)
+        {
+            // A SOFT bounce, a transient block, or a subscription-management event. Postmark retries
+            // soft bounces on its own, and moving an order off 'delivered' for one would manufacture
+            // a failure the supplier never saw. Debug, not Warning: these are the common case.
+            _logger.LogDebug(
+                "Postmark bounce webhook ignored: RecordType={RecordType} Type={Type} TypeCode={TypeCode} — not terminal.",
+                body.RecordType, body.Type, body.TypeCode);
+            return Ok(new { handled = false, reason = "not_terminal" });
+        }
+
+        var result = await handler.HandleAsync(
+            new DeliveryBounceNotification(
+                IdempotencyKey:    ReadDeliveryKey(body.Metadata),
+                Kind:              kind.Value,
+                Recipient:         body.Email,
+                Description:       string.IsNullOrWhiteSpace(body.Description) ? body.Details : body.Description,
+                ProviderMessageId: body.MessageID),
+            ct);
+
+        return Ok(new { handled = true, outcome = result.Outcome.ToString(), orderId = result.OrderId });
+    }
+
+    /// <summary>
+    /// Maps a Postmark webhook payload to the terminal kinds ProcuLink acts on, or null for
+    /// everything else.
+    ///
+    /// <para>Postmark sends bounce records for a long list of types. Only two are terminal statements
+    /// about the supplier's address: a HARD bounce (the address does not exist) and a spam complaint.
+    /// <c>SpamNotification</c> is the bounce-typed form of a complaint; <c>SpamComplaint</c> is the
+    /// separate RecordType. A soft bounce, a transient DNS failure or a throttle is Postmark's
+    /// problem to retry, and <c>Inactive</c> alone is not a cause — it is the consequence Postmark
+    /// applies AFTER a hard bounce, and it is also set for a suppressed recipient, so treating it as
+    /// terminal on its own would fail orders that were never sent.</para>
+    /// </summary>
+    private static DeliveryBounceKind? ClassifyBounce(PostmarkBouncePayload body)
+    {
+        if (string.Equals(body.RecordType, "SpamComplaint", StringComparison.OrdinalIgnoreCase))
+            return DeliveryBounceKind.SpamComplaint;
+
+        if (string.Equals(body.Type, "SpamNotification", StringComparison.OrdinalIgnoreCase))
+            return DeliveryBounceKind.SpamComplaint;
+
+        if (string.Equals(body.Type, "HardBounce", StringComparison.OrdinalIgnoreCase))
+            return DeliveryBounceKind.Hard;
+
+        return null;
+    }
+
+    /// <summary>
+    /// Reads the delivery key out of the metadata bag Postmark echoes back. Postmark lower-cases
+    /// metadata keys in webhook payloads, so the lookup is case-insensitive — a case-sensitive read
+    /// would find nothing on every real bounce while every unit test that spells the key exactly
+    /// passed.
+    /// </summary>
+    private static string? ReadDeliveryKey(Dictionary<string, string>? metadata)
+    {
+        if (metadata is null || metadata.Count == 0) return null;
+
+        foreach (var (key, value) in metadata)
+        {
+            if (string.Equals(key, DeliveryBounceMetadata.IdempotencyKeyField, StringComparison.OrdinalIgnoreCase))
+                return string.IsNullOrWhiteSpace(value) ? null : value;
+        }
+
+        return null;
+    }
+
     private static string StripHtml(string html)
     {
         // Drop <script> and <style> blocks (content, not just tags) so their
@@ -353,6 +491,31 @@ public sealed class InboundEmailController : ControllerBase
     }
 
     // ── Postmark contract DTOs ───────────────────────────────────────────────
+
+    /// <summary>
+    /// Subset of the Postmark Bounce / SpamComplaint webhook JSON we consume.
+    ///
+    /// <para><c>Metadata</c> is the load-bearing field: it is what ProcuLink stamped on the outbound
+    /// send and is the only thing here that can name an order. Postmark echoes it on both record
+    /// types. <c>MessageID</c> is Postmark's own id and is kept for the audit row only — it is not a
+    /// correlation key, because nothing persists it on our side.</para>
+    /// </summary>
+    public sealed class PostmarkBouncePayload
+    {
+        /// <summary>"Bounce" or "SpamComplaint". Absent on older payload shapes.</summary>
+        [JsonPropertyName("RecordType")] public string? RecordType { get; set; }
+
+        /// <summary>Bounce type name — "HardBounce", "SoftBounce", "SpamNotification", …</summary>
+        [JsonPropertyName("Type")] public string? Type { get; set; }
+
+        [JsonPropertyName("TypeCode")] public int? TypeCode { get; set; }
+        [JsonPropertyName("MessageID")] public string? MessageID { get; set; }
+        [JsonPropertyName("Email")] public string? Email { get; set; }
+        [JsonPropertyName("Description")] public string? Description { get; set; }
+        [JsonPropertyName("Details")] public string? Details { get; set; }
+        [JsonPropertyName("Inactive")] public bool? Inactive { get; set; }
+        [JsonPropertyName("Metadata")] public Dictionary<string, string>? Metadata { get; set; }
+    }
 
     /// <summary>
     /// Subset of the Postmark Inbound JSON we actually consume. Postmark sends

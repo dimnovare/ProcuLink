@@ -172,4 +172,47 @@ public class EmailApiDeliveryDispatcherTests
         result.ErrorMessage.Should().Be("boom");
         result.ResponseCode.Should().Be(502);
     }
+
+    // 9. Bounce attribution — the link the whole bounce webhook hangs from.
+    //
+    // Postmark's Bounce / SpamComplaint payloads echo METADATA and do NOT echo custom MIME headers,
+    // so the deterministic Message-ID above cannot carry the correlation. If this stamp is missing,
+    // every real bounce arrives unattributable and the webhook is a check that cannot fire — while
+    // every test of the webhook itself, which supplies the key by hand, still passes.
+    [Fact]
+    public async Task Dispatch_StampsTheDeliveryKeyIntoProviderMetadata_SoABounceCanFindTheOrder()
+    {
+        var fake = new FakeEmailApiClient();
+        var dispatcher = MakeDispatcher(fake);
+
+        await dispatcher.DispatchAsync(
+            Encoding.UTF8.GetBytes("<Order/>"), "PO-1.xml", "application/xml",
+            MakeConfig(new { toAddresses = "a@x.example" }), string.Empty, default,
+            idempotencyKey: "delivery-key-abc");
+
+        fake.LastMessage!.Metadata.Should().NotBeNull(
+            "a bounce webhook has no other way to reach the order — Postmark echoes metadata, not headers");
+        fake.LastMessage.Metadata!
+            .Should().ContainKey(ProcuLink.Core.Services.Delivery.DeliveryBounceMetadata.IdempotencyKeyField)
+            .WhoseValue.Should().Be("delivery-key-abc",
+                "the stamped value must be the delivery idempotency key, which is what " +
+                "DeliveryAttempt.IdempotencyKey already stores");
+    }
+
+    // 10. A TEST FIRE has no order, so there is nothing to attribute and nothing to stamp. Without
+    // this, a change that stamped a constant or a fabricated key would look correct in test 9.
+    [Fact]
+    public async Task Dispatch_WithNoDeliveryKey_StampsNoMetadata()
+    {
+        var fake = new FakeEmailApiClient();
+        var dispatcher = MakeDispatcher(fake);
+
+        await dispatcher.DispatchAsync(
+            Encoding.UTF8.GetBytes("<Order/>"), "PO-1.xml", "application/xml",
+            MakeConfig(new { toAddresses = "a@x.example" }), string.Empty, default,
+            idempotencyKey: null, isTestFire: true);
+
+        fake.LastMessage!.Metadata.Should().BeNull(
+            "a test fire has no order, so a bounce for it must stay honestly unattributable");
+    }
 }
