@@ -194,6 +194,47 @@ public sealed class SftpIngressClaimFirstPostgresTests(PostgresContainerFixture 
         (await verify.PurchaseOrders.AnyAsync(o => o.Id == originalOrderId)).Should().BeTrue();
     }
 
+    // ── B-7: concurrent polls of ONE corrected re-send create ONE new order ──
+    // The re-claim is an UPDATE ... WHERE file_hash = <old>. Without that guard every concurrent
+    // poll would stamp its own fresh order id over the row and import the correction N times —
+    // N supplier deliveries and N x EUR0.50 overage for one corrected PO.
+
+    [DockerRequiredFact]
+    public async Task ConcurrentPolls_OfOneCorrectedResend_CreateExactlyOneNewOrder()
+    {
+        const int workers = 8;
+        const string remotePath = "/incoming/po-concurrent-resend.csv";
+        var original  = "po,qty\r\n9001,10"u8.ToArray();
+        var corrected = "po,qty\r\n9001,11"u8.ToArray();
+
+        var orgId = await SeedOrgSupplierConfigAsync("/incoming");
+        var orders = new CountingOrderService(_options!);   // shared across all polls
+        var enqueuer = new CountingParseEnqueuer();
+        var factory = new OneFileSftpFactory(remotePath, original);
+
+        await using (var db1 = new ProcuLinkDbContext(_options!))
+            (await NewService(db1, orders, enqueuer, factory).PollAsync(orgId, CancellationToken.None))
+                .Should().Be(1);
+
+        // One correction, many simultaneous pollers racing to claim it.
+        factory.Content = corrected;
+        var tasks = Enumerable.Range(0, workers).Select(async _ =>
+        {
+            await using var db = new ProcuLinkDbContext(_options!);
+            return await NewService(db, orders, enqueuer, factory).PollAsync(orgId, CancellationToken.None);
+        });
+        await Task.WhenAll(tasks);
+
+        (await OrderCountAsync(orgId)).Should().Be(2,
+            "one original + ONE correction — the losers of the re-claim race must skip, not re-import");
+
+        await using var verify = new ProcuLinkDbContext(_options!);
+        (await verify.Set<ImportedSftpFile>().CountAsync(f => f.OrgId == orgId && f.RemotePath == remotePath))
+            .Should().Be(1, "exactly one ledger row survives the concurrent re-claim race");
+        (await verify.Set<ImportedSftpFile>().SingleAsync(f => f.OrgId == orgId && f.RemotePath == remotePath))
+            .FileHash.Should().Be(Sha256Hex(corrected));
+    }
+
     // ── B-7: a corrected file at a TERMINAL claim's path must import too ─────
     // "We rejected the file that used to be at this path" must not become "we will never look
     // at this path again". A permanently-bad file the supplier then FIXED is the same lost order.
