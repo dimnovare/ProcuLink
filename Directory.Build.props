@@ -1,0 +1,47 @@
+<Project>
+
+  <!--
+    Repo-wide NuGet vulnerability audit.
+
+    WHY THIS FILE EXISTS
+    SSH.NET 2024.2.0 shipped GHSA-q939-rpr3-3284 (HIGH) in the SFTP delivery path and rode
+    every single restore for months as `warning NU1903`. Nothing consumed that warning: CI's
+    `dotnet restore ProcuLink.slnx` step is green with it, the Docker build is green with it,
+    and no human reads restore output. A warning nobody sees is not a control. Escalating the
+    HIGH/CRITICAL audit codes to errors is what turns it into one.
+
+    NU1901 low · NU1902 moderate · NU1903 high · NU1904 critical.
+    NuGetAuditLevel=high already suppresses NU1901/NU1902, so only 1903/1904 can ever fire.
+
+    WHY MODE IS `direct` AND NOT `all` — this is load-bearing, do not "tighten" it casually.
+    The repo has two HIGH advisories in TRANSITIVE packages that no first-party change can
+    currently clear, both pre-dating this file:
+
+      · Newtonsoft.Json 11.0.1              GHSA-5crp-9r3c-p9vr   (via Hangfire.Core 1.8.18)
+      · System.Security.Cryptography.Xml 8.0.2  GHSA-37gx-xxp4-5rgx
+
+    Under mode `all` those two fail the build on a clean checkout — including the Railway
+    Docker image build, which would mean no deploys. Under mode `direct` the audit covers
+    exactly the set this repo can actually act on: a direct <PackageReference> with a known
+    HIGH advisory is upgradable by definition, which is the whole class the SSH.NET finding
+    belonged to. Verify with `dotnet list ProcuLink.slnx package` plus the `vulnerable` and
+    `include-transitive` switches before changing this to `all`; flip it only once those two
+    are resolved.
+
+    Setting `direct` explicitly is NOT redundant. The .NET 8 SDK (what CI and both Dockerfiles
+    use) defaults to `direct` and ignores this property entirely, but the .NET 9+ SDK defaults
+    to `all` — so on a developer machine running a newer SDK, omitting this line is what would
+    fail the build on the two transitive advisories above.
+
+    ESCAPE HATCH: if a HIGH advisory lands on a direct dependency with no fixed version yet and
+    a deploy cannot wait, build with `-p:NuGetAudit=false` and open an issue the same day. Do
+    not delete this file to unblock yourself.
+  -->
+  <PropertyGroup>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>direct</NuGetAuditMode>
+    <NuGetAuditLevel>high</NuGetAuditLevel>
+    <WarningsAsErrors>$(WarningsAsErrors);NU1903;NU1904</WarningsAsErrors>
+  </PropertyGroup>
+
+</Project>
