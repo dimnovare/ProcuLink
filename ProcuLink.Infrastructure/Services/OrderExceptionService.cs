@@ -51,6 +51,7 @@ namespace ProcuLink.Infrastructure.Services;
 /// property that actually matters: <c>OrderTransformService</c> reconciles on transform success,
 /// which every order passes through before delivery, so <b>no duplicate can reach a supplier
 /// without having been flagged first</b>.</para>
+/// </summary>
 public sealed class OrderExceptionService : IOrderExceptionService
 {
     private readonly ProcuLinkDbContext _db;
