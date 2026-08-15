@@ -11,11 +11,22 @@ public class OrderException
     public Guid     OrgId      { get; set; }
     public Guid     OrderId    { get; set; }
     public Guid?    LineId     { get; set; }
-    /// <summary>Parse | Validate | Map | Transform | Deliver</summary>
+    /// <summary>
+    /// Route | Map | Parse | Validate | Transform | Deliver — the stages actually emitted by
+    /// <c>OrderExceptionService.ProblemFor</c> and the independent detectors beside it.
+    /// </summary>
     public string   Stage      { get; set; } = string.Empty;
-    /// <summary>unresolved_mapping | transform_failed | delivery_failed | supplier_rejected | dead_letter | validation_error</summary>
+    /// <summary>
+    /// Every code this build produces, all from <c>OrderExceptionService</c>:
+    /// unrouted_order | unresolved_mapping | duplicate_po_number | parse_failed | transform_failed |
+    /// delivery_failed | delivery_unconfirmed | supplier_rejected | dead_letter.
+    /// <para>This list was stale before 2026-08-15: it advertised <c>validation_error</c>, which
+    /// nothing has ever emitted, and omitted <c>unrouted_order</c>, <c>parse_failed</c> and
+    /// <c>delivery_unconfirmed</c>, which are emitted. There is no enum and no DB CHECK constraint
+    /// behind these strings, so this comment is the only inventory — keep it honest.</para>
+    /// </summary>
     public string   Code       { get; set; } = string.Empty;
-    /// <summary>info | warning | error | critical</summary>
+    /// <summary>warning | error | critical (the documented <c>info</c> level is never emitted).</summary>
     public string   Severity   { get; set; } = "warning";
     /// <summary>open | resolved | ignored</summary>
     public string   State      { get; set; } = "open";

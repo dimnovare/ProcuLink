@@ -556,6 +556,10 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.OrgId).HasColumnName("org_id");
             b.Property(x => x.SupplierId).HasColumnName("supplier_id");
             b.Property(x => x.PoNumber).HasColumnName("po_number").IsRequired();
+            // Nullable ON PURPOSE, and null is not "unknown": null means "this order carries no PO
+            // number anyone asserted (a minted placeholder), so it takes part in no duplicate
+            // comparison". Migration AddPurchaseOrderPoNumberNormalized backfilled every prior row.
+            b.Property(x => x.PoNumberNormalized).HasColumnName("po_number_normalized");
             b.Property(x => x.BuyerName).HasColumnName("buyer_name");
             b.Property(x => x.OrderDate).HasColumnName("order_date");
             b.Property(x => x.Currency).HasColumnName("currency").IsRequired();
@@ -649,6 +653,22 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // Also the retention scrub's selection predicate (domain IS NOT NULL, past the window).
             b.HasIndex(x => new { x.OrgId, x.InboundSenderDomain })
              .HasDatabaseName("IX_purchase_orders_org_id_inbound_sender_domain");
+            // (OrgId, PoNumberNormalized): the duplicate-PO-number probe in
+            // OrderExceptionService.ReconcileAsync — "does another order in this org already carry
+            // this PO number?". Before this index there was no lookup on PO number at ALL in
+            // production code (`git grep "PoNumber =="` returned nothing), which is why
+            // cross-channel duplication went undetected: every ingress ledger keys on TRANSPORT
+            // identity (remote path, S3 key, message id, request key) and none of them can see
+            // each other, so the PO itself was never a key anywhere.
+            // NOT UNIQUE, and that is the design decision, not an oversight — a buyer legitimately
+            // re-sends a corrected PO under the same number, and rejecting it at the database would
+            // lose a real order. Detection is advisory; the operator decides. See the class doc on
+            // OrderExceptionService for the full detect-vs-prevent argument.
+            // Filtered: placeholders store null and must never be compared to each other, so they
+            // are kept out of the index entirely rather than filtered out at query time.
+            b.HasIndex(x => new { x.OrgId, x.PoNumberNormalized })
+             .HasFilter("po_number_normalized IS NOT NULL")
+             .HasDatabaseName("IX_purchase_orders_org_id_po_number_normalized");
             b.HasOne(x => x.Organisation)
              .WithMany(x => x.PurchaseOrders)
              .HasForeignKey(x => x.OrgId);

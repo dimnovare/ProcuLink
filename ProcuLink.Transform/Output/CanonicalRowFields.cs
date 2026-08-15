@@ -164,6 +164,13 @@ public static class CanonicalRowFields
                 "Internal parse/transform re-drive counter used by the stuck-order sweep.",
             ["DeliveryRequeueCount"] =
                 "Internal delivery-phase re-drive counter used by the stuck-delivery sweep.",
+            ["PoNumberNormalized"] =
+                "Internal comparison key for duplicate-PO-number detection: PoNumber trimmed and "
+                + "upper-cased, or null when the order carries only a minted placeholder. The "
+                + "supplier-facing value is PoNumber, which is bindable and keeps its original "
+                + "casing; emitting the folded copy would put a value in the document that the "
+                + "buyer never wrote, and null-for-placeholder is a ProcuLink processing fact, "
+                + "not a property of the purchase order.",
             ["SchemaFingerprintHash"] =
                 "Internal column-layout hash powering fingerprint learning and the idempotency "
                 + "guard for parse-time fingerprinting.",

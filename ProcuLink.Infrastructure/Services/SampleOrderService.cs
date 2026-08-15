@@ -155,6 +155,11 @@ public sealed class SampleOrderService : ISampleOrderService
             OrgId         = organisationId,
             SupplierId    = supplier.Id,
             PoNumber      = FixturePoNumber,
+            // Deliberately null, not PoNumberIdentity.Normalize(FixturePoNumber): the fixture PO
+            // number is a constant, so two demo orders in one workspace would otherwise report each
+            // other as duplicates — a fabricated warning on data we generated ourselves. The
+            // duplicate probe also skips IsSample orders; this is the second of the two guards.
+            PoNumberNormalized = null,
             OrderDate     = DateOnly.FromDateTime(now),
             Currency      = FixtureCurrency,
             Status        = "parsing",
