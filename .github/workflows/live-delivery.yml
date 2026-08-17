@@ -1,0 +1,154 @@
+name: Live delivery (disposable sink)
+
+# Fires the REAL HTTP delivery dispatcher at a disposable endpoint created for
+# this run, then verifies out-of-band that the purchase orders actually arrived.
+#
+# The tests are the ones already on main —
+# ProcuLink.Infrastructure.Tests/Services/Dispatchers/LiveEndpointDeliveryTests.cs,
+# `Category=LiveEndpoint`. They construct a real HttpDeliveryDispatcher with a
+# real HttpClient, a real OutboundRequestGuard and the real OAuth2
+# client-credentials flow. Until now nothing ran them: they are gated behind
+# PROCULINK_LIVE_ENDPOINT_TESTS and needed an external endpoint somebody kept
+# alive by hand, so the only delivery coverage CI had was against mocks.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# GUARDRAIL 1 — WHY THERE IS NO `pull_request` OR `push` TRIGGER, EVER.
+#
+# This job makes real outbound network calls from the runner. Two reasons that
+# must not become one reason and then no reason:
+#
+#  a) A third party's bad minute must never redden a pull request. This repo
+#     already separates offline checks from network checks for exactly that
+#     reason — see postmark-ip-drift.yml, whose network job is schedule-only.
+#  b) More importantly, this is the workflow that gets extended. The moment
+#     somebody points it at a real endpoint and adds a credential to do so, a
+#     `pull_request` trigger means a fork PR can run repository workflow code
+#     with that credential in scope, and `pull_request_target` runs with the
+#     BASE repo's secrets by design. Establishing the restriction now, while
+#     there is nothing to steal, is the only time it is free.
+#
+# To run this on a branch: gh workflow run live-delivery.yml --ref <branch>.
+# `workflow_dispatch` already takes a ref, so nothing is blocked by this.
+#
+# GUARDRAIL 2 — DISPOSABLE SINKS ONLY, CREATED AT RUNTIME, DESTROYED ALWAYS.
+#
+# The endpoint is `tools/live-delivery-sink/sink.mjs`, started by this job on
+# 127.0.0.1 and killed in an `if: always()` step. It never has a real supplier's
+# hostname because it never has a hostname at all — the target is loopback, and
+# a loopback URL cannot reach a customer, a vendor, or anyone's inbox. Nothing
+# here touches email, SFTP, S3 or an ERP: those channels in
+# LiveEndpointDeliveryTests stay gated off, and their skip reasons say so.
+#
+# It also does NOT touch the production API, the production database, or any
+# real order. The dispatcher runs IN-PROCESS on the runner; there is no call to
+# api.proculink.eu anywhere in this job, and therefore no supplier delivery
+# config to overwrite and no plan quota to consume.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 05:30 UTC daily — before the working day, and half an hour clear of the
+    # frontend repo's production smoke so two live checks do not report at once.
+    - cron: '30 5 * * *'
+
+concurrency:
+  group: live-delivery
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deliver:
+    name: Real dispatcher against a runtime sink
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SINK_PORT: '8899'
+      SINK_LOG: ${{ github.workspace }}/sink-receipts.jsonl
+      # The opt-in the [EnvironmentGatedFact]s read. Without it every live test
+      # skips with a reason — correct on a laptop, useless here, which is why the
+      # verify step below refuses to accept an empty sink as a pass.
+      PROCULINK_LIVE_ENDPOINT_TESTS: '1'
+      PROCULINK_LIVE_HTTP_BASE: http://127.0.0.1:8899
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore
+        run: dotnet restore ProcuLink.Infrastructure.Tests/ProcuLink.Infrastructure.Tests.csproj
+
+      - name: Build
+        run: dotnet build ProcuLink.Infrastructure.Tests/ProcuLink.Infrastructure.Tests.csproj --no-restore --configuration Release
+
+      # GUARDRAIL 2, first half — the sink exists only for the next few minutes.
+      - name: Start the disposable delivery sink
+        run: |
+          node tools/live-delivery-sink/sink.mjs --port "$SINK_PORT" --log "$SINK_LOG" &
+          echo "SINK_PID=$!" >> "$GITHUB_ENV"
+          # Wait for the port rather than sleeping: a fixed sleep is either too
+          # short (a flaky red) or too long (wasted minutes on every run).
+          for i in $(seq 1 40); do
+            if curl -sf "http://127.0.0.1:$SINK_PORT/health" > /dev/null; then
+              echo "Sink is up after ${i} attempt(s)."
+              exit 0
+            fi
+            sleep 0.25
+          done
+          echo "::error title=Sink never started::No response from http://127.0.0.1:$SINK_PORT/health after 10s."
+          exit 1
+
+      - name: Fire the real delivery dispatcher
+        run: |
+          dotnet test ProcuLink.Infrastructure.Tests/ProcuLink.Infrastructure.Tests.csproj \
+            --no-restore \
+            --no-build \
+            --configuration Release \
+            --filter "Category=LiveEndpoint" \
+            --logger "console;verbosity=normal" \
+            --logger "trx;LogFileName=live-delivery.trx"
+
+      # The actual gate. `dotnet test` exits 0 for "all live tests passed" AND for
+      # "all live tests skipped"; only the sink's receipts can tell those apart.
+      - name: Verify what the sink actually received
+        run: node tools/live-delivery-sink/verify-receipts.mjs --log "$SINK_LOG"
+
+      # GUARDRAIL 2, second half. `always()` so a failed assertion, a timeout or a
+      # cancellation still leaves no listener behind.
+      - name: Stop the disposable delivery sink
+        if: always()
+        run: |
+          if [ -n "${SINK_PID:-}" ]; then
+            kill "$SINK_PID" 2>/dev/null || true
+            echo "Stopped sink pid $SINK_PID."
+          fi
+
+      # The receipts ARE the evidence, and they contain nothing sensitive: the
+      # payloads are the fixture purchase orders written into
+      # LiveEndpointDeliveryTests, and the only credential in play is the
+      # throwaway token this run's sink issued to itself.
+      - name: Upload receipts and test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-delivery-evidence
+          path: |
+            sink-receipts.jsonl
+            '**/TestResults/*.trx'
+          retention-days: 14
+          if-no-files-found: warn
