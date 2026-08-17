@@ -788,8 +788,17 @@ public class SuppliersController : ControllerBase
         // so it is where three separately-sold capabilities are actually chosen. All three
         // were declared in the gate table and enforced NOWHERE, which meant a Pilot org
         // could configure a webhook and an Enterprise-only ERP connector.
-        if (await DeliveryCapabilityGate.FirstUnmetAsync(
-                _billing, orgId, request.Protocol, request.OutputFormat, ct) is { } gated)
+        //
+        // Gated on what the edit INTRODUCES, not on what the stored row already has. Gating
+        // unconditionally made re-saving an existing configuration impossible for an org whose
+        // plan no longer covers it — and re-saving is the only way to rotate a credential, and
+        // the only migration path off the unbound (version 1) envelopes. That put a billing
+        // check in front of a security action. Creating a configuration is unchanged: with no
+        // stored row this is identical to the old call.
+        var existingConfig = await _deliveryConfigService.GetEntityAsync(orgId, id, ct);
+        if (await DeliveryCapabilityGate.FirstUnmetForEditAsync(
+                _billing, orgId, request.Protocol, request.OutputFormat,
+                existingConfig?.Protocol, existingConfig?.OutputFormat, ct) is { } gated)
         {
             return StatusCode(StatusCodes.Status403Forbidden, new
             {

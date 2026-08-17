@@ -120,7 +120,14 @@ public class BillingFeatureEnforcementTests
     private sealed record SupplierHarness(
         SuppliersController Controller, ProcuLinkDbContext Db, Guid OrgId, Supplier Supplier);
 
-    private static SupplierHarness BuildSuppliers(BillingFeature? granted)
+    /// <param name="existingDelivery">
+    /// The delivery configuration already stored for this supplier, or null for "none yet".
+    /// The edit gate subtracts what the stored row already requires, so this is what separates
+    /// creating a configuration from re-saving one.
+    /// </param>
+    private static SupplierHarness BuildSuppliers(
+        BillingFeature? granted,
+        SupplierDeliveryConfig? existingDelivery = null)
     {
         var db = NewDb();
         var orgId = Guid.NewGuid();
@@ -129,6 +136,9 @@ public class BillingFeatureEnforcementTests
         tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
 
         var deliveryConfig = new Mock<IDeliveryConfigService>();
+        deliveryConfig.Setup(d => d.GetEntityAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(existingDelivery);
         deliveryConfig.Setup(d => d.UpsertAsync(
                 It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<UpsertDeliveryConfigRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Guid _, Guid sid, UpsertDeliveryConfigRequest r, CancellationToken _) =>
@@ -582,6 +592,100 @@ public class BillingFeatureEnforcementTests
             h.Supplier.Id, Delivery("http", outputFormat: "cxml"), CancellationToken.None);
 
         Assert403NamingTheRightPlan(result, BillingFeature.WebhookDelivery);
+    }
+
+    // ── Editing an EXISTING configuration ────────────────────────────────────
+    //
+    // Found in production 2026-08-17. Re-saving a supplier's delivery config is the only way to
+    // rotate a credential, and the only migration path off the unbound (version 1) envelopes,
+    // which cannot be rebound automatically. The gate ran unconditionally, so an org whose plan
+    // no longer covered an existing configuration could not save it at all — a billing check
+    // standing in front of a security action, and the longer it stood the more valuable the
+    // unrotatable secret became.
+
+    private static SupplierDeliveryConfig Stored(string protocol, string outputFormat) =>
+        new() { Id = Guid.NewGuid(), Protocol = protocol, OutputFormat = outputFormat };
+
+    [Fact]
+    public async Task ExistingCxmlConfig_CanBeReSaved_WhenThePlanNoLongerCoversIt()
+    {
+        // Granted NOTHING, yet the stored row is already http + cxml. Saving it again introduces
+        // no capability: it already delivers this way, because delivery never consults the gate.
+        var h = BuildSuppliers(granted: null, existingDelivery: Stored("http", "cxml"));
+
+        var result = await h.Controller.UpsertDeliveryConfig(
+            h.Supplier.Id, Delivery("http", outputFormat: "cxml"), CancellationToken.None);
+
+        AssertNot403(result, BillingFeature.Cxml);
+    }
+
+    [Fact]
+    public async Task CreatingTheSameCxmlConfig_IsStillRefused_WhenNothingIsStoredYet()
+    {
+        // Anti-vacuity control for the test above, and the whole point of the change: identical
+        // request, identical (empty) entitlements, ONLY the stored row differs. If this ever goes
+        // green the edit gate has stopped gating creation and the exemption has swallowed the rule.
+        var h = BuildSuppliers(granted: null, existingDelivery: null);
+
+        var result = await h.Controller.UpsertDeliveryConfig(
+            h.Supplier.Id, Delivery("http", outputFormat: "cxml"), CancellationToken.None);
+
+        Assert403NamingTheRightPlan(result, BillingFeature.Cxml);
+    }
+
+    [Fact]
+    public async Task EditingAnExistingConfig_StillRefusesACapabilityItWouldINTRODUCE()
+    {
+        // An sftp + xml row requires nothing. Turning it into http + cxml introduces both, so the
+        // exemption must not apply — otherwise "has any config at all" would be a free upgrade.
+        //
+        // Both are unmet, and the refusal names Cxml (Operations) rather than WebhookDelivery
+        // (Growth): the gate reports the WORST unmet tier, because naming the cheaper one would
+        // send the customer to a plan that still would not let them save.
+        var h = BuildSuppliers(granted: null, existingDelivery: Stored("sftp", "xml"));
+
+        var result = await h.Controller.UpsertDeliveryConfig(
+            h.Supplier.Id, Delivery("http", outputFormat: "cxml"), CancellationToken.None);
+
+        Assert403NamingTheRightPlan(result, BillingFeature.Cxml);
+    }
+
+    [Fact]
+    public async Task PartiallyOverlappingEdit_ExemptsOnlyTheCapabilityAlreadyStored()
+    {
+        // The nuance case. Stored http + xml, so WebhookDelivery is already in force and exempt.
+        // The edit adds cxml, which is NOT stored — that half must still be refused, and must name
+        // the Operations gate rather than the webhook one the org is being forgiven for.
+        var h = BuildSuppliers(granted: null, existingDelivery: Stored("http", "xml"));
+
+        var result = await h.Controller.UpsertDeliveryConfig(
+            h.Supplier.Id, Delivery("http", outputFormat: "cxml"), CancellationToken.None);
+
+        Assert403NamingTheRightPlan(result, BillingFeature.Cxml);
+    }
+
+    [Fact]
+    public async Task FirstUnmetForEdit_WithNoStoredRow_IsExactlyFirstUnmet()
+    {
+        // The creation path must not merely "look" unchanged — it must BE the old decision, for
+        // every combination the gate knows about, or a future edit to one drifts from the other.
+        var billing = BillingGranting(null).Object;
+        var orgId = Guid.NewGuid();
+
+        foreach (var (protocol, format) in new[]
+                 {
+                     ("http", "cxml"), ("http", "xml"), ("erp_erply", "xml"),
+                     ("erp_directo", "cxml"), ("sftp", "xml"), ("email", "csv"),
+                 })
+        {
+            var unconditional = await DeliveryCapabilityGate.FirstUnmetAsync(
+                billing, orgId, protocol, format, CancellationToken.None);
+            var forEdit = await DeliveryCapabilityGate.FirstUnmetForEditAsync(
+                billing, orgId, protocol, format, null, null, CancellationToken.None);
+
+            forEdit.Should().Be(unconditional,
+                $"with nothing stored, editing {protocol}/{format} must decide exactly as creating it");
+        }
     }
 
     [Fact]
