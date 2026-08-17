@@ -46,6 +46,31 @@ public class NetworkWorkflowTriggerTests
     /// </summary>
     private static readonly string[] AllowedTriggers = { "workflow_dispatch", "schedule" };
 
+    /// <summary>
+    /// The exact set of workflows the scan is expected to find, and the exact subset that starts the
+    /// disposable sink.
+    ///
+    /// <para>A HARD-CODED LIST INSIDE A TEST IS USUALLY THE DEFECT IN THIS REPOSITORY, so this one
+    /// states its reason. The first version of this class asserted only
+    /// <c>NetworkWorkflows().Should().NotBeEmpty()</c> and then put every real assertion inside
+    /// <c>foreach (var w in NetworkWorkflows())</c>. <c>NoVacuousTestPassTests</c> failed it — correctly
+    /// — under <c>every-assertion-is-conditional</c>: a scan that matched nothing, or that matched a
+    /// renamed signal, would loop zero times and report Passed having checked no workflow at all. The
+    /// guard would have been vacuous in exactly the direction it exists to prevent.</para>
+    ///
+    /// <para><c>NotBeEmpty</c> would not have fixed it either. One workflow being found says nothing
+    /// about the second one having quietly stopped matching, and it is the unmatched workflow that
+    /// carries the untested trigger. So the assertion is an exact set: adding a network workflow is a
+    /// deliberate edit here, which is the review moment worth forcing — the cost of that edit is one
+    /// line, and the cost of not having it is a production-credentialled workflow nobody checked.</para>
+    /// </summary>
+    private static readonly string[] ExpectedNetworkWorkflows = { "live-delivery.yml" };
+
+    /// <summary>Workflows that START the sink, and therefore owe a teardown. Same rationale.</summary>
+    private static readonly string[] ExpectedSinkWorkflows = { "live-delivery.yml" };
+
+    private const string SinkStart = "live-delivery-sink/sink.mjs";
+
     private static string RepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
@@ -104,21 +129,41 @@ public class NetworkWorkflowTriggerTests
         return triggers;
     }
 
+    /// <summary>
+    /// Why the exact-set assertion is written out in each test rather than factored into a helper.
+    ///
+    /// <para><c>VacuousTestPassScanner</c> counts only assertions that <c>BelongsDirectlyTo</c> the test
+    /// method. That is not a limitation to route around — it is the rule being right: moving the one
+    /// unconditional assertion into a helper would leave each test body containing nothing but a loop
+    /// that may not execute, which is precisely the shape it flags. A sibling test passing does not make
+    /// this test's loop non-empty either, and xUnit gives no ordering guarantee, so "the other test
+    /// would have caught it" is not a property of any single run.</para>
+    /// </summary>
+    private static string DiscoveryFailureReason() =>
+        $"the scan for [{string.Join(", ", NetworkSignals)}] under .github/workflows must find exactly " +
+        $"[{string.Join(", ", ExpectedNetworkWorkflows)}]. Finding FEWER means a workflow was deleted or " +
+        "now opts in under a name this scan does not know, and every assertion after this point would be " +
+        "checking nothing. Finding MORE means a new workflow makes real outbound calls and has not been " +
+        "reviewed — add it to ExpectedNetworkWorkflows in the same commit that adds the workflow.";
+
     [Fact]
-    public void At_least_one_network_workflow_is_found_otherwise_this_class_asserts_nothing()
+    public void The_scan_finds_exactly_the_network_workflows_this_class_knows_about()
     {
-        // The scan is by content, so a rename or a moved script would make it match nothing — and a
-        // guard that inspects nothing reports exactly the same green as one that inspects everything.
-        NetworkWorkflows().Should().NotBeEmpty(
-            $"no workflow under .github/workflows mentions any of {string.Join(", ", NetworkSignals)}. " +
-            "Either the live-delivery workflow was deleted, or it now opts in under a name this scan " +
-            "does not know — add that name to NetworkSignals.");
+        NetworkWorkflows().Select(w => w.File).OrderBy(f => f, StringComparer.Ordinal)
+            .Should().Equal(ExpectedNetworkWorkflows, DiscoveryFailureReason());
     }
 
     [Fact]
     public void Network_workflows_are_triggered_only_by_workflow_dispatch_or_schedule()
     {
-        foreach (var (file, source) in NetworkWorkflows())
+        var workflows = NetworkWorkflows();
+
+        // Unconditional, and first: it proves the loop below is not empty before the loop below is
+        // trusted to have verified anything.
+        workflows.Select(w => w.File).OrderBy(f => f, StringComparer.Ordinal)
+            .Should().Equal(ExpectedNetworkWorkflows, DiscoveryFailureReason());
+
+        foreach (var (file, source) in workflows)
         {
             var triggers = DeclaredTriggers(source);
 
@@ -137,10 +182,23 @@ public class NetworkWorkflowTriggerTests
     [Fact]
     public void The_disposable_sink_is_stopped_even_when_the_run_fails()
     {
-        foreach (var (file, source) in NetworkWorkflows())
-        {
-            if (!source.Contains("live-delivery-sink/sink.mjs", StringComparison.Ordinal)) continue;
+        // The `continue` this loop used to open with — skipping any workflow that does not start the
+        // sink — was the second half of the same vacuity: with no workflow starting the sink, every
+        // iteration skipped and the test passed having checked no teardown at all. Selecting the
+        // subset and asserting the SUBSET's membership unconditionally says the same thing without
+        // ever taking a silent path.
+        var sinkWorkflows = NetworkWorkflows()
+            .Where(w => w.Source.Contains(SinkStart, StringComparison.Ordinal))
+            .ToList();
 
+        sinkWorkflows.Select(w => w.File).OrderBy(f => f, StringComparer.Ordinal).Should().Equal(
+            ExpectedSinkWorkflows,
+            $"exactly [{string.Join(", ", ExpectedSinkWorkflows)}] should start the disposable sink " +
+            $"({SinkStart}). Finding none means the teardown assertions below verify nothing; finding an " +
+            "unexpected one means a workflow starts a listener whose teardown nobody has reviewed.");
+
+        foreach (var (file, source) in sinkWorkflows)
+        {
             var lines = source.Split('\n')
                 .Select(l => l.TrimEnd('\r'))
                 .Where(l => !Regex.IsMatch(l, @"^\s*#"))
