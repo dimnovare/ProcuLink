@@ -108,4 +108,61 @@ public static class DeliveryCapabilityGate
 
         return worst;
     }
+
+    /// <summary>
+    /// The gate for EDITING a delivery configuration that already exists: refuses only the
+    /// capabilities the edit would <b>introduce</b>, never the ones the stored configuration
+    /// already has.
+    ///
+    /// <para><b>Why this is not a loophole.</b> The gate governs what an organisation may
+    /// <i>configure</i>, and it has never governed what already delivers — an existing cXML
+    /// webhook keeps sending after a downgrade, because delivery does not consult it. So a save
+    /// that changes nothing about the channel or the format grants nothing that was not already
+    /// in force, and refusing it protects no revenue.</para>
+    ///
+    /// <para><b>What refusing it did cost.</b> Re-saving is the ONLY way to rewrite a credential:
+    /// it is how a leaked secret is rotated, and it is the sole migration path for the unbound
+    /// (version 1) credential envelopes, which cannot be rebound automatically because the pinned
+    /// revision copy is frozen byte-for-byte. Gating it unconditionally therefore put a billing
+    /// check in front of a security action — an organisation whose plan no longer covers an
+    /// existing configuration could not rotate its credentials at all, and the longer they stayed
+    /// on the old envelope the more valuable the unrotatable secret became.</para>
+    ///
+    /// <para>Introducing a capability is still refused, so a Pilot organisation cannot turn an
+    /// <c>sftp</c> configuration into an <c>http</c> + <c>cxml</c> one by editing it. With no
+    /// stored configuration this is exactly <see cref="FirstUnmetAsync"/> — the creation path is
+    /// deliberately unchanged.</para>
+    /// </summary>
+    public static async Task<(BillingFeature Feature, string Capability)?> FirstUnmetForEditAsync(
+        IBillingService billing,
+        Guid orgId,
+        string? protocol,
+        string? outputFormat,
+        string? existingProtocol,
+        string? existingOutputFormat,
+        CancellationToken ct)
+    {
+        // Features the STORED configuration already required. Compared by feature rather than by
+        // raw string so a re-tiering in PlanConstants cannot make the two sides disagree.
+        var alreadyHeld = RequiredFeatures(existingProtocol, existingOutputFormat)
+            .Select(r => r.Feature)
+            .ToHashSet();
+
+        (BillingFeature Feature, string Capability)? worst = null;
+        var worstRank = -1;
+
+        foreach (var required in RequiredFeatures(protocol, outputFormat))
+        {
+            if (alreadyHeld.Contains(required.Feature)) continue;
+            if (await billing.HasFeatureAsync(orgId, required.Feature, ct)) continue;
+
+            var rank = Array.IndexOf(PlanConstants.All, PlanConstants.GetMinimumPlan(required.Feature));
+            if (rank <= worstRank) continue;
+
+            worstRank = rank;
+            worst = required;
+        }
+
+        return worst;
+    }
 }
