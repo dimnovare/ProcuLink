@@ -64,6 +64,20 @@ public class DataErasureServiceTests
             FileName = $"PO_{prefix.Replace('/', '_')}_12345.pdf",
             ImportedAt = DateTime.UtcNow,
         });
+        // Ranked supplier candidates for this order. This table has NO foreign key to
+        // purchase_orders — its only FK is to organisations — so nothing cascades it away and
+        // for a long time nothing deleted it either: the rows outlived the erased order holding
+        // a dangling OrderId, the sender's email domain inside SignalsJson, and the deciding
+        // operator's Clerk user id. Seeded with those exact fields populated so the assertions
+        // below are about real leftover content, not an empty row.
+        db.OrderSupplierSuggestions.Add(new OrderSupplierSuggestion
+        {
+            Id = Guid.NewGuid(), OrgId = orgId, OrderId = orderId, SupplierId = Guid.NewGuid(),
+            Rank = 1, Score = 0.82,
+            SignalsJson = $"[{{\"signal\":\"senderDomain\",\"detail\":\"the order arrived from their email domain {prefix}-supplier.example\"}}]",
+            Decision = "accepted", DecidedBy = $"user_clerk_{prefix.Replace('/', '_')}",
+            DecidedAt = DateTime.UtcNow, CreatedAt = DateTime.UtcNow,
+        });
     }
 
     [Fact]
@@ -95,6 +109,7 @@ public class DataErasureServiceTests
         result.AiSuggestionDecisionsDeleted.Should().Be(1);
         result.IdempotencyKeysDeleted.Should().Be(1);
         result.EmailImportRecordsDeleted.Should().Be(1);
+        result.SupplierSuggestionsDeleted.Should().Be(1);
 
         storage.Deleted.Should().BeEquivalentTo(new[]
         {
@@ -119,6 +134,10 @@ public class DataErasureServiceTests
         // The IMAP-ingest ledger row (attachment file name + Message-Id) is gone too —
         // no orphan PII survives the erase.
         (await db.EmailImportRecords.AnyAsync(r => r.OrderId == order1)).Should().BeFalse();
+        // Supplier-suggestion rows go too. They have no FK to purchase_orders, so nothing
+        // cascades them and nothing else in the tree deletes them — leaving them behind kept the
+        // sender email domain and the deciding operator's Clerk user id after the erase.
+        (await db.OrderSupplierSuggestions.AnyAsync(s => s.OrderId == order1)).Should().BeFalse();
 
         // Tenant isolation: org 2's graph is completely untouched.
         (await db.PurchaseOrders.AnyAsync(o => o.Id == order2)).Should().BeTrue();
@@ -127,7 +146,60 @@ public class DataErasureServiceTests
         (await db.AiSuggestionDecisions.AnyAsync(d => d.OrderId == order2)).Should().BeTrue();
         (await db.IdempotencyKeys.AnyAsync(k => k.OrderId == order2)).Should().BeTrue();
         (await db.EmailImportRecords.AnyAsync(r => r.OrderId == order2)).Should().BeTrue();
+        (await db.OrderSupplierSuggestions.AnyAsync(s => s.OrderId == order2)).Should().BeTrue();
         storage.Deleted.Should().NotContain(k => k.StartsWith("org2/"));
+    }
+
+    /// <summary>
+    /// Erasing the SAME order twice. The existing no-op test passes a Guid that never existed,
+    /// which proves the unknown-id branch and nothing about the real operator sequence: a request
+    /// arrives twice, a runbook step is repeated, a retry fires. The second call must report
+    /// <c>Found = false</c> and must not throw — that is what makes the runbook safe to re-run —
+    /// and the audit receipt written by the caller for the FIRST erase must survive it, since
+    /// that row is the only durable evidence the erasure happened.
+    /// </summary>
+    [Fact]
+    public async Task EraseOrderAsync_RunTwiceOnTheSameOrder_IsIdempotent_AndKeepsTheErasureReceipt()
+    {
+        await using var db = CreateDb();
+        var storage = new RecordingFileStorage();
+
+        var orgId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        SeedOrderGraph(db, orgId, orderId, "org1/order1");
+        await db.SaveChangesAsync();
+
+        var service = new DataErasureService(db, storage, NullLogger<DataErasureService>.Instance);
+
+        var first = await service.EraseOrderAsync(orgId, orderId, default);
+        first.Found.Should().BeTrue();
+        first.R2ObjectsDeleted.Should().Be(3);
+
+        // The caller (AdminController.EraseOrder) writes this AFTER the erase, keyed to the erased
+        // order. Model it here so the second run is asserted against the real post-erase state.
+        db.AuditEvents.Add(new AuditEvent
+        {
+            Id = Guid.NewGuid(), OrgId = orgId, EntityType = "Order", EntityId = orderId,
+            Action = "admin.order.erased", CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var second = await service.EraseOrderAsync(orgId, orderId, default);
+
+        second.Found.Should().BeFalse("the order is already gone — a repeated erase is a no-op, not an error");
+        second.R2ObjectsDeleted.Should().Be(0);
+        second.LinesDeleted.Should().Be(0);
+        second.SupplierSuggestionsDeleted.Should().Be(0);
+
+        // No second round of storage deletes: still exactly the three keys from the first run.
+        storage.Deleted.Should().BeEquivalentTo(new[]
+        {
+            "org1/order1/source.csv", "org1/order1/out.xml", "org1/order1/conf.pdf",
+        });
+
+        // The receipt is still queryable. A second erase must not take the evidence with it.
+        (await db.AuditEvents.AnyAsync(e => e.EntityId == orderId && e.Action == "admin.order.erased"))
+            .Should().BeTrue("the erasure receipt is the accountability record and outlives the order");
     }
 
     [Fact]

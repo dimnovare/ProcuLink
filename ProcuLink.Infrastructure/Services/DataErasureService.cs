@@ -69,6 +69,18 @@ public sealed class DataErasureService : IDataErasureService
             .Where(d => d.OrderId == orderId && d.OrgId == organisationId).ToListAsync(ct);
         var idempotencyKeys = await _db.IdempotencyKeys
             .Where(k => k.OrderId == orderId && k.OrgId == organisationId).ToListAsync(ct);
+        // Ranked supplier candidates offered for this order. Unlike every other child above,
+        // order_supplier_suggestions has NO foreign key to purchase_orders — its only FK is to
+        // organisations (ProcuLinkDbContext OrderSupplierSuggestion mapping; migration
+        // 20260726094835_AddSupplierAutoDetect) — so deleting the order neither cascades to it
+        // nor errors. Left behind, each row keeps a dangling OrderId plus SignalsJson, which
+        // embeds document-derived identity text ("the order arrived from their email domain
+        // {domain}", SupplierSuggestionService.SenderDomainContribution), and DecidedBy, the
+        // Clerk user id of the operator who ruled on it. That is erasable order content, so it
+        // is deleted here explicitly. Nothing else in the tree removes these rows: neither
+        // retention sweep touches this table.
+        var supplierSuggestions = await _db.OrderSupplierSuggestions
+            .Where(s => s.OrderId == orderId && s.OrgId == organisationId).ToListAsync(ct);
         // Order confirmations (inbound supplier confirmations) + their lines are tied to
         // this order and hold sensitive PO content (item codes/qty/price/notes + their own
         // R2 source). Lines have a RESTRICT FK onto purchase_order_lines, so they MUST go.
@@ -140,6 +152,7 @@ public sealed class DataErasureService : IDataErasureService
         _db.AuditEvents.RemoveRange(audits);
         _db.AiSuggestionDecisions.RemoveRange(aiDecisions);
         _db.IdempotencyKeys.RemoveRange(idempotencyKeys);
+        _db.OrderSupplierSuggestions.RemoveRange(supplierSuggestions);
         _db.EmailImportRecords.RemoveRange(emailImportRecords);
         // Tombstone the SFTP/S3 pull-ingress ledger rows (see rationale above): keep the row so the
         // file is not re-imported, but sever its link to the erased order so it is never resurrected.
@@ -153,11 +166,12 @@ public sealed class DataErasureService : IDataErasureService
             "attempts={Attempts} exceptions={Exceptions} validations={Validations} passport={Passport} " +
             "audit={Audit} confirmations={Confirmations} confirmationLines={ConfirmationLines} " +
             "aiDecisions={AiDecisions} idempotencyKeys={IdempotencyKeys} emailImportRecords={EmailImportRecords} " +
+            "supplierSuggestions={SupplierSuggestions} " +
             "sftpLedgerTombstoned={SftpLedger} s3LedgerTombstoned={S3Ledger}.",
             orderId, organisationId, r2Deleted, lines.Count, artifacts.Count, attempts.Count,
             exceptions.Count, validations.Count, passport.Count, audits.Count,
             confirmations.Count, confirmationLines.Count, aiDecisions.Count, idempotencyKeys.Count,
-            emailImportRecords.Count, sftpLedger.Count, s3Ledger.Count);
+            emailImportRecords.Count, supplierSuggestions.Count, sftpLedger.Count, s3Ledger.Count);
 
         return new OrderErasureResult(
             Found: true,
@@ -173,7 +187,8 @@ public sealed class DataErasureService : IDataErasureService
             ConfirmationLinesDeleted: confirmationLines.Count,
             AiSuggestionDecisionsDeleted: aiDecisions.Count,
             IdempotencyKeysDeleted: idempotencyKeys.Count,
-            EmailImportRecordsDeleted: emailImportRecords.Count);
+            EmailImportRecordsDeleted: emailImportRecords.Count,
+            SupplierSuggestionsDeleted: supplierSuggestions.Count);
     }
 
     public async Task<BulkOrderErasureResult> BulkEraseOrdersAsync(
@@ -243,6 +258,7 @@ public sealed class DataErasureService : IDataErasureService
                 AiSuggestionDecisionsDeleted = result.AiSuggestionDecisionsDeleted + r.AiSuggestionDecisionsDeleted,
                 IdempotencyKeysDeleted       = result.IdempotencyKeysDeleted + r.IdempotencyKeysDeleted,
                 EmailImportRecordsDeleted    = result.EmailImportRecordsDeleted + r.EmailImportRecordsDeleted,
+                SupplierSuggestionsDeleted   = result.SupplierSuggestionsDeleted + r.SupplierSuggestionsDeleted,
             };
         }
 
