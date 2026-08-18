@@ -61,7 +61,8 @@ public sealed record BulkOrderErasureResult(
     int ConfirmationLinesDeleted,
     int AiSuggestionDecisionsDeleted = 0,
     int IdempotencyKeysDeleted = 0,
-    int EmailImportRecordsDeleted = 0);
+    int EmailImportRecordsDeleted = 0,
+    int SupplierSuggestionsDeleted = 0);
 
 /// <summary>Per-table counts of what an erase removed (for the audit trail / API response).</summary>
 public sealed record OrderErasureResult(
@@ -78,4 +79,5 @@ public sealed record OrderErasureResult(
     int ConfirmationLinesDeleted,
     int AiSuggestionDecisionsDeleted = 0,
     int IdempotencyKeysDeleted = 0,
-    int EmailImportRecordsDeleted = 0);
+    int EmailImportRecordsDeleted = 0,
+    int SupplierSuggestionsDeleted = 0);
