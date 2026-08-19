@@ -373,6 +373,51 @@ public class BillingControllerTests
         updated.StripeSubscriptionId.Should().BeNull();
     }
 
+    // BillingStatus.BillingInterval is derived from org.StripePriceId alone
+    // (StripeBillingService.GetBillingIntervalFromPriceId), and an id that matches no
+    // configured *YearlyPriceId is reported as "monthly" ON PURPOSE — a price on file is
+    // taken to mean a subscription exists. Cancellation nulled StripeSubscriptionId but
+    // left StripePriceId behind, which broke exactly that premise: the billing screen told
+    // a cancelled workspace "Billed monthly" directly beneath "Your subscription isn't
+    // active." The reconciliation downgrade path already cleared both
+    // (StripeSubscriptionReconciliationService.DowngradeAsync); this webhook path did not.
+    [Fact]
+    public async Task HandleSubscriptionDeleted_ClearsStripePriceId_SoNoIntervalIsClaimedWithoutASubscription()
+    {
+        var (ctrl, _, _, orgId, db) = Build();
+
+        db.Organisations.Add(new Organisation
+        {
+            Id                   = orgId,
+            Plan                 = PlanConstants.Growth,
+            AccountStatus        = AccountStatusConstants.Active,
+            StripeCustomerId     = "cus_price_clear",
+            StripeSubscriptionId = "sub_price_clear",
+            StripePriceId        = "price_growth_monthly_test",
+            ClerkOrgId           = "org_price_clear",
+            Name                 = "Price Clear Org",
+            Slug                 = "price-clear-org",
+        });
+        await db.SaveChangesAsync();
+
+        // Control: the fixture really does carry a price id, so a pass cannot come from
+        // a subscription that never had one.
+        (await db.Organisations.FindAsync(orgId))!.StripePriceId
+            .Should().Be("price_growth_monthly_test");
+        db.ChangeTracker.Clear();
+
+        await ctrl.HandleSubscriptionDeletedAsync(
+            new Stripe.Subscription { Id = "sub_price_clear", CustomerId = "cus_price_clear" },
+            CancellationToken.None);
+
+        var updated = await db.Organisations.FindAsync(orgId);
+        updated!.StripeSubscriptionId.Should().BeNull();
+        updated.StripePriceId.Should().BeNull(
+            "a cancelled org has no subscription, so no price may stay on file to be read as an interval");
+        updated.StripeCustomerId.Should().Be("cus_price_clear",
+            "the customer id is deliberately kept for the portal / re-subscribe path");
+    }
+
     [Fact]
     public async Task HandleSubscriptionDeleted_ClearsStripeReconciliationMissingSince_NoPhantomFlag()
     {

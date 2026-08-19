@@ -436,6 +436,14 @@ public sealed class BillingController : ControllerBase
         org.Plan = PlanConstants.Pilot;
         org.AccountStatus = AccountStatusConstants.ReadOnly;
         org.StripeSubscriptionId = null;
+        // Clear the price id in lock-step with the subscription id. BillingStatus.BillingInterval
+        // is derived from THIS FIELD ALONE (StripeBillingService.GetBillingIntervalFromPriceId),
+        // and a price that matches no configured *YearlyPriceId is reported as "monthly" on the
+        // premise that a price on file means a subscription exists. Leaving it set here broke that
+        // premise and made the billing screen say "Billed monthly" to a workspace whose
+        // subscription had just ended. Matches DowngradeAsync in
+        // StripeSubscriptionReconciliationService, which has always cleared both.
+        org.StripePriceId = null;
         org.StripeSubscriptionStatus = "canceled";
         // Clear any reconcile-404 grace marker in lock-step with nulling the subscription id
         // (matches the reconciliation DowngradeAsync path). Leaving it set would create a

@@ -454,7 +454,15 @@ public class StripeBillingServicePricingTests
     [Theory]
     [InlineData("price_growth_test")]
     [InlineData("price_ops_test")]
-    [InlineData("price_unknown_legacy")] // unrecognised but present ⇒ a subscription exists ⇒ monthly default
+    // "unrecognised but present ⇒ a subscription exists ⇒ monthly default" is only sound
+    // while EVERY path that ends a subscription clears the price id too. That premise held
+    // for the reconciliation downgrade and NOT for the cancellation webhook, which nulled
+    // StripeSubscriptionId and left StripePriceId behind — so a cancelled workspace was told
+    // "Billed monthly". Pinned in lock-step by
+    // BillingControllerTests.HandleSubscriptionDeleted_ClearsStripePriceId_SoNoIntervalIsClaimedWithoutASubscription.
+    // If you add another way to end a subscription, clear the price id there as well rather
+    // than weakening this default.
+    [InlineData("price_unknown_legacy")]
     public async Task GetStatus_MonthlyOrUnknownPriceIdOnFile_ReportsMonthlyInterval(string priceId)
     {
         var db = MakeDb();
