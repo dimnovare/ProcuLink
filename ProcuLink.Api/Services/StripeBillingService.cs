@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
@@ -668,7 +669,7 @@ public sealed class StripeBillingService : IBillingService
             Invoice     = stripeInvoiceId,
             Currency    = "eur",
             Amount      = amountCents,
-            Description = $"Order overage: {clamped} orders x EUR{PlanConstants.OveragePerOrderEur:0.00}",
+            Description = BuildOverageDescription(clamped),
             Metadata    = new Dictionary<string, string>
             {
                 ["org_id"]      = orgId.ToString(),
@@ -697,6 +698,17 @@ public sealed class StripeBillingService : IBillingService
 
         return new OverageBillingResult(orgId, billingKey, clamped, amountCents, AlreadyBilled: false, StripeItemId: item.Id);
     }
+
+    /// <summary>
+    /// Customer-facing Stripe invoice-item description for an order-overage charge.
+    /// The amount is deliberately formatted with the invariant culture: the string
+    /// lands on customers' real invoices, so its shape must not depend on the host
+    /// OS culture (a comma-decimal server rendered "EUR0,50" on live invoices).
+    /// </summary>
+    internal static string BuildOverageDescription(int orderCount) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"Order overage: {orderCount} orders x EUR{PlanConstants.OveragePerOrderEur:0.00}");
 
     /// <summary>
     /// Finding #9: locate an overage invoice item this org already has for the given period
