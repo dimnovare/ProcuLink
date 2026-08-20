@@ -11,8 +11,9 @@ namespace ProcuLink.Infrastructure.Services;
 /// / btree indexes), then pg_trgm trigram similarity ranking for the fuzzy remainder — without
 /// materialising the whole catalog. Every query is scoped to (orgId, supplierId).
 ///
-/// Provider safety: the trigram path uses <c>EF.Functions.TrigramsSimilarity</c>, which is
-/// Postgres-only and throws on the EF InMemory provider used by the tests. This service detects a
+/// Provider safety: the trigram path uses <c>EF.Functions.TrigramsAreSimilar</c> (the
+/// index-served <c>%</c> pre-filter) and <c>EF.Functions.TrigramsSimilarity</c> (the ranking),
+/// both Postgres-only — they throw on the EF InMemory provider used by the tests. This service detects a
 /// non-Postgres provider up front (<see cref="ShouldUseIndexedRetrievalAsync"/>) AND defensively
 /// catches a translation failure at query time, signalling the caller (via <c>null</c>) to fall
 /// back to the existing in-memory lexical path. The trigram RANKING therefore cannot be proven by
@@ -139,42 +140,72 @@ public sealed class CatalogRetrievalService : ICatalogRetrievalService
             // ── Pass 2 — TRIGRAM similarity ranking (pg_trgm GIN), per line ────────────────
             // For each unresolved line, rank the catalog by trigram similarity of the product
             // code+name against the line's "buyer code + description" query text, taking the top
-            // few. This runs as SQL (similarity over indexed columns) — the catalog is never fully
-            // loaded. A floor cuts near-zero-similarity noise.
+            // few. A floor cuts near-zero-similarity noise.
+            //
+            // INDEX SERVICE — why the % pre-filter exists. A comment here used to claim
+            // "similarity over indexed columns"; that was false. The gin_trgm_ops indexes serve
+            // the % / LIKE / ILIKE operator family ONLY — a computed similarity() in a WHERE is
+            // never index-served, so this pass was one sequential scan of the supplier's whole
+            // catalog PER UNRESOLVED LINE, inside the parse job. The % pre-filter below
+            // (EF.Functions.TrigramsAreSimilar) is what the index can serve; the similarity()
+            // ranking and floor after it are unchanged.
+            //
+            // THRESHOLD — why SET LOCAL, and why 0.05 rather than 0.1. The % operator honours the
+            // pg_trgm.similarity_threshold GUC, whose default is 0.3 — but this pass ranks at
+            // >= 0.1, so a bare % pre-filter would silently DROP every candidate scoring in
+            // [0.1, 0.3). The GUC is pinned strictly BELOW the floor (0.05) so the pre-filter is
+            // provably a superset of the floor whatever pg_trgm's boundary comparison is (> vs >=
+            // at exactly the threshold), and the explicit `Score >= similarityFloor` keeps the
+            // exact old semantics. SET LOCAL is transaction-scoped, so the changed GUC can never
+            // leak back into Npgsql's connection pool. Raw SQL is unavoidable for a GUC (EF cannot
+            // express SET); it carries no user input. Pinned, against an independent SQL oracle
+            // including a [0.1, 0.3) candidate, by CatalogTrigramIndexUsagePostgresTests.
             const double similarityFloor = 0.1;
+            const string pinTrigramThreshold = "SET LOCAL pg_trgm.similarity_threshold = 0.05;";
 
-            foreach (var q in queries)
+            await using (var tx = await _db.Database.BeginTransactionAsync(ct))
             {
-                if (ordered.Count >= overallCap) break;
+                await _db.Database.ExecuteSqlRawAsync(pinTrigramThreshold, ct);
 
-                var queryText = $"{(q.BuyerItemCode ?? string.Empty).Trim()} {q.Description}".Trim();
-                if (queryText.Length == 0) continue;
-
-                var matches = await _db.SupplierProducts
-                    .AsNoTracking()
-                    .Where(p => p.OrgId == orgId && p.SupplierId == supplierId && p.IsActive)
-                    .Select(p => new
-                    {
-                        Product = p,
-                        // similarity() over code and name; take the stronger of the two.
-                        Score = Math.Max(
-                            EF.Functions.TrigramsSimilarity(p.Code, queryText),
-                            p.Name == null ? 0d : EF.Functions.TrigramsSimilarity(p.Name, queryText)),
-                    })
-                    .Where(x => x.Score >= similarityFloor)
-                    .OrderByDescending(x => x.Score)
-                    .ThenBy(x => x.Product.Code)
-                    .Take(perQueryTopK)
-                    .Select(x => Project(x.Product))
-                    .ToListAsync(ct);
-
-                foreach (var p in matches)
+                foreach (var q in queries)
                 {
-                    var code = (p.Code ?? string.Empty).Trim();
-                    if (code.Length == 0 || !seen.Add(code)) continue;
-                    ordered.Add(p);
                     if (ordered.Count >= overallCap) break;
+
+                    var queryText = $"{(q.BuyerItemCode ?? string.Empty).Trim()} {q.Description}".Trim();
+                    if (queryText.Length == 0) continue;
+
+                    var matches = await _db.SupplierProducts
+                        .AsNoTracking()
+                        .Where(p => p.OrgId == orgId && p.SupplierId == supplierId && p.IsActive
+                            // Index-served pre-filter: `%` on the columns the GIN indexes cover.
+                            && (EF.Functions.TrigramsAreSimilar(p.Code, queryText)
+                                || (p.Name != null && EF.Functions.TrigramsAreSimilar(p.Name, queryText))))
+                        .Select(p => new
+                        {
+                            Product = p,
+                            // similarity() over code and name; take the stronger of the two.
+                            Score = Math.Max(
+                                EF.Functions.TrigramsSimilarity(p.Code, queryText),
+                                p.Name == null ? 0d : EF.Functions.TrigramsSimilarity(p.Name, queryText)),
+                        })
+                        .Where(x => x.Score >= similarityFloor)
+                        .OrderByDescending(x => x.Score)
+                        .ThenBy(x => x.Product.Code)
+                        .Take(perQueryTopK)
+                        .Select(x => Project(x.Product))
+                        .ToListAsync(ct);
+
+                    foreach (var p in matches)
+                    {
+                        var code = (p.Code ?? string.Empty).Trim();
+                        if (code.Length == 0 || !seen.Add(code)) continue;
+                        ordered.Add(p);
+                        if (ordered.Count >= overallCap) break;
+                    }
                 }
+
+                // Read-only work; commit just releases the SET LOCAL scope cleanly.
+                await tx.CommitAsync(ct);
             }
 
             return ordered;
