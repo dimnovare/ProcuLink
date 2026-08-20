@@ -58,6 +58,30 @@ jobs:
             exit 1
           fi
 
+          # The overall .status field is the roll-up of every check (database, storage,
+          # migrations, worker, revisionAuthority). StorageHealthCheck reports an R2
+          # failure as Degraded, which keeps HTTP 200 — so before this check, storage
+          # death was announced only to a human reading the JSON. "Unhealthy" also 503s
+          # (caught by the code check above), so failing on it here is belt-and-braces.
+          #
+          # TRADE-OFF, on purpose: a Degraded status FAILS the run rather than merely
+          # emitting a warning annotation. At pilot scale a red run is the only pager —
+          # a ::warning:: nobody opens is the same silence this check exists to end. If
+          # Degraded ever becomes too noisy to page on, the fix is to make the noisy
+          # check Healthy, not to soften this gate.
+          status="$(printf '%s' "$json" | jq -r '.status')"
+          echo "status=$status"
+          if [ "$status" = "Unhealthy" ]; then
+            echo "::error title=API Unhealthy::API readiness reports status=Unhealthy. Failing checks: $(printf '%s' "$json" | jq -r '[.checks[] | select(.status != "Healthy") | .name] | join(", ")'). See docs/deployment/monitoring-runbook.md."
+            exit 1
+          fi
+          if [ "$status" = "Degraded" ]; then
+            degraded="$(printf '%s' "$json" | jq -r '[.checks[] | select(.status != "Healthy") | .name] | join(", ")')"
+            echo "::warning title=API Degraded::API readiness reports status=Degraded (HTTP stays 200 by design). Degraded checks: $degraded. E.g. storage (R2) failure is Degraded, not Unhealthy — see docs/deployment/monitoring-runbook.md."
+            echo "::error title=API Degraded::Failing the run so the degradation pages someone — degraded checks: $degraded."
+            exit 1
+          fi
+
           # A stale Worker is Degraded (HTTP 200) but workerHealthy:false — fail on it
           # so "Worker not consuming" pages the team even while the API is up.
           worker_healthy="$(printf '%s' "$json" | jq -r '.workerHealthy')"

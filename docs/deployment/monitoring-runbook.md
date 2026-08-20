@@ -60,6 +60,10 @@ Fails on:
 - a 200 body whose `.workerHealthy` is not `true` → `::error title=Worker unhealthy::`
 - a 200 body whose `.revisionAuthority` is not `true` → `::error title=Revision authority is OFF::`
   (WP-21 — see [`revision-authority-production-smoke.md`](../ops/revision-authority-production-smoke.md))
+- a 200 body whose `.status` is not `Healthy` → `Unhealthy` fails outright (belt-and-braces — it
+  also 503s); `Degraded` emits a `::warning::` naming the degraded `checks[]` **and still fails
+  the run**, because e.g. a storage (R2) failure is Degraded-with-HTTP-200 by design and a red
+  run is the only pager at pilot scale
 
 That third condition is the point of the whole workflow. `/health/ready` runs the
 `ready`-tagged health checks (database, storage, migration flag, Worker heartbeat, and the
