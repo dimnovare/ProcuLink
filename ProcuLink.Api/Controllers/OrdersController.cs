@@ -1313,7 +1313,8 @@ public sealed class OrdersController : ControllerBase
                 // Phase 2: load the same supplier catalog the transform uses so a LoadCatalogProduct
                 // rule previews the REAL catalog value, not "" — otherwise preview ≠ delivered bytes.
                 var previewCatalog = await ProcuLink.Api.Services.OrderServiceShared.BuildCatalogLookupAsync(
-                    _db, _tenant.OrganisationId, order.SupplierId ?? Guid.Empty, ct);
+                    _db, _tenant.OrganisationId, order.SupplierId ?? Guid.Empty,
+                    ProcuLink.Api.Services.OrderServiceShared.CollectCatalogProbeKeys(order.Lines), ct);
                 result = new MappedTransformService().Build(
                     order, fieldOverride, fmt.Value, sourceTokens: previewTokens, catalogLookup: previewCatalog);
             }
@@ -1386,7 +1387,8 @@ public sealed class OrdersController : ControllerBase
             var treeTokens = ProcuLink.Transform.Output.SourceTokenSerialization
                 .FromTokensJson(order.SourceCapture?.TokensJson);
             var treeCatalog = await ProcuLink.Api.Services.OrderServiceShared.BuildCatalogLookupAsync(
-                _db, _tenant.OrganisationId, order.SupplierId ?? Guid.Empty, ct);
+                _db, _tenant.OrganisationId, order.SupplierId ?? Guid.Empty,
+                ProcuLink.Api.Services.OrderServiceShared.CollectCatalogProbeKeys(order.Lines), ct);
             var treeResult = new OutputTemplateEmitter().Emit(tree, order, @override, treeTokens, treeCatalog);
             using var treeReader = new StreamReader(treeResult.Content);
             var treeContent = await treeReader.ReadToEndAsync(ct);

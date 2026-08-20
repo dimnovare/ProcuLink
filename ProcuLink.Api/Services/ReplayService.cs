@@ -188,8 +188,11 @@ public sealed class ReplayService : IReplayService
         // token (F-1) or a catalog field rendered EMPTY. Because BOTH replay sides were equally blind, a
         // revision that changed only token-bound leaves reported "nothing changes" — the exact failure
         // this engine exists to catch. Loaded once here: replay is scoped to ONE supplier.
+        // One lookup for the whole replay batch: the probe-key set is the union across every
+        // replayed order's lines, so each order still resolves exactly as it would alone.
         var catalogLookup = await OrderServiceShared.BuildCatalogLookupAsync(
-            _db, orgId, revision.SupplierId, ct);
+            _db, orgId, revision.SupplierId,
+            OrderServiceShared.CollectCatalogProbeKeys(orders.SelectMany(o => o.Lines)), ct);
 
         var diffs = new List<ReplayOrderDiffDto>(orders.Count);
         foreach (var order in orders)
@@ -272,7 +275,9 @@ public sealed class ReplayService : IReplayService
             DeserializeOutputConfig(revision.OutputMappingJson),
             DeserializeSnapshotTree(revision.InputMappingJson));
         var draftFormat   = ParseFormat(revision.OutputFormat) ?? DefaultFormat;
-        var catalogLookup = await OrderServiceShared.BuildCatalogLookupAsync(_db, orgId, revision.SupplierId, ct);
+        var catalogLookup = await OrderServiceShared.BuildCatalogLookupAsync(
+            _db, orgId, revision.SupplierId,
+            OrderServiceShared.CollectCatalogProbeKeys(order.Lines), ct);
         var sourceTokens  = SourceTokenSerialization.FromTokensJson(order.SourceCapture?.TokensJson);
 
         var rendered = Render(order, draftOverride, draftFormat, sourceTokens, catalogLookup);

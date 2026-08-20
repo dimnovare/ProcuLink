@@ -662,7 +662,8 @@ internal sealed class OrderTransformService
         // so the {{ catalog.* }} template accessor resolves without an N+1. Empty dict when the
         // supplier has no catalog → byte-identical to the no-catalog path (empty catalog object).
         var catalogLookup = await OrderServiceShared.BuildCatalogLookupAsync(
-            _db, organisationId, entity.SupplierId ?? Guid.Empty, ct);
+            _db, organisationId, entity.SupplierId ?? Guid.Empty,
+            OrderServiceShared.CollectCatalogProbeKeys(entity.Lines), ct);
 
         TransformResult transformResult;
         try

@@ -93,7 +93,8 @@ public class ItemMappingCaseParityTests
         var snapshotHit = snapshot.TryGetValue(queried.Trim(), out var sv) && sv is not null;
 
         // Path C — the supplier catalog lookup.
-        var catalog    = await OrderServiceShared.BuildCatalogLookupAsync(db, orgId, supplierId, CancellationToken.None);
+        var catalog    = await OrderServiceShared.BuildCatalogLookupAsync(
+            db, orgId, supplierId, new[] { queried.Trim() }, CancellationToken.None);
         var catalogHit = catalog.ContainsKey(queried.Trim());
 
         var liveSingleHit = liveSingle is not null;
@@ -135,7 +136,7 @@ public class ItemMappingCaseParityTests
         (await new ItemMappingService(db).ResolveAsync(orgId, supplierId, Stored, CancellationToken.None))
             .Should().Be(Target);
 
-        (await OrderServiceShared.BuildCatalogLookupAsync(db, orgId, supplierId, CancellationToken.None))
+        (await OrderServiceShared.BuildCatalogLookupAsync(db, orgId, supplierId, new[] { Stored }, CancellationToken.None))
             .Should().ContainKey(Stored);
     }
 

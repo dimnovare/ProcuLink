@@ -240,7 +240,9 @@ internal sealed class OrderResolutionService
         if (guardConnection is { PriceVarianceGuardEnabled: true })
         {
             var guard   = new PriceVarianceGuard(true, guardConnection.PriceVarianceThresholdPercent);
-            var catalog = await OrderServiceShared.BuildCatalogLookupAsync(_db, organisationId, entity.SupplierId ?? Guid.Empty, ct);
+            var catalog = await OrderServiceShared.BuildCatalogLookupAsync(
+                _db, organisationId, entity.SupplierId ?? Guid.Empty,
+                OrderServiceShared.CollectCatalogProbeKeys(entity.Lines), ct);
             foreach (var line in entity.Lines)
             {
                 var product =

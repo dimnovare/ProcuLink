@@ -157,7 +157,7 @@ public sealed class ItemMappingCaseParityPostgresTests
         // returning the wrong answer — which is itself the assertion we want on this provider.
         var live    = await service.ResolveAsync(orgId, supplierId, queried, CancellationToken.None);
         var catalog = await OrderServiceShared.BuildCatalogLookupAsync(
-            db, orgId, supplierId, CancellationToken.None);
+            db, orgId, supplierId, new[] { queried.Trim() }, CancellationToken.None);
 
         (live is not null).Should().Be(catalog.ContainsKey(queried.Trim()),
             "on real Postgres (case-sensitive default collation) the learned-mapping resolver and "
@@ -219,5 +219,43 @@ public sealed class ItemMappingCaseParityPostgresTests
         (await service.ResolveAsync(orgId, supplierId, "WIDGET1", CancellationToken.None))
             .Should().BeNull("supplier item codes are a namespace the supplier controls — only "
                              + "manufacturer part numbers get separators stripped");
+    }
+
+    [DockerRequiredFact]
+    public async Task ScopedCatalogFetch_TranslatesAndStaysBounded_OnRealPostgres()
+    {
+        // The scoped-fetch WHERE (lower() over five key columns + the legacy null-normalised arm)
+        // must TRANSLATE on Npgsql — an untranslatable predicate throws here rather than quietly
+        // fetching everything. CatalogLookupScopedFetchTests proves the equivalence contract on
+        // InMemory; this fact proves the same query shape and its case rule against a real
+        // postgres:16 with its case-sensitive default collation.
+        await using var db = NewDb();
+        var (orgId, supplierId) = await SeedAsync(db, withCatalog: false);
+        var now = DateTime.UtcNow;
+
+        var wanted = new SupplierProduct
+        {
+            Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,
+            Code = "SCOPED-1", Barcode = "4006381333931",
+            ManufacturerPartNumber = "LTQ2500-BK-BTK1", ManufacturerPartNumberNormalized = "LTQ2500BKBTK1",
+            ExternalId = "EXT-77", IsActive = true, CreatedAt = now, UpdatedAt = now,
+        };
+        var unrelated = new SupplierProduct
+        {
+            Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,
+            Code = "UNRELATED-1", IsActive = true, CreatedAt = now, UpdatedAt = now,
+        };
+        db.SupplierProducts.AddRange(wanted, unrelated);
+        await db.SaveChangesAsync();
+
+        var catalog = await OrderServiceShared.BuildCatalogLookupAsync(
+            db, orgId, supplierId,
+            new[] { "scoped-1", "ltq2500 bk btk1", "LTQ2500BKBTK1" }, CancellationToken.None);
+
+        catalog.Should().ContainKey("SCOPED-1", "a case-variant probe must still reach the row through SQL lower()");
+        catalog["SCOPED-1"].Id.Should().Be(wanted.Id);
+        catalog.Should().ContainKey("LTQ2500BKBTK1", "the normalised-MPN column is a fetch key");
+        catalog.Values.Select(p => p.Id).Should().NotContain(unrelated.Id,
+            "a row no probe key can reach must not be fetched — that boundedness is the entire fix");
     }
 }
