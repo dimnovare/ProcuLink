@@ -30,6 +30,18 @@ public sealed class SupplierCatalogService : ISupplierCatalogService
     /// </summary>
     public const int UpsertBatchSize = 5_000;
 
+    /// <summary>
+    /// Escape character for the ILIKE search pattern, and the escaping that makes the user's
+    /// query LITERAL inside it — `%` and `_` are search text here, never wildcards, matching the
+    /// ToLower().Contains semantics this search always had.
+    /// </summary>
+    private const string LikeEscapeChar = "\\";
+
+    private static string EscapeLikePattern(string value) => value
+        .Replace("\\", "\\\\")
+        .Replace("%", "\\%")
+        .Replace("_", "\\_");
+
     private readonly ProcuLinkDbContext _db;
 
     public SupplierCatalogService(ProcuLinkDbContext db)
@@ -49,19 +61,43 @@ public sealed class SupplierCatalogService : ISupplierCatalogService
 
         if (!string.IsNullOrWhiteSpace(query))
         {
-            // Case-insensitive contains via ToLower(). This translates on BOTH Npgsql
-            // (lower(col) LIKE …) and the EF InMemory provider used by the tests, unlike
-            // EF.Functions.ILike which is Postgres-only and throws on InMemory.
-            var needle = query.Trim().ToLowerInvariant();
-            q = q.Where(p =>
-                p.Code.ToLower().Contains(needle)
-                || (p.Name != null && p.Name.ToLower().Contains(needle))
-                || (p.Barcode != null && p.Barcode.ToLower().Contains(needle))
-                // An operator reviewing a punchout line has the MANUFACTURER's part number in
-                // front of them, not the supplier's code — searching the catalog for it has to
-                // find the product, or the manual fallback is "grep the whole catalog by eye".
-                || (p.ManufacturerPartNumber != null
-                    && p.ManufacturerPartNumber.ToLower().Contains(needle)));
+            // Case-insensitive substring on code / name / barcode / manufacturer part number.
+            // An operator reviewing a punchout line has the MANUFACTURER's part number in front
+            // of them, not the supplier's code — searching the catalog for it has to find the
+            // product, or the manual fallback is "grep the whole catalog by eye".
+            if (_db.Database.IsNpgsql())
+            {
+                // ILIKE, not ToLower().Contains. The AddCatalogTrigramIndexes migration ships GIN
+                // gin_trgm_ops indexes on code and name, and those serve the % / LIKE / ILIKE
+                // operator family — but the index is on `code`, not `lower(code)`, so the previous
+                // `lower(code) LIKE '%…%'` translation could never use it and degraded to a
+                // bounded sequential scan. ILIKE keeps identical semantics (case-insensitive
+                // substring) and leaves the indexed columns index-servable. LIKE wildcards in the
+                // user's query are escaped so `%` and `_` stay LITERAL text, exactly as
+                // ToLower().Contains treated them. Barcode and manufacturer_part_number carry no
+                // trigram index; ILIKE there is semantically identical and loses nothing.
+                // Pinned (semantics + translation shape) by CatalogTrigramIndexUsagePostgresTests.
+                var pattern = "%" + EscapeLikePattern(query.Trim()) + "%";
+                q = q.Where(p =>
+                    EF.Functions.ILike(p.Code, pattern, LikeEscapeChar)
+                    || (p.Name != null && EF.Functions.ILike(p.Name, pattern, LikeEscapeChar))
+                    || (p.Barcode != null && EF.Functions.ILike(p.Barcode, pattern, LikeEscapeChar))
+                    || (p.ManufacturerPartNumber != null
+                        && EF.Functions.ILike(p.ManufacturerPartNumber, pattern, LikeEscapeChar)));
+            }
+            else
+            {
+                // EF.Functions.ILike is Postgres-only and throws on the EF InMemory provider used
+                // by the tests — same guard pattern as CatalogRetrievalService. This branch keeps
+                // the original translation-safe spelling with identical semantics.
+                var needle = query.Trim().ToLowerInvariant();
+                q = q.Where(p =>
+                    p.Code.ToLower().Contains(needle)
+                    || (p.Name != null && p.Name.ToLower().Contains(needle))
+                    || (p.Barcode != null && p.Barcode.ToLower().Contains(needle))
+                    || (p.ManufacturerPartNumber != null
+                        && p.ManufacturerPartNumber.ToLower().Contains(needle)));
+            }
         }
 
         return await q
