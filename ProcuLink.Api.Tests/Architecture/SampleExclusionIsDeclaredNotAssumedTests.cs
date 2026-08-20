@@ -55,14 +55,18 @@ public class SampleExclusionIsDeclaredNotAssumedTests
              "user's screen; excluding it would hide a real delivery failure."),
 
         ["ProcuLink.Infrastructure/Services/OpsHealthService.cs"] =
-            (6,
+            (8,
              "GET /api/ops/health (4 org-scoped: the status GROUP BY, parsing-stuck, " +
-             "delivering-stuck, SLA-breached) plus 2 deliberately CROSS-TENANT worker probes " +
-             "that are not org-scoped at all. Same reasoning as dead-letter-count: these count " +
-             "problems, not throughput. KNOWN CONSEQUENCE, recorded rather than hidden — a stuck " +
-             "or failed practice order does appear on operations health and does break the " +
-             "'All clear' gate. That is arguably correct (the job really is stuck) but it has " +
-             "not been decided; it is not the P0-5 defect, which was a VOLUME count."),
+             "delivering-stuck, SLA-breached) plus 4 deliberately CROSS-TENANT worker probes " +
+             "that are not org-scoped at all: dead-letter and delivery-failed, and — feeding " +
+             "the pipeline_failure_backlog alert — the pre-delivery failed and transform_failed " +
+             "backlogs. Same reasoning as dead-letter-count: these count problems, not " +
+             "throughput. A practice order that genuinely hit failed or transform_failed IS a " +
+             "real pipeline failure the founder should hear about, so the alert counts it on " +
+             "purpose. KNOWN CONSEQUENCE, recorded rather than hidden — a stuck or failed " +
+             "practice order does appear on operations health and does break the 'All clear' " +
+             "gate. That is arguably correct (the job really is stuck) but it has not been " +
+             "decided; it is not the P0-5 defect, which was a VOLUME count."),
 
         ["ProcuLink.Infrastructure/Services/BuyerService.cs"] =
             (1,
@@ -88,11 +92,11 @@ public class SampleExclusionIsDeclaredNotAssumedTests
     /// letting the whole guard pass for free. Raise it when the codebase genuinely grows; never
     /// lower it to make a red build green.
     ///
-    /// <para>Measured, not guessed: 22 aggregate sites today — 13 sample-aware, 9 declared
+    /// <para>Measured, not guessed: 24 aggregate sites today — 13 sample-aware, 11 declared
     /// sample-inclusive below. The floors sit just under those so ordinary churn does not trip
     /// them but a scanner that stops matching does.</para>
     /// </summary>
-    private const int MinimumAggregateSitesExpected = 20;
+    private const int MinimumAggregateSitesExpected = 22;
 
     /// <summary>Companion floor: the convention must be visibly PRESENT, not merely unviolated.</summary>
     private const int MinimumSampleAwareSitesExpected = 11;
