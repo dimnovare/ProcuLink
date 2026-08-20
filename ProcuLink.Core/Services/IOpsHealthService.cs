@@ -41,15 +41,26 @@ public interface IOpsHealthService
 /// <param name="SecondsSinceWorkerHeartbeat">Seconds since the most recent heartbeat, or null if unknown.</param>
 /// <param name="DeadLetterOrders">All-org count of orders in <c>delivery_dead_letter</c>.</param>
 /// <param name="FailedDeliveryOrders">All-org count of orders in <c>delivery_failed</c>.</param>
+/// <param name="FailedOrders">All-org count of orders in <c>failed</c> (pipeline/parse failure).</param>
+/// <param name="TransformFailedOrders">All-org count of orders in <c>transform_failed</c>.</param>
 public sealed record WorkerHealthSnapshot(
     bool      WorkerHealthy,
     int       ActiveWorkers,
     double?   SecondsSinceWorkerHeartbeat,
     int       DeadLetterOrders,
-    int       FailedDeliveryOrders)
+    int       FailedDeliveryOrders,
+    int       FailedOrders          = 0,
+    int       TransformFailedOrders = 0)
 {
     /// <summary>Combined count of orders stuck in a failed-delivery / dead-letter state, all orgs.</summary>
     public int DeadLetterOrFailed => DeadLetterOrders + FailedDeliveryOrders;
+
+    /// <summary>
+    /// Combined count of orders that failed BEFORE the delivery step — parse (<c>failed</c>) and
+    /// transform (<c>transform_failed</c>) — all orgs. These never reach the dead-letter bucket,
+    /// so without this count a broken parser surfaces as a customer email, not an alert.
+    /// </summary>
+    public int PipelineFailedOrders => FailedOrders + TransformFailedOrders;
 }
 
 /// <summary>Aggregate job-health counts for one organisation. All counts are org-scoped.</summary>

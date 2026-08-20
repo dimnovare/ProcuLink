@@ -42,6 +42,29 @@ public class OpsHealthServiceWorkerSnapshotTests
     }
 
     [Fact]
+    public async Task GetWorkerHealthSnapshotAsync_CountsPipelineFailuresAcrossAllOrgs()
+    {
+        await using var db = CreateDb();
+        var orgA = Guid.NewGuid();
+        var orgB = Guid.NewGuid();
+
+        await SeedOrderAsync(db, orgA, OrderStatusConstants.Failed);
+        await SeedOrderAsync(db, orgB, OrderStatusConstants.Failed);
+        await SeedOrderAsync(db, orgA, OrderStatusConstants.TransformFailed);
+        await SeedOrderAsync(db, orgB, OrderStatusConstants.Delivered);       // not counted
+        await SeedOrderAsync(db, orgA, OrderStatusConstants.DeliveryFailed);  // delivery bucket, not pipeline
+
+        var svc = new OpsHealthService(db, HealthyMonitoring(secondsAgo: 5));
+
+        var snap = await svc.GetWorkerHealthSnapshotAsync(default);
+
+        snap.FailedOrders.Should().Be(2);
+        snap.TransformFailedOrders.Should().Be(1);
+        snap.PipelineFailedOrders.Should().Be(3);
+        snap.FailedDeliveryOrders.Should().Be(1, "delivery failures stay in the dead-letter bucket");
+    }
+
+    [Fact]
     public async Task GetWorkerHealthSnapshotAsync_StaleHeartbeat_ReportsUnhealthy()
     {
         await using var db = CreateDb();

@@ -160,12 +160,23 @@ public sealed class OpsHealthService : IOpsHealthService
         var failedDelivery = await _db.PurchaseOrders
             .CountAsync(o => o.Status == OrderStatusConstants.DeliveryFailed, ct);
 
+        // Pipeline failures BEFORE the delivery step. These orders never enter the dead-letter
+        // bucket, so counting only delivery states left a broken parser or output template
+        // invisible to the alert sweep.
+        var failed = await _db.PurchaseOrders
+            .CountAsync(o => o.Status == OrderStatusConstants.Failed, ct);
+
+        var transformFailed = await _db.PurchaseOrders
+            .CountAsync(o => o.Status == OrderStatusConstants.TransformFailed, ct);
+
         return new WorkerHealthSnapshot(
             WorkerHealthy:                workerHealthy,
             ActiveWorkers:               activeWorkers,
             SecondsSinceWorkerHeartbeat: secondsSince,
             DeadLetterOrders:            deadLetter,
-            FailedDeliveryOrders:        failedDelivery);
+            FailedDeliveryOrders:        failedDelivery,
+            FailedOrders:                failed,
+            TransformFailedOrders:       transformFailed);
     }
 
     public async Task<IReadOnlyList<DeadLetterOrder>> ListDeadLetterAsync(

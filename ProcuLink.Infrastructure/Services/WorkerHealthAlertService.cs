@@ -65,11 +65,13 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
         {
             conditions.Add(EvaluateWorkerHeartbeat(snap));
             conditions.Add(EvaluateDeadLetterBacklog(snap));
+            conditions.Add(EvaluatePipelineFailureBacklog(snap));
         }
         else
         {
             blindSources.Add(
-                "the worker health snapshot query (worker heartbeat, dead-letter backlog)");
+                "the worker health snapshot query (worker heartbeat, dead-letter backlog, "
+              + "pipeline failure backlog)");
         }
 
         if (signals is { } sig)
@@ -128,8 +130,9 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
         {
             _logger.LogInformation(
                 "WorkerHealthAlert: healthy — workers={ActiveWorkers}, deadLetter+failed={DeadLetter}, "
+              + "pipelineFailed={PipelineFailed}, "
               + "deliveryAttempts={Attempts}/failures={Failures}, latchedAiOrgs={Latched}.",
-                okSnap.ActiveWorkers, okSnap.DeadLetterOrFailed,
+                okSnap.ActiveWorkers, okSnap.DeadLetterOrFailed, okSnap.PipelineFailedOrders,
                 okSignals.DeliveryFailureRate.Attempts, okSignals.DeliveryFailureRate.Failures,
                 okSignals.AiTokenLatch.LatchedOrgs);
         }
@@ -247,6 +250,18 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
             $"ProcuLink delivery backlog: dead-letter+failed deliveries = {snap.DeadLetterOrFailed} "
           + $"(threshold {threshold}) [deadLetter={snap.DeadLetterOrders}, failedDelivery={snap.FailedDeliveryOrders}]. "
           + "Review and requeue from the operations health page.");
+    }
+
+    private (string, bool, string) EvaluatePipelineFailureBacklog(WorkerHealthSnapshot snap)
+    {
+        var threshold = _options.EffectivePipelineFailureThreshold;
+        var isBad = snap.PipelineFailedOrders >= threshold;
+
+        return (OperationalAlertKeys.PipelineFailureBacklog, isBad,
+            $"ProcuLink pipeline failure backlog: failed+transform_failed orders = {snap.PipelineFailedOrders} "
+          + $"(threshold {threshold}) [failed={snap.FailedOrders}, transformFailed={snap.TransformFailedOrders}]. "
+          + "These orders failed BEFORE the delivery step, so no delivery alert covers them — "
+          + "check parser and output-template errors in the Worker logs.");
     }
 
     private (string, bool, string) EvaluateDeliveryFailureRate(DeliveryFailureRateSignal signal)

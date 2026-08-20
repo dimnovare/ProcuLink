@@ -9,7 +9,7 @@ using ProcuLink.Infrastructure.Services;
 namespace ProcuLink.Infrastructure.Tests.Services;
 
 /// <summary>
-/// Reliability/observability — the operator alert sweep (WP-37). Verifies that each of the five
+/// Reliability/observability — the operator alert sweep (WP-37). Verifies that each of the
 /// conditions fires on its own trigger, that none of them fires on a healthy system, and that the
 /// anti-spam rules hold PER CONDITION: one alert on transition, repeats rate-limited, recovery
 /// re-arms, and a persistent incident on one condition never gags the first notification of
@@ -246,6 +246,104 @@ public class WorkerHealthAlertServiceTests
         sink.Calls.Should().BeEmpty();
     }
 
+    // ── Condition 6: pipeline failure backlog (parse/transform failures) ─────────
+
+    [Fact]
+    public async Task RunAsync_PipelineFailureAtThreshold_RaisesAlert()
+    {
+        var sink = new RecordingSink();
+        // Default threshold is 1: at pilot scale a single order stuck in failed/transform_failed
+        // is a broken parser or template, and previously nobody upstream ever heard about it.
+        var health = HealthReturning(new WorkerHealthSnapshot(
+            WorkerHealthy: true, ActiveWorkers: 1, SecondsSinceWorkerHeartbeat: 5,
+            DeadLetterOrders: 0, FailedDeliveryOrders: 0,
+            FailedOrders: 1, TransformFailedOrders: 0));
+
+        var alerted = await CreateService(health, sink).RunAsync(default);
+
+        alerted.Should().BeTrue();
+        sink.Calls.Should().ContainSingle();
+        sink.Calls[0].Key.Should().Be(OperationalAlertKeys.PipelineFailureBacklog);
+        sink.Calls[0].Message.Should().Contain("failed+transform_failed orders = 1");
+    }
+
+    [Fact]
+    public async Task RunAsync_TransformFailuresAloneCrossTheThreshold_RaisesAlert()
+    {
+        var sink = new RecordingSink();
+        var health = HealthReturning(new WorkerHealthSnapshot(
+            WorkerHealthy: true, ActiveWorkers: 1, SecondsSinceWorkerHeartbeat: 5,
+            DeadLetterOrders: 0, FailedDeliveryOrders: 0,
+            FailedOrders: 0, TransformFailedOrders: 2));
+
+        var alerted = await CreateService(health, sink).RunAsync(default);
+
+        alerted.Should().BeTrue();
+        sink.Calls.Should().ContainSingle();
+        sink.Calls[0].Key.Should().Be(OperationalAlertKeys.PipelineFailureBacklog);
+    }
+
+    [Fact]
+    public async Task RunAsync_PipelineFailureBelowCustomThreshold_DoesNotAlert()
+    {
+        var sink = new RecordingSink();
+        var health = HealthReturning(new WorkerHealthSnapshot(
+            WorkerHealthy: true, ActiveWorkers: 1, SecondsSinceWorkerHeartbeat: 5,
+            DeadLetterOrders: 0, FailedDeliveryOrders: 0,
+            FailedOrders: 2, TransformFailedOrders: 2)); // 4 < 5
+        var options = new WorkerHealthAlertOptions { PipelineFailureThreshold = 5 };
+
+        var svc = new WorkerHealthAlertService(
+            health.Object, ProbeReturning(Healthy()).Object, sink, new WorkerHealthAlertState(), options,
+            NullLogger<WorkerHealthAlertService>.Instance);
+
+        (await svc.RunAsync(default)).Should().BeFalse();
+        sink.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunAsync_PipelineFailureStaysBadWithinWindow_AlertsOnceThenSuppresses()
+    {
+        var sink = new RecordingSink();
+        var health = HealthReturning(new WorkerHealthSnapshot(
+            WorkerHealthy: true, ActiveWorkers: 1, SecondsSinceWorkerHeartbeat: 5,
+            DeadLetterOrders: 0, FailedDeliveryOrders: 0,
+            FailedOrders: 3, TransformFailedOrders: 0));
+
+        var now = new DateTime(2026, 8, 20, 9, 0, 0, DateTimeKind.Utc);
+        var svc = new WorkerHealthAlertService(
+            health.Object, ProbeReturning(Healthy()).Object, sink, new WorkerHealthAlertState(),
+            new WorkerHealthAlertOptions { MinAlertIntervalMinutes = 30 },
+            NullLogger<WorkerHealthAlertService>.Instance, () => now);
+
+        // First bad run -> transition alert.
+        (await svc.RunAsync(default)).Should().BeTrue();
+        // 10 min later, still bad, inside the 30-min window -> suppressed.
+        now = now.AddMinutes(10);
+        (await svc.RunAsync(default)).Should().BeFalse();
+        // 35 min after the first alert -> window elapsed -> alerts again.
+        now = now.AddMinutes(25);
+        (await svc.RunAsync(default)).Should().BeTrue();
+
+        sink.Calls.Should().HaveCount(2);
+        sink.Calls.Should().OnlyContain(c => c.Key == OperationalAlertKeys.PipelineFailureBacklog);
+    }
+
+    [Fact]
+    public async Task RunAsync_HealthSnapshotThrows_PipelineFailureIsUnknownNotAllClear()
+    {
+        var sink = new RecordingSink();
+
+        await CreateService(HealthThrowing(), sink).RunAsync(default);
+
+        sink.Calls.Select(c => c.Key).Should().NotContain(OperationalAlertKeys.PipelineFailureBacklog,
+            "an unreadable snapshot means the condition is UNKNOWN, not bad and not clear");
+        sink.Calls.Should().ContainSingle();
+        sink.Calls[0].Key.Should().Be(OperationalAlertKeys.AlertSweepDegraded);
+        sink.Calls[0].Message.Should().Contain("pipeline failure backlog",
+            "the degraded page must name the pipeline condition as one of the blinded inputs");
+    }
+
     // ── All clear ────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -268,7 +366,8 @@ public class WorkerHealthAlertServiceTests
         var sink = new RecordingSink();
         var health = HealthReturning(new WorkerHealthSnapshot(
             WorkerHealthy: false, ActiveWorkers: 0, SecondsSinceWorkerHeartbeat: 900,
-            DeadLetterOrders: 30, FailedDeliveryOrders: 5));
+            DeadLetterOrders: 30, FailedDeliveryOrders: 5,
+            FailedOrders: 2, TransformFailedOrders: 1));
         var probe = ProbeReturning(new OperationalAlertSignals(
             new DeliveryFailureRateSignal(60, 40, 39),
             new[] { new PullChannelSignal("email", 1, 500) },
