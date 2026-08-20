@@ -61,6 +61,7 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
         var protocol = NormalizeProtocol(request.Protocol);
         ValidateConfigJson(request.ConfigJson);
         ValidateTransportSecurity(protocol, request.ConfigJson);
+        ValidateCredentialTokenUrl(request.CredentialsJson);
 
         var now = DateTime.UtcNow;
         var existing = await _db.SupplierDeliveryConfigs
@@ -277,6 +278,21 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
         var verdict = DeliveryConfigTransport.InspectEndpoint(protocol, configJson);
         if (!verdict.Allowed)
             throw new OutboundUrlPolicyException(verdict, nameof(UpsertDeliveryConfigRequest.ConfigJson));
+    }
+
+    /// <summary>
+    /// Refuses an OAuth token URL — inside the ENCRYPTED credentials blob — that the transport
+    /// policy would refuse as a delivery endpoint. The client-credentials exchange POSTs
+    /// <c>client_id</c> and <c>client_secret</c> to that URL at send time, so a cleartext
+    /// <c>tokenUrl</c> leaks the secret itself. The catalog save path already inspects its own
+    /// token URL (<c>SuppliersController</c>); this closes the same gap on the delivery side,
+    /// through the same shared walker so the two write paths cannot drift.
+    /// </summary>
+    private static void ValidateCredentialTokenUrl(string? credentialsJson)
+    {
+        var verdict = DeliveryConfigTransport.InspectCredentialTokenUrl(credentialsJson);
+        if (!verdict.Allowed)
+            throw new OutboundUrlPolicyException(verdict, nameof(UpsertDeliveryConfigRequest.CredentialsJson));
     }
 
     /// <summary>

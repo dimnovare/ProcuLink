@@ -121,6 +121,24 @@ public sealed class HttpAuthApplier
         if (!guard.Allowed)
             return (null, $"OAuth token request blocked: {guard.Reason}");
 
+        // Transport policy — warn-and-continue, matching the dispatch-time convention
+        // (HttpDeliveryDispatcher.WarnIfInsecureTransport) exactly: the SSRF guard deliberately
+        // allows plain http, and the write path now refuses a cleartext tokenUrl, so the only way
+        // to arrive here failing is a credential stored BEFORE enforcement existed. Refusing it
+        // mid-flight would trade a security weakness for an outage. Never the full URL in the log
+        // — the refusal that most needs surfacing is a userinfo URL, and logging it whole would
+        // put the password into the log line.
+        var transport = OutboundUrlPolicy.Inspect(tokenUrl, "OAuth token URL");
+        if (!transport.Allowed)
+        {
+            Uri.TryCreate(tokenUrl.Trim(), UriKind.Absolute, out var tokenUri);
+            _logger.LogWarning(
+                "OAuth token endpoint no longer passes transport policy (scheme '{Scheme}', "
+                + "host '{Host}'). These credentials predate TLS enforcement on the token URL and "
+                + "can no longer be saved; the token request continues so orders are not lost. {Warning}",
+                tokenUri?.Scheme, tokenUri?.Host, transport.Message);
+        }
+
         string Get(string name) => creds.TryGetProperty(name, out var e) ? e.GetString() ?? "" : "";
         var clientId     = Get("clientId");
         var clientSecret = Get("clientSecret");

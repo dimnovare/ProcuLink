@@ -96,6 +96,79 @@ public static class DeliveryConfigTransport
         return verdict.Allowed ? null : verdict.Message;
     }
 
+    // ── OAuth token URL inside the encrypted credentials blob ────────────────
+
+    /// <summary>
+    /// EVERY <c>tokenUrl</c>-keyed string at the root of the credentials blob, in document order.
+    ///
+    /// <para><b>Why this walk exists.</b> The OAuth client-credentials exchange POSTs
+    /// <c>client_id</c> AND <c>client_secret</c> to this URL, so a cleartext <c>tokenUrl</c>
+    /// leaks the secret itself — not merely the endpoint it protects. The catalog save path
+    /// inspects its own token URL; the delivery credentials blob was the rotation: encrypted with
+    /// no URL inspection, and at send time only SSRF-guarded, which deliberately allows http.</para>
+    ///
+    /// <para><b>Every value, not the first</b> — same trap as <see cref="ExtractUrls"/>: a JSON
+    /// object may repeat a key and System.Text.Json keeps both, so a walker that bets on which
+    /// one the reader binds can be disagreed with. Root-level only, matching what
+    /// <c>HttpAuthApplier</c> actually reads (<c>creds.TryGetProperty("tokenUrl", …)</c> on the
+    /// root element); a nested tokenUrl is never fetched and refusing it would be a false
+    /// refusal. The key match is case-insensitive: the reader is exact-case today, so an
+    /// off-case key is inert — but a reader switched to case-insensitive binding would inherit
+    /// protection here instead of a bypass, and the cost is refusing a misspelling that cannot
+    /// authenticate anything.</para>
+    ///
+    /// <para>Blank values are skipped: a blank tokenUrl is not a network target — it saves today
+    /// and fails at send time with the enumerated "missing" message, and turning that into a
+    /// save-time refusal would be a separate behaviour change. An unparseable blob yields
+    /// nothing, mirroring <see cref="ReadHeaderEntries"/>.</para>
+    /// </summary>
+    public static IReadOnlyList<string> ExtractCredentialTokenUrls(string? credentialsJson)
+    {
+        if (string.IsNullOrWhiteSpace(credentialsJson)) return Array.Empty<string>();
+
+        try
+        {
+            using var doc = JsonDocument.Parse(credentialsJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return Array.Empty<string>();
+
+            List<string>? found = null;
+            foreach (var property in doc.RootElement.EnumerateObject())
+            {
+                if (!string.Equals(property.Name, "tokenUrl", StringComparison.OrdinalIgnoreCase)) continue;
+                if (property.Value.ValueKind != JsonValueKind.String) continue;
+
+                var value = property.Value.GetString();
+                if (string.IsNullOrWhiteSpace(value)) continue;
+
+                (found ??= new List<string>()).Add(value);
+            }
+
+            return (IReadOnlyList<string>?)found ?? Array.Empty<string>();
+        }
+        catch (JsonException)
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>
+    /// The transport verdict for the OAuth token URL(s) in a delivery credentials blob:
+    /// <see cref="OutboundUrlVerdict.Allow"/> when there is none or every one passes, otherwise
+    /// the FIRST refusal. Deliberately not scoped to an auth type or a protocol list — a scoped
+    /// guard goes stale in one direction, and a tokenUrl on credentials that never authenticate
+    /// with it is inert, so inspecting it costs nothing.
+    /// </summary>
+    public static OutboundUrlVerdict InspectCredentialTokenUrl(string? credentialsJson)
+    {
+        foreach (var url in ExtractCredentialTokenUrls(credentialsJson))
+        {
+            var verdict = OutboundUrlPolicy.Inspect(url, "OAuth token URL");
+            if (!verdict.Allowed) return verdict;
+        }
+
+        return OutboundUrlVerdict.Allow();
+    }
+
     // ── Credential-bearing headers ───────────────────────────────────────────
 
     /// <summary>
