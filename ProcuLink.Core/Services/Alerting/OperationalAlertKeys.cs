@@ -17,6 +17,9 @@ public static class OperationalAlertKeys
     /// <summary>All-org dead-letter + failed-delivery backlog crossed its threshold.</summary>
     public const string DeadLetterBacklog = "dead_letter_backlog";
 
+    /// <summary>All-org failed + transform-failed (pre-delivery pipeline) backlog crossed its threshold.</summary>
+    public const string PipelineFailureBacklog = "pipeline_failure_backlog";
+
     /// <summary>Delivery attempts in the recent window are failing above the configured rate.</summary>
     public const string DeliveryFailureRate = "delivery_failure_rate";
 
@@ -45,13 +48,14 @@ public static class OperationalAlertKeys
     public const string AlertSweepDegraded = "alert_sweep_degraded";
 
     /// <summary>
-    /// The five conditions that describe the health of the SYSTEM. Excludes
+    /// The conditions that describe the health of the SYSTEM. Excludes
     /// <see cref="AlertSweepDegraded"/>, which describes the health of the alert sweep itself.
     /// </summary>
     public static readonly IReadOnlyList<string> HealthConditions = new[]
     {
         WorkerHeartbeatLost,
         DeadLetterBacklog,
+        PipelineFailureBacklog,
         DeliveryFailureRate,
         PullChannelStalled,
         AiTokenCapLatched,

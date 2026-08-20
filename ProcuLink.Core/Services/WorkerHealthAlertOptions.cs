@@ -24,6 +24,15 @@ public sealed class WorkerHealthAlertOptions
     public int DeadLetterThreshold { get; set; } = 25;
 
     /// <summary>
+    /// All-org failed + transform-failed (pre-delivery pipeline) order count at/above which an
+    /// alert fires. Default 1 — deliberately LOW, unlike <see cref="DeadLetterThreshold"/>: at
+    /// pilot scale a single order stuck in <c>failed</c> or <c>transform_failed</c> means a broken
+    /// parser or output template, and these orders reach no other alert condition. A non-positive
+    /// configured value falls back to the default.
+    /// </summary>
+    public int PipelineFailureThreshold { get; set; } = 1;
+
+    /// <summary>
     /// While a given condition stays bad, re-alert no more often than this many minutes (avoids
     /// alert spam). Applied PER CONDITION, so one persistent incident never gags another.
     /// Default 30. A non-positive configured value falls back to the default.
@@ -59,6 +68,10 @@ public sealed class WorkerHealthAlertOptions
 
     /// <summary>Effective dead-letter threshold (never non-positive).</summary>
     public int EffectiveDeadLetterThreshold => DeadLetterThreshold > 0 ? DeadLetterThreshold : 25;
+
+    /// <summary>Effective pipeline-failure threshold (never non-positive).</summary>
+    public int EffectivePipelineFailureThreshold =>
+        PipelineFailureThreshold > 0 ? PipelineFailureThreshold : 1;
 
     /// <summary>Effective rate-limit interval (never non-positive).</summary>
     public TimeSpan MinAlertInterval =>
