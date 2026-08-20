@@ -232,7 +232,8 @@ public sealed class MapperEnrichmentController : ControllerBase
             return Ok(hints);
 
         // Batch-load the supplier's active catalog ONCE (keyed by code/barcode/MPN) — no N+1.
-        var catalog = await OrderServiceShared.BuildCatalogLookupAsync(_db, orgId, supplierId, ct);
+        var catalog = await OrderServiceShared.BuildCatalogLookupAsync(
+            _db, orgId, supplierId, OrderServiceShared.CollectCatalogProbeKeys(lines), ct);
         if (catalog.Count == 0)
             return Ok(hints);
 

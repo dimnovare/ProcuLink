@@ -98,10 +98,44 @@ internal sealed class OrderServiceShared
     /// column, the import alias "manufacturer part id" landed in <c>external_id</c>, so catalogs
     /// imported before this change hold their manufacturer part numbers there. It is keyed LAST so
     /// a real manufacturer part number always wins over a stale one parked in external_id.
+    ///
+    /// <para><b>Scoped fetch (P1 perf):</b> this used to load the ENTIRE active catalog — 14,713
+    /// rows for a live supplier — while every consumer only ever PROBES the dictionary with keys
+    /// derived from the order's lines (<c>SupplierItemCode</c>, raw
+    /// <c>ManufacturerPartNumber</c>, and its <see cref="ProductKeyNormalizer"/> form; see
+    /// <c>ScribanOrderModel.BuildLine</c>, <c>MappedTransformService.InjectCatalogRow</c>, the
+    /// price-variance guard in <c>OrderResolutionService</c>, and
+    /// <c>MapperEnrichmentController.GetCatalogHints</c> — nothing enumerates the lookup). The
+    /// interactive mapping-preview endpoint calls this on every keystroke (300–400ms debounce), so
+    /// the full fetch was quadratic pain per typing session. <paramref name="probeKeys"/> is the
+    /// set of keys the caller can probe (build it with
+    /// <see cref="CollectCatalogProbeKeys"/>), and the query fetches only rows one of those keys
+    /// can reach — through ANY of the five key columns, case-insensitively, because the dictionary
+    /// itself is case-insensitive across all of them (a probe by supplier item code may legally
+    /// hit a row's barcode or normalised MPN). The result is IDENTICAL to the full fetch for every
+    /// probeable key — pinned, against a verbatim oracle of the old behaviour, by
+    /// <c>CatalogLookupScopedFetchTests</c>.</para>
     /// </summary>
     public static async Task<IReadOnlyDictionary<string, SupplierProduct>> BuildCatalogLookupAsync(
-        ProcuLinkDbContext db, Guid organisationId, Guid supplierId, CancellationToken ct)
+        ProcuLinkDbContext db, Guid organisationId, Guid supplierId,
+        IReadOnlyCollection<string> probeKeys, CancellationToken ct)
     {
+        // ToLower(), not EF.Functions.ILike, and BOTH .NET lowerings of each key: `.ToLower()`
+        // translates to SQL lower() on Npgsql AND runs in C# on the EF InMemory provider the unit
+        // tests use (the exact pattern OrderIngestionService.ResolveByManufacturerPartAsync and
+        // CatalogRetrievalService already established). Adding ToLowerInvariant() too costs one
+        // extra set entry per key and keeps an exotic-culture host from folding a key differently
+        // than the invariant rule the dictionary comparer uses.
+        var loweredKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var key in probeKeys)
+        {
+            if (string.IsNullOrWhiteSpace(key)) continue;
+            loweredKeys.Add(key.ToLower());
+            loweredKeys.Add(key.ToLowerInvariant());
+        }
+        if (loweredKeys.Count == 0)
+            return new Dictionary<string, SupplierProduct>(ItemCodeComparison.Comparer);
+
         // ORDERED, because the dictionary below is case-INSENSITIVE while the unique index on
         // (org_id, supplier_id, code) is case-SENSITIVE: a catalog may legally hold "AB-1" and
         // "ab-1" as two rows, and `TryAdd` is first-wins. Without an ORDER BY the winner was
@@ -109,9 +143,23 @@ internal sealed class OrderServiceShared
         // different product between two runs — the same class of defect as two resolvers
         // disagreeing, one level down. Id is the final tie-break so the answer never depends on
         // physical row order. (The same applies to a Barcode/MPN/ExternalId on one row colliding
-        // with a Code on another.)
+        // with a Code on another.) Scoping the WHERE does not disturb this: every row that could
+        // claim a probeable key is still fetched, in the same relative order.
+        //
+        // The `ManufacturerPartNumberNormalized == null && ManufacturerPartNumber != null` arm
+        // exists for legacy rows written before the normalised column: the dictionary computes
+        // their normalised key in memory (the `??` fallback below), which no SQL predicate can
+        // reproduce, so such rows are fetched unconditionally. Every writer since
+        // AddManufacturerPartNumberToCatalog sets both columns together (SupplierCatalogService),
+        // so in a healthy catalog this arm matches zero rows.
         var products = await db.SupplierProducts.AsNoTracking()
-            .Where(p => p.OrgId == organisationId && p.SupplierId == supplierId && p.IsActive)
+            .Where(p => p.OrgId == organisationId && p.SupplierId == supplierId && p.IsActive
+                && (loweredKeys.Contains(p.Code.ToLower())
+                    || (p.Barcode != null && loweredKeys.Contains(p.Barcode.ToLower()))
+                    || (p.ManufacturerPartNumber != null && loweredKeys.Contains(p.ManufacturerPartNumber.ToLower()))
+                    || (p.ManufacturerPartNumberNormalized != null && loweredKeys.Contains(p.ManufacturerPartNumberNormalized.ToLower()))
+                    || (p.ManufacturerPartNumber != null && p.ManufacturerPartNumberNormalized == null)
+                    || (p.ExternalId != null && loweredKeys.Contains(p.ExternalId.ToLower()))))
             .OrderBy(p => p.Code)
             .ThenBy(p => p.Id)
             .ToListAsync(ct);
@@ -137,6 +185,33 @@ internal sealed class OrderServiceShared
             if (!string.IsNullOrWhiteSpace(p.ExternalId)) dict.TryAdd(p.ExternalId!, p);
         }
         return dict;
+    }
+
+    /// <summary>
+    /// The one place the catalog probe-key set is derived from an order's lines, so every
+    /// <see cref="BuildCatalogLookupAsync"/> caller scopes its fetch by the SAME rule the
+    /// consumers probe by: the line's <c>SupplierItemCode</c>, its raw
+    /// <c>ManufacturerPartNumber</c>, and the <see cref="ProductKeyNormalizer"/> form of that
+    /// part number (<c>ScribanOrderModel.BuildLine</c> tries exactly these three, in that order).
+    /// Adding a probe to a consumer without adding it here would silently un-scope nothing and
+    /// MISS matches — so keep this list and the consumers' probe order in the same review.
+    /// </summary>
+    public static IReadOnlyCollection<string> CollectCatalogProbeKeys(
+        IEnumerable<PurchaseOrderLineEntity> lines)
+    {
+        var keys = new HashSet<string>(ItemCodeComparison.Comparer);
+        foreach (var line in lines)
+        {
+            if (!string.IsNullOrWhiteSpace(line.SupplierItemCode))
+                keys.Add(line.SupplierItemCode!);
+            if (!string.IsNullOrWhiteSpace(line.ManufacturerPartNumber))
+            {
+                keys.Add(line.ManufacturerPartNumber!);
+                var normalised = ProductKeyNormalizer.Normalize(line.ManufacturerPartNumber);
+                if (normalised is not null) keys.Add(normalised);
+            }
+        }
+        return keys;
     }
 
     /// <summary>
