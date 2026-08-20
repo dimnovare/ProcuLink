@@ -69,16 +69,17 @@ public sealed class DataErasureService : IDataErasureService
             .Where(d => d.OrderId == orderId && d.OrgId == organisationId).ToListAsync(ct);
         var idempotencyKeys = await _db.IdempotencyKeys
             .Where(k => k.OrderId == orderId && k.OrgId == organisationId).ToListAsync(ct);
-        // Ranked supplier candidates offered for this order. Unlike every other child above,
-        // order_supplier_suggestions has NO foreign key to purchase_orders — its only FK is to
-        // organisations (ProcuLinkDbContext OrderSupplierSuggestion mapping; migration
-        // 20260726094835_AddSupplierAutoDetect) — so deleting the order neither cascades to it
-        // nor errors. Left behind, each row keeps a dangling OrderId plus SignalsJson, which
-        // embeds document-derived identity text ("the order arrived from their email domain
-        // {domain}", SupplierSuggestionService.SenderDomainContribution), and DecidedBy, the
-        // Clerk user id of the operator who ruled on it. That is erasable order content, so it
-        // is deleted here explicitly. Nothing else in the tree removes these rows: neither
-        // retention sweep touches this table.
+        // Ranked supplier candidates offered for this order. Since migration
+        // TwoIntegrityInvariantsWereHeldShutByApplicationCodeAlone (2026-08-20),
+        // order_supplier_suggestions carries an ON DELETE CASCADE FK to purchase_orders, so the
+        // order delete below would remove these rows even if this block did not. The explicit
+        // delete STAYS, deliberately (belt and braces): it keeps the erase correct on providers
+        // without the relational cascade (EF InMemory tests), keeps the per-table count in the
+        // erase log/audit receipt honest, and does not silently depend on a constraint someone
+        // could drop. The content argument is unchanged — each row's SignalsJson embeds
+        // document-derived identity text ("the order arrived from their email domain {domain}",
+        // SupplierSuggestionService.SenderDomainContribution) and DecidedBy is the Clerk user id
+        // of the operator who ruled on it: erasable order content either way.
         var supplierSuggestions = await _db.OrderSupplierSuggestions
             .Where(s => s.OrderId == orderId && s.OrgId == organisationId).ToListAsync(ct);
         // Order confirmations (inbound supplier confirmations) + their lines are tied to

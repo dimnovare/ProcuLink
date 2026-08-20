@@ -64,7 +64,10 @@ public sealed class DeliveryBounceHandler : IDeliveryBounceHandler
 
         // The attempt row is the tenant boundary here: it carries OrgId, so resolving the attempt
         // resolves the organisation. Nothing in the webhook payload names a tenant, and nothing in
-        // it is trusted to.
+        // it is trusted to. This deliberately org-blind lookup is served by
+        // IX_delivery_attempts_idempotency_key (migration
+        // TwoIntegrityInvariantsWereHeldShutByApplicationCodeAlone) — before that index existed,
+        // every bounce webhook was a sequential scan over delivery_attempts.
         var attempt = await _db.DeliveryAttempts
             .Include(a => a.Order)
             .Where(a => a.IdempotencyKey == notification.IdempotencyKey && a.OrderId != null)

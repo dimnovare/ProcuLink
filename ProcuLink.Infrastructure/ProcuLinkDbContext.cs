@@ -973,6 +973,20 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasOne(x => x.Organisation)
              .WithMany()
              .HasForeignKey(x => x.OrgId);
+            // FK to purchase_orders, ON DELETE CASCADE — added 2026-08-20 after the read-only DB
+            // audit. Until then this table's ONLY FK was the org one, so a delete of the order
+            // neither cascaded here nor errored: rows silently kept a dangling OrderId plus
+            // SignalsJson (document-derived identity text) and DecidedBy (an operator's Clerk user
+            // id). That is erasable order content, and this table has already produced exactly that
+            // GDPR orphan once. DataErasureService deletes these rows explicitly (belt and braces —
+            // its delete stays), but only this FK covers the paths that bypass it: raw SQL, future
+            // code, ops surgery. CASCADE and not RESTRICT because suggestions are derived,
+            // order-scoped content with no independent lifecycle — nothing should ever block an
+            // order delete on their account.
+            b.HasOne<PurchaseOrderEntity>()
+             .WithMany()
+             .HasForeignKey(x => x.OrderId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── outbound_artifacts ─────────────────────────────────────────
@@ -1041,6 +1055,29 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .HasForeignKey(x => x.OrgId);
             b.HasIndex(x => new { x.OrgId, x.OrderId, x.AttemptedAt })
              .HasDatabaseName("IX_delivery_attempts_org_id_order_id_attempted_at");
+            // PARTIAL UNIQUE — the single-in-flight-attempt-per-key invariant, DB-enforced.
+            // The 2026-08 DB audit found idempotency_key added bare: duplicate-send protection
+            // lived entirely in OpenDispatchAttemptAsync's read-then-insert plus the delivery
+            // status CAS — sound, but application code alone. Both filter clauses are load-bearing:
+            //   - idempotency_key IS NOT NULL: legacy/test-fire rows carry null keys.
+            //   - status = 'dispatching': the key is DETERMINISTIC per (order, artifact)
+            //     (DeliveryIdempotencyKey.Build), so every retry of the same artifact legitimately
+            //     inserts a NEW row with the SAME key once the previous row is terminal. Full
+            //     uniqueness would break the retry ladder; uniqueness over in-flight rows is
+            //     exactly what the application check assumes and cannot guarantee under a race.
+            b.HasIndex(x => new { x.OrgId, x.IdempotencyKey })
+             .IsUnique()
+             .HasFilter("idempotency_key IS NOT NULL AND status = 'dispatching'")
+             .HasDatabaseName("UX_delivery_attempts_org_id_idempotency_key_dispatching");
+            // Serves DeliveryBounceHandler's correlation lookup, which is by idempotency_key ALONE
+            // (deliberately org-blind: the webhook payload names no tenant and none of it is
+            // trusted to; the attempt row IS the tenant boundary). The unique index above cannot
+            // serve it — it leads on org_id and covers only in-flight rows, while a bounce almost
+            // always lands on a terminal row. Before this index every bounce webhook was a
+            // sequential scan over delivery_attempts.
+            b.HasIndex(x => x.IdempotencyKey)
+             .HasFilter("idempotency_key IS NOT NULL")
+             .HasDatabaseName("IX_delivery_attempts_idempotency_key");
         });
 
         // ── idempotency_keys ───────────────────────────────────────────
