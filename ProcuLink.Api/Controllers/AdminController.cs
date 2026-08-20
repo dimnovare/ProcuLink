@@ -51,6 +51,13 @@ public sealed class AdminController : ControllerBase
     /// </summary>
     private const int MaxExtendTrialDays = 3650;
 
+    /// <summary>
+    /// Result bound for the support PO-number lookup (<see cref="FindOrders"/>). Twenty rows
+    /// covers every real triage (a PO number is nearly unique; duplicates are the interesting
+    /// signal) while keeping the cross-org read a lookup rather than an export.
+    /// </summary>
+    private const int MaxOrderFindResults = 20;
+
     private readonly ProcuLinkDbContext       _db;
     private readonly IBillingService          _billing;
     private readonly IConfiguration           _config;
@@ -309,6 +316,86 @@ public sealed class AdminController : ControllerBase
         }).ToList();
 
         return Ok(result);
+    }
+
+    // ── GET /api/admin/orders/find ────────────────────────────────────────
+    /// <summary>
+    /// Support triage: maps a customer-quoted PO number ("PO 4500012580 isn't arriving") to the
+    /// owning organisation(s) and order(s), so the founder can open the right org's context instead
+    /// of asking the customer to do the investigation. Before this existed the controller's only
+    /// PurchaseOrders read was a per-org aggregate — there was NO route from a PO number to an org.
+    ///
+    /// <para><b>Match semantics mirror how the PO number is stored</b> (see
+    /// <see cref="PoNumberIdentity"/>): the exact stored <c>po_number</c> — which also finds minted
+    /// placeholders, whose normalized key is null — OR the normalized comparison key
+    /// (trim + upper-case), so a casing/padding difference between what the customer quotes and
+    /// what the document carried still resolves. Exact spellings sort first, then newest first.</para>
+    ///
+    /// <para><b>Why this cross-org read is safe:</b> read-only (no order is mutated), admin-gated
+    /// (class-level <see cref="AdminOnlyAttribute"/>, fail-closed), and bounded (a blank query is
+    /// refused and the result is capped at <see cref="MaxOrderFindResults"/> rows) — it is a
+    /// lookup, not a portal. Read endpoints on this controller do not write the admin audit trail;
+    /// this one follows that rule.</para>
+    /// </summary>
+    [HttpGet("orders/find")]
+    [ProducesResponseType(typeof(AdminOrderFindResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> FindOrders([FromQuery] string? po, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(po))
+            return BadRequest(new { error = "po is required — pass the PO number the customer quoted." });
+
+        var exact = po.Trim();
+        var normalized = PoNumberIdentity.Normalize(exact); // non-null: input is non-blank
+
+        // Cross-tenant by design — the whole point is finding which org owns this PO.
+        // Take one row over the cap so the response can say "there were more" honestly.
+        var orders = await _db.PurchaseOrders
+            .AsNoTracking()
+            .Where(o => o.PoNumber == exact || o.PoNumberNormalized == normalized)
+            .OrderByDescending(o => o.PoNumber == exact)
+            .ThenByDescending(o => o.CreatedAt)
+            .Take(MaxOrderFindResults + 1)
+            .Select(o => new { o.Id, o.OrgId, o.SupplierId, o.Status, o.PoNumber, o.CreatedAt, o.UpdatedAt })
+            .ToListAsync(ct);
+
+        var capped = orders.Count > MaxOrderFindResults;
+        if (capped)
+            orders.RemoveAt(orders.Count - 1);
+
+        var orgIds = orders.Select(o => o.OrgId).Distinct().ToList();
+        var orgsById = await _db.Organisations
+            .AsNoTracking()
+            .Where(x => orgIds.Contains(x.Id))
+            .Select(x => new { x.Id, x.Name, x.Slug })
+            .ToDictionaryAsync(x => x.Id, ct);
+
+        var supplierIds = orders.Where(o => o.SupplierId != null).Select(o => o.SupplierId!.Value).Distinct().ToList();
+        var suppliersById = await _db.Suppliers
+            .AsNoTracking()
+            .Where(s => supplierIds.Contains(s.Id))
+            .Select(s => new { s.Id, s.Name })
+            .ToDictionaryAsync(s => s.Id, s => s.Name, ct);
+
+        var matches = orders.Select(o =>
+        {
+            orgsById.TryGetValue(o.OrgId, out var org);
+            return new AdminOrderFindMatchDto(
+                OrgId:        o.OrgId,
+                OrgName:      org?.Name ?? "(unknown organisation)",
+                OrgSlug:      org?.Slug ?? string.Empty,
+                OrderId:      o.Id,
+                Status:       o.Status,
+                SupplierName: o.SupplierId is { } sid && suppliersById.TryGetValue(sid, out var sup) ? sup : null,
+                PoNumber:     o.PoNumber,
+                CreatedAt:    o.CreatedAt,
+                UpdatedAt:    o.UpdatedAt);
+        }).ToList();
+
+        return Ok(new AdminOrderFindResponse(
+            Count:   matches.Count,
+            Capped:  capped,
+            Matches: matches));
     }
 
     // ── POST /api/admin/invoices ──────────────────────────────────────────

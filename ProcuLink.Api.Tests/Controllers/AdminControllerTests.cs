@@ -984,6 +984,134 @@ public class AdminControllerTests
         (await db.AuditEvents.AnyAsync()).Should().BeFalse("a not-found erase changed nothing to audit");
     }
 
+    // ── PO-number → org lookup (support triage) ───────────────────────────
+    //
+    // The support gap: "PO 4500012580 isn't arriving" gave the founder NO route
+    // from a PO number to the owning organisation — the controller's only
+    // PurchaseOrders read was a per-org aggregate. These tests pin the lookup:
+    // cross-org match, org names attached, blank input refused, result bounded.
+
+    [Fact]
+    public void FindOrders_IsOnTheAdminOnlyGatedController()
+    {
+        // The endpoint lives on AdminController, which is class-decorated with
+        // [AdminOnly] (fail-closed). A non-admin caller is therefore rejected with
+        // 403 by the filter before reaching this action. (The filter's 403 behaviour
+        // is exercised directly in AdminOnlyAttributeTests.)
+        typeof(AdminController)
+            .GetCustomAttributes(typeof(ProcuLink.Api.Auth.AdminOnlyAttribute), inherit: true)
+            .Should().NotBeEmpty();
+
+        typeof(AdminController)
+            .GetMethod(nameof(AdminController.FindOrders))
+            .Should().NotBeNull("the admin PO-number lookup must exist on the gated controller");
+    }
+
+    [Fact]
+    public async Task FindOrders_MatchesAcrossOrgs_WithOrgAndSupplierNames()
+    {
+        var db = MakeDb();
+        var orgA = Org("Acme", PlanConstants.Operations, AccountStatusConstants.Active);
+        var orgB = Org("Beta", PlanConstants.Pilot, AccountStatusConstants.Trialing);
+        db.Organisations.AddRange(orgA, orgB);
+
+        var supA = Guid.NewGuid();
+        var supB = Guid.NewGuid();
+        db.Suppliers.AddRange(
+            new Supplier { Id = supA, OrgId = orgA.Id, Name = "Sup A", CreatedAt = DateTime.UtcNow },
+            new Supplier { Id = supB, OrgId = orgB.Id, Name = "Sup B", CreatedAt = DateTime.UtcNow });
+
+        // Same customer-quoted PO in two orgs — one stored exactly, one differing
+        // only in case/padding, so the normalized key is what has to connect them.
+        var exact = MakeOrder(orgA.Id, supA, createdAt: DateTime.UtcNow.AddDays(-1));
+        exact.PoNumber = "PO-4500012580";
+        exact.PoNumberNormalized = ProcuLink.Core.Services.PoNumberIdentity.Normalize(exact.PoNumber);
+
+        var caseVariant = MakeOrder(orgB.Id, supB, createdAt: DateTime.UtcNow.AddDays(-2));
+        caseVariant.PoNumber = "po-4500012580";
+        caseVariant.PoNumberNormalized = ProcuLink.Core.Services.PoNumberIdentity.Normalize(caseVariant.PoNumber);
+
+        var unrelated = MakeOrder(orgA.Id, supA, createdAt: DateTime.UtcNow);
+        unrelated.PoNumber = "PO-9999";
+        unrelated.PoNumberNormalized = ProcuLink.Core.Services.PoNumberIdentity.Normalize(unrelated.PoNumber);
+
+        db.PurchaseOrders.AddRange(exact, caseVariant, unrelated);
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+        var result = await ctrl.FindOrders("  PO-4500012580 ", CancellationToken.None);
+
+        var body = result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<AdminOrderFindResponse>().Subject;
+
+        body.Count.Should().Be(2);
+        body.Capped.Should().BeFalse();
+        body.Matches.Should().HaveCount(2);
+
+        var a = body.Matches.Single(m => m.OrgId == orgA.Id);
+        a.OrgName.Should().Be("Acme");
+        a.OrgSlug.Should().Be(orgA.Slug);
+        a.OrderId.Should().Be(exact.Id);
+        a.Status.Should().Be("delivered");
+        a.SupplierName.Should().Be("Sup A");
+        a.PoNumber.Should().Be("PO-4500012580");
+
+        var b = body.Matches.Single(m => m.OrgId == orgB.Id);
+        b.OrgName.Should().Be("Beta");
+        b.OrgSlug.Should().Be(orgB.Slug);
+        b.OrderId.Should().Be(caseVariant.Id);
+        b.SupplierName.Should().Be("Sup B");
+        b.PoNumber.Should().Be("po-4500012580");
+
+        // Exact stored spelling sorts ahead of the case-variant match.
+        body.Matches[0].OrderId.Should().Be(exact.Id);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task FindOrders_BlankPo_Returns400(string? po)
+    {
+        var db = MakeDb();
+        var ctrl = Build(db);
+
+        var result = await ctrl.FindOrders(po, CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Fact]
+    public async Task FindOrders_CapsAtTwenty_NewestFirst()
+    {
+        var db = MakeDb();
+        var org = Org("Acme", PlanConstants.Operations, AccountStatusConstants.Active);
+        db.Organisations.Add(org);
+        var sup = Guid.NewGuid();
+        db.Suppliers.Add(new Supplier { Id = sup, OrgId = org.Id, Name = "Sup A", CreatedAt = DateTime.UtcNow });
+
+        // 25 orders all carrying the same (normalized) PO number, oldest first.
+        for (var i = 0; i < 25; i++)
+        {
+            var o = MakeOrder(org.Id, sup, createdAt: DateTime.UtcNow.AddDays(-25 + i));
+            o.PoNumber = "PO-DUP-1";
+            o.PoNumberNormalized = ProcuLink.Core.Services.PoNumberIdentity.Normalize(o.PoNumber);
+            db.PurchaseOrders.Add(o);
+        }
+        await db.SaveChangesAsync();
+
+        var ctrl = Build(db);
+        var result = await ctrl.FindOrders("PO-DUP-1", CancellationToken.None);
+
+        var body = result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<AdminOrderFindResponse>().Subject;
+
+        body.Count.Should().Be(20);
+        body.Capped.Should().BeTrue();
+        body.Matches.Should().HaveCount(20);
+        body.Matches.Should().BeInDescendingOrder(m => m.CreatedAt, "the founder wants the recent transits first");
+    }
+
     // ── helper ────────────────────────────────────────────────────────────
 
     private static PurchaseOrderEntity MakeOrder(
