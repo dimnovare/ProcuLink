@@ -454,6 +454,26 @@ worse but not broken, and the counter clears when the calendar month rolls over.
    config key overrides **every** plan value and is the emergency lever, so put it back after.
 3. If the same org latches every month, its plan is wrong for its volume, not its budget.
 
+### Support: "PO 4500012580 isn't arriving" — find the org from the PO number
+
+A customer quotes a PO number and nothing else. Every downstream question (did it parse, is
+the mapping wrong, what did delivery say) needs the owning organisation and order id first,
+and support tickets do not carry those. The admin lookup answers with both:
+
+```bash
+curl -sS -H "Authorization: Bearer $ADMIN_JWT" \
+  "https://api.proculink.eu/api/admin/orders/find?po=4500012580" | jq .
+```
+
+Admin-only (the `Admin:UserIds` / `Admin:Emails` allowlist — a non-admin token gets 403),
+read-only, capped at 20 matches, exact stored spellings first and then newest first. The
+match is the exact `po_number` **or** its normalized key (trim + upper-case), so a casing
+or padding difference between the ticket and the document still resolves. Each row carries
+`orgId` / `orgName` / `orgSlug`, `orderId`, `status`, `supplierName` and timestamps — enough
+to open the right org's context and keep triaging with `/api/ops/health` or the order itself.
+Two rows in two different orgs is not an error; the same customer PO number can legitimately
+exist on both sides of a buyer/supplier pair. A blank `po` is refused with 400.
+
 ---
 
 ## 6. What is *not* monitored

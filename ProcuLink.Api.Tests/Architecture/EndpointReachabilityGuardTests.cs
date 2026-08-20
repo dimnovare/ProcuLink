@@ -145,6 +145,13 @@ public sealed class EndpointReachabilityGuardTests
             + "spells out the curl against `$API_BASE/api/admin/organisations/$ORG_ID/account-status`. "
             + "[AdminOnly] and cross-tenant. The other AdminController writes have NO such runbook "
             + "entry and are listed below as open questions, not excused here."),
+        new("GET /api/admin/orders/find",
+            "2026-08-20 — support triage run by hand from the monitoring runbook rather than from a "
+            + "screen: docs/deployment/monitoring-runbook.md §5 (\"Support: PO … isn't arriving\") "
+            + "spells out the curl against `/api/admin/orders/find?po=…`. It maps a customer-quoted "
+            + "PO number to the owning organisation + order — the founder's first move on a "
+            + "\"my PO isn't arriving\" ticket. [AdminOnly], read-only, capped at 20 rows. Behaviour "
+            + "pinned by AdminControllerTests.FindOrders_*."),
 
         // ── Reached only in a local development topology ──────────────────────────────────
         new("GET /api/dev/files/{**}",
@@ -355,6 +362,11 @@ public sealed class EndpointReachabilityGuardTests
             "DELETE /api/suppliers/{}/po-mapping/output-tree",
             "GET /api/admin/item-mapping-twins",
             "GET /api/admin/job-failures",
+            // Moved into the baseline on 2026-08-20, deliberately and in the open, exactly as the
+            // failure text asks: the support PO-number → org lookup's caller is the founder's hand,
+            // via the curl written into docs/deployment/monitoring-runbook.md §5 — a runbook curl,
+            // the same class of out-of-band caller as the account-status entry above it.
+            "GET /api/admin/orders/find",
             "GET /api/auto-send/dry-runs",
             "GET /api/auto-send/dry-runs/summary",
             "GET /api/billing/ai-usage",

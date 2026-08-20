@@ -40,6 +40,28 @@ public sealed record AdminOrganisationDto(
     int OrderVolume30d,
     int SupplierCount);
 
+/// <summary>
+/// Response for GET /api/admin/orders/find — the support-triage lookup from a
+/// customer-quoted PO number to the owning organisation(s). <see cref="Capped"/>
+/// is true when more orders matched than the bounded result carries.
+/// </summary>
+public sealed record AdminOrderFindResponse(
+    int Count,
+    bool Capped,
+    IReadOnlyList<AdminOrderFindMatchDto> Matches);
+
+/// <summary>One matched order, with the org identity support actually needs. Cross-tenant.</summary>
+public sealed record AdminOrderFindMatchDto(
+    Guid OrgId,
+    string OrgName,
+    string OrgSlug,
+    Guid OrderId,
+    string Status,
+    string? SupplierName,
+    string PoNumber,
+    DateTime CreatedAt,
+    DateTime UpdatedAt);
+
 /// <summary>Request body for POST /api/admin/invoices.</summary>
 public sealed record CreateInvoiceRequest(
     Guid OrganisationId,
