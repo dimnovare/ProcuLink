@@ -114,6 +114,7 @@ public sealed class PostmarkEmailApiClient : IEmailApiClient
             // HTTP 200 — e.g. inactive recipient) or a non-2xx status is a failure.
             int? errorCode = null;
             string? providerMessage = null;
+            string? messageId = null;
             try
             {
                 using var doc = JsonDocument.Parse(body);
@@ -121,6 +122,11 @@ public sealed class PostmarkEmailApiClient : IEmailApiClient
                     errorCode = ec.GetInt32();
                 if (doc.RootElement.TryGetProperty("Message", out var m) && m.ValueKind == JsonValueKind.String)
                     providerMessage = m.GetString();
+                // Postmark's own identifier for the accepted message. This body was already being
+                // parsed for the two fields above and the ID was dropped on the floor, which left a
+                // successful send with no handle anyone could look up afterwards.
+                if (doc.RootElement.TryGetProperty("MessageID", out var mid) && mid.ValueKind == JsonValueKind.String)
+                    messageId = mid.GetString();
             }
             catch (JsonException)
             {
@@ -128,7 +134,7 @@ public sealed class PostmarkEmailApiClient : IEmailApiClient
             }
 
             if (response.IsSuccessStatusCode && errorCode is null or 0)
-                return new EmailApiResult(true, null, code);
+                return new EmailApiResult(true, null, code, MessageId: messageId);
 
             var reason = string.IsNullOrWhiteSpace(providerMessage)
                 ? $"email provider returned HTTP {code}."
@@ -142,7 +148,8 @@ public sealed class PostmarkEmailApiClient : IEmailApiClient
             return new EmailApiResult(
                 false, $"Email delivery failed: {reason}", code,
                 ResponseBody: string.IsNullOrWhiteSpace(body) ? null : body,
-                RetryAfter: RetryAfterHeader.Read(response.Headers, DateTimeOffset.UtcNow));
+                RetryAfter: RetryAfterHeader.Read(response.Headers, DateTimeOffset.UtcNow),
+                MessageId: messageId);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {

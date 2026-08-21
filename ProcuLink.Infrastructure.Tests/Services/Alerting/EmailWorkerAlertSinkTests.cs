@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Services.Alerting;
 using ProcuLink.Core.Services.Email;
@@ -160,7 +161,79 @@ public class EmailWorkerAlertSinkTests
         (await sink.AlertAsync(Key, Message)).Should().BeFalse();
     }
 
+    // ── Leaving a trace of a DELIVERED alert ─────────────────────────────────────
+    //
+    // Failures logged; successes were silent. A delivered operational alert therefore left no
+    // record anywhere in ProcuLink, and "did that alert actually go out?" could only be answered
+    // by opening Postmark and reading the outbound list by hand — with no identifier to look up.
+
+    [Fact]
+    public async Task AlertAsync_Delivered_LogsTheAlertKeyAndTheProviderMessageId()
+    {
+        var log = new CapturingLogger();
+        var client = new FakeEmailApiClient
+        {
+            IsConfigured = true,
+            ResultToReturn = new EmailApiResult(true, null, 200, MessageId: "b7bc2f4a-e38e-4336-af7d-e6c392c2f817"),
+        };
+
+        await new EmailWorkerAlertSink(
+            client, new AlertingEmailOptions { To = "founder@example.com" }, log)
+            .AlertAsync(Key, Message);
+
+        log.Entries.Should().ContainSingle(e => e.Level == LogLevel.Information)
+           .Which.Line.Should().Contain(Key)
+           .And.Contain("b7bc2f4a-e38e-4336-af7d-e6c392c2f817");
+    }
+
+    [Fact]
+    public async Task AlertAsync_Delivered_LogsTheRecipientDomainOnly_NeverTheAddress()
+    {
+        var log = new CapturingLogger();
+        var client = new FakeEmailApiClient { IsConfigured = true };
+
+        await new EmailWorkerAlertSink(
+            client, new AlertingEmailOptions { To = "founder@example.com" }, log)
+            .AlertAsync(Key, Message);
+
+        var line = log.Entries.Single(e => e.Level == LogLevel.Information).Line;
+        line.Should().Contain("example.com", "the destination domain is the routing evidence");
+        line.Should().NotContain("founder@example.com",
+            "the local part identifies a PERSON — InboundEmailRouter.ExtractSenderDomain is the "
+          + "privacy boundary this log reuses, and logs are a Sentry breadcrumb surface");
+    }
+
+    [Fact]
+    public async Task AlertAsync_ProviderRefused_LogsNoSuccessLine()
+    {
+        var log = new CapturingLogger();
+        var client = new FakeEmailApiClient
+        {
+            IsConfigured = true,
+            ResultToReturn = new EmailApiResult(false, "422 inactive recipient", 422),
+        };
+
+        await new EmailWorkerAlertSink(
+            client, new AlertingEmailOptions { To = "founder@example.com" }, log)
+            .AlertAsync(Key, Message);
+
+        log.Entries.Should().NotContain(e => e.Level == LogLevel.Information,
+            "a refused alert must never leave a line that reads like a delivery");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────────
+
+    /// <summary>Captures the fully rendered log line — exactly what reaches stdout and Sentry.</summary>
+    private sealed class CapturingLogger : ILogger<EmailWorkerAlertSink>
+    {
+        public List<(LogLevel Level, string Line)> Entries { get; } = new();
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? ex,
+                                Func<TState, Exception?, string> formatter)
+            => Entries.Add((level, formatter(state, ex)));
+    }
+
 
     private static EmailWorkerAlertSink Sink(IEmailApiClient client, string? to) =>
         new(client, new AlertingEmailOptions { To = to }, NullLogger<EmailWorkerAlertSink>.Instance);

@@ -164,6 +164,44 @@ public class PostmarkEmailApiClientTests
             factory.Object, NullLogger<PostmarkEmailApiClient>.Instance);
         withPostmarkFrom.DefaultFrom.Should().Be("postmark-from@example.com");
     }
+
+    // 8. The provider's MessageID survives onto the result — the only handle that can look one
+    //    specific sent message up with Postmark afterwards. The client already parsed this
+    //    response body for ErrorCode/Message and discarded the ID, so a delivered operational
+    //    alert left no trace anywhere in ProcuLink.
+    [Fact]
+    public async Task Configured_Success_SurfacesTheProviderMessageId()
+    {
+        // A representative Postmark 200 body, field-for-field (their documented success shape).
+        var handler = new StubHandler(HttpStatusCode.OK, """
+            {
+              "To": "a@x.example",
+              "SubmittedAt": "2026-08-21T09:14:22.1234567Z",
+              "MessageID": "b7bc2f4a-e38e-4336-af7d-e6c392c2f817",
+              "ErrorCode": 0,
+              "Message": "OK"
+            }
+            """);
+        var client = MakeClient(Config(("Email:Postmark:ServerToken", Token)), handler);
+
+        var result = await client.SendAsync(SimpleMessage("a@x.example"));
+
+        result.Success.Should().BeTrue();
+        result.MessageId.Should().Be("b7bc2f4a-e38e-4336-af7d-e6c392c2f817");
+    }
+
+    // 9. A success body that names no MessageID leaves it null rather than inventing one.
+    [Fact]
+    public async Task Configured_SuccessWithoutMessageId_LeavesItNull()
+    {
+        var handler = new StubHandler(HttpStatusCode.OK, """{"ErrorCode":0,"Message":"OK"}""");
+        var client = MakeClient(Config(("Email:Postmark:ServerToken", Token)), handler);
+
+        var result = await client.SendAsync(SimpleMessage("a@x.example"));
+
+        result.Success.Should().BeTrue();
+        result.MessageId.Should().BeNull();
+    }
 }
 
 /// <summary>Returns a fixed status + JSON body for any request.</summary>
