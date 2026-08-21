@@ -139,19 +139,19 @@ public sealed class EndpointReachabilityGuardTests
             "Permanent entry."),
 
         // ── Operator tooling with a documented out-of-band caller ─────────────────────────
-        new("POST /api/admin/organisations/{}/account-status",
-            "2026-08-13 — run by hand from the admin runbook rather than from a screen: "
-            + "project-proculink/src/app/(app)/admin/guides/onboard-a-new-client/content.mdx:82 "
-            + "spells out the curl against `$API_BASE/api/admin/organisations/$ORG_ID/account-status`. "
-            + "[AdminOnly] and cross-tenant. The other AdminController writes have NO such runbook "
-            + "entry and are listed below as open questions, not excused here."),
-        new("GET /api/admin/orders/find",
-            "2026-08-20 — support triage run by hand from the monitoring runbook rather than from a "
-            + "screen: docs/deployment/monitoring-runbook.md §5 (\"Support: PO … isn't arriving\") "
-            + "spells out the curl against `/api/admin/orders/find?po=…`. It maps a customer-quoted "
-            + "PO number to the owning organisation + order — the founder's first move on a "
-            + "\"my PO isn't arriving\" ticket. [AdminOnly], read-only, capped at 20 rows. Behaviour "
-            + "pinned by AdminControllerTests.FindOrders_*."),
+        new("DELETE /api/admin/organisations/{}/orders/{}",
+            "2026-08-21 — single-order GDPR erasure, deliberately left without a screen and run "
+            + "by hand from project-proculink/src/app/(app)/admin/guides/erase-order-data/content.mdx. It "
+            + "is irreversible and audited, so it keeps the friction of a typed command rather "
+            + "than gaining a button; the five reversible admin actions beside it DID gain "
+            + "screens in that same change, which is what makes this an intentional exception "
+            + "rather than an oversight. [AdminOnly] and cross-tenant."),
+        new("POST /api/admin/organisations/{}/orders/bulk-erase",
+            "2026-08-21 — bulk erasure, the same deliberate exception as the single-order erase "
+            + "above and documented in the same runbook "
+            + "(project-proculink/src/app/(app)/admin/guides/erase-order-data/content.mdx), which also "
+            + "records that the endpoint refuses a request carrying no filter criterion. Mass "
+            + "irreversible deletion is the last thing that should be one click away."),
 
         // ── Reached only in a local development topology ──────────────────────────────────
         new("GET /api/dev/files/{**}",
@@ -203,35 +203,7 @@ public sealed class EndpointReachabilityGuardTests
             + "the mapper offers no way to un-promote a layout. A door with no handle, in its own "
             + "words."),
 
-        // ── Data-protection obligations with no operator surface ─────────────────────────
-        new("DELETE /api/admin/organisations/{}/orders/{}",
-            "PENDING A DECISION, 2026-08-13 — single-order erasure. A data-protection obligation "
-            + "with no screen and, unlike account-status, no runbook curl either: "
-            + "project-proculink/src/app/(app)/admin/guides/onboard-a-new-client/content.mdx "
-            + "documents none."),
-        new("POST /api/admin/organisations/{}/orders/bulk-erase",
-            "PENDING A DECISION, 2026-08-13 — bulk erasure, the same gap as the single-order erase "
-            + "above (AdminController.cs:697) and the same absence from "
-            + "project-proculink/src/app/(app)/admin/guides/onboard-a-new-client/content.mdx. The "
-            + "admin screens call only /limits and /invoices."),
-        new("POST /api/admin/organisations/{}/retention",
-            "PENDING A DECISION, 2026-08-13 — sets an organisation's retention window "
-            + "(AdminController.cs:626). No control anywhere under "
-            + "project-proculink/src/app/(app)/admin/page.tsx, and no curl in "
-            + "project-proculink/src/app/(app)/admin/guides/onboard-a-new-client/content.mdx. Wire "
-            + "it into the admin org view or retire it."),
-
         // ── Operator diagnostics that exist and cannot be looked at ──────────────────────
-        new("GET /api/admin/job-failures",
-            "PENDING A DECISION, 2026-08-13 — background-job failures "
-            + "(ProcuLink.Api/Controllers/AdminController.cs:102), queryable and never queried: no "
-            + "call site anywhere in project-proculink/src. Found by this guard and not by the "
-            + "frontend's — it is a GET, and that sweep covers state-changing verbs only."),
-        new("GET /api/admin/item-mapping-twins",
-            "PENDING A DECISION, 2026-08-13 — duplicate item-mapping detection "
-            + "(ProcuLink.Api/Controllers/AdminController.cs:144), with no reader in "
-            + "project-proculink/src/app/(app)/admin/. Same class as job-failures above, and "
-            + "likewise invisible to a state-changing-only sweep."),
         new("GET /api/auto-send/dry-runs",
             "PENDING A DECISION, 2026-08-13 — the audit records the per-supplier auto-send flag as "
             + "shipped with no indicator and no control; this is the evidence trail for it, and "
