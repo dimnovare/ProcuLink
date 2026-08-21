@@ -236,6 +236,7 @@ public class OrdersPreviewHonorFormatTests
             modelBuilder.Ignore<IntegrationSubscription>();
             modelBuilder.Ignore<OrderParty>();
             modelBuilder.Ignore<CanonicalFieldDef>();
+            modelBuilder.Ignore<WorkerHealthAlertCooldown>();
 
             modelBuilder.Entity<PurchaseOrderEntity>(b =>
             {

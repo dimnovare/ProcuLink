@@ -150,6 +150,7 @@ public class AiCalibrationControllerTests
             modelBuilder.Ignore<OrderParty>();
             modelBuilder.Ignore<SourceCapture>();
             modelBuilder.Ignore<CanonicalFieldDef>();
+            modelBuilder.Ignore<WorkerHealthAlertCooldown>();
 
             modelBuilder.Entity<AiSuggestionDecision>(b =>
             {

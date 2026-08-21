@@ -238,6 +238,7 @@ public class DeliveryServiceEmitsFirstDeliverySucceededTests
             modelBuilder.Ignore<OrderParty>();
             modelBuilder.Ignore<SourceCapture>();
             modelBuilder.Ignore<CanonicalFieldDef>();
+            modelBuilder.Ignore<WorkerHealthAlertCooldown>();
 
             modelBuilder.Entity<PurchaseOrderEntity>(b =>
             {

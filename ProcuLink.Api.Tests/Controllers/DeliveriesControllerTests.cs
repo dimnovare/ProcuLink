@@ -326,6 +326,7 @@ public class DeliveriesControllerTests
             modelBuilder.Ignore<TenantApiKey>();
             modelBuilder.Ignore<IntegrationSubscription>();
             modelBuilder.Ignore<SchemaFingerprint>();
+            modelBuilder.Ignore<WorkerHealthAlertCooldown>();
 
             modelBuilder.Entity<DeliveryAttempt>(b =>
             {

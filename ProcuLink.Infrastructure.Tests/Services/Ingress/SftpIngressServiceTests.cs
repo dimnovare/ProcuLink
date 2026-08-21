@@ -1043,6 +1043,7 @@ public class SftpIngressServiceTests
             modelBuilder.Ignore<AdvanceShippingNoticeEntity>();
             modelBuilder.Ignore<AsnPackageEntity>();
             modelBuilder.Ignore<AsnPackageLineEntity>();
+            modelBuilder.Ignore<WorkerHealthAlertCooldown>();
 
             // Only materialise the two new entities.
             modelBuilder.Entity<SftpIngressConfig>(b =>

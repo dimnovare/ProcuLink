@@ -813,6 +813,7 @@ public class S3IngressServiceTests
             modelBuilder.Ignore<AdvanceShippingNoticeEntity>();
             modelBuilder.Ignore<AsnPackageEntity>();
             modelBuilder.Ignore<AsnPackageLineEntity>();
+            modelBuilder.Ignore<WorkerHealthAlertCooldown>();
 
             modelBuilder.Entity<S3IngressConfig>(b =>
             {

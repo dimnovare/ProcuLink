@@ -1196,6 +1196,7 @@ public class BillingControllerTests
             modelBuilder.Ignore<TenantApiKey>();
             modelBuilder.Ignore<IntegrationSubscription>();
             modelBuilder.Ignore<SchemaFingerprint>();
+            modelBuilder.Ignore<WorkerHealthAlertCooldown>();
 
             modelBuilder.Entity<Organisation>(b =>
             {

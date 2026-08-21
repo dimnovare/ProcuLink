@@ -232,6 +232,7 @@ public class PullIngressSettingsServiceTests
             modelBuilder.Ignore<AdvanceShippingNoticeEntity>();
             modelBuilder.Ignore<AsnPackageEntity>();
             modelBuilder.Ignore<AsnPackageLineEntity>();
+            modelBuilder.Ignore<WorkerHealthAlertCooldown>();
 
             modelBuilder.Entity<SftpIngressConfig>(b => b.HasKey(x => x.Id));
             modelBuilder.Entity<S3IngressConfig>(b => b.HasKey(x => x.Id));

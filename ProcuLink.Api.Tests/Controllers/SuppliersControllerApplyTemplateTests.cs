@@ -256,6 +256,7 @@ public class SuppliersControllerApplyTemplateTests
             modelBuilder.Ignore<AsnPackageLineEntity>();
             modelBuilder.Ignore<TenantApiKey>();
             modelBuilder.Ignore<IntegrationSubscription>();
+            modelBuilder.Ignore<WorkerHealthAlertCooldown>();
 
             modelBuilder.Entity<Supplier>(b =>
             {
