@@ -1206,7 +1206,11 @@ public class SuppliersController : ControllerBase
     /// <summary>
     /// Read-only honesty probe: fetches the SAVED source through the exact production pull
     /// path (SSRF guard, timeouts, bounded read, shared parse) and reports what would be
-    /// imported — mapped/unmapped columns, row counts, and ≤5 sample rows. Never writes:
+    /// imported. This runs INSIDE the request-serving process, so it is bounded by
+    /// <c>CatalogLimits.MaxInteractiveTestFetchBytes</c> (32 MB) rather than the 256 MB
+    /// ingestion cap the scheduled Worker sync keeps: it is a sample that proves credentials
+    /// and column shape, not a full sync. A larger file comes back <c>ok: false</c> with a
+    /// message saying exactly that. Reports what would be imported — mapped/unmapped columns, row counts, and ≤5 sample rows. Never writes:
     /// no upsert, no last-sync mutation. Failures return <c>ok: false</c> with the same
     /// sanitized message a real sync would persist.
     /// </summary>

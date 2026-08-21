@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Catalog;
+using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
@@ -336,6 +337,49 @@ public class CatalogPullServiceHttpTests
         (await h.Db.SupplierProducts.CountAsync()).Should().Be(0);
     }
 
+
+    // ── the interactive test-fetch is bounded far below the ingestion cap ─────
+
+    [Fact]
+    public async Task TestFetch_BodyAboveInteractiveCap_RefusesWithTheSampleMessage()
+    {
+        // One operator pressing "Test fetch" on a large distributor feed used to pull the FULL
+        // ingestion cap (256 MB) into the request-serving process, where every tenant shares the
+        // memory. The interactive probe exists to prove credentials and column shape, so it gets
+        // its own, much smaller cap; the scheduled Worker sync (pinned by the control below) keeps
+        // the full one.
+        var handler = new StreamHandler(
+            () => new RepeatingCsvStream(CatalogLimits.MaxInteractiveTestFetchBytes + 1024), "text/csv");
+        var h = await BuildAsync(new HttpClient(handler));
+
+        var result = await h.Service.TestFetchAsync(h.OrgId, h.SupplierId, CancellationToken.None);
+
+        result.Ok.Should().BeFalse();
+        result.Error.Should().Be(
+            "Connected successfully, but this catalog file is larger than the 32 MB limit for a " +
+            "test fetch. A test fetch downloads a bounded sample to prove the connection and the " +
+            "column mapping — it is not a full sync. Scheduled syncs are unaffected and still " +
+            "import the whole file.");
+        h.Sink.UpsertCalls.Should().Be(0);
+        (await h.Db.SupplierProducts.CountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Pull_ScheduledSync_BodyAboveInteractiveCap_StillImports_Control()
+    {
+        // CONTROL for the test above: narrowing the interactive probe must not narrow real
+        // ingestion. The same body the test-fetch refuses is still imported by the scheduled path.
+        var handler = new StreamHandler(
+            () => new RepeatingCsvStream(CatalogLimits.MaxInteractiveTestFetchBytes + 1024), "text/csv");
+        var h = await BuildAsync(new HttpClient(handler));
+
+        var result = await h.Service.PullAsync(h.OrgId, h.SourceId, CancellationToken.None);
+
+        result.Status.Should().Be("ok");
+        result.Created.Should().BeGreaterThan(0);
+        h.Sink.UpsertCalls.Should().Be(1);
+    }
+
     // ── test doubles ──────────────────────────────────────────────────────────
 
     private sealed class TestableCatalogPullService : CatalogPullService
@@ -430,6 +474,53 @@ public class CatalogPullServiceHttpTests
         }
         public Task<int> CountAsync(Guid orgId, Guid supplierId, CancellationToken ct) => _inner.CountAsync(orgId, supplierId, ct);
         public Task<int> DeleteAsync(Guid orgId, Guid supplierId, CancellationToken ct) => _inner.DeleteAsync(orgId, supplierId, ct);
+    }
+
+    /// <summary>
+    /// A valid CSV catalog of a chosen byte length, produced without materialising it: a header
+    /// line then padded rows repeated until the target size. Used to feed the interactive cap a
+    /// body that is genuinely importable, so the control test proves the scheduled path still
+    /// imports exactly what the probe refuses.
+    /// </summary>
+    private sealed class RepeatingCsvStream : Stream
+    {
+        private static readonly byte[] Header = Encoding.UTF8.GetBytes("code,name,price\n");
+        private readonly long _total;
+        private long _position;
+        private int _row;
+        private byte[] _current = Header;
+        private int _offset;
+
+        public RepeatingCsvStream(long totalBytes) => _total = totalBytes;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => _total;
+        public override long Position { get => _position; set => throw new NotSupportedException(); }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (_position >= _total) return 0;
+            if (_offset >= _current.Length)
+            {
+                _current = Encoding.UTF8.GetBytes(
+                    $"SKU-{_row},{new string('n', 64 * 1024)}-{_row},9.50\n");
+                _row++;
+                _offset = 0;
+            }
+
+            var take = (int)Math.Min(Math.Min(count, _current.Length - _offset), _total - _position);
+            Array.Copy(_current, _offset, buffer, offset, take);
+            _offset += take;
+            _position += take;
+            return take;
+        }
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private sealed class EndlessZeroStream : Stream

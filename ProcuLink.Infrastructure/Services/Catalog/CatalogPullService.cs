@@ -52,6 +52,18 @@ public class CatalogPullService : ICatalogPullService
     internal const string ErrVendorUnavailable = "No fetcher is configured for this catalog source.";
 
     /// <summary>
+    /// The interactive probe refused a file above <see cref="CatalogLimits.MaxInteractiveTestFetchBytes"/>.
+    /// Distinct from the ingestion cap message on purpose: the connection and the credentials
+    /// WORKED, and the scheduled sync is not affected, so the operator must not be sent hunting a
+    /// transport fault or told their feed is too big for ProcuLink.
+    /// </summary>
+    internal const string ErrTestFetchTooLarge =
+        "Connected successfully, but this catalog file is larger than the 32 MB limit for a " +
+        "test fetch. A test fetch downloads a bounded sample to prove the connection and the " +
+        "column mapping \u2014 it is not a full sync. Scheduled syncs are unaffected and still " +
+        "import the whole file.";
+
+    /// <summary>
     /// The sftp server presented a different SSH host key than the one this source is pinned to.
     ///
     /// <para>
@@ -142,7 +154,10 @@ public class CatalogPullService : ICatalogPullService
 
         try
         {
-            var fetched = await FetchAndParseAsync(source, ct);
+            var fetched = await FetchAndParseAsync(
+                source, ct,
+                maxBytes: CatalogLimits.MaxCatalogFileBytes,
+                maxUncompressedBytes: CatalogLimits.MaxUncompressedBytes);
 
             // Trust-on-first-use: record the sftp host key this sync established, so every later
             // sync is verified against it. Staged on the tracked row here and committed by whichever
@@ -220,11 +235,21 @@ public class CatalogPullService : ICatalogPullService
         FetchOutcome fetched;
         try
         {
-            fetched = await FetchAndParseAsync(source, ct, skipUnchangedShortCircuit: true);
+            fetched = await FetchAndParseAsync(
+                source, ct,
+                maxBytes: CatalogLimits.MaxInteractiveTestFetchBytes,
+                maxUncompressedBytes: CatalogLimits.MaxInteractiveUncompressedBytes,
+                skipUnchangedShortCircuit: true);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
+        }
+        catch (Exception ex) when (ex is CatalogFileTooLargeException or CatalogTooLargeException)
+        {
+            // The probe's own, smaller ceiling \u2014 NOT the ingestion cap. Say so, or the operator
+            // reads "too large" as "ProcuLink cannot import this feed", which is false.
+            return CatalogTestFetchResult.Failure(ErrTestFetchTooLarge);
         }
         catch (Exception ex)
         {
@@ -290,8 +315,17 @@ public class CatalogPullService : ICatalogPullService
         string? ContentType,
         string? LearnedHostKeyFingerprint = null);
 
+    /// <summary>
+    /// The shared fetch path. <paramref name="maxBytes"/> and <paramref name="maxUncompressedBytes"/>
+    /// are supplied by the CALLER rather than read from <see cref="CatalogLimits"/> here, because the
+    /// two callers run in different processes: the scheduled pull runs in the Worker and keeps the
+    /// full ingestion cap, while the interactive test-fetch runs inside the request-serving API and
+    /// is bounded far lower so one operator probing a large feed cannot pressure every tenant.
+    /// </summary>
     private async Task<FetchOutcome> FetchAndParseAsync(
-        SupplierCatalogSource source, CancellationToken ct, bool skipUnchangedShortCircuit = false)
+        SupplierCatalogSource source, CancellationToken ct,
+        long maxBytes, long maxUncompressedBytes,
+        bool skipUnchangedShortCircuit = false)
     {
         // Supplier must still exist — a pull for a soft-deleted supplier would silently
         // resurrect catalog rows under it.
@@ -335,10 +369,10 @@ public class CatalogPullService : ICatalogPullService
         var token = linkedCts.Token;
 
         var downloaded = isVendor
-            ? await DownloadVendorAsync(source, token)
+            ? await DownloadVendorAsync(source, maxBytes, token)
             : isHttp
-                ? await DownloadHttpAsync(source, token)
-                : await DownloadFileChannelAsync(source, password, token);
+                ? await DownloadHttpAsync(source, maxBytes, token)
+                : await DownloadFileChannelAsync(source, password, maxBytes, token);
 
         string fileHash;
         using (downloaded.Data)
@@ -373,7 +407,7 @@ public class CatalogPullService : ICatalogPullService
             CatalogArchiveUnwrapper.UnwrappedEntry? unwrapped = null;
             try
             {
-                unwrapped = CatalogArchiveUnwrapper.TryUnwrap(data, CatalogLimits.MaxUncompressedBytes);
+                unwrapped = CatalogArchiveUnwrapper.TryUnwrap(data, maxUncompressedBytes);
             }
             catch (CatalogTooLargeException) { throw; }
             catch (Exception ex) when (ex is InvalidDataException or IOException)
@@ -417,7 +451,7 @@ public class CatalogPullService : ICatalogPullService
     // ── SFTP / FTP(S) channel ─────────────────────────────────────────────────
 
     private async Task<DownloadOutcome> DownloadFileChannelAsync(
-        SupplierCatalogSource source, string password, CancellationToken token)
+        SupplierCatalogSource source, string password, long maxBytes, CancellationToken token)
     {
         // SSRF guard IMMEDIATELY before connect (every poll AND test-fetch). Residual risk
         // L1 (accepted): a DNS rebind between this resolution and the library's own
@@ -449,7 +483,7 @@ public class CatalogPullService : ICatalogPullService
                     using var session = _sftpFactory.Connect(
                         source.Host, source.Port, source.Username ?? string.Empty, password, verifier);
                     using var remote = session.OpenRead(source.RemotePath);
-                    return await BoundedRead.CopyAsync(remote, CatalogLimits.MaxCatalogFileBytes, token);
+                    return await BoundedRead.CopyAsync(remote, maxBytes, token);
                 }, CancellationToken.None).WaitAsync(token);
                 return new DownloadOutcome(
                     sftpData, fileName, ContentType: null, verifier.LearnedFingerprint);
@@ -461,7 +495,7 @@ public class CatalogPullService : ICatalogPullService
                            string.IsNullOrWhiteSpace(source.Username) ? "anonymous" : source.Username,
                            password, explicitTls: source.Protocol == "ftps"))
                 {
-                    var ftpData = await ftp.DownloadAsync(source.RemotePath, CatalogLimits.MaxCatalogFileBytes, token);
+                    var ftpData = await ftp.DownloadAsync(source.RemotePath, maxBytes, token);
                     return new DownloadOutcome(ftpData, fileName, ContentType: null);
                 }
 
@@ -486,7 +520,7 @@ public class CatalogPullService : ICatalogPullService
     /// All failures map to enumerated safe messages via <see cref="Sanitize"/> upstream; the
     /// auth applier returns safe strings (never host/token/secret) on its own failures.
     /// </summary>
-    private async Task<DownloadOutcome> DownloadHttpAsync(SupplierCatalogSource source, CancellationToken token)
+    private async Task<DownloadOutcome> DownloadHttpAsync(SupplierCatalogSource source, long maxBytes, CancellationToken token)
     {
         var url = source.Url;
         if (string.IsNullOrWhiteSpace(url))
@@ -527,7 +561,7 @@ public class CatalogPullService : ICatalogPullService
         // bounded read below already enforces, so the transport limit and the stream limit agree
         // instead of the transport silently refusing a legitimate 174 MB feed.
         request.Options.Set(
-            ResponseSizeLimitingHandler.MaxResponseBytesOption, CatalogLimits.MaxCatalogFileBytes);
+            ResponseSizeLimitingHandler.MaxResponseBytesOption, maxBytes);
 
         // (2) Apply auth via the shared applier (oauth2 fetches a fresh token, SSRF-guarded).
         var authError = await _auth.ApplyAsync(request, creds, client, token);
@@ -542,7 +576,7 @@ public class CatalogPullService : ICatalogPullService
 
         // (3) Bounded streamed read — at most cap+1 bytes ever buffered.
         await using var responseStream = await response.Content.ReadAsStreamAsync(token);
-        var data = await BoundedRead.CopyAsync(responseStream, CatalogLimits.MaxCatalogFileBytes, token);
+        var data = await BoundedRead.CopyAsync(responseStream, maxBytes, token);
 
         var contentType = response.Content.Headers.ContentType?.MediaType;
         // Filename hint: the URL's last path segment (drives 'auto' extension routing as a
@@ -565,7 +599,7 @@ public class CatalogPullService : ICatalogPullService
     /// fetcher returns the SAME byte shape as the file/http channels, so hash-skip, unwrap, caps,
     /// parsing, and error sanitisation apply unchanged.
     /// </summary>
-    private async Task<DownloadOutcome> DownloadVendorAsync(SupplierCatalogSource source, CancellationToken token)
+    private async Task<DownloadOutcome> DownloadVendorAsync(SupplierCatalogSource source, long maxBytes, CancellationToken token)
     {
         var fetcher = _vendorFetchers[source.Protocol];
 
@@ -598,7 +632,7 @@ public class CatalogPullService : ICatalogPullService
         }
 
         var client = CreateHttpClient();
-        var ctx = new VendorFetchContext(url, creds, client, CatalogLimits.MaxCatalogFileBytes);
+        var ctx = new VendorFetchContext(url, creds, client, maxBytes);
         var result = await fetcher.FetchAsync(ctx, token);
         return new DownloadOutcome(result.Data, result.FileName, result.ContentType);
     }
