@@ -37,7 +37,8 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
     /// <summary>
     /// Runs one sweep.
     /// <para>
-    /// <b>Fail closed, never all-clear.</b> Both inputs are read defensively and INDEPENDENTLY. A
+    /// <b>Fail closed, never all-clear.</b> All three inputs — the health snapshot, the operational
+    /// probe, and the durable cooldown store — are read defensively and INDEPENDENTLY. A
     /// source that cannot be read yields no conditions at all rather than zeroed ones: the
     /// conditions it feeds are skipped as UNKNOWN, and the fact that the sweep was partially blind
     /// is itself raised as <see cref="OperationalAlertKeys.AlertSweepDegraded"/> through the same
@@ -55,11 +56,25 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
     {
         var now = _utcNow();
 
+        // The cooldown is durable, so it is READ first and written back last. An unreadable store
+        // is a third blind source, reported exactly like the other two — the alternative, deciding
+        // spacing off a state nobody could read while logging nothing, is how a restart-flood hides.
+        var cooldownBlindSource = await _state.BeginSweepAsync(ct);
+        if (cooldownBlindSource is not null)
+        {
+            _logger.LogError(_state.LoadFailure,
+                "WorkerHealthAlert: the durable alert cooldown store could not be read — this run's "
+              + "alert spacing falls back to process-local state, which does not survive a restart.");
+        }
+
         var snapshot = await ReadSnapshotAsync(ct);
         var signals = await ReadSignalsAsync(ct);
 
         var conditions = new List<(string Key, bool IsBad, string Message)>(OperationalAlertKeys.All.Count);
         var blindSources = new List<string>();
+
+        if (cooldownBlindSource is not null)
+            blindSources.Add(cooldownBlindSource);
 
         if (snapshot is { } snap)
         {
@@ -124,6 +139,15 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
                   + "NOBODY has been notified. Set Alerting:Email:To (with Email:Postmark:ServerToken) "
                   + "or Sentry:Dsn on the Worker.", key);
             }
+        }
+
+        // Write the cooldowns back before returning. A failure is logged and remembered rather than
+        // thrown: the alerts have already gone out, and the next sweep reports the store as blind.
+        if (await _state.CommitSweepAsync(now, ct) is { } persistError)
+        {
+            _logger.LogError(persistError,
+                "WorkerHealthAlert: the durable alert cooldown store could not be written — a Worker "
+              + "restart before the next successful write will re-alert every condition.");
         }
 
         if (!anyBad && snapshot is { } okSnap && signals is { } okSignals)

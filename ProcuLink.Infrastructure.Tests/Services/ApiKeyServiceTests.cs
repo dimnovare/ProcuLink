@@ -126,6 +126,7 @@ public class ApiKeyServiceTests
             modelBuilder.Ignore<AdvanceShippingNoticeEntity>();
             modelBuilder.Ignore<AsnPackageEntity>();
             modelBuilder.Ignore<AsnPackageLineEntity>();
+            modelBuilder.Ignore<WorkerHealthAlertCooldown>();
 
             // Configure Organisation minimally (no JsonDocument navigations).
             modelBuilder.Entity<Organisation>(b =>

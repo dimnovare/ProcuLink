@@ -519,6 +519,7 @@ public class AiUsageTrackerTests
             modelBuilder.Ignore<AsnPackageEntity>();
             modelBuilder.Ignore<AsnPackageLineEntity>();
             modelBuilder.Ignore<PoPassportEvent>();
+            modelBuilder.Ignore<WorkerHealthAlertCooldown>();
 
             modelBuilder.Entity<AiUsageMonthly>(b =>
             {

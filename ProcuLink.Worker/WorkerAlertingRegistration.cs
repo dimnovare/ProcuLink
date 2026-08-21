@@ -39,8 +39,18 @@ public static class WorkerAlertingRegistration
         IConfiguration configuration)
     {
         // Singleton: per-condition rate-limit state, which must survive across the scoped sweeps.
-        // It captures no scoped graph of its own.
-        services.AddSingleton<WorkerHealthAlertState>();
+        // It captures no scoped graph of its own — the store below opens its own scope per call,
+        // which is what lets a singleton reach a scoped DbContext safely.
+        //
+        // The state is DURABLE because a singleton alone was not enough: it survives sweeps inside
+        // one process and nothing else, so every Worker restart re-armed every healthy→bad
+        // transition and restarted every cooldown. A crash-looping Worker emailed on the raw
+        // 5-minute sweep interval (observed live 2026-08-20: 14:50 / 14:55 / 15:00 / 15:05 across
+        // a run of Railway redeploys, against 30-minute spacing either side of it).
+        services.AddSingleton<IWorkerHealthAlertStateStore>(sp =>
+            new DbWorkerHealthAlertStateStore(sp.GetRequiredService<IServiceScopeFactory>()));
+        services.AddSingleton(sp =>
+            new WorkerHealthAlertState(sp.GetRequiredService<IWorkerHealthAlertStateStore>()));
 
         services.AddSingleton(_ =>
         {

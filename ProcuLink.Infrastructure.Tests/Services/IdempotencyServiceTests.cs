@@ -164,6 +164,7 @@ public class IdempotencyServiceTests
             modelBuilder.Ignore<AdvanceShippingNoticeEntity>();
             modelBuilder.Ignore<AsnPackageEntity>();
             modelBuilder.Ignore<AsnPackageLineEntity>();
+            modelBuilder.Ignore<WorkerHealthAlertCooldown>();
 
             // IdempotencyKey: keep the composite key, drop nothing else.
             modelBuilder.Entity<IdempotencyKey>(b =>

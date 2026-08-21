@@ -87,6 +87,13 @@ public static class OrgQueryFilters
             [typeof(ConnectionRevisionTestCase)] =
                 "Test-pack child of SupplierConnectionRevision, scoped through the required FK " +
                 "RevisionId. The parent carries OrgId and is filtered.",
+
+            [typeof(WorkerHealthAlertCooldown)] =
+                "Deployment-wide operator alerting state, not tenant data. One row per alert " +
+                "condition (worker heartbeat, all-org backlogs, the sweep's own blindness); the " +
+                "conditions are evaluated across every organisation at once, so there is no org " +
+                "to scope by. It is written by the Worker's recurring sweep on a DI scope with no " +
+                "tenant resolved, so a filter would refuse to read it at all.",
         };
 
     /// <summary>

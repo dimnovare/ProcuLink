@@ -191,6 +191,9 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     // ── Inbound email: the per-org address that authorises delivery into an org ─
     public DbSet<OrgInboundAddress>              OrgInboundAddresses           { get; set; } = null!;
 
+    // ── Operator alerting: per-condition cooldown that must outlive a restart ───
+    public DbSet<WorkerHealthAlertCooldown>      WorkerHealthAlertCooldowns    { get; set; } = null!;
+
     // ── Org plan-history chokepoint ──────────────────────────────────────────
     // Overage metering must resolve the plan + order-limit override AS OF each
     // billed window (a yearly renewal invoice decomposes into ~12 PAST months;
@@ -1092,6 +1095,25 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.OrderId).HasColumnName("order_id");
             b.Property(x => x.CreatedAt)
              .HasColumnName("created_at")
+             .HasColumnType("timestamptz");
+        });
+
+        // ── worker_health_alert_cooldowns ──────────────────────────────
+        // Anti-spam state for the operator alert sweep, one row per condition key.
+        // Deliberately NOT org-scoped: these conditions describe the deployment
+        // (worker heartbeat, all-org backlogs, the sweep's own blindness), not a
+        // tenant, so there is no org_id to scope by and no query filter applies.
+        modelBuilder.Entity<WorkerHealthAlertCooldown>(b =>
+        {
+            b.ToTable("worker_health_alert_cooldowns");
+            b.HasKey(x => x.AlertKey);
+            b.Property(x => x.AlertKey).HasColumnName("alert_key").HasMaxLength(100).IsRequired();
+            b.Property(x => x.WasBad).HasColumnName("was_bad");
+            b.Property(x => x.LastAlertUtc)
+             .HasColumnName("last_alert_utc")
+             .HasColumnType("timestamptz");
+            b.Property(x => x.UpdatedUtc)
+             .HasColumnName("updated_utc")
              .HasColumnType("timestamptz");
         });
 

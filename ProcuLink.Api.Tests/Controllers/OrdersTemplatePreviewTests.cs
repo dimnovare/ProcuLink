@@ -380,6 +380,7 @@ public class OrdersTemplatePreviewTests
             // SourceCapture is MAPPED here (not Ignored): the mapping-override preview now
             // Includes it to re-derive SourceMap rules from the persisted token universe.
             modelBuilder.Ignore<CanonicalFieldDef>();
+            modelBuilder.Ignore<WorkerHealthAlertCooldown>();
 
             modelBuilder.Entity<PurchaseOrderEntity>(b =>
             {
