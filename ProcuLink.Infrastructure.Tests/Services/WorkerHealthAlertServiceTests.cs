@@ -477,6 +477,187 @@ public class WorkerHealthAlertServiceTests
             "each condition owns its own cooldown — a long outage must not gag a new incident");
     }
 
+    // ── Durable cooldown: the window must survive a Worker restart ───────────────
+
+    /// <summary>
+    /// The assertion that fails on the pre-fix code. The cooldown lived in a process-local
+    /// singleton, so a restart re-armed every condition's healthy→bad transition and restarted the
+    /// window. Live evidence from the outbound mail log on 2026-08-20: 13:45 / 14:10 / 14:40 (the
+    /// 30-minute cooldown holding), then 14:50 / 14:55 / 15:00 / 15:05 — the raw sweep interval —
+    /// across a run of Railway redeploys. A crash-looping Worker floods exactly when it matters.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_CooldownSurvivesAWorkerRestart()
+    {
+        var sink = new RecordingSink();
+        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 600, 0, 0));
+        var options = new WorkerHealthAlertOptions { MinAlertIntervalMinutes = 30 };
+        var now = new DateTime(2026, 8, 20, 13, 45, 0, DateTimeKind.Utc);
+
+        // One durable store, two process lifetimes.
+        var store = new InMemoryWorkerHealthAlertStateStore();
+
+        var first = new WorkerHealthAlertService(
+            health.Object, ProbeReturning(Healthy()).Object, sink,
+            new WorkerHealthAlertState(store), options,
+            NullLogger<WorkerHealthAlertService>.Instance, () => now);
+        (await first.RunAsync(default)).Should().BeTrue();
+
+        // Railway redeploys five minutes later. A brand-new process, a brand-new state object.
+        now = now.AddMinutes(5);
+        var second = new WorkerHealthAlertService(
+            health.Object, ProbeReturning(Healthy()).Object, sink,
+            new WorkerHealthAlertState(store), options,
+            NullLogger<WorkerHealthAlertService>.Instance, () => now);
+
+        (await second.RunAsync(default)).Should().BeFalse(
+            "a restart must not re-arm a condition whose cooldown has not elapsed — that is what "
+          + "turned a crash-looping Worker into an email every 5 minutes");
+
+        sink.Calls.Should().ContainSingle();
+    }
+
+    /// <summary>
+    /// The anti-suppression control, and the failure direction that actually matters: a durable
+    /// cooldown must not become permanent silence. Same restart, but on the far side of the window.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_AfterARestart_StillAlertsOnceTheCooldownGenuinelyElapsed()
+    {
+        var sink = new RecordingSink();
+        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 600, 0, 0));
+        var options = new WorkerHealthAlertOptions { MinAlertIntervalMinutes = 30 };
+        var now = new DateTime(2026, 8, 20, 13, 45, 0, DateTimeKind.Utc);
+
+        var store = new InMemoryWorkerHealthAlertStateStore();
+
+        var first = new WorkerHealthAlertService(
+            health.Object, ProbeReturning(Healthy()).Object, sink,
+            new WorkerHealthAlertState(store), options,
+            NullLogger<WorkerHealthAlertService>.Instance, () => now);
+        (await first.RunAsync(default)).Should().BeTrue();
+
+        // Restart, and this time 31 minutes have passed — the window is genuinely over.
+        now = now.AddMinutes(31);
+        var second = new WorkerHealthAlertService(
+            health.Object, ProbeReturning(Healthy()).Object, sink,
+            new WorkerHealthAlertState(store), options,
+            NullLogger<WorkerHealthAlertService>.Instance, () => now);
+
+        (await second.RunAsync(default)).Should().BeTrue(
+            "persisting the cooldown must not turn into permanent suppression — a still-bad "
+          + "condition past its window must page again");
+
+        sink.Calls.Should().HaveCount(2);
+    }
+
+    /// <summary>
+    /// Recovery is durable too. A condition that recovered before the restart must be free to
+    /// alert on its next healthy→bad transition, cooldown or not.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_RecoveryBeforeARestart_ReArmsTheTransitionAlert()
+    {
+        var sink = new RecordingSink();
+        var options = new WorkerHealthAlertOptions { MinAlertIntervalMinutes = 30 };
+        var now = new DateTime(2026, 8, 20, 13, 45, 0, DateTimeKind.Utc);
+        var store = new InMemoryWorkerHealthAlertStateStore();
+
+        var bad = new WorkerHealthSnapshot(false, 0, 600, 0, 0);
+        var good = new WorkerHealthSnapshot(true, 1, 2, 0, 0);
+
+        WorkerHealthAlertService Svc(WorkerHealthSnapshot snap) => new(
+            HealthReturning(snap).Object, ProbeReturning(Healthy()).Object, sink,
+            new WorkerHealthAlertState(store), options,
+            NullLogger<WorkerHealthAlertService>.Instance, () => now);
+
+        (await Svc(bad).RunAsync(default)).Should().BeTrue();
+
+        now = now.AddMinutes(5);
+        (await Svc(good).RunAsync(default)).Should().BeFalse();
+
+        // Restart, then the condition goes bad again well inside the 30-minute window.
+        now = now.AddMinutes(5);
+        (await Svc(bad).RunAsync(default)).Should().BeTrue(
+            "a persisted recovery must re-arm the transition alert across a restart, exactly as it "
+          + "does within one process");
+
+        sink.Calls.Should().HaveCount(2);
+    }
+
+    /// <summary>
+    /// The #162 discipline applied to the new input: an unreadable cooldown store is UNKNOWN, and
+    /// unknown is raised through <c>alert_sweep_degraded</c>. It must not silently all-clear, and
+    /// it must not silently suppress either — the sweep keeps alerting off best-effort local state.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_CooldownStoreUnreadable_RaisesSweepDegradedRatherThanFailingQuietly()
+    {
+        var sink = new RecordingSink();
+
+        var svc = new WorkerHealthAlertService(
+            HealthOk().Object, ProbeReturning(Healthy()).Object, sink,
+            new WorkerHealthAlertState(new ThrowingStateStore()),
+            new WorkerHealthAlertOptions(),
+            NullLogger<WorkerHealthAlertService>.Instance);
+
+        var alerted = await svc.RunAsync(default);
+
+        alerted.Should().BeTrue();
+        sink.Calls.Should().ContainSingle();
+        sink.Calls[0].Key.Should().Be(OperationalAlertKeys.AlertSweepDegraded);
+        sink.Calls[0].Message.Should().Contain("alert cooldown store");
+    }
+
+    [Fact]
+    public async Task RunAsync_CooldownStoreUnreadable_StillEvaluatesEveryOtherCondition()
+    {
+        var sink = new RecordingSink();
+        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 600, 0, 0));
+
+        var svc = new WorkerHealthAlertService(
+            health.Object, ProbeReturning(Healthy()).Object, sink,
+            new WorkerHealthAlertState(new ThrowingStateStore()),
+            new WorkerHealthAlertOptions(),
+            NullLogger<WorkerHealthAlertService>.Instance);
+
+        await svc.RunAsync(default);
+
+        sink.Calls.Select(c => c.Key).Should().Contain(OperationalAlertKeys.WorkerHeartbeatLost,
+            "an unreadable cooldown must cost the spacing guarantee, never the alert itself — "
+          + "trading a flood for silence is the worse direction");
+    }
+
+    /// <summary>
+    /// A store that reads but cannot write is the quieter half of the same failure: the alerts go
+    /// out, but nothing was persisted, so the next restart re-arms. The operator learns about it on
+    /// the following sweep rather than never.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_CooldownStoreUnwritable_ReportsDegradedOnTheNextSweep()
+    {
+        var sink = new RecordingSink();
+        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 600, 0, 0));
+        var now = new DateTime(2026, 8, 20, 13, 45, 0, DateTimeKind.Utc);
+        var state = new WorkerHealthAlertState(new WriteOnlyFailingStateStore());
+
+        var svc = new WorkerHealthAlertService(
+            health.Object, ProbeReturning(Healthy()).Object, sink, state,
+            new WorkerHealthAlertOptions { MinAlertIntervalMinutes = 30 },
+            NullLogger<WorkerHealthAlertService>.Instance, () => now);
+
+        await svc.RunAsync(default);
+        sink.Calls.Select(c => c.Key).Should().NotContain(OperationalAlertKeys.AlertSweepDegraded,
+            "the write failure is only known after this run's conditions were assembled");
+
+        now = now.AddMinutes(5);
+        await svc.RunAsync(default);
+
+        sink.Calls.Select(c => c.Key).Should().Contain(OperationalAlertKeys.AlertSweepDegraded,
+            "a cooldown that is never persisted is a cooldown that will not survive the next "
+          + "restart — the operator has to be told");
+    }
+
     // ── Probe resilience ─────────────────────────────────────────────────────────
 
     [Fact]
@@ -765,6 +946,29 @@ public class WorkerHealthAlertServiceTests
     {
         public Task<bool> AlertAsync(string alertKey, string message, CancellationToken ct = default) =>
             Task.FromResult(false);
+    }
+
+    /// <summary>A cooldown store that cannot be read at all — the database is unreachable.</summary>
+    private sealed class ThrowingStateStore : IWorkerHealthAlertStateStore
+    {
+        public Task<IReadOnlyList<WorkerHealthAlertConditionState>> LoadAsync(CancellationToken ct) =>
+            throw new TimeoutException("cooldown store unreachable");
+
+        public Task SaveAsync(
+            IReadOnlyCollection<WorkerHealthAlertConditionState> states, CancellationToken ct) =>
+            throw new TimeoutException("cooldown store unreachable");
+    }
+
+    /// <summary>Reads fine, refuses every write — a read replica, or a full disk.</summary>
+    private sealed class WriteOnlyFailingStateStore : IWorkerHealthAlertStateStore
+    {
+        public Task<IReadOnlyList<WorkerHealthAlertConditionState>> LoadAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<WorkerHealthAlertConditionState>>(
+                Array.Empty<WorkerHealthAlertConditionState>());
+
+        public Task SaveAsync(
+            IReadOnlyCollection<WorkerHealthAlertConditionState> states, CancellationToken ct) =>
+            throw new InvalidOperationException("cooldown store is read-only");
     }
 
     private sealed class ThrowingOnFirstCallSink : IWorkerAlertSink
