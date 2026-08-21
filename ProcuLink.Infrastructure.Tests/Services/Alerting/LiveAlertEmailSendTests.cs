@@ -29,6 +29,13 @@ namespace ProcuLink.Infrastructure.Tests.Services.Alerting;
 /// <para>It is an <c>EnvironmentGatedFact</c>, not an early <c>return</c>, so an unconfigured run
 /// reports a declared SKIP with the reason — never a green no-op.</para>
 /// </summary>
+/// <remarks>
+/// The trait is what makes this class SELECTABLE by category. Without it, no
+/// <c>--filter Category=…</c> run could ever reach the only test that proves a real alert lands.
+/// It is deliberately NOT <c>LiveEndpoint</c>: the daily live-delivery workflow filters on that
+/// value and must keep its current membership.
+/// </remarks>
+[Trait("Category", "LiveAlert")]
 public class LiveAlertEmailSendTests
 {
     private const string TokenVar     = "PROCULINK_LIVE_POSTMARK_TOKEN";

@@ -73,9 +73,18 @@ public sealed record EmailApiHeader(string Name, string Value);
 /// The wait the provider asked for (<c>Retry-After</c>) — Postmark sends it on a rate limit — or
 /// null when they sent none.
 /// </param>
+/// <param name="MessageId">
+/// The provider's own identifier for the accepted message (Postmark's <c>MessageID</c>), or null
+/// when the send never got that far or the provider named none. This is the ONLY handle that can
+/// look one specific message up with the provider afterwards. Without it, "did that alert actually
+/// go out?" could only be answered by eyeballing the provider's outbound list by hand — the client
+/// already parsed this field out of the response body and threw it away.
+/// Optional and LAST so every existing positional construction site stays correct.
+/// </param>
 public sealed record EmailApiResult(
     bool Success,
     string? Error,
     int? StatusCode = null,
     string? ResponseBody = null,
-    TimeSpan? RetryAfter = null);
+    TimeSpan? RetryAfter = null,
+    string? MessageId = null);

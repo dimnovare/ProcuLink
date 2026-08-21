@@ -266,6 +266,38 @@ dotnet test ProcuLink.Infrastructure.Tests --filter FullyQualifiedName~LiveAlert
 ```
 
 It is statically skipped (with a printed reason) when those are absent — never a green no-op.
+It now carries `[Trait("Category", "LiveAlert")]`, so `--filter Category=LiveAlert` selects it. That
+trait is deliberately *not* `LiveEndpoint`: the daily live-delivery workflow filters on that value,
+and adding this class to it would send a real email on every scheduled run.
+
+### The 60-second monthly proof that needs no test send
+
+The live-send test above costs one real email and a token in your shell. Once a month you want the
+cheaper question answered — *did the alerts we believe we sent actually leave?* — and you can read
+that straight off Postmark without sending anything:
+
+```
+curl -sS -H "X-Postmark-Server-Token: $POSTMARK_SERVER_TOKEN"   "https://api.postmarkapp.com/messages/outbound?fromdate=$(date -u -d '30 days ago' +%F)&count=200"
+```
+
+Three things to read, in order:
+
+1. **A `401` is the answer, not an error.** It means the server token is revoked or rotated — the
+   *configured-but-broken* destination named in blind spot 1 below, caught without sending anything
+   and without waiting for a real incident to go unheard.
+2. **Find the newest `[ProcuLink alert]` subject.** Its absence when you know a condition fired is
+   itself the finding. `SubjectPrefix` is `Alerting:Email:SubjectPrefix`, defaulting to
+   `[ProcuLink alert]`.
+3. **Open that message's `MessageEvents` and confirm it reads `Delivered`** — Postmark accepting a
+   message (HTTP 200) is not the same as an inbox receiving it; a `Bounce` or `SpamComplaint` event
+   here is a destination that is configured, accepted, and still reaching nobody.
+
+Step 2 is now checkable from our side too. `EmailWorkerAlertSink` logs one Information line per
+**delivered** alert carrying the alert key, the recipient *domains* (never the addresses — the local
+part is PII and this line is a Sentry breadcrumb surface) and Postmark's own `MessageId`. Grep the
+Railway Worker logs for `emailed alert` and you have both the fact and the identifier to look up
+above. Before that line existed, only failures were logged, so a delivered alert left no trace in
+ProcuLink at all.
 
 ### Blind spots, both still load-bearing
 

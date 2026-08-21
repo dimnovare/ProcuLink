@@ -74,6 +74,17 @@ public sealed class EmailWorkerAlertSink : IWorkerAlertSink
                     "EmailWorkerAlertSink: provider refused alert {AlertKey} — {Status} {Error}.",
                     alertKey, result.StatusCode, result.Error);
             }
+            else
+            {
+                // Failures logged; successes were silent — so a DELIVERED alert left no record
+                // anywhere in ProcuLink, and "did that alert actually go out?" could only be
+                // answered by reading the provider's outbound list by hand, with no identifier to
+                // look up. {MessageId} is that identifier. Recipients are logged as DOMAINS only.
+                _logger.LogInformation(
+                    "EmailWorkerAlertSink: emailed alert {AlertKey} to {RecipientCount} recipient(s) "
+                  + "at {RecipientDomains} — provider MessageId {MessageId}.",
+                    alertKey, recipients.Count, RecipientDomains(recipients), result.MessageId ?? "(none reported)");
+            }
 
             return result.Success;
         }
@@ -84,6 +95,24 @@ public sealed class EmailWorkerAlertSink : IWorkerAlertSink
             _logger.LogError(ex, "EmailWorkerAlertSink: failed to email alert {AlertKey}.", alertKey);
             return false;
         }
+    }
+
+    /// <summary>
+    /// The recipient DOMAINS, de-duplicated and comma-joined — never the addresses. The local part
+    /// is the half that identifies a person, and this log line is also a Sentry breadcrumb surface,
+    /// so it is dropped here by the same privacy boundary the inbound path uses
+    /// (<see cref="Email.InboundEmailRouter.ExtractSenderDomain"/>, founder ruling D2) rather than
+    /// by a second hand-rolled rule that could drift from it.
+    /// </summary>
+    private static string RecipientDomains(IReadOnlyList<string> recipients)
+    {
+        var domains = recipients
+            .Select(Email.InboundEmailRouter.ExtractSenderDomain)
+            .Where(d => !string.IsNullOrWhiteSpace(d))
+            .Distinct()
+            .ToList();
+
+        return domains.Count == 0 ? "(undetermined)" : string.Join(", ", domains);
     }
 
     /// <summary>
