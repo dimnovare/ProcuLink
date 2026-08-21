@@ -21,7 +21,11 @@ public interface ICatalogPullService
 
     /// <summary>
     /// Read-only honesty probe over the SAME fetch path (guard, timeouts, bounded read,
-    /// parse all run identically) using the supplier's SAVED source config. Never writes:
+    /// parse all run identically) using the supplier's SAVED source config, with ONE deliberate
+    /// difference: this call runs inside the request-serving API process, so it is bounded by
+    /// <c>CatalogLimits.MaxInteractiveTestFetchBytes</c> (32 MB) instead of the 256 MB ingestion
+    /// cap <see cref="PullAsync"/> keeps in the Worker. It samples enough to prove credentials,
+    /// reachability and column shape; it is not a sync. Never writes:
     /// no upsert, no <c>last_sync_*</c> mutation. Failures come back as
     /// <c>Ok = false</c> with the same enumerated safe message a real sync would persist.
     /// </summary>

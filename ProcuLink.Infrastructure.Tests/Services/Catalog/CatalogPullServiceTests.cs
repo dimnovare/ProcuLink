@@ -527,7 +527,9 @@ public class CatalogPullServiceTests
         var result = await h.Service.TestFetchAsync(h.OrgId, h.SupplierId, CancellationToken.None);
 
         result.Ok.Should().BeFalse();
-        result.Error.Should().Be("Catalog file exceeds 256 MB.");
+        // The interactive probe's own ceiling, not the 256 MB ingestion cap: the connection worked
+        // and the scheduled sync still imports the whole file.
+        result.Error.Should().Be(CatalogPullService.ErrTestFetchTooLarge);
     }
 
     [Fact]
