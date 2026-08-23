@@ -23,10 +23,18 @@ namespace ProcuLink.Api.Middleware;
 /// in-memory sliding window so a script that mints fresh Clerk identities cannot
 /// create unlimited 14-day trials (trial-farming) or hammer the request-hot-path
 /// write. A normal first login makes a single provisioning call and is never
-/// affected. When the throttle trips, the request continues without a resolved
-/// tenant (downstream [Authorize] / tenant-scoped controllers fail closed).
+/// affected. When the throttle trips the request may still RESOLVE an organisation that
+/// already exists — a first page load is a burst, and a sibling request may have created
+/// the row moments earlier — but it may never CREATE one. If there is no row to resolve,
+/// the request continues without a tenant (downstream [Authorize] / tenant-scoped
+/// controllers fail closed).
 ///
 /// Unauthenticated requests (e.g. /health) pass through untouched.
+///
+/// <para>Database work here is retried on a transient fault and, if it still cannot complete,
+/// answered as 503 + Retry-After rather than being left to surface downstream as an
+/// authorization error. Production runs on Neon, which suspends when idle, so a cold start is
+/// an ordinary event rather than an outage. See <see cref="IsTransientDatabaseFault"/>.</para>
 ///
 /// <para><b>This middleware is where organisation query filters are armed</b> — the single site, for
 /// both auth schemes. See <see cref="ApplyOrganisationScope"/>.</para>
@@ -52,6 +60,11 @@ public sealed class TenantResolutionMiddleware
     // stopping a script from farming trials / amplifying the hot-path write.
     private const int MaxProvisionsPerWindow = 5;
     private static readonly TimeSpan ProvisionWindow = TimeSpan.FromMinutes(10);
+
+    // Retry-After on the 503 we answer when the database could not be reached. Two seconds is
+    // longer than a Neon cold start normally takes and short enough that a retry still reads as a
+    // slow page rather than an outage.
+    private const string RetryAfterSeconds = "2";
 
     // Hard upper bound on the number of distinct throttle keys we keep state for. The
     // sliding window only protects against repeats from the SAME key; without this cap a
@@ -112,6 +125,42 @@ public sealed class TenantResolutionMiddleware
     public async Task InvokeAsync(
         HttpContext context,
         ProcuLinkDbContext requestDb,
+        IAnalyticsService analytics,
+        DbContextOptions<ProcuLinkDbContext> dbOptions)
+    {
+        // Tenant resolution touches the database, and the database is Neon, which suspends when
+        // idle. A transient fault here used to reach the client as whatever the failure happened
+        // to look like downstream — most often UnauthorizedAccessException("Organisation not
+        // resolved"), which reads as "you are not allowed in" when the truth was "the database
+        // was still waking up". Answer honestly instead, and let the caller retry.
+        try
+        {
+            await ResolveTenantAsync(context, analytics, dbOptions);
+        }
+        catch (Exception ex) when (IsTransientDatabaseFault(ex))
+        {
+            _logger.LogWarning(
+                ex,
+                "Tenant resolution could not reach the database after retries; answering 503.");
+
+            // Fail closed and say so. We do NOT call _next: without a resolved tenant the request
+            // must not proceed, and 503 + Retry-After is the accurate, retryable answer.
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            context.Response.Headers.RetryAfter = RetryAfterSeconds;
+            return;
+        }
+
+        ApplyOrganisationScope(context, requestDb);
+
+        await _next(context);
+    }
+
+    /// <summary>
+    /// The tenant-resolution work itself, split out of <see cref="InvokeAsync"/> so a transient
+    /// database fault anywhere inside it has one place to be caught and turned into an honest 503.
+    /// </summary>
+    private async Task ResolveTenantAsync(
+        HttpContext context,
         IAnalyticsService analytics,
         DbContextOptions<ProcuLinkDbContext> dbOptions)
     {
@@ -203,10 +252,6 @@ public sealed class TenantResolutionMiddleware
                 // frontend org gate forces real org creation before tenant-scoped calls.
             }
         }
-
-        ApplyOrganisationScope(context, requestDb);
-
-        await _next(context);
     }
 
     /// <summary>
@@ -257,11 +302,15 @@ public sealed class TenantResolutionMiddleware
     private static async Task<Guid?> ResolveOrgIdByClerkKeyAsync(
         ProcuLinkDbContext db, string clerkKey, CancellationToken ct)
     {
-        var org = await db.Organisations
-            .AsNoTracking()
-            .Where(o => o.ClerkOrgId == clerkKey)
-            .Select(o => new { o.Id })
-            .FirstOrDefaultAsync(ct);
+        // Retried on a transient fault: this is the FIRST query of the request, so it is the one
+        // that pays a Neon cold start, and every branch of tenant resolution goes through it.
+        var org = await WithTransientRetryAsync(
+            () => db.Organisations
+                .AsNoTracking()
+                .Where(o => o.ClerkOrgId == clerkKey)
+                .Select(o => new { o.Id })
+                .FirstOrDefaultAsync(ct),
+            ct);
         return org?.Id;
     }
 
@@ -298,7 +347,7 @@ public sealed class TenantResolutionMiddleware
                 personal.ClerkOrgId = clerkOrgId;
                 try
                 {
-                    await db.SaveChangesAsync(ct);
+                    await WithTransientRetryAsync(() => db.SaveChangesAsync(ct), ct);
                 }
                 catch (DbUpdateException ex) when (IsUniqueViolation(ex))
                 {
@@ -346,6 +395,29 @@ public sealed class TenantResolutionMiddleware
         var throttleKey = BuildThrottleKey(context, clerkOrgId);
         if (!TryReserveProvision(throttleKey))
         {
+            // A throttled request must not MINT an organisation. It may still RESOLVE one that
+            // already exists, and that distinction is the whole fix here.
+            //
+            // The lookup at the top of InvokeAsync found no row, which is the only reason we are
+            // on this path at all. But a first page load is not one request — it is a burst of
+            // them, and on a cold database the winner's INSERT can take seconds to commit. Every
+            // sibling in that burst therefore arrives here having also seen "no row", spends a
+            // reservation, and the ones past the cap were failed closed. Downstream that surfaced
+            // as UnauthorizedAccessException("Organisation not resolved") — an authorization
+            // error on the first screen a new customer ever sees, caused by a slow database.
+            //
+            // So re-read before giving up. If the row exists now, a sibling created it and this
+            // request simply belongs to it. Nothing is created on this path, so the
+            // anti-trial-farming property the throttle exists for is untouched: a script minting
+            // fresh Clerk identities still finds no row to resolve and is still refused.
+            var settledId = await ResolveOrgIdByClerkKeyAsync(db, clerkOrgId, ct);
+            if (settledId is { } sid)
+            {
+                context.Items[CurrentTenantService.Items.OrganisationId] = sid;
+                StampRole(context, ClerkOrgRole.FromClaims(context.User));
+                return;
+            }
+
             _logger.LogWarning(
                 "Auto-provision throttled for TenantKey={ClerkOrgId} (ThrottleKey={ThrottleKey}); " +
                 "more than {Max} new orgs from this key within {Minutes} min.",
@@ -372,7 +444,11 @@ public sealed class TenantResolutionMiddleware
         db.Organisations.Add(newOrg);
         try
         {
-            await db.SaveChangesAsync(ct);
+            // Retried on a transient fault. Safe to repeat: the entity is still Added, so a retry
+            // re-sends the same INSERT, and if the first one actually landed before the connection
+            // dropped the retry comes back as a unique violation — which the catch below already
+            // knows how to settle by resolving the winning row.
+            await WithTransientRetryAsync(() => db.SaveChangesAsync(ct), ct);
         }
         catch (DbUpdateException ex) when (IsUniqueViolation(ex))
         {
@@ -435,6 +511,72 @@ public sealed class TenantResolutionMiddleware
                 return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// True when an exception is a TRANSIENT database fault — the connection failed, timed out, or
+    /// the server was still waking — as opposed to a fault that will fail identically on a retry.
+    ///
+    /// <para>We run on Neon, whose compute auto-suspends when idle. Low-traffic periods are
+    /// therefore normal, and the first request after one pays a cold start that can exceed the
+    /// connection timeout. Nothing in this application retried it: there is no
+    /// <c>EnableRetryOnFailure</c> execution strategy configured, and one cannot simply be turned
+    /// on, because eight production call sites open explicit transactions and EF's retrying
+    /// strategy refuses user-initiated transactions. So resilience is applied here, at the one
+    /// place a cold start is most likely to be met and most damaging — the first request of a
+    /// brand-new organisation.</para>
+    ///
+    /// <para>Detection duck-types Npgsql rather than referencing it, for the same reason
+    /// <see cref="IsUniqueViolation"/> does: this assembly takes no hard Npgsql dependency. We read
+    /// <c>NpgsqlException.IsTransient</c>, which Npgsql itself sets for connection-level failures,
+    /// and additionally accept SQLSTATE class 08 (connection exception). A unique violation is not
+    /// transient by either test, so the race path above keeps its own distinct handling.</para>
+    /// </summary>
+    private static bool IsTransientDatabaseFault(Exception ex)
+    {
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is TimeoutException)
+                return true;
+
+            var type = e.GetType();
+
+            if (type.GetProperty("IsTransient")?.GetValue(e) is true)
+                return true;
+
+            // SQLSTATE class 08 — "connection exception" (08000, 08003, 08006, 08001, 08004).
+            if (type.GetProperty("SqlState")?.GetValue(e) is string s
+                && s.StartsWith("08", StringComparison.Ordinal))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Runs a database operation, retrying a bounded number of times on a transient fault
+    /// (<see cref="IsTransientDatabaseFault"/>) with a short quadratic backoff.
+    ///
+    /// <para>Three attempts at 150 ms then 600 ms adds at most ~750 ms to a request that would
+    /// otherwise have failed outright, which is the right trade for a Neon cold start that
+    /// resolves in about a second. A non-transient fault is rethrown on the first attempt, so a
+    /// genuine bug still fails fast and loudly rather than being retried into a timeout.</para>
+    /// </summary>
+    private static async Task<T> WithTransientRetryAsync<T>(
+        Func<Task<T>> operation, CancellationToken ct)
+    {
+        const int maxAttempts = 3;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await operation();
+            }
+            catch (Exception ex)
+                when (attempt < maxAttempts && IsTransientDatabaseFault(ex) && !ct.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(150 * attempt * attempt), ct);
+            }
+        }
     }
 
     /// <summary>
