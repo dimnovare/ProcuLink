@@ -390,6 +390,16 @@ builder.Services.AddHangfire(cfg => cfg
 builder.Services.AddScoped<Hangfire.Storage.IMonitoringApi>(sp =>
     sp.GetRequiredService<Hangfire.JobStorage>().GetMonitoringApi());
 
+// Hangfire's own record of when each RECURRING job last executed. The Worker registers the same
+// type for the SFTP/S3 pull-freshness signal; the API needs it for RecurringJobDispatcherHealthCheck,
+// which is the only automated way to tell "the Worker's dispatcher is wedged" from "the Worker is
+// beating" — the server heartbeat cannot separate them. SINGLETON because the health-check system
+// resolves checks as singletons; the type takes an OPTIONAL JobStorage and falls back to
+// JobStorage.Current, so it resolves either way.
+builder.Services
+    .AddSingleton<ProcuLink.Core.Services.Alerting.IRecurringJobLastExecutionSource,
+                  ProcuLink.Infrastructure.Services.Alerting.HangfireRecurringJobLastExecutionSource>();
+
 // ── HTTP client for webhook delivery ──────────────────────────────────────
 // SSRF: the "delivery" client sends to tenant-supplied URLs (ErplyConnector /
 // DirectoConnector, and any future CreateClient("delivery") user). Attach the
@@ -810,6 +820,18 @@ builder.Services.AddHealthChecks()
         name: "worker",
         failureStatus: HealthStatus.Degraded,
         tags: new[] { "ready" })
+    // Recurring-job DISPATCHER liveness — Degraded when a watched sweep job's last execution is
+    // stale or unreadable. The check above answers "is a Hangfire server registered and beating";
+    // this one answers "are scheduled jobs actually firing", which the server heartbeat cannot,
+    // because a wedged dispatcher or a saturated worker pool keeps beating while nothing runs.
+    // Reads Hangfire's own recurring-job record from the SHARED storage — no new table or job.
+    // Until now that failure was visible only to a human grepping the Worker logs for
+    // WORKER-HEARTBEAT. Degraded (not Unhealthy) for the same reason as "worker": the API must not
+    // evict itself over another process's fault.
+    .AddCheck<ProcuLink.Api.Controllers.RecurringJobDispatcherHealthCheck>(
+        name: "recurringJobs",
+        failureStatus: HealthStatus.Degraded,
+        tags: new[] { "ready" })
     // WP-21 — the EFFECTIVE value of Connections:RevisionAuthority. Always Healthy (the flag being
     // off is a configuration, not an outage); the value rides the data bag and is flattened to a
     // top-level `revisionAuthority` boolean by HealthResponseWriter. Exists because the deployed
@@ -982,9 +1004,13 @@ app.MapControllers();
 // body.
 //
 // BODY: a structured JSON payload (instead of the default plain "Healthy" string)
-// with per-check status/description/duration + TWO flattened booleans the uptime
-// workflow + dashboards read: workerHealthy and revisionAuthority. Both are asserted
-// by .github/workflows/uptime.yml, which fails the run on either being false.
+// with per-check status/description/duration + THREE flattened booleans the uptime
+// workflow + dashboards read: workerHealthy, recurringJobsHealthy and
+// revisionAuthority. workerHealthy and revisionAuthority are asserted directly by
+// .github/workflows/uptime.yml, which fails the run on either being false;
+// recurringJobsHealthy reaches the same workflow through the Degraded roll-up gate,
+// which fails the run and names the degraded checks. All three render FALSE when
+// their check entry is absent — a monitor that vanished is not evidence of health.
 // ResponseWriter is the only customisation — it NEVER includes secrets (each check's
 // Data bag is counts/ages/booleans/config KEY names only, never a config VALUE; the
 // revisionAuthority bag's key set is pinned by RevisionAuthorityReadinessSurfaceTests

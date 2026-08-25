@@ -16,16 +16,25 @@ namespace ProcuLink.Api.Controllers;
 ///   "ready": true,                       // false only when status == Unhealthy (HTTP 503)
 ///   "workerHealthy": true,               // flattened from the "worker" check — the uptime
 ///                                        // workflow fails on false even while HTTP is 200
+///   "recurringJobsHealthy": true,        // flattened from the "recurringJobs" check — a wedged
+///                                        // dispatcher keeps workerHealthy true
 ///   "totalDurationMs": 12.3,
 ///   "checks": [
 ///     { "name": "database",   "status": "Healthy",  "description": "Database reachable.",        "durationMs": 4.1, "data": {} },
 ///     { "name": "storage",    "status": "Healthy",  "description": "Storage reachable.",         "durationMs": 1.0, "data": {} },
 ///     { "name": "migrations", "status": "Healthy",  "description": "Migrations applied …",       "durationMs": 0.0, "data": {} },
 ///     { "name": "worker",     "status": "Degraded", "description": "Worker heartbeat is stale …", "durationMs": 0.2,
-///       "data": { "activeWorkers": 0, "secondsSinceWorkerHeartbeat": 312.4, "heartbeatDeadlineSeconds": 60 } }
+///       "data": { "activeWorkers": 0, "secondsSinceWorkerHeartbeat": 312.4, "heartbeatDeadlineSeconds": 60 } },
+///     { "name": "recurringJobs", "status": "Degraded", "description": "Recurring jobs are not executing …", "durationMs": 3.4,
+///       "data": { "healthy": false, "jobs": [ { "id": "worker-heartbeat", "deadlineMinutes": 10, "minutesSinceLastExecution": 47.2 } ] } }
 ///   ]
 /// }
 /// </code>
+///
+/// EVERY flattened boolean here renders FALSE when its check entry is ABSENT. That is the only
+/// safe polarity on a probe an external workflow gates on: a check that vanished from the
+/// registration is a check nobody is running, which is not evidence of health. Distinguishing
+/// "flag off" from "check missing" is done by looking for the entry in <c>checks[]</c>.
 ///
 /// SECURITY: this writer NEVER serialises exception stack traces, connection
 /// strings, credentials, or any secret. Each check returns only counts / ages /
@@ -50,8 +59,31 @@ public static class HealthResponseWriter
         // so the uptime workflow can `jq -e '.workerHealthy'` without walking checks.
         // A Degraded worker keeps HTTP 200, so this flag is the only signal of a dead
         // Worker on the happy-path response.
-        var workerHealthy = !report.Entries.TryGetValue("worker", out var worker)
-            || worker.Status == HealthStatus.Healthy;
+        //
+        // An ABSENT "worker" entry renders FALSE. This used to be `!TryGetValue(...) || …`, i.e. a
+        // missing check reported a healthy Worker — the flag failed OPEN, in the one direction that
+        // matters: the entry goes missing exactly when the check was dropped from the registration,
+        // threw during construction, or was filtered out of the "ready" tag, and every one of those
+        // is a state where nobody knows whether the Worker is consuming. `uptime.yml` fails the run
+        // on `workerHealthy != true`, so the open polarity turned "the Worker monitor disappeared"
+        // into a green probe. Absent and false are conflated on purpose, in the safe direction:
+        // both mean "a live Worker was NOT confirmed". The two are told apart by looking for a
+        // "worker" entry in checks[], the same way the revisionAuthority flag below does it — that
+        // flag was deliberately built absent→false, with the rationale written down, while its
+        // neighbour eight lines up did the opposite.
+        var workerHealthy = report.Entries.TryGetValue("worker", out var worker)
+            && worker.Status == HealthStatus.Healthy;
+
+        // Flatten the recurring-job dispatcher check the same way, and with the same absent→false
+        // rule. This is the signal the Hangfire server heartbeat CANNOT give: a server whose
+        // recurring-job dispatcher has wedged, or whose worker pool is saturated, keeps writing
+        // server heartbeats while no scheduled job ever fires — so `workerHealthy` stays true while
+        // nothing is parsed, transformed or delivered. Until now that gap was closed only by a human
+        // grepping the Railway Worker logs for WORKER-HEARTBEAT; the check's own status also rolls
+        // into `.status`, and this boolean is the machine-readable form of it.
+        var recurringJobsHealthy =
+            report.Entries.TryGetValue("recurringJobs", out var recurringJobs)
+            && recurringJobs.Status == HealthStatus.Healthy;
 
         // WP-21: flatten the revision-authority check's EFFECTIVE value the same way, so the one
         // configuration fact that decides whether ProcuLink's reproducibility claims are true can
@@ -76,6 +108,7 @@ public static class HealthResponseWriter
             // `ready` tracks the HTTP contract: Unhealthy → 503 (not ready), else 200.
             ready = report.Status != HealthStatus.Unhealthy,
             workerHealthy,
+            recurringJobsHealthy,
             revisionAuthority,
             totalDurationMs = Math.Round(report.TotalDuration.TotalMilliseconds, 1),
             checks = report.Entries

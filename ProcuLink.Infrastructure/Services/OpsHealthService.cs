@@ -20,13 +20,25 @@ public sealed class OpsHealthService : IOpsHealthService
     /// </summary>
     private static readonly TimeSpan WorkerHeartbeatDeadline = TimeSpan.FromSeconds(60);
 
-    private readonly ProcuLinkDbContext _db;
-    private readonly IMonitoringApi?    _monitoring;
+    private readonly ProcuLinkDbContext       _db;
+    private readonly IMonitoringApi?          _monitoring;
+    private readonly WorkerHealthAlertOptions _alertOptions;
 
-    public OpsHealthService(ProcuLinkDbContext db, IMonitoringApi? monitoring = null)
+    /// <param name="alertOptions">
+    /// OPTIONAL, and only the cross-tenant alerting snapshot reads it — for the trailing window the
+    /// pipeline-failure counts are taken over. The Worker's container registers it (see
+    /// <c>WorkerAlertingRegistration</c>) and the Worker is the only host that runs the alert sweep;
+    /// the API resolves this service without it and gets the same defaults, which is harmless
+    /// because the API never calls <see cref="GetWorkerHealthSnapshotAsync"/>.
+    /// </param>
+    public OpsHealthService(
+        ProcuLinkDbContext db,
+        IMonitoringApi? monitoring = null,
+        WorkerHealthAlertOptions? alertOptions = null)
     {
-        _db         = db;
-        _monitoring = monitoring;
+        _db           = db;
+        _monitoring   = monitoring;
+        _alertOptions = alertOptions ?? new WorkerHealthAlertOptions();
     }
 
     public async Task<OpsHealthSummary> GetHealthAsync(Guid organisationId, CancellationToken ct)
@@ -163,11 +175,29 @@ public sealed class OpsHealthService : IOpsHealthService
         // Pipeline failures BEFORE the delivery step. These orders never enter the dead-letter
         // bucket, so counting only delivery states left a broken parser or output template
         // invisible to the alert sweep.
+        //
+        // COUNTED OVER A TRAILING WINDOW, unlike the two delivery counts above, and the asymmetry
+        // is deliberate. `failed` is DECLARED TERMINAL — OrderStatusMachine.Transitions[Failed] is
+        // the empty set — so an order that lands there can never leave, and an all-time count of it
+        // is monotonically non-decreasing for the life of the workspace. Paired with the alert's
+        // threshold of 1, that made the condition permanently bad after the first unparseable
+        // upload: it could never transition back to healthy, so it re-alerted on every cooldown
+        // expiry forever. The delivery counts have the opposite property — RequeueableFrom admits
+        // both of their statuses, so an operator draining the queue makes those numbers fall — which
+        // is why they are left all-time.
+        //
+        // UpdatedAt is the clock because it is the last time anything happened to the order; an
+        // order that has sat in `failed` untouched for a month is history, not a live incident.
+        var pipelineFailureCutoff =
+            DateTime.UtcNow - _alertOptions.PipelineFailureWindow;
+
         var failed = await _db.PurchaseOrders
-            .CountAsync(o => o.Status == OrderStatusConstants.Failed, ct);
+            .CountAsync(o => o.Status == OrderStatusConstants.Failed
+                          && o.UpdatedAt >= pipelineFailureCutoff, ct);
 
         var transformFailed = await _db.PurchaseOrders
-            .CountAsync(o => o.Status == OrderStatusConstants.TransformFailed, ct);
+            .CountAsync(o => o.Status == OrderStatusConstants.TransformFailed
+                          && o.UpdatedAt >= pipelineFailureCutoff, ct);
 
         return new WorkerHealthSnapshot(
             WorkerHealthy:                workerHealthy,
@@ -176,7 +206,10 @@ public sealed class OpsHealthService : IOpsHealthService
             DeadLetterOrders:            deadLetter,
             FailedDeliveryOrders:        failedDelivery,
             FailedOrders:                failed,
-            TransformFailedOrders:       transformFailed);
+            TransformFailedOrders:       transformFailed,
+            // Carried so the alert message states the window it actually measured, rather than the
+            // reader having to assume one.
+            PipelineFailureWindowMinutes: _alertOptions.EffectivePipelineFailureWindowMinutes);
     }
 
     public async Task<IReadOnlyList<DeadLetterOrder>> ListDeadLetterAsync(
