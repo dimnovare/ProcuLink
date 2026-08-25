@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Alerting;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 
@@ -348,6 +349,145 @@ public sealed class WorkerHeartbeatHealthCheck : IHealthCheck
         int ActiveWorkers,
         double? SecondsSinceHeartbeat,
         bool Healthy);
+}
+
+/// <summary>
+/// One recurring job whose freshness the readiness probe watches, with the age at which its
+/// silence stops being a slow cycle and starts being a wedge.
+/// </summary>
+/// <param name="Id">
+/// The Hangfire recurring-job id, exactly as <c>ProcuLink.Worker.Worker.StartAsync</c> registers it.
+/// A typo here would report a permanent, false stall, which is why
+/// <c>RecurringJobDispatcherHealthCheckTests</c> drives the real <c>Worker.StartAsync</c> and
+/// asserts every watched id is actually registered.
+/// </param>
+/// <param name="CronMinutes">How often the job is scheduled to run, for the operator-facing text.</param>
+/// <param name="DeadlineMinutes">
+/// Age of the last execution at/above which the dispatcher is treated as stalled. Several times the
+/// cadence, on purpose: one missed run is a redeploy or a slow cycle, and paging on that would be
+/// the false alarm every threshold in this system is shaped to avoid.
+/// </param>
+public sealed record WatchedRecurringJob(string Id, int CronMinutes, int DeadlineMinutes);
+
+/// <summary>
+/// Readiness check that the Hangfire RECURRING-JOB DISPATCHER is actually firing — not merely that
+/// a Hangfire server process is registered and beating.
+///
+/// <para><b>The gap this closes.</b> <see cref="WorkerHeartbeatHealthCheck"/> reads Hangfire's
+/// server heartbeat, which the <c>BackgroundJobServer</c> thread writes every ~30 s for as long as
+/// it is alive. A server whose recurring-job dispatcher has wedged — a deadlocked job, a poisoned
+/// queue, a storage write failure on the recurring table — or whose worker pool is saturated by
+/// long-running work KEEPS WRITING THAT HEARTBEAT while no scheduled job ever fires. Uploads land
+/// and sit; nothing parses, transforms or delivers; <c>workerHealthy</c> stays <c>true</c> and
+/// <c>/health/ready</c> stays green. <c>WorkerHeartbeatJob</c> was added to close this and closes it
+/// only for a human: its remarks say plainly that "Ops greps the Railway Worker logs for
+/// WORKER-HEARTBEAT". Nothing automated could see it. This check is that same evidence, read from
+/// storage instead of from a log stream.</para>
+///
+/// <para><b>MECHANISM — no new table, no new job.</b> Hangfire already records
+/// <c>LastExecution</c> per recurring job, which is the same reasoning that lets the SFTP/S3
+/// pull-freshness signal work without a column of its own
+/// (<c>HangfireRecurringJobLastExecutionSource</c>). The API shares the Worker's Postgres storage,
+/// so it can read the Worker's scheduler record directly.</para>
+///
+/// <para><b>UNKNOWN IS NOT HEALTHY.</b> A job with no readable last execution reports Degraded, not
+/// Healthy. The source returns <c>null</c> for "cannot tell", and the alternative — treating an
+/// unreadable scheduler as proof of a working one — is the exact fail-open polarity this endpoint
+/// was just corrected for in <see cref="HealthResponseWriter"/>. In practice the null case is
+/// narrow: <c>AddOrUpdate</c> preserves <c>LastExecution</c> across restarts, so it is null only on
+/// a brand-new database or when Hangfire storage cannot be read at all — both of which are things
+/// an operator should hear about.</para>
+///
+/// <para><b>SEVERITY = Degraded, never Unhealthy</b>, for the same reason as the Worker heartbeat
+/// check: the API is serving fine and must not evict itself over another process's problem.
+/// Degraded keeps <c>/health/ready</c> at HTTP 200, and <c>uptime.yml</c> already fails the run on a
+/// Degraded roll-up while naming the degraded checks — so this reaches the pager through the gate
+/// that exists, and additionally as the flattened <c>recurringJobsHealthy</c> boolean.</para>
+///
+/// <para><b>What it still cannot see.</b> The watched jobs run on the <c>background</c> queue, so a
+/// saturated <c>default</c> queue with a healthy <c>background</c> one would not trip this. It is a
+/// dispatcher-liveness signal, not a queue-depth one.</para>
+///
+/// <para>Tagged "ready" — never affects the liveness probe.</para>
+/// </summary>
+public sealed class RecurringJobDispatcherHealthCheck : IHealthCheck
+{
+    /// <summary>
+    /// The watched set, kept deliberately SMALL: every entry is one Hangfire storage round-trip on
+    /// a public endpoint. Two jobs are enough because they answer two different questions.
+    /// <list type="bullet">
+    ///   <item><c>worker-heartbeat</c> — the tightest cadence in the schedule (2 min), so it is the
+    ///     fastest detector of a wedged dispatcher, and it exists for exactly this purpose.</item>
+    ///   <item><c>worker-health-alert</c> — the sweep that raises every other operator alert.
+    ///     The monitoring runbook records that this path "runs ON the Worker", so a dead sweep can
+    ///     never report itself. Watching it from the API is the outside view it lacked.</item>
+    /// </list>
+    /// </summary>
+    public static readonly IReadOnlyList<WatchedRecurringJob> Watched = new[]
+    {
+        new WatchedRecurringJob("worker-heartbeat",    CronMinutes: 2, DeadlineMinutes: 10),
+        new WatchedRecurringJob("worker-health-alert", CronMinutes: 5, DeadlineMinutes: 20),
+    };
+
+    private readonly IRecurringJobLastExecutionSource _executions;
+
+    public RecurringJobDispatcherHealthCheck(IRecurringJobLastExecutionSource executions) =>
+        _executions = executions;
+
+    public Task<HealthCheckResult> CheckHealthAsync(
+        HealthCheckContext context, CancellationToken cancellationToken = default)
+    {
+        var now = DateTime.UtcNow;
+
+        var probes = Watched
+            .Select(job =>
+            {
+                var last = _executions.GetLastExecutionUtc(job.Id);
+                double? ageMinutes = last is { } at ? (now - at).TotalMinutes : null;
+                // Unknown counts as stalled: see the class remarks on fail-closed.
+                var stalled = ageMinutes is null || ageMinutes >= job.DeadlineMinutes;
+                return (Job: job, AgeMinutes: ageMinutes, Stalled: stalled);
+            })
+            .ToList();
+
+        var stalledJobs = probes.Where(p => p.Stalled).ToList();
+        var healthy = stalledJobs.Count == 0;
+
+        var data = new Dictionary<string, object>
+        {
+            ["healthy"] = healthy,
+            // Counts and ages only — no tenant identifiers, no configuration values. Safe on the
+            // unauthenticated probe, same rule as every other check's data bag.
+            ["jobs"] = probes
+                .Select(p => new
+                {
+                    id = p.Job.Id,
+                    cronMinutes = p.Job.CronMinutes,
+                    deadlineMinutes = p.Job.DeadlineMinutes,
+                    // Omitted entirely when unknown — an absent age is not an age of zero.
+                    minutesSinceLastExecution = p.AgeMinutes is { } age ? Math.Round(age, 1) : (double?)null,
+                })
+                .ToArray(),
+        };
+
+        if (healthy)
+        {
+            var beats = string.Join(", ", probes.Select(p =>
+                $"{p.Job.Id} {p.AgeMinutes:F0} min ago"));
+            return Task.FromResult(HealthCheckResult.Healthy(
+                $"Recurring-job dispatcher is firing ({beats}).", data));
+        }
+
+        var detail = string.Join("; ", stalledJobs.Select(p => p.AgeMinutes is { } age
+            ? $"{p.Job.Id} last ran {age:F0} min ago (every {p.Job.CronMinutes} min, deadline {p.Job.DeadlineMinutes} min)"
+            : $"{p.Job.Id} has no readable last execution (every {p.Job.CronMinutes} min)"));
+
+        return Task.FromResult(HealthCheckResult.Degraded(
+            $"Recurring jobs are not executing: {detail}. A Hangfire server can keep beating while "
+          + "its recurring-job dispatcher is wedged or its worker pool is saturated, so this can be "
+          + "stale while workerHealthy is true — uploads will land and sit unprocessed.",
+            data: data));
+    }
 }
 
 /// <summary>

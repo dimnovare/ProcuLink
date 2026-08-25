@@ -303,6 +303,7 @@ public sealed class HealthEndpointTests : IClassFixture<HealthTestFactory>
         Assert.True(root.TryGetProperty("status", out _));
         Assert.True(root.TryGetProperty("ready", out var ready));
         Assert.True(root.TryGetProperty("workerHealthy", out _));
+        Assert.True(root.TryGetProperty("recurringJobsHealthy", out _));
         Assert.True(root.TryGetProperty("totalDurationMs", out _));
         Assert.True(root.TryGetProperty("checks", out var checks));
         Assert.Equal(JsonValueKind.Array, checks.ValueKind);
@@ -315,6 +316,10 @@ public sealed class HealthEndpointTests : IClassFixture<HealthTestFactory>
         Assert.Contains("storage", names);
         Assert.Contains("migrations", names);
         Assert.Contains("worker", names);
+        // "worker" answers "is a Hangfire server registered and beating"; "recurringJobs" answers
+        // "are scheduled jobs actually firing", which a wedged dispatcher makes a different
+        // question. Both have to be on the readiness surface for either answer to mean anything.
+        Assert.Contains("recurringJobs", names);
 
         // ready mirrors the HTTP contract (not Unhealthy → ready:true).
         Assert.True(ready.GetBoolean());

@@ -39,10 +39,25 @@ public interface IOpsHealthService
 /// <param name="WorkerHealthy">True when at least one Hangfire server has a recent heartbeat.</param>
 /// <param name="ActiveWorkers">Number of registered Hangfire servers.</param>
 /// <param name="SecondsSinceWorkerHeartbeat">Seconds since the most recent heartbeat, or null if unknown.</param>
-/// <param name="DeadLetterOrders">All-org count of orders in <c>delivery_dead_letter</c>.</param>
-/// <param name="FailedDeliveryOrders">All-org count of orders in <c>delivery_failed</c>.</param>
-/// <param name="FailedOrders">All-org count of orders in <c>failed</c> (pipeline/parse failure).</param>
-/// <param name="TransformFailedOrders">All-org count of orders in <c>transform_failed</c>.</param>
+/// <param name="DeadLetterOrders">
+/// All-org count of orders in <c>delivery_dead_letter</c>. ALL-TIME on purpose — the status has an
+/// operator drain (<c>OrderStatusMachine.RequeueableFrom</c>), so the count falls when the incident
+/// is handled rather than only when it ages out.
+/// </param>
+/// <param name="FailedDeliveryOrders">All-org count of orders in <c>delivery_failed</c>. All-time, same reason.</param>
+/// <param name="FailedOrders">
+/// All-org count of orders in <c>failed</c> (pipeline/parse failure) whose <c>UpdatedAt</c> falls
+/// inside <paramref name="PipelineFailureWindowMinutes"/>. RECENT, not all-time — <c>failed</c> is
+/// terminal with an empty transition set, so an all-time count can never fall.
+/// </param>
+/// <param name="TransformFailedOrders">
+/// All-org count of orders in <c>transform_failed</c> inside the same trailing window.
+/// </param>
+/// <param name="PipelineFailureWindowMinutes">
+/// The trailing window the two pipeline-failure counts were taken over, so an alert can state what
+/// it actually measured. <c>0</c> means the counts are all-time (a snapshot produced without a
+/// window — the shape that had no drain).
+/// </param>
 public sealed record WorkerHealthSnapshot(
     bool      WorkerHealthy,
     int       ActiveWorkers,
@@ -50,15 +65,17 @@ public sealed record WorkerHealthSnapshot(
     int       DeadLetterOrders,
     int       FailedDeliveryOrders,
     int       FailedOrders          = 0,
-    int       TransformFailedOrders = 0)
+    int       TransformFailedOrders = 0,
+    int       PipelineFailureWindowMinutes = 0)
 {
     /// <summary>Combined count of orders stuck in a failed-delivery / dead-letter state, all orgs.</summary>
     public int DeadLetterOrFailed => DeadLetterOrders + FailedDeliveryOrders;
 
     /// <summary>
     /// Combined count of orders that failed BEFORE the delivery step — parse (<c>failed</c>) and
-    /// transform (<c>transform_failed</c>) — all orgs. These never reach the dead-letter bucket,
-    /// so without this count a broken parser surfaces as a customer email, not an alert.
+    /// transform (<c>transform_failed</c>) — all orgs, within
+    /// <see cref="PipelineFailureWindowMinutes"/>. These never reach the dead-letter bucket, so
+    /// without this count a broken parser surfaces as a customer email, not an alert.
     /// </summary>
     public int PipelineFailedOrders => FailedOrders + TransformFailedOrders;
 }
