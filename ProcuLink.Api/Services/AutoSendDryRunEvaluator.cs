@@ -8,6 +8,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Services;
 
 namespace ProcuLink.Api.Services;
 
@@ -153,6 +154,34 @@ public sealed class AutoSendDryRunEvaluator : IAutoSendDryRunEvaluator
         // for the same reason: one write staying in step with another is an assumption, not a fact.
         if (order.UnresolvedLines > 0)
             return await Record(AutoSendDecision.UnresolvedLines, false, 0, BaseEvidence());
+
+        // An open duplicate_po_number warning is a human decision, so auto-send declines it.
+        //
+        // Detection is advisory by design — OrderExceptionService opens a warning and blocks
+        // nothing, because suppliers do legitimately reuse PO numbers and a hard block would refuse
+        // real orders. That trade-off holds exactly as long as a person reads the warning before
+        // clicking Send, which is what the frontend now puts in front of them at the Send button.
+        // Take the person out of the loop and the trade-off inverts: the thing being waved through
+        // unattended is a second copy of a purchase order that has already gone to the supplier.
+        //
+        // Read, not re-derived: this asks OrderExceptionService's own flag rather than running a
+        // second duplicate query here, for the same reason the acceptance verdict comes from the
+        // gate — two definitions of "duplicate" would eventually disagree, and the day they did,
+        // this table would be certifying orders the review screen is warning about.
+        //
+        // `open` only. Resolved or ignored means an operator already looked and decided; re-asking
+        // them would leave a flag that can never be cleared.
+        var duplicateFlagged = await _db.OrderExceptions.AsNoTracking()
+            .AnyAsync(
+                e => e.OrgId == orgId
+                  && e.OrderId == orderId
+                  && e.Code == OrderExceptionService.DuplicatePoNumberCode
+                  && e.State == "open",
+                ct);
+
+        if (duplicateFlagged)
+            return await Record(AutoSendDecision.PossibleDuplicate, false, 0,
+                BaseEvidence(new { duplicatePoNumber = order.PoNumber }));
 
         if (string.IsNullOrWhiteSpace(channel))
             return await Record(AutoSendDecision.NoDeliveryChannel, false, 0, BaseEvidence());

@@ -1,4 +1,7 @@
+using System.ClientModel;
 using System.Globalization;
+using System.Net.Sockets;
+using System.Security.Authentication;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -32,6 +35,11 @@ namespace ProcuLink.Infrastructure.Services.Ai;
 ///     printed number can pass; the cross-check only runs when a line amount is
 ///     stated.)
 ///   • Never throws — all failure paths return Success=false.
+///   • Because every failure degrades to that regex fallback silently, a PROVIDER-level failure
+///     (auth, transport, provider 5xx) is logged at Error rather than Warning — see
+///     <see cref="ClassifyProviderFailure"/>. Error is what reaches Sentry, and a provider outage
+///     drops extraction quality for every upload until someone is told. Ordinary per-document
+///     misses stay at Warning on purpose.
 /// </summary>
 public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
 {
@@ -460,7 +468,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Structured extraction failed (org {OrgId}).", organisationId);
+            LogCallFailure(ex, organisationId, "Structured extraction");
             return StructuredExtractionResult.Fail("AI request failed.");
         }
     }
@@ -557,7 +565,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Vision extraction failed (org {OrgId}).", organisationId);
+            LogCallFailure(ex, organisationId, "Vision extraction");
             return StructuredExtractionResult.Fail("AI vision request failed.");
         }
     }
@@ -1075,6 +1083,103 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         return trailing == 3
             ? t.Replace(sep.ToString(), string.Empty)
             : t.Replace(sep, '.');
+    }
+
+    // ─── Provider-failure classification ─────────────────────────────────────
+
+    /// <summary>
+    /// Names of the provider-level failures, used as a log field so an alert can group by cause.
+    /// </summary>
+    internal const string AuthFailure         = "auth";
+    internal const string TransportFailure    = "transport";
+    internal const string ProviderUnavailable = "provider_unavailable";
+
+    /// <summary>
+    /// Is this exception the AI PROVIDER failing, rather than this one document failing to extract?
+    /// Returns the failure's name when it is provider-level, and null when it is not.
+    ///
+    /// <para><b>Why the distinction is the whole point.</b> Every failure here degrades the caller
+    /// to the deterministic regex parser, and the caller cannot tell the two apart: a document the
+    /// model could not read and an OpenAI outage both arrive as Success=false. One is an ordinary
+    /// per-document miss that happens every day. The other silently drops extraction quality for
+    /// EVERY upload, in every organisation, until someone notices by hand — the same silent
+    /// degradation the latched-token-cap path logs at Error for, and for the same reason. A
+    /// revoked or rotated API key is the near-term version of it, and it arrives as a 401.</para>
+    ///
+    /// <para><b>Why it is deliberately narrow.</b> Error goes to Sentry, and an Error that fires on
+    /// ordinary misses trains people to ignore Sentry — which is the failure mode this project
+    /// already worries about. So a malformed response, an empty completion, a refusal, a schema
+    /// mismatch and a 400 are all NOT provider failures: those are this document, this call. Only a
+    /// failure that will repeat for the next document too counts.</para>
+    ///
+    /// <para><b>Not here on purpose:</b> HTTP 429. OpenAI returns it both for a transient burst
+    /// limit — which retries absorb and which would be pure noise at Error — and for an exhausted
+    /// account quota, which genuinely is silent permanent degradation. The two are told apart only
+    /// by sniffing the response body for <c>insufficient_quota</c>, and this repo has exactly one
+    /// sanctioned place for prose sniffing. Timeouts are excluded for the same reason: our own 60s
+    /// deadline fires on a large document as readily as on a sick provider, and it is caught a
+    /// frame above this anyway.</para>
+    /// </summary>
+    internal static string? ClassifyProviderFailure(Exception? ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is ClientResultException clientResult)
+            {
+                var kind = ClassifyProviderFailureStatus(clientResult.Status);
+                if (kind is not null) return kind;
+                continue;   // a 4xx we do not treat as provider-level; keep unwrapping
+            }
+
+            // No HTTP response at all: DNS, TLS, connection refused, a socket dropped mid-read.
+            if (e is HttpRequestException or SocketException or AuthenticationException or IOException)
+                return TransportFailure;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Maps an HTTP status from the provider onto a provider-level failure name, or null when the
+    /// status describes this request rather than the provider (400 bad request, 404 unknown model,
+    /// 422 — all of which repeat for this document and no other).
+    /// </summary>
+    internal static string? ClassifyProviderFailureStatus(int status) => status switch
+    {
+        // No status at all — the exception never carried a response, so nothing reached OpenAI.
+        0            => TransportFailure,
+        // A key that is missing, revoked, rotated out from under us, or not entitled to the model.
+        401 or 403   => AuthFailure,
+        // The provider itself is down, overloaded, or behind a broken gateway.
+        >= 500       => ProviderUnavailable,
+        _            => null,
+    };
+
+    /// <summary>
+    /// One place where an OpenAI call failure decides between Warning (this document) and Error
+    /// (the provider). Error is what creates the Sentry event — the Worker sets
+    /// <c>MinimumEventLevel = LogLevel.Error</c> on its logging integration — so this method IS the
+    /// alert. There is no probe and no monitor behind it; the log line is the whole mechanism.
+    /// </summary>
+    private void LogCallFailure(Exception ex, Guid organisationId, string path)
+    {
+        var providerFailure = ClassifyProviderFailure(ex);
+
+        if (providerFailure is null)
+        {
+            _logger.LogWarning(ex, "{Path} failed (org {OrgId}).", path, organisationId);
+            return;
+        }
+
+        // LogError (→ Sentry): a provider outage silently degrades EVERY PDF and spreadsheet
+        // extraction to the regex fallback, so ops must see it without grepping — the same
+        // rationale IsAtOrOverCapAsync states for a latched token cap, one level up from a
+        // single organisation.
+        _logger.LogError(
+            ex,
+            "AI provider failure ({Failure}) during {Path} (org {OrgId}) — extraction is falling back to the "
+          + "deterministic parser. Every document parsed while this lasts is degraded.",
+            providerFailure, path, organisationId);
     }
 
     // ─── Plumbing helpers ────────────────────────────────────────────────────

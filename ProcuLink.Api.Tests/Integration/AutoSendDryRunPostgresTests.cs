@@ -6,6 +6,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Services;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Integration;
@@ -313,6 +314,95 @@ public sealed class AutoSendDryRunPostgresTests : IClassFixture<AutoSendDryRunPo
         Assert.Equal(AutoSendDecision.AcceptanceGateUnavailable, outcome.Decision);
     }
 
+    // ── The duplicate signal ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// An order carrying an OPEN <c>duplicate_po_number</c> warning is a human decision, not an
+    /// automatic send.
+    ///
+    /// <para>Duplicate detection is advisory on purpose — it opens a warning and blocks nothing,
+    /// because suppliers legitimately reuse PO numbers. That is sound while a person reads the
+    /// warning before clicking Send, which is what the order review screen now puts in front of
+    /// them. It stops being sound the moment nobody is clicking: the thing waved through would be
+    /// a second copy of a purchase order the supplier already has, and no amount of audit trail
+    /// un-sends it.</para>
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task An_order_flagged_as_a_possible_duplicate_is_never_clean()
+    {
+        var ids = await SeedAsync(autoTransform: true, status: OrderStatusConstants.Ready);
+        await AddExceptionAsync(ids.OrgId, ids.OrderId, OrderExceptionService.DuplicatePoNumberCode, "open");
+
+        await using var db = new ProcuLinkDbContext(_options!);
+        var outcome = await EvaluatorFor(db).EvaluateAsync(ids.OrgId, ids.OrderId, CancellationToken.None);
+
+        Assert.False(outcome.WouldHaveSent);
+        Assert.Equal(AutoSendDecision.PossibleDuplicate, outcome.Decision);
+
+        await using var read = new ProcuLinkDbContext(_options!);
+        var row = await read.AutoSendDryRuns.AsNoTracking().SingleAsync(r => r.OrgId == ids.OrgId);
+        Assert.False(row.WouldHaveSent);
+        Assert.Equal(AutoSendDecision.PossibleDuplicate, row.Decision);
+    }
+
+    /// <summary>
+    /// The other arm. A duplicate warning an operator has already dealt with must NOT hold the
+    /// order forever — otherwise the flag becomes impossible to clear and the supplier's opt-in is
+    /// worth nothing. <c>resolved</c> and <c>ignored</c> are both "a human looked and decided".
+    /// </summary>
+    [DockerRequiredTheory]
+    [InlineData("resolved")]
+    [InlineData("ignored")]
+    public async Task A_duplicate_warning_a_human_has_already_settled_does_not_hold_the_order(string state)
+    {
+        var ids = await SeedAsync(autoTransform: true, status: OrderStatusConstants.Ready);
+        await AddExceptionAsync(ids.OrgId, ids.OrderId, OrderExceptionService.DuplicatePoNumberCode, state);
+
+        await using var db = new ProcuLinkDbContext(_options!);
+        var outcome = await EvaluatorFor(db).EvaluateAsync(ids.OrgId, ids.OrderId, CancellationToken.None);
+
+        Assert.True(outcome.WouldHaveSent);
+        Assert.Equal(AutoSendDecision.Clean, outcome.Decision);
+    }
+
+    /// <summary>
+    /// Anti-vacuity for the two tests above: the check keys on the duplicate CODE, not on "this
+    /// order has an open exception". An order can legitimately carry other open exceptions —
+    /// refusing every one of them would quietly make auto-send unreachable for reasons nobody
+    /// intended, under a decision code that names duplicates.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task An_unrelated_open_exception_does_not_make_an_order_a_possible_duplicate()
+    {
+        var ids = await SeedAsync(autoTransform: true, status: OrderStatusConstants.Ready);
+        await AddExceptionAsync(ids.OrgId, ids.OrderId, "delivery_unconfirmed", "open");
+
+        await using var db = new ProcuLinkDbContext(_options!);
+        var outcome = await EvaluatorFor(db).EvaluateAsync(ids.OrgId, ids.OrderId, CancellationToken.None);
+
+        Assert.True(outcome.WouldHaveSent);
+        Assert.Equal(AutoSendDecision.Clean, outcome.Decision);
+    }
+
+    /// <summary>
+    /// Org scope, on the new read as on every other. A duplicate warning belonging to a DIFFERENT
+    /// organisation — same order id, another tenant's row — must not reach this order's decision.
+    /// </summary>
+    [DockerRequiredFact]
+    public async Task Another_organisations_duplicate_warning_does_not_hold_this_order()
+    {
+        var ids      = await SeedAsync(autoTransform: true, status: OrderStatusConstants.Ready);
+        var otherOrg = await SeedOrganisationAsync();
+
+        await AddExceptionAsync(otherOrg, ids.OrderId, OrderExceptionService.DuplicatePoNumberCode, "open");
+
+        await using var db = new ProcuLinkDbContext(_options!);
+        var outcome = await EvaluatorFor(db).EvaluateAsync(ids.OrgId, ids.OrderId, CancellationToken.None);
+
+        Assert.True(outcome.WouldHaveSent);
+        Assert.Equal(AutoSendDecision.Clean, outcome.Decision);
+    }
+
     /// <summary>An opted-in supplier whose configured channel is blank has nowhere to send.</summary>
     [DockerRequiredFact]
     public async Task An_opted_in_supplier_with_no_channel_is_never_clean()
@@ -525,5 +615,51 @@ public sealed class AutoSendDryRunPostgresTests : IClassFixture<AutoSendDryRunPo
 
         await db.SaveChangesAsync();
         return new Ids(orgId, supplierId, orderId);
+    }
+
+    /// <summary>An organisation on its own, for the cross-tenant test.</summary>
+    private async Task<Guid> SeedOrganisationAsync()
+    {
+        var orgId = Guid.NewGuid();
+        var now   = DateTime.UtcNow;
+
+        await using var db = new ProcuLinkDbContext(_options!);
+        db.Organisations.Add(new Organisation
+        {
+            Id             = orgId,
+            ClerkOrgId     = $"org_autosend_{orgId:N}",
+            Name           = "Another Org",
+            Slug           = $"autosend-{orgId:N}",
+            Plan           = "operations",
+            AccountStatus  = "active",
+            CreatedAt      = now,
+            TrialStartedAt = now,
+        });
+        await db.SaveChangesAsync();
+        return orgId;
+    }
+
+    /// <summary>
+    /// One exception row against an order, in a named state. Written directly rather than through
+    /// <c>OrderExceptionService.ReconcileAsync</c> so a test can construct the <c>resolved</c> and
+    /// <c>ignored</c> states the reconciler would not produce on demand.
+    /// </summary>
+    private async Task AddExceptionAsync(Guid orgId, Guid orderId, string code, string state)
+    {
+        await using var db = new ProcuLinkDbContext(_options!);
+        db.OrderExceptions.Add(new OrderException
+        {
+            Id         = Guid.NewGuid(),
+            OrgId      = orgId,
+            OrderId    = orderId,
+            Stage      = "Parse",
+            Code       = code,
+            Severity   = "warning",
+            State      = state,
+            Message    = $"{code} raised for the test in state {state}.",
+            CreatedAt  = DateTime.UtcNow,
+            ResolvedAt = state == "resolved" ? DateTime.UtcNow : null,
+        });
+        await db.SaveChangesAsync();
     }
 }
