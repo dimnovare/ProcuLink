@@ -35,6 +35,22 @@ public static class AutoSendDecision
     /// <summary>At least one line still needs a human. Checked independently of the status, not inferred from it.</summary>
     public const string UnresolvedLines = "unresolved_lines";
 
+    /// <summary>
+    /// Another order in this workspace already carries this PO number, and the resulting
+    /// <c>duplicate_po_number</c> exception is still open — nobody has looked at it yet.
+    ///
+    /// <para>Duplicate detection is deliberately advisory: it opens a warning and blocks nothing,
+    /// because suppliers legitimately reuse PO numbers and a hard block would refuse genuine
+    /// orders. That trade-off is sound while a human is reading the warning before clicking Send.
+    /// It stops being sound the moment a machine is doing the clicking, because the failure it
+    /// guards against — the same PO going out twice — is precisely the one nobody can take back.
+    /// So an unresolved duplicate warning is a human decision, and auto-send declines it.</para>
+    ///
+    /// <para>Only <c>open</c> counts. An operator who resolved or ignored the warning has already
+    /// made that decision, and re-asking them would make the flag impossible to clear.</para>
+    /// </summary>
+    public const string PossibleDuplicate = "possible_duplicate";
+
     /// <summary>The supplier is opted in but no delivery channel resolves, so there is nowhere to send.</summary>
     public const string NoDeliveryChannel = "no_delivery_channel";
 
