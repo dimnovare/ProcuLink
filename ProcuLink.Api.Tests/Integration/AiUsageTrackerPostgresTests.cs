@@ -45,12 +45,34 @@ public sealed class AiUsageTrackerPostgresTests(PostgresContainerFixture postgre
     private static IConfiguration EmptyConfig() =>
         new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build();
 
+    /// <summary>
+    /// ai_usage_monthly.org_id has a foreign key to organisations (migration
+    /// <c>NineOrgLedgersNamedATenantTheDatabaseNeverChecked</c>), so a usage row can only exist for
+    /// a tenant that exists. These tests used to invent an org id and never create the
+    /// organisation, which the database now refuses. Seeding it changes nothing about what they
+    /// measure: the increment races still start with NO usage row present.
+    /// </summary>
+    private async Task SeedOrganisationAsync(Guid orgId)
+    {
+        var now = DateTime.UtcNow;
+
+        await using var db = new ProcuLinkDbContext(_options!);
+        db.Organisations.Add(new ProcuLink.Core.Entities.Organisation
+        {
+            Id = orgId, ClerkOrgId = $"org_aiusage_{orgId:N}", Name = "AI usage org",
+            Slug = $"aiusage-{orgId:N}", Plan = "operations", AccountStatus = "active", CreatedAt = now,
+        });
+        await db.SaveChangesAsync();
+    }
+
     [DockerRequiredFact]
     public async Task ParallelIncrements_NeverLoseAnUpdate_IncludingTheFirstInsertRace()
     {
         var orgId = Guid.NewGuid();
         const int workers = 16;
         const long tokensEach = 100;
+
+        await SeedOrganisationAsync(orgId);
 
         // Each "worker" gets its own DbContext + tracker (a DbContext is not thread-safe),
         // exactly like parallel Hangfire job activations. All start with NO row present,
@@ -71,6 +93,8 @@ public sealed class AiUsageTrackerPostgresTests(PostgresContainerFixture postgre
     public async Task SequentialIncrements_AccumulateOnTheExistingRow()
     {
         var orgId = Guid.NewGuid();
+
+        await SeedOrganisationAsync(orgId);
 
         await using (var db = new ProcuLinkDbContext(_options!))
         {

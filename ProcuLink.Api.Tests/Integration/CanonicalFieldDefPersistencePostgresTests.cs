@@ -40,6 +40,29 @@ public sealed class CanonicalFieldDefPersistencePostgresTests(PostgresContainerF
         await postgres.DropDatabaseAsync(_databaseConnectionString);
     }
 
+    /// <summary>
+    /// canonical_field_defs.org_id has a foreign key to organisations (migration
+    /// <c>NineOrgLedgersNamedATenantTheDatabaseNeverChecked</c>), so a definition can only be
+    /// inserted for a tenant that exists. These tests used to invent an org id and never create the
+    /// organisation, which the database now refuses.
+    /// </summary>
+    private async Task SeedOrganisationAsync(params Guid[] orgIds)
+    {
+        var now = DateTime.UtcNow;
+
+        await using var db = new ProcuLinkDbContext(_options!);
+        foreach (var orgId in orgIds)
+        {
+            db.Organisations.Add(new Organisation
+            {
+                Id = orgId, ClerkOrgId = $"org_cfd_{orgId:N}", Name = "CFD Org",
+                Slug = $"cfd-{orgId:N}", Plan = "operations", AccountStatus = "active", CreatedAt = now,
+            });
+        }
+
+        await db.SaveChangesAsync();
+    }
+
     [DockerRequiredFact]
     public async Task Def_persists_reloads_and_soft_deletes()
     {
@@ -47,6 +70,8 @@ public sealed class CanonicalFieldDefPersistencePostgresTests(PostgresContainerF
         var connId = Guid.NewGuid();
         var defId  = Guid.NewGuid();
         var now    = DateTime.UtcNow;
+
+        await SeedOrganisationAsync(orgId);
 
         // ── Insert one definition (org + connection scoped) ──
         await using (var db = new ProcuLinkDbContext(_options!))
@@ -112,6 +137,8 @@ public sealed class CanonicalFieldDefPersistencePostgresTests(PostgresContainerF
         var orgA = Guid.NewGuid();
         var orgB = Guid.NewGuid();
         var now  = DateTime.UtcNow;
+
+        await SeedOrganisationAsync(orgA, orgB);
 
         await using (var db = new ProcuLinkDbContext(_options!))
         {
