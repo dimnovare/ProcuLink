@@ -10,10 +10,11 @@ namespace ProcuLink.Infrastructure.Tests.Services;
 
 /// <summary>
 /// P0 reliability — stuck-order detection + requeue. Orders left in a transient
-/// pipeline status ('parsing' / 'transforming') past the timeout are RE-ENQUEUED
-/// (a transient Worker restart mid-job is recoverable), up to a bounded cap, after
-/// which they are dead-lettered as genuinely failed. Each action writes an audit
-/// event. Uses the full ProcuLinkDbContext on InMemory.
+/// pipeline status ('pending_parse' / 'parsing' / 'transforming') past the timeout are
+/// RE-ENQUEUED (a transient Worker restart mid-job is recoverable), up to a bounded cap,
+/// after which the outcome is leg-aware: a parse-side strand dead-letters as genuinely
+/// failed, a 'transforming' one recovers to 're-sendable' ready. Each action writes an
+/// audit event. Uses the full ProcuLinkDbContext on InMemory.
 /// </summary>
 public class StuckOrderDetectionServiceTests
 {
@@ -70,6 +71,86 @@ public class StuckOrderDetectionServiceTests
         enqueuer.Calls.Should().ContainSingle().Which.Should().Be((orderId, order.OrgId));
         // UpdatedAt was bumped out of the stuck window so the next sweep won't double-act.
         order.UpdatedAt.Should().BeAfter(DateTime.UtcNow.AddMinutes(-Threshold.TotalMinutes));
+    }
+
+    /// <summary>
+    /// 'pending_parse' is the C# default on <c>PurchaseOrderEntity.Status</c> and nothing writes it
+    /// today — every construction site overrides it before the row is saved. It survives as a
+    /// DEFAULT WAITING TO LEAK: the first ingest path that forgets one of those assignments lands an
+    /// order in a status with no sweeper, no alert and no UI bucket, which makes it permanently
+    /// invisible rather than merely late. Sweeping the status costs nothing while nothing writes it
+    /// (the query matches no rows) and converts that silent, permanent loss into the ordinary
+    /// requeue path the moment it does.
+    ///
+    /// <para>The order is re-driven through <c>parsing</c> for the same reason a stalled 'parsing'
+    /// strand is: that literal is the only status <c>ParseStoredFileAsync</c> acts on.</para>
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_LeakedPendingParseOrder_IsSweptIntoParsingAndReEnqueued_NotStranded()
+    {
+        await using var db = CreateDb();
+        var orderId = await SeedOrderAsync(db, OrderStatusConstants.PendingParse, updatedMinutesAgo: 45);
+        var enqueuer = new RecordingParseEnqueuer();
+
+        var acted = await CreateService(db, enqueuer).RunAsync(Threshold, default);
+
+        acted.Should().Be(1, "an order sitting in pending_parse past the threshold is invisible to " +
+                             "every other watchdog, so this sweep is the only thing that can see it");
+
+        var order = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+        order.Status.Should().Be(OrderStatusConstants.Parsing);
+        order.RequeueCount.Should().Be(1);
+        enqueuer.Calls.Should().ContainSingle().Which.Should().Be((orderId, order.OrgId));
+
+        var audit = await db.AuditEvents.SingleAsync(e => e.EntityId == orderId);
+        audit.Action.Should().Be("StuckRequeued");
+    }
+
+    /// <summary>
+    /// The trap this packet's obvious one-line version walks into. Adding <c>pending_parse</c> to
+    /// the transient set while the requeue branch stays keyed on <c>== Parsing</c> routes a leaked
+    /// order into the TRANSFORM recovery — which resets it to <c>ready</c>. An order that has never
+    /// been parsed has no lines, so 'ready' offers the operator an empty PO to send to a supplier,
+    /// and no parse job is ever enqueued to fill it. Strictly worse than leaving it stranded, and
+    /// silent in exactly the same way.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_LeakedPendingParseOrder_IsNeverRecoveredToReadyLikeATransformStrand()
+    {
+        await using var db = CreateDb();
+        var orderId = await SeedOrderAsync(db, OrderStatusConstants.PendingParse, updatedMinutesAgo: 45);
+        var enqueuer = new RecordingParseEnqueuer();
+
+        await CreateService(db, enqueuer).RunAsync(Threshold, default);
+
+        var order = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+        order.Status.Should().NotBe(OrderStatusConstants.Ready,
+            "an order that has never been parsed has no lines — 'ready' would offer the operator an " +
+            "empty PO to send, and the transform-recovery branch enqueues no parse job to fill it");
+        enqueuer.Calls.Should().ContainSingle(
+            "the parse leg re-drives through a fresh parse job; the transform leg enqueues nothing");
+    }
+
+    /// <summary>
+    /// Past the requeue budget a parse-side strand dead-letters, and a leaked pending_parse order
+    /// is a parse-side strand. The <c>pending_parse → failed</c> edge that implies is declared in
+    /// <c>OrderStatusMachine.Transitions</c>.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_LeakedPendingParseOrderPastRequeueCap_IsDeadLetteredAsFailed()
+    {
+        await using var db = CreateDb();
+        var orderId = await SeedOrderAsync(
+            db, OrderStatusConstants.PendingParse, updatedMinutesAgo: 45, requeueCount: MaxRequeues);
+
+        var acted = await CreateService(db, new RecordingParseEnqueuer()).RunAsync(Threshold, default);
+
+        acted.Should().Be(1);
+        var order = await db.PurchaseOrders.SingleAsync(o => o.Id == orderId);
+        order.Status.Should().Be(OrderStatusConstants.Failed);
+
+        var audit = await db.AuditEvents.SingleAsync(e => e.EntityId == orderId);
+        audit.Action.Should().Be("StuckTimeout");
     }
 
     [Fact]
@@ -213,7 +294,7 @@ public class StuckOrderDetectionServiceTests
     {
         await using var db = CreateDb();
         // A delivered order updated long ago must NOT be touched — only
-        // parsing/transforming count as "stuck".
+        // pending_parse/parsing/transforming count as "stuck".
         var orderId = await SeedOrderAsync(db, OrderStatusConstants.Delivered, updatedMinutesAgo: 120);
 
         var acted = await CreateService(db).RunAsync(Threshold, default);
