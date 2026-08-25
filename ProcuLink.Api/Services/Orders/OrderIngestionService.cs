@@ -925,13 +925,10 @@ internal sealed class OrderIngestionService
                 try { _parserFactory.GetParser(extension); }
                 catch (UnsupportedFileFormatException ex)
                 {
-                    await SetOrderFailedAsync(orderId, organisationId, ct);
-                    _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "ParseFailed",
-                        new { error = ParseFailureExplain.ForUnsupportedFormat(extension), stage = "parse", detail = ex.Message }));
-                    await _db.SaveChangesAsync(ct);
-                    await _shared.EmitPassportEventAsync(organisationId, orderId, "Parse", "Failed",
-                        payload: new { error = ParseFailureExplain.ForUnsupportedFormat(extension) }, ct: ct);
-                    await _shared.SafeReconcileExceptionsAsync(organisationId, orderId, ct);
+                    await RecordParseFailureAsync(orderId, organisationId,
+                        auditError:    ParseFailureExplain.ForUnsupportedFormat(extension),
+                        auditDetail:   ex.Message,
+                        passportError: ParseFailureExplain.ForUnsupportedFormat(extension), ct);
                     return Result<ParsedFileOutput>.Fail(ex.Message);
                 }
             }
@@ -994,19 +991,15 @@ internal sealed class OrderIngestionService
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to parse file for order {OrderId}", orderId);
-                await SetOrderFailedAsync(orderId, organisationId, ct);
-                _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "ParseFailed",
-                    new { error = ParseFailureExplain.ForException(extension, ex), stage = "parse", detail = ex.Message }));
-                await _db.SaveChangesAsync(ct);
-                await _shared.EmitPassportEventAsync(organisationId, orderId, "Parse", "Failed",
-                    payload: new { error = ex.Message }, ct: ct);
-                await _shared.SafeReconcileExceptionsAsync(organisationId, orderId, ct);
+                await RecordParseFailureAsync(orderId, organisationId,
+                    auditError:    ParseFailureExplain.ForException(extension, ex),
+                    auditDetail:   ex.Message,
+                    passportError: ex.Message, ct);
                 return Result<ParsedFileOutput>.Fail($"Could not parse file: {ex.Message}");
             }
 
             if (parsedOrder.Lines.Count == 0)
             {
-                await SetOrderFailedAsync(orderId, organisationId, ct);
                 // When the per-org AI usage cap blocked the LLM extractor, the regex
                 // fallback yielding 0 lines is a consequence of the cap — say so honestly
                 // instead of the misleading "scanned or image-only" PDF copy.
@@ -1015,12 +1008,10 @@ internal sealed class OrderIngestionService
                 var emptyLinesError = aiCapReached
                     ? ParseFailureExplain.ForAiCapReached()
                     : ParseFailureExplain.ForEmptyLines(extension);
-                _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "ParseFailed",
-                    new { error = emptyLinesError, stage = "parse", detail = "0 lines parsed" }));
-                await _db.SaveChangesAsync(ct);
-                await _shared.EmitPassportEventAsync(organisationId, orderId, "Parse", "Failed",
-                    payload: new { error = aiCapReached ? emptyLinesError : "0 lines parsed" }, ct: ct);
-                await _shared.SafeReconcileExceptionsAsync(organisationId, orderId, ct);
+                await RecordParseFailureAsync(orderId, organisationId,
+                    auditError:    emptyLinesError,
+                    auditDetail:   "0 lines parsed",
+                    passportError: aiCapReached ? emptyLinesError : "0 lines parsed", ct);
                 return Result<ParsedFileOutput>.Fail(
                     aiCapReached ? emptyLinesError : "File contains no line items.");
             }
@@ -2972,20 +2963,155 @@ internal sealed class OrderIngestionService
     }
 
     /// <summary>
-    /// Sets order status to "failed". Loads the row and persists via the change
-    /// tracker so this works on both the relational provider and the EF InMemory
-    /// test provider (ExecuteUpdateAsync is not translatable on InMemory). The row
-    /// is re-loaded at the moment of failure, so it is not stale.
+    /// Records a parse failure end to end: takes the guarded terminal-failure claim below, and
+    /// writes the audit row, the passport event and the exception reconcile ONLY when that claim
+    /// actually won the row. Returns whether the failure was recorded.
+    ///
+    /// <para>The three parse-failure sites (unsupported format, parser threw, zero lines) used to
+    /// repeat this five-call sequence verbatim, which is how the unguarded write came to exist in
+    /// triplicate. They now share one copy, so the guard cannot be present at two of them and
+    /// missing at the third.</para>
+    ///
+    /// <para><b>Why nothing is recorded when the claim loses.</b> The audit row and the passport
+    /// event are the operator's account of what happened to this order. If another writer already
+    /// moved the row — a concurrent parse that SUCCEEDED, or a human's <c>rejected_by_supplier</c>
+    /// verdict — then "parse failed" is not what happened to it, and reconciling exceptions off a
+    /// failure that was never committed would raise an exception for a healthy order. The same
+    /// shape, and the same reasoning, as
+    /// <c>OrderTransformService.FailTransformFromClaimableAsync</c>.</para>
     /// </summary>
-    private async Task SetOrderFailedAsync(Guid orderId, Guid organisationId, CancellationToken ct)
+    private async Task<bool> RecordParseFailureAsync(
+        Guid              orderId,
+        Guid              organisationId,
+        string            auditError,
+        string            auditDetail,
+        string            passportError,
+        CancellationToken ct)
     {
-        var entity = await _db.PurchaseOrders
-            .Where(o => o.Id == orderId && o.OrgId == organisationId)
-            .FirstOrDefaultAsync(ct);
-        if (entity is null) return;
+        if (!await SetOrderFailedAsync(orderId, organisationId, ct))
+            return false;
 
-        entity.Status    = "failed";
-        entity.UpdatedAt = DateTime.UtcNow;
+        _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "ParseFailed",
+            new { error = auditError, stage = "parse", detail = auditDetail }));
         await _db.SaveChangesAsync(ct);
+        await _shared.EmitPassportEventAsync(organisationId, orderId, "Parse", "Failed",
+            payload: new { error = passportError }, ct: ct);
+        await _shared.SafeReconcileExceptionsAsync(organisationId, orderId, ct);
+        return true;
+    }
+
+    /// <summary>
+    /// Commits a parse failure as an ATOMIC CLAIM: moves the order to
+    /// <see cref="OrderStatusConstants.Failed"/> only while it is still one of
+    /// <see cref="OrderStatusMachine.ParseFailableFrom"/>, and reports whether it won the row.
+    /// Returns <c>false</c> — writing nothing at all — when someone else got there first.
+    ///
+    /// <para><b>Why this needs a claim, when it reads like a straight-line write.</b>
+    /// <see cref="ParseStoredFileAsync"/> checks the status ONCE, at the top, and refuses unless it
+    /// is <c>parsing</c>. Every failure below that check lands minutes later — after a storage
+    /// download, a format detection, and on the PDF/XLSX paths a network call to an LLM extractor —
+    /// and the row is unclaimed for that entire window. The previous implementation loaded the row
+    /// and stamped <c>failed</c> onto whatever it found, with no from-status test at all, and its
+    /// doc comment ("the row is re-loaded at the moment of failure, so it is not stale") described
+    /// a FRESH read as if freshness were the same thing as ownership. It is not: re-reading tells
+    /// you what the status was, and then you overwrite it anyway.</para>
+    ///
+    /// <para><b>What that overwrote, in production.</b> Two writers reach a <c>parsing</c> row
+    /// concurrently, and both are ordinary flows rather than exotic races:</para>
+    /// <list type="bullet">
+    /// <item>A SECOND PARSE THAT SUCCEEDED. <c>StuckOrderDetectionService</c> re-drives a stalled
+    ///   order by KEEPING it in <c>parsing</c> and enqueuing a fresh job — deliberately, because
+    ///   resetting to <c>pending_parse</c> made the new job skip the parse and strand the order. So
+    ///   two live parse jobs for one order is the recovery path working. When the slow one then
+    ///   fails, it was stamping <c>failed</c> over the fast one's <c>pending_review</c> /
+    ///   <c>ready</c>.</item>
+    /// <item>AN OPERATOR'S VERDICT. <c>OrderResolutionService.MarkRejectedAsync</c> has no
+    ///   from-status guard beyond "not finished", and <c>parsing → rejected_by_supplier</c> is a
+    ///   documented edge, so a human can record a supplier refusal mid-parse and have it replaced
+    ///   by "something went wrong".</item>
+    /// </list>
+    ///
+    /// <para><b>And why the result was unrecoverable rather than merely wrong.</b> <c>failed</c> is
+    /// the sole member of <see cref="OrderStatusMachine.DeclaredTerminal"/>, so
+    /// <c>OrderResolutionService.IsFinished</c> then refuses resolve, accept-AI and mark-rejected
+    /// alike. The order was not mislabelled, it was WEDGED — a terminal lie with no operator exit,
+    /// fixable only by uploading a new order or editing the database.</para>
+    ///
+    /// <para>The set comes from <see cref="OrderStatusMachine"/> rather than a literal for the same
+    /// reason the transform leg's does: it is written twice below (a relational predicate and its
+    /// EF-InMemory emulation), and two hand-written copies of one status list are how the five
+    /// delivery-claim lists drifted apart four times.</para>
+    ///
+    /// <para>Idempotent: a repeat pass over an order already outside
+    /// <see cref="OrderStatusMachine.ParseFailableFrom"/> — including one this method already
+    /// failed — writes nothing and reports <c>false</c>.</para>
+    /// </summary>
+    private async Task<bool> SetOrderFailedAsync(Guid orderId, Guid organisationId, CancellationToken ct)
+    {
+        var failedAt = DateTime.UtcNow;
+
+        // Parameterised as `= ANY(@p)` rather than inlined, for the same reason the transform claim
+        // is: it keeps the SQL text (and therefore the Postgres plan) stable whatever the set holds.
+        var failableStatuses = OrderStatusMachine.ParseFailableFrom.ToArray();
+
+        int failed;
+        if (_db.Database.IsRelational())
+        {
+            failed = await _db.PurchaseOrders
+                .Where(o => o.Id == orderId && o.OrgId == organisationId
+                         && failableStatuses.Contains(o.Status))
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(o => o.Status,    OrderStatusConstants.Failed)
+                    .SetProperty(o => o.UpdatedAt, failedAt), ct);
+
+            // ExecuteUpdateAsync bypasses the change tracker, and ParseStoredFileAsync is still
+            // holding the copy of this row it loaded at the top. Everything that runs after a
+            // winning claim reads back through this SAME context — the exception reconcile most of
+            // all — and identity resolution would hand it that pre-claim 'parsing'. Sync the
+            // tracked copy so the in-memory view matches the row we just won. There is no
+            // concurrency token on this table, so the redundant UPDATE the following SaveChanges
+            // may re-send carries the identical two values and is harmless.
+            if (failed == 1 &&
+                _db.PurchaseOrders.Local.FirstOrDefault(o => o.Id == orderId) is { } tracked)
+            {
+                tracked.Status    = OrderStatusConstants.Failed;
+                tracked.UpdatedAt = failedAt;
+            }
+        }
+        else
+        {
+            // EF InMemory cannot translate ExecuteUpdateAsync — emulate the same guarded transition
+            // through the change tracker (tests are single-threaded there). Both branches read the
+            // SAME declaration: this is the second copy of the rule, and the pair that drifts. The
+            // caller's SaveChanges commits the mutation together with the audit row.
+            var row = await _db.PurchaseOrders
+                .Where(o => o.Id == orderId && o.OrgId == organisationId)
+                .FirstOrDefaultAsync(ct);
+
+            failed = row is not null
+                  && OrderStatusMachine.ParseFailableFrom.Contains(row.Status) ? 1 : 0;
+
+            if (failed == 1)
+            {
+                row!.Status    = OrderStatusConstants.Failed;
+                row.UpdatedAt  = failedAt;
+            }
+        }
+
+        if (failed == 0)
+        {
+            // Not ours to fail. Something else moved the order out of 'parsing' while this attempt
+            // was in flight — most often a concurrent parse that SUCCEEDED, whose result must not be
+            // overwritten with a failure, or an operator who recorded rejected_by_supplier, whose
+            // verdict outranks a machine failure. Logged rather than silent, because "we could not
+            // record this" is itself worth seeing.
+            _logger.LogWarning(
+                "Order {OrderId} (org {OrgId}) failed to parse, but the order has moved to a status a parse "
+              + "failure may not overwrite — leaving it untouched and recording nothing.",
+                orderId, organisationId);
+            return false;
+        }
+
+        return true;
     }
 }

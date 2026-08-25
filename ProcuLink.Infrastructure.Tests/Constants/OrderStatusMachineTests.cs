@@ -235,14 +235,24 @@ public class OrderStatusMachineTests
 
         // Nothing WRITES 'pending_parse': every ingest path stamps 'parsing' straight onto
         // the stub (OrderIngestionService.cs:343, SampleOrderService.cs:130), and the stuck-order
-        // requeue re-writes 'parsing' too (StuckOrderDetectionService.cs:101). No order is ever in
-        // pending_parse, so nothing can transition out of it. The status is declared but dead.
+        // requeue re-writes 'parsing' too. No order is ever in pending_parse, so nothing can
+        // RESOLVE one — which is what keeps these two edges writerless.
+        //
+        // Edge(PendingParse, Failed) used to sit here on the same argument, and it no longer holds.
+        // StuckOrderDetectionService now SWEEPS pending_parse — not because an order is in it, but
+        // because it is the entity's C# default and therefore a status that leaks the first time an
+        // ingest path forgets an assignment, into a hole with no sweeper, no alert and no UI bucket.
+        // That sweep re-drives such an order through 'parsing' and, past the requeue budget,
+        // dead-letters it to 'failed' exactly as it does a 'parsing' strand. So the edge has a
+        // production writer for precisely the case it exists to cover, and it is declared in the
+        // machine rather than exempted here.
         Edge(PendingParse, PendingReview),
         Edge(PendingParse, Ready),
-        Edge(PendingParse, Failed),
 
         // No call site fails an order from the review loop; a hard failure is only ever written
-        // from 'parsing' (StuckOrderDetectionService.cs:195).
+        // from a PARSE-side status — 'parsing' (OrderIngestionService.SetOrderFailedAsync, whose
+        // claim admits exactly OrderStatusMachine.ParseFailableFrom, and the stuck sweep's
+        // dead-letter) or the pending_parse leak the same sweep now covers.
         Edge(PendingReview, Failed),
         Edge(Ready, Failed),
 
@@ -770,6 +780,15 @@ public class OrderStatusMachineTests
     /// <c>Edge(PendingParse, PendingReview)</c> / <c>Edge(PendingParse, Ready)</c> in
     /// <see cref="KnownObserverOnlyEdges"/> — one fact, two consumers, so a writer appearing
     /// tomorrow invalidates both together rather than one of them quietly.</para>
+    ///
+    /// <para><b>"No order is ever in it" is a fact about TODAY, not a guarantee.</b> It holds only
+    /// while every construction site remembers to override the default, and the cost of the first
+    /// one that forgets is an order in a status with no sweeper, no alert and no UI bucket — lost
+    /// silently and permanently, not merely late. <c>StuckOrderDetectionService</c> therefore
+    /// sweeps <c>pending_parse</c> anyway: while this list is accurate the sweep matches no rows and
+    /// costs nothing, and the moment it stops being accurate the leak surfaces as an ordinary
+    /// requeue instead of a disappearance. Covering the status does NOT make it written, so this
+    /// exclusion stands.</para>
     /// </summary>
     private static readonly IReadOnlySet<string> StatusesNoOrderIsEverIn =
         new HashSet<string>(StringComparer.Ordinal) { PendingParse };
@@ -1085,6 +1104,49 @@ public class OrderStatusMachineTests
             .Should().BeEmpty(
                 "a status a transform failure may overwrite but a transform could never have " +
                 "claimed is a status the failure write would stamp without ever owning the row");
+    }
+
+    /// <summary>
+    /// The parse leg's answer to "may I OVERWRITE this with a failure?", pinned exactly — the
+    /// analogue of <see cref="TransformFailableFrom_IsClaimableMinus_RejectedBySupplier"/> one leg
+    /// earlier.
+    ///
+    /// <para><c>OrderIngestionService.SetOrderFailedAsync</c> stamps terminal <c>failed</c> from
+    /// three sites, all of them minutes below <c>ParseStoredFileAsync</c>'s single top-of-method
+    /// status read — after a storage download, a format detection, and on the PDF/XLSX paths a
+    /// network call to an LLM extractor. It used to carry no from-status test at all, so a parse
+    /// that lost the race overwrote a CONCURRENT PARSE'S SUCCESS (the stuck sweep re-drives a
+    /// stalled order by keeping it in <c>parsing</c> and enqueuing a fresh job, so two live parse
+    /// jobs is the recovery path working) or an operator's <c>rejected_by_supplier</c> VERDICT. And
+    /// because <c>failed</c> is the sole <see cref="OrderStatusMachine.DeclaredTerminal"/> member,
+    /// <c>OrderResolutionService.IsFinished</c> then refused every correction — a terminal lie with
+    /// no operator exit.</para>
+    ///
+    /// <para><b>Exactly <c>parsing</c>, and the exclusions are the content.</b> A parse only ever
+    /// RUNS from <c>parsing</c>, so a row in any other status is one this failure is not ABOUT.
+    /// <c>pending_parse</c> is the tempting addition and is deliberately out: a row still in it has
+    /// had no parse started on it, and admitting it would let a stale attempt stamp terminal failure
+    /// on an order <c>StuckOrderDetectionService</c> is about to re-drive.</para>
+    ///
+    /// <para><b>Invariant:</b> every member must be able to reach <c>failed</c> in
+    /// <see cref="OrderStatusMachine.Transitions"/> — a claim admitting a status the map says cannot
+    /// fail is the two-maps-disagree shape this file exists to catch.</para>
+    /// </summary>
+    [Fact]
+    public void ParseFailableFrom_IsExactlyParsing()
+    {
+        OrderStatusMachine.ParseFailableFrom.Should().BeEquivalentTo(new[] { Parsing },
+            "a parse only ever runs from 'parsing', so every other status is one the failure is " +
+            "not about — and 'failed' is terminal, so a mistaken overwrite is unrecoverable");
+
+        OrderStatusMachine.ParseFailableFrom.Should().NotContain(PendingParse,
+            "a row still in pending_parse has had no parse started on it; admitting it would let a " +
+            "stale attempt stamp terminal failure on an order the stuck sweep is about to re-drive");
+
+        foreach (var from in OrderStatusMachine.ParseFailableFrom)
+            OrderStatusMachine.IsAllowed(from, Failed).Should().BeTrue(
+                $"the parse-failure claim admits {from}, so the machine must list failed as one of " +
+                "its successors — otherwise the map calls a live production write impossible");
     }
 
     /// <summary>

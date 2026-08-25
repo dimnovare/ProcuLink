@@ -13,16 +13,42 @@ public sealed class StuckOrderDetectionService : IStuckOrderDetectionService
 {
     // Statuses an order should never sit in for long — they are transient
     // "a Hangfire job is working on this" states.
+    //
+    // 'pending_parse' is here for a different reason from the other two, and it is worth naming.
+    // Nothing WRITES it today: it is the C# default on PurchaseOrderEntity.Status, and every
+    // construction site overrides it before the row is saved. It survives as a default waiting to
+    // leak — the first ingest path that forgets one of those assignments produces an order in a
+    // status with no sweeper, no alert and no UI bucket, i.e. one that is permanently invisible
+    // rather than merely late. Sweeping it costs nothing while nothing writes it (the query matches
+    // no rows) and converts that silent, permanent loss into the ordinary requeue-then-dead-letter
+    // path the moment it does. A status the product declares and no watchdog covers is the shape
+    // this sweep exists to prevent.
     private static readonly string[] TransientStatuses =
     {
+        OrderStatusConstants.PendingParse,
         OrderStatusConstants.Parsing,
         OrderStatusConstants.Transforming,
     };
 
     /// <summary>
+    /// The PARSE-leg members of <see cref="TransientStatuses"/> — the strands the requeue branch
+    /// re-drives through a fresh parse job.
+    ///
+    /// <para>Deliberately a NAMED positive test rather than <c>!= Transforming</c>. The branches
+    /// below already read as "transforming, or everything else", and adding <c>pending_parse</c> to
+    /// the transient set while leaving the requeue branch keyed on <c>== Parsing</c> would have
+    /// routed a leaked <c>pending_parse</c> order into the TRANSFORM recovery — resetting an order
+    /// that has never been parsed to <c>ready</c> and offering an operator an empty PO to send. A
+    /// third transient status arriving one day must land in a branch someone chose for it, not in
+    /// whichever one the <c>else</c> happens to be.</para>
+    /// </summary>
+    private static bool IsParseSide(string status) =>
+        status is OrderStatusConstants.PendingParse or OrderStatusConstants.Parsing;
+
+    /// <summary>
     /// How many times a single order may be re-enqueued before we stop looping it.
     /// A transient Worker restart mid-job is recoverable; past this cap the outcome is
-    /// status-aware: a 'parsing' strand that keeps failing to parse is dead-lettered to
+    /// status-aware: a parse-side strand that keeps failing to parse is dead-lettered to
     /// terminal 'failed', whereas a 'transforming' strand is recovered to the re-sendable
     /// 'ready' state (a real failing transform reverts itself to 'ready', so a strand the
     /// sweep still sees is a rare claimed-but-no-job crash window — never a true failure).
@@ -87,7 +113,7 @@ public sealed class StuckOrderDetectionService : IStuckOrderDetectionService
                 order.RequeueCount += 1;
                 order.UpdatedAt = now;
 
-                if (fromStatus == OrderStatusConstants.Parsing)
+                if (IsParseSide(fromStatus))
                 {
                     // KEEP the order in 'parsing' and re-drive a fresh parse job. The parse
                     // guard (OrderIngestionService.ParseStoredFileAsync) only does work when
@@ -98,6 +124,12 @@ public sealed class StuckOrderDetectionService : IStuckOrderDetectionService
                     // the parse's atomic ExecuteUpdate is itself keyed on 'parsing', so a stray
                     // concurrent job cannot double-write. UpdatedAt is bumped below, so the order
                     // leaves the stuck window until it stalls again.
+                    //
+                    // A leaked 'pending_parse' order takes this same door, and 'parsing' is the
+                    // right target for it too: it is the ONLY status ParseStoredFileAsync acts on,
+                    // and pending_parse -> parsing is exactly what the normal ingest performs. The
+                    // assignment below is not a no-op for that case, which is why it is written
+                    // unconditionally rather than guarded as "already parsing".
                     order.Status = OrderStatusConstants.Parsing;
                     parseRequeues.Add((order.Id, order.OrgId));
                 }
@@ -121,7 +153,7 @@ public sealed class StuckOrderDetectionService : IStuckOrderDetectionService
                     thresholdMinutes = stuckThreshold.TotalMinutes,
                     requeueCount = order.RequeueCount,
                     maxRequeues = MaxRequeues,
-                    parseReEnqueued = fromStatus == OrderStatusConstants.Parsing && _parseEnqueuer is not null,
+                    parseReEnqueued = IsParseSide(fromStatus) && _parseEnqueuer is not null,
                 });
 
                 _db.AuditEvents.Add(new AuditEvent
@@ -201,8 +233,11 @@ public sealed class StuckOrderDetectionService : IStuckOrderDetectionService
             else
             {
                 // ── Requeue cap exceeded → dead-letter (genuinely failed) ─────────
-                // Reached only for a 'parsing' strand: a file that keeps failing to parse is
-                // genuinely unprocessable, so it is dead-lettered as failed.
+                // Reached only for a PARSE-side strand ('parsing', or a leaked 'pending_parse' this
+                // sweep already re-drove through 'parsing' twice): a file that keeps failing to
+                // parse is genuinely unprocessable, so it is dead-lettered as failed. The
+                // pending_parse -> failed edge that implies is declared in
+                // OrderStatusMachine.Transitions, which carries the argument for it.
                 order.Status = OrderStatusConstants.Failed;
                 order.UpdatedAt = now;
 

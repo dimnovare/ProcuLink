@@ -66,7 +66,15 @@ public static class OrderStatusMachine
     public static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> Transitions =
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
         {
-            [PendingParse]       = Set(Parsing, Unrouted, RejectedBySupplier),
+            // pending_parse → failed: the stuck-order sweep's dead-letter. Nothing WRITES
+            // pending_parse today — it is the entity's C# default and all four construction sites
+            // override it — but StuckOrderDetectionService now SWEEPS the status, precisely so a
+            // future ingest path that forgets one of those assignments cannot leave an order
+            // permanently invisible. That sweep re-drives a pending_parse row through 'parsing'
+            // (the edge already listed here) and, past the requeue budget, dead-letters it to
+            // 'failed' exactly as it does a 'parsing' strand. The edge is therefore real the
+            // moment the leak it guards against happens, which is the only moment it matters.
+            [PendingParse]       = Set(Parsing, Unrouted, RejectedBySupplier, Failed),
             [Parsing]            = Set(PendingReview, Ready, Failed, PendingParse, Unrouted, RejectedBySupplier),
             // Routing hold: parked awaiting a supplier; assigning one re-enqueues parse.
             // + RR. Reachable and consequential: an unrouted order HAS lines
@@ -600,6 +608,58 @@ public static class OrderStatusMachine
     /// </summary>
     public static readonly IReadOnlySet<string> RequeueableFrom =
         Set(DeliveryDeadLetter, DeliveryFailed);
+
+    /// <summary>
+    /// The statuses a PARSE failure may OVERWRITE — the guard on
+    /// <c>OrderIngestionService.SetOrderFailedAsync</c>, which stamps terminal
+    /// <see cref="OrderStatusConstants.Failed"/> when a stored source file turns out to be an
+    /// unsupported format, throws while parsing, or yields no lines. The parse-leg analogue of
+    /// <see cref="TransformFailableFrom"/>, and named here for the same reason that one is: the
+    /// rule is written twice at the call site — a relational <c>ExecuteUpdateAsync</c> predicate
+    /// and its EF-InMemory emulation — and two hand-written copies of one status list are exactly
+    /// how the five delivery-claim lists drifted apart four times, each time silently.
+    ///
+    /// <para><b>Why the write needs a claim at all.</b> <c>ParseStoredFileAsync</c> reads the order
+    /// ONCE at the top and refuses unless the status is <c>parsing</c>, but every failure write
+    /// sits far below that read — after a storage download, a format detection, and (on the PDF and
+    /// XLSX paths) a network call to an LLM extractor. The row is UNCLAIMED for that whole window,
+    /// and two things reach it there:</para>
+    /// <list type="bullet">
+    /// <item>A CONCURRENT PARSE THAT SUCCEEDED. Two live parse jobs for one order is not an exotic
+    ///   race — it is the recovery path working as designed: <c>StuckOrderDetectionService</c>
+    ///   deliberately KEEPS a stalled order in <c>parsing</c> and enqueues a fresh job, because
+    ///   resetting it to <c>pending_parse</c> made the new job skip the parse entirely. If the
+    ///   slower attempt finishes second it stamps <c>failed</c> over the winner's
+    ///   <c>pending_review</c> / <c>ready</c>.</item>
+    /// <item>AN OPERATOR'S REJECTION VERDICT. <c>OrderResolutionService.MarkRejectedAsync</c>
+    ///   carries no from-status guard beyond "not finished", and <c>parsing →
+    ///   rejected_by_supplier</c> is a documented edge above, so a human can record a supplier
+    ///   refusal while this very parse is in flight. That is a finding about the document; a
+    ///   generic machine failure must not replace it.</item>
+    /// </list>
+    ///
+    /// <para><b>Why the damage is permanent, which is what makes this worth a claim rather than a
+    /// log line.</b> <c>failed</c> is the sole member of <see cref="DeclaredTerminal"/>, so
+    /// <c>OrderResolutionService.IsFinished</c> then refuses every correction the operator has
+    /// left: resolve, accept-AI, mark-rejected. The order is not merely mislabelled, it is WEDGED —
+    /// a terminal lie whose only cure is a new order row or a database edit. The transform leg
+    /// reached the same conclusion first (<see cref="TransformFailableFrom"/>); this is the same
+    /// hole on the other leg.</para>
+    ///
+    /// <para><b>Exactly <c>parsing</c>, and deliberately NOT <c>pending_parse</c>.</b> A parse only
+    /// ever RUNS from <c>parsing</c> — <c>ParseStoredFileAsync</c>'s own idempotency guard compares
+    /// against that literal, and the stuck sweep re-writes that literal for the same reason. A row
+    /// still in <c>pending_parse</c> is therefore one no parse has started on, so a parse failure
+    /// cannot be ABOUT it; admitting it would let a stale attempt stamp terminal failure on an
+    /// order another job is about to pick up. <c>pending_parse</c> is covered by
+    /// <c>StuckOrderDetectionService</c> instead, which sweeps it forward into <c>parsing</c> and
+    /// only dead-letters it once the requeue budget is spent.</para>
+    ///
+    /// <para><b>Invariant:</b> a subset of the statuses <c>failed</c> is reachable from in
+    /// <see cref="Transitions"/>. Pinned by
+    /// <c>OrderStatusMachineTests.ParseFailableFrom_IsExactlyParsing</c>.</para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> ParseFailableFrom = Set(Parsing);
 
     /// <summary>
     /// <c>OrderTransformService</c>'s atomic transform claim — the statuses it flips to
