@@ -92,14 +92,29 @@ public class SampleExclusionIsDeclaredNotAssumedTests
     /// letting the whole guard pass for free. Raise it when the codebase genuinely grows; never
     /// lower it to make a red build green.
     ///
-    /// <para>Measured, not guessed: 24 aggregate sites today — 13 sample-aware, 11 declared
+    /// <para>Measured, not guessed: 21 aggregate sites today — 10 sample-aware, 11 declared
     /// sample-inclusive below. The floors sit just under those so ordinary churn does not trip
     /// them but a scanner that stops matching does.</para>
+    ///
+    /// <para><b>Lowered once, 2026-08-25, from 24/13.</b> The rule above stands and this is the
+    /// exception it warns about, so it is written down rather than quietly applied.
+    /// <c>DashboardController.GetStats</c> derived its four KPIs from four sequential
+    /// <c>CountAsync</c> calls — four round trips for numbers one <c>GROUP BY</c> answers — and
+    /// they collapsed into a single grouped query. Three aggregate sites therefore stopped
+    /// existing. All four were sample-aware and so is the query that replaced them, which is why
+    /// both floors moved by the same three.</para>
+    ///
+    /// <para>What makes that a corpus change and not a broken scan: the census is unchanged
+    /// everywhere else, the sample-inclusive registry below still matches reality file by file
+    /// (11 sites, exactly as declared), and the disappearance is visible in one diff hunk. A
+    /// scanner that had genuinely stopped matching would have taken the registry counts down with
+    /// it and failed the per-file assertions too. If a future red build here cannot point at a
+    /// specific collapsed query, the scan is broken — fix that, do not move these numbers.</para>
     /// </summary>
-    private const int MinimumAggregateSitesExpected = 22;
+    private const int MinimumAggregateSitesExpected = 19;
 
     /// <summary>Companion floor: the convention must be visibly PRESENT, not merely unviolated.</summary>
-    private const int MinimumSampleAwareSitesExpected = 11;
+    private const int MinimumSampleAwareSitesExpected = 8;
 
     [Fact]
     public void EveryAggregateOverPurchaseOrders_DeclaresWhichPopulationItCounts()

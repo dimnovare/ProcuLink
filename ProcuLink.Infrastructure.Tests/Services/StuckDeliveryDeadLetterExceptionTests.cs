@@ -216,8 +216,9 @@ public class StuckDeliveryDeadLetterExceptionTests
                 ? throw new InvalidOperationException("exception store unavailable")
                 : _inner.ReconcileAsync(orgId, orderId, ct);
 
-        public Task<IReadOnlyList<OrderException>> ListAsync(Guid orgId, string? state, CancellationToken ct) =>
-            _inner.ListAsync(orgId, state, ct);
+        public Task<OrderExceptionPage> ListAsync(
+            Guid orgId, string? state, int page, int pageSize, CancellationToken ct) =>
+            _inner.ListAsync(orgId, state, page, pageSize, ct);
 
         public Task<IReadOnlyList<OrderException>> ListForOrderAsync(Guid orgId, Guid orderId, CancellationToken ct) =>
             _inner.ListForOrderAsync(orgId, orderId, ct);

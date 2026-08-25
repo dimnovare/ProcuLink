@@ -24,6 +24,18 @@ public class DashboardController : ControllerBase
 
     // ── GET /api/dashboard/stats ──────────────────────────────────────────────
 
+    // Four KPIs from ONE round trip.
+    //
+    // These used to be four sequential awaited CountAsync calls over the same table with the
+    // same org + practice-order predicate — four separate round trips to a managed Postgres,
+    // serialised, on the landing page's first paint. GetSummary immediately below already
+    // showed the shape: one GROUP BY, aggregated in SQL, summed in memory.
+    //
+    // The grouping key is (Status, created-this-month), so its cardinality is bounded by the
+    // status list — a couple of dozen rows at most, not one row per order. The four numbers are
+    // derived from that one result set and are IDENTICAL to what the four counts returned;
+    // DashboardStatsKpiTests pins each of them against a seeded set precisely so a later
+    // "tidy-up" here cannot move a KPI without turning a test red.
     [HttpGet("stats")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<IActionResult> GetStats(CancellationToken ct)
@@ -31,17 +43,19 @@ public class DashboardController : ControllerBase
         var orgId     = _tenant.OrganisationId;
         var monthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc);
 
-        var totalThisMonth = await _db.PurchaseOrders
-            .CountAsync(o => o.OrgId == orgId && !o.IsSample && o.CreatedAt >= monthStart, ct);
+        var rows = await _db.PurchaseOrders
+            .AsNoTracking()
+            .Where(o => o.OrgId == orgId && !o.IsSample)
+            .GroupBy(o => new { o.Status, ThisMonth = o.CreatedAt >= monthStart })
+            .Select(g => new { g.Key.Status, g.Key.ThisMonth, Count = g.Count() })
+            .ToListAsync(ct);
 
-        var pendingReview = await _db.PurchaseOrders
-            .CountAsync(o => o.OrgId == orgId && !o.IsSample && o.Status == OrderStatusConstants.PendingReview, ct);
-
-        var delivered = await _db.PurchaseOrders
-            .CountAsync(o => o.OrgId == orgId && !o.IsSample && o.Status == OrderStatusConstants.Delivered, ct);
-
-        var totalOrders = await _db.PurchaseOrders
-            .CountAsync(o => o.OrgId == orgId && !o.IsSample, ct);
+        // totalThisMonth counts EVERY status inside the window, and totalOrders counts every
+        // status in every window — neither is status-filtered, exactly as before.
+        var totalThisMonth = rows.Where(r => r.ThisMonth).Sum(r => r.Count);
+        var totalOrders    = rows.Sum(r => r.Count);
+        var pendingReview  = rows.Where(r => r.Status == OrderStatusConstants.PendingReview).Sum(r => r.Count);
+        var delivered      = rows.Where(r => r.Status == OrderStatusConstants.Delivered).Sum(r => r.Count);
 
         return Ok(new { totalOrdersThisMonth = totalThisMonth, pendingReview, delivered, totalOrders });
     }

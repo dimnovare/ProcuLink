@@ -500,7 +500,13 @@ builder.Services.AddCors(options =>
               // header, but the frontend is a different origin and reaches the endpoint by
               // authenticated fetch (a bare <iframe src> cannot carry the bearer token), so
               // without this the one consumer the header exists for cannot read it.
-              .WithExposedHeaders("Retry-After", "Content-Disposition")
+              //
+              // The paging headers are exposed for the third time for the same reason. GET
+              // /api/exceptions keeps a bare JSON array as its body so its existing caller does
+              // not break, which leaves X-Total-Count as the only place the row count can ride —
+              // and a header a cross-origin pager cannot read is a total that does not exist.
+              .WithExposedHeaders(
+                  ["Retry-After", "Content-Disposition", .. ProcuLink.Api.Contracts.PaginationHeaders.All])
               .AllowCredentials());
 });
 
