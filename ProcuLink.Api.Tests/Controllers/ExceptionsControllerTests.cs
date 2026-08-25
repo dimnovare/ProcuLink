@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Moq;
 using ProcuLink.Api.Contracts;
@@ -17,22 +18,30 @@ public class ExceptionsControllerTests
         var tenant = new Mock<ICurrentTenantService>();
         tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
         var svc = new Mock<IOrderExceptionService>();
-        return (new ExceptionsController(svc.Object, tenant.Object), svc, orgId);
+        var ctrl = new ExceptionsController(svc.Object, tenant.Object)
+        {
+            // List() writes paging metadata to Response.Headers, so the action needs a real
+            // HttpContext to write into.
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
+        };
+        return (ctrl, svc, orgId);
     }
 
     [Fact]
     public async Task List_ReturnsOk_WithMappedDtos()
     {
         var (ctrl, svc, orgId) = Build();
-        svc.Setup(s => s.ListAsync(orgId, null, It.IsAny<CancellationToken>()))
-           .ReturnsAsync(new List<OrderException>
-           {
-               new() { Id = Guid.NewGuid(), OrgId = orgId, OrderId = Guid.NewGuid(),
-                       Stage = "Map", Code = "unresolved_mapping", Severity = "warning",
-                       State = "open", Message = "x", CreatedAt = DateTime.UtcNow }
-           });
+        svc.Setup(s => s.ListAsync(orgId, null, It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+           .ReturnsAsync(new OrderExceptionPage(
+               new List<OrderException>
+               {
+                   new() { Id = Guid.NewGuid(), OrgId = orgId, OrderId = Guid.NewGuid(),
+                           Stage = "Map", Code = "unresolved_mapping", Severity = "warning",
+                           State = "open", Message = "x", CreatedAt = DateTime.UtcNow }
+               },
+               Total: 1, Page: 1, PageSize: OrderExceptionPaging.DefaultPageSize));
 
-        var result = await ctrl.List(null, CancellationToken.None);
+        var result = await ctrl.List(null, ct: CancellationToken.None);
 
         var ok = result.Should().BeOfType<OkObjectResult>().Subject;
         var dtos = ok.Value.Should().BeAssignableTo<IEnumerable<OrderExceptionDto>>().Subject;

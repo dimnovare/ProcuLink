@@ -179,7 +179,19 @@ public sealed class BillingController : ControllerBase
     /// organisation, plus the org's RESOLVED monthly cap (the global config
     /// override <c>Ai:OpenAI:MonthlyTokenLimitPerOrg</c> when set, otherwise the
     /// org's plan default from <c>PlanConstants.GetAiMonthlyTokenLimit</c>).
-    /// Used by the settings UI and by support to diagnose AI no-op behaviour.
+    ///
+    /// <para><b>No UI consumer exists.</b> This is a support endpoint, reached by curl with an
+    /// org token when someone reports that AI extraction or mapping suggestions have gone quiet
+    /// — the usual answer being that the month's token cap is spent. Nothing in the browser app
+    /// calls it: there is no settings surface for AI usage, and no other frontend caller.</para>
+    ///
+    /// <para>This docstring used to claim it was "used by the settings UI". It was not, and had
+    /// never been. A comment naming a consumer that does not exist is worse than no comment: it
+    /// is read as evidence the surface is covered, so nobody goes looking, and the gap survives
+    /// every review that trusts it. If a settings surface is ever built, say so here THEN. The
+    /// endpoint-reachability guard records the same fact independently —
+    /// <c>EndpointReachabilityGuardTests.UncalledPendingDecision</c> carries
+    /// <c>GET /api/billing/ai-usage</c> as a decision owed, not as a wired surface.</para>
     /// </summary>
     [HttpGet("ai-usage")]
     [Authorize]

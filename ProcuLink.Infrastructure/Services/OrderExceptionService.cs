@@ -260,12 +260,44 @@ public sealed class OrderExceptionService : IOrderExceptionService
         await _db.SaveChangesAsync(ct);
     }
 
-    public async Task<IReadOnlyList<OrderException>> ListAsync(Guid orgId, string? state, CancellationToken ct)
+    /// <summary>
+    /// One page of the organisation's exception history, newest first.
+    ///
+    /// <para><b>Why this is paged at all.</b> Exception rows are never deleted — resolving or
+    /// ignoring one flips <c>State</c> and leaves the row — so an organisation's history grows
+    /// monotonically from its first order onward. Returning all of it, which is what this method
+    /// used to do, is a response whose size is a function of account age.</para>
+    ///
+    /// <para><b>The ordering carries a tiebreak, and it is load-bearing.</b> Ordering by
+    /// <c>CreatedAt</c> alone is not a total order here: <see cref="ReconcileAsync"/> stamps every
+    /// row it opens in one pass with the same <c>now</c>, so a single order can produce several
+    /// exceptions sharing a timestamp to the tick. Postgres is free to return tied rows in any
+    /// order per query, and a Skip/Take walk over an unstable sort silently repeats some rows
+    /// across pages and drops others entirely. <c>Id</c> is unique, so adding it makes the sort
+    /// total and the walk exhaustive.</para>
+    /// </summary>
+    public async Task<OrderExceptionPage> ListAsync(
+        Guid orgId, string? state, int page, int pageSize, CancellationToken ct)
     {
+        page     = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, OrderExceptionPaging.MinPageSize, OrderExceptionPaging.MaxPageSize);
+
         var q = _db.OrderExceptions.AsNoTracking().Where(e => e.OrgId == orgId);
         if (!string.IsNullOrWhiteSpace(state))
             q = q.Where(e => e.State == state);
-        return await q.OrderByDescending(e => e.CreatedAt).ToListAsync(ct);
+
+        // The total is counted over the SAME filtered query, so a pager can never be built from a
+        // population the rows did not come from.
+        var total = await q.CountAsync(ct);
+
+        var rows = await q
+            .OrderByDescending(e => e.CreatedAt)
+            .ThenByDescending(e => e.Id)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(ct);
+
+        return new OrderExceptionPage(rows, total, page, pageSize);
     }
 
     public async Task<IReadOnlyList<OrderException>> ListForOrderAsync(Guid orgId, Guid orderId, CancellationToken ct) =>
