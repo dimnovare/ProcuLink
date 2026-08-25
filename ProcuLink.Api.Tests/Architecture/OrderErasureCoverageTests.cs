@@ -44,6 +44,33 @@ namespace ProcuLink.Api.Tests.Architecture;
 /// extracted document) are erased ONLY by <c>ON DELETE CASCADE</c>. The service never names them.
 /// One migration authored without that cascade would turn the highest-PII rows in the schema into
 /// permanent leftovers, silently. This test is what makes that a build failure.</para>
+///
+/// <para><b>Widened 2026-08-25, because the corpus was narrower than the question.</b> It was built
+/// from entities carrying a property literally named <c>OrderId</c>, so it was blind to every order
+/// child that spells the link differently.
+/// <see cref="ProcuLink.Core.Entities.OrderConfirmationEntity"/> ties to the order through
+/// <c>PurchaseOrderId</c>, and <see cref="ProcuLink.Core.Entities.OrderConfirmationLineEntity"/>
+/// through <c>OrderConfirmationId</c> plus <c>PurchaseOrderLineId</c>. Neither carries an
+/// <c>OrderId</c>, so neither was ever in the corpus, and an erasure that left supplier
+/// acknowledgement rows behind — with their confirmed prices, quantities and supplier reference
+/// text — would have kept this guard green. A guard whose corpus is narrower than the property it
+/// checks reports only on the tables it happens to see, which is the same failure mode as a
+/// hand-written list, just harder to notice.</para>
+///
+/// <para>The corpus now takes any entity with a foreign key targeting <c>purchase_orders</c> or
+/// <c>purchase_order_lines</c>, plus any entity with a scalar <c>OrderId</c>,
+/// <c>PurchaseOrderId</c> or <c>PurchaseOrderLineId</c>. The cascade arm walks TRANSITIVELY for the
+/// same reason: <c>order_confirmation_lines</c> reaches the order through <c>order_confirmations</c>,
+/// so a single-hop FK read would have called it unaccounted for even though the database really does
+/// erase it. <see cref="MinimumOrderTiedEntities"/> is the floor that stops the widened sweep quietly
+/// shrinking back, and <see cref="TheCorpusSeesOrderChildrenThatDoNotSpellItOrderId"/> pins the two
+/// entities the narrow version missed by name.</para>
+///
+/// <para><b>Both newly-visible tables turned out to be genuinely erased</b> — <c>DataErasureService</c>
+/// removes confirmations and confirmation lines explicitly (<c>OrderConfirmationLines.RemoveRange</c>
+/// then <c>OrderConfirmations.RemoveRange</c>), and the database cascades them too. So the widening
+/// closed a blind spot rather than a live GDPR gap. It closed it after the fact, which is the
+/// argument for widening now rather than the next time someone adds a table.</para>
 /// </summary>
 public sealed class OrderErasureCoverageTests
 {
@@ -68,8 +95,18 @@ public sealed class OrderErasureCoverageTests
     /// <summary>
     /// A floor under the model sweep. If the walk ever finds fewer order-tied entities than this,
     /// the sweep itself broke and every other assertion in the file went vacuously green.
+    ///
+    /// <para>Raised from 12 to 16 with the 2026-08-25 widening. Both numbers are measured, not
+    /// guessed: the narrow, name-only corpus finds 15 entities and the widened one finds 17. The
+    /// floor is deliberately set ABOVE the narrow count, so reverting
+    /// <see cref="IsOrderTied"/> to <c>FindProperty("OrderId")</c> — which would silently drop
+    /// <c>OrderConfirmationEntity</c> and <c>OrderConfirmationLineEntity</c> back out of view —
+    /// fails here as well as in
+    /// <see cref="TheCorpusSeesOrderChildrenThatDoNotSpellItOrderId"/>. A floor set to the narrow
+    /// count would have let that revert pass. Raise it as the schema grows; never lower it to make
+    /// a red build green.</para>
     /// </summary>
-    private const int MinimumOrderTiedEntities = 12;
+    private const int MinimumOrderTiedEntities = 16;
 
     private static IModel BuildModel() =>
         new ProcuLinkDbContext(
@@ -78,22 +115,72 @@ public sealed class OrderErasureCoverageTests
                 .Options).Model;
 
     /// <summary>
-    /// Every mapped entity with a scalar <c>OrderId</c>, excluding the order itself. Derived from
-    /// the model, so a table added tomorrow is in this corpus without anyone editing this file.
+    /// The two order tables an order child can be tied to. A foreign key at either one makes the
+    /// entity order-tied regardless of what the property is called, which is the half the old
+    /// name-only corpus could not see.
+    /// </summary>
+    private static readonly Type[] OrderTables =
+    [
+        typeof(ProcuLink.Core.Entities.PurchaseOrderEntity),
+        typeof(ProcuLink.Core.Entities.PurchaseOrderLineEntity),
+    ];
+
+    /// <summary>
+    /// The scalar spellings of an order link in this model. Names alone are not enough (hence
+    /// <see cref="OrderTables"/>) but they are not redundant either: a column can point at an order
+    /// without a foreign key behind it, which is exactly the shape
+    /// <c>order_supplier_suggestions</c> had when it produced this schema's first GDPR orphan.
+    /// </summary>
+    private static readonly string[] OrderLinkProperties =
+        ["OrderId", "PurchaseOrderId", "PurchaseOrderLineId"];
+
+    /// <summary>
+    /// Every mapped entity tied to an order — by a foreign key at either order table, or by a
+    /// scalar order-link property — excluding the order itself. Derived from the model, so a table
+    /// added tomorrow is in this corpus without anyone editing this file.
     /// </summary>
     private static IReadOnlyList<IEntityType> OrderTiedEntities() =>
         BuildModel().GetEntityTypes()
             .Where(e => !e.IsOwned() && e.BaseType is null)
             .Where(e => e.ClrType != typeof(ProcuLink.Core.Entities.PurchaseOrderEntity))
-            .Where(e => e.FindProperty("OrderId") is not null)
+            .Where(IsOrderTied)
             .OrderBy(e => e.ClrType.Name, StringComparer.Ordinal)
             .ToList();
 
-    /// <summary>True when the model cascades this entity away with its parent order.</summary>
+    private static bool IsOrderTied(IEntityType entity) =>
+        OrderLinkProperties.Any(name => entity.FindProperty(name) is not null)
+        || entity.GetForeignKeys().Any(fk => OrderTables.Contains(fk.PrincipalEntityType.ClrType));
+
+    /// <summary>
+    /// True when the model cascades this entity away with its parent order, through any number of
+    /// hops. Transitive on purpose: <c>order_confirmation_lines</c> reaches the order only through
+    /// <c>order_confirmations</c>, and a single-hop read would report a row the database really
+    /// does erase as an unaccounted-for leftover.
+    /// </summary>
     private static bool IsCascadedFromTheOrder(IEntityType entity) =>
-        entity.GetForeignKeys().Any(fk =>
-            fk.PrincipalEntityType.ClrType == typeof(ProcuLink.Core.Entities.PurchaseOrderEntity)
-            && fk.DeleteBehavior is DeleteBehavior.Cascade);
+        IsCascadedFromTheOrder(entity, []);
+
+    private static bool IsCascadedFromTheOrder(IEntityType entity, HashSet<IEntityType> visited)
+    {
+        // The model has no cascade cycle today; the visited set keeps the walk terminating if one
+        // is ever introduced, rather than turning a schema change into a stack overflow.
+        if (!visited.Add(entity))
+            return false;
+
+        foreach (var fk in entity.GetForeignKeys())
+        {
+            if (fk.DeleteBehavior is not DeleteBehavior.Cascade)
+                continue;
+
+            if (fk.PrincipalEntityType.ClrType == typeof(ProcuLink.Core.Entities.PurchaseOrderEntity))
+                return true;
+
+            if (IsCascadedFromTheOrder(fk.PrincipalEntityType, visited))
+                return true;
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// The CLR types <c>DataErasureService</c> removes, read out of its source rather than listed
@@ -188,6 +275,38 @@ public sealed class OrderErasureCoverageTests
             .Should().BeTrue("order_parties holds ContactName/Email/Phone and is erased only by cascade");
         IsCascadedFromTheOrder(entities.Single(e => e.ClrType == typeof(ProcuLink.Core.Entities.SourceCapture)))
             .Should().BeTrue("source_captures holds RawText, the full extracted document, and is erased only by cascade");
+    }
+
+    // ── the widening itself, pinned by name so it cannot be undone quietly ────
+
+    /// <summary>
+    /// The corpus must keep seeing the order children that do not spell their link
+    /// <c>OrderId</c>. Reverting <see cref="OrderTiedEntities"/> to a name-only match would drop
+    /// both of these and leave every other assertion in this file green while a whole family of
+    /// supplier-acknowledgement rows went unchecked. Naming them is the point: a count alone would
+    /// be satisfied by any two entities.
+    /// </summary>
+    [Fact]
+    public void TheCorpusSeesOrderChildrenThatDoNotSpellItOrderId()
+    {
+        var entities = OrderTiedEntities();
+        var names = entities.Select(e => e.ClrType.Name).ToHashSet(StringComparer.Ordinal);
+
+        names.Should().Contain(nameof(ProcuLink.Core.Entities.OrderConfirmationEntity),
+            "it ties to the order through PurchaseOrderId, carries the supplier's reference text and " +
+            "source file key, and was invisible to the name-only corpus");
+        names.Should().Contain(nameof(ProcuLink.Core.Entities.OrderConfirmationLineEntity),
+            "it ties to the order through OrderConfirmationId and PurchaseOrderLineId, carries " +
+            "confirmed prices and quantities, and was invisible to the name-only corpus");
+
+        // The transitive cascade walk is the other half of the widening: confirmation lines reach
+        // the order through confirmations, so a single-hop FK read would report a row the database
+        // really does erase as an unaccounted-for leftover.
+        IsCascadedFromTheOrder(entities.Single(e =>
+                e.ClrType == typeof(ProcuLink.Core.Entities.OrderConfirmationLineEntity)))
+            .Should().BeTrue(
+                "order_confirmation_lines cascades from order_confirmations, which cascades from " +
+                "purchase_orders — the walk has to follow both hops or it under-reports coverage");
     }
 
     // ── direction 2: a declared residual that stopped being one ───────────────

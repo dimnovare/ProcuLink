@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -750,6 +750,13 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.Phone).HasColumnName("phone");
             b.HasOne(x => x.Order).WithMany(x => x.Parties).HasForeignKey(x => x.OrderId);
             b.HasIndex(x => new { x.OrgId, x.OrderId }).HasDatabaseName("IX_order_parties_org_id_order_id");
+            // CASCADE: the only person-level contact columns in the schema (ContactName, Email,
+            // Phone). These already cascade with their purchase order; the organisation arm closes
+            // the second route by which a row could be stranded holding contact details.
+            b.HasOne<Organisation>()
+             .WithMany()
+             .HasForeignKey(x => x.OrgId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── source_captures (Phase 1 lossless raw bag) ─────────────────
@@ -767,6 +774,13 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.PageRefs).HasColumnName("page_refs");
             b.HasOne(x => x.Order).WithOne(x => x.SourceCapture).HasForeignKey<SourceCapture>(x => x.OrderId);
             b.HasIndex(x => x.OrderId).IsUnique().HasDatabaseName("IX_source_captures_order_id");
+            // CASCADE: RawText is the full extracted document. Like order_parties this already
+            // cascades with the order; the organisation arm removes the second route to a stranded
+            // copy of a customer's document text.
+            b.HasOne<Organisation>()
+             .WithMany()
+             .HasForeignKey(x => x.OrgId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── item_mappings ──────────────────────────────────────────────
@@ -1090,6 +1104,12 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
         {
             b.ToTable("idempotency_keys");
             b.HasKey(x => new { x.OrgId, x.Key });
+            // CASCADE: a request-dedup ledger is derived from traffic, not evidence of anything
+            // the organisation is owed or owes. Nothing here should outlive the tenant.
+            b.HasOne<Organisation>()
+             .WithMany()
+             .HasForeignKey(x => x.OrgId)
+             .OnDelete(DeleteBehavior.Cascade);
             b.Property(x => x.Key).HasColumnName("key").IsRequired();
             b.Property(x => x.OrgId).HasColumnName("org_id");
             b.Property(x => x.OrderId).HasColumnName("order_id");
@@ -1126,6 +1146,12 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.Year).HasColumnName("year");
             b.Property(x => x.Month).HasColumnName("month");
             b.Property(x => x.TokensUsed).HasColumnName("tokens_used");
+            // CASCADE: an internal token counter used for cost control and the AI-spend alert.
+            // It is never invoiced, so it carries no billing evidence worth outliving the org.
+            b.HasOne<Organisation>()
+             .WithMany()
+             .HasForeignKey(x => x.OrgId)
+             .OnDelete(DeleteBehavior.Cascade);
             b.Property(x => x.UpdatedAt)
              .HasColumnName("updated_at")
              .HasColumnType("timestamptz");
@@ -1149,6 +1175,14 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .HasColumnName("created_at")
              .HasColumnType("timestamptz");
             b.HasIndex(x => new { x.OrgId, x.BillingKey }).IsUnique();
+            // RESTRICT: this is the record of money actually charged through Stripe. An
+            // organisation delete that silently took the overage ledger with it would destroy the
+            // only proof of what was billed and to whom, so the delete has to fail and be dealt
+            // with deliberately.
+            b.HasOne<Organisation>()
+             .WithMany()
+             .HasForeignKey(x => x.OrgId)
+             .OnDelete(DeleteBehavior.Restrict);
         });
 
         // ── org_plan_history ───────────────────────────────────────────
@@ -1167,6 +1201,18 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .HasColumnName("effective_from")
              .HasColumnType("timestamptz");
             b.HasIndex(x => new { x.OrgId, x.EffectiveFrom });
+            // CASCADE, and deliberately NOT Restrict even though these rows are the working behind
+            // every overage invoice. AppendOrgPlanHistoryAsync writes a baseline row for EVERY
+            // organisation the moment it is created, so a Restrict here would not mean "billing
+            // evidence blocks this delete" — it would mean no organisation can ever be deleted, a
+            // blanket prohibition wearing a constraint's clothes, and it would break the first
+            // org-erasure path anyone writes. The charge itself is evidenced by
+            // overage_billing_records, which exists only when money actually moved and is where the
+            // Restrict belongs.
+            b.HasOne<Organisation>()
+             .WithMany()
+             .HasForeignKey(x => x.OrgId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── retention_audit_log ────────────────────────────────────────
@@ -1238,6 +1284,12 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.OrderId).HasColumnName("order_id").HasDefaultValue(Guid.Empty);
             b.Property(x => x.ImportedAt).HasColumnName("imported_at").HasColumnType("timestamptz");
             b.HasIndex(x => new { x.OrgId, x.RemotePath }).IsUnique();
+            // CASCADE: a pull-ingress dedupe ledger. It exists only to stop the poller re-importing
+            // a file, and no poller runs for an organisation that no longer exists.
+            b.HasOne<Organisation>()
+             .WithMany()
+             .HasForeignKey(x => x.OrgId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── s3_ingress_configs ─────────────────────────────────────────
@@ -1282,6 +1334,11 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.OrderId).HasColumnName("order_id").HasDefaultValue(Guid.Empty);
             b.Property(x => x.ImportedAt).HasColumnName("imported_at").HasColumnType("timestamptz");
             b.HasIndex(x => new { x.OrgId, x.BucketName, x.ObjectKey }).IsUnique();
+            // CASCADE: the same pull-ingress dedupe ledger as imported_sftp_files, same reasoning.
+            b.HasOne<Organisation>()
+             .WithMany()
+             .HasForeignKey(x => x.OrgId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── email_import_records ───────────────────────────────────────
@@ -1304,6 +1361,13 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.ImportedAt).HasColumnName("imported_at").HasColumnType("timestamptz");
             b.HasIndex(x => new { x.OrgId, x.ImapMessageId, x.AttachmentHash }).IsUnique()
              .HasDatabaseName("IX_email_import_records_org_id_imap_message_id_attachment_hash");
+            // CASCADE: an IMAP dedupe ledger tied to a mailbox this organisation configured. It
+            // also carries an IMAP message id and a file name, which are the organisation's own
+            // data and should leave with it.
+            b.HasOne<Organisation>()
+             .WithMany()
+             .HasForeignKey(x => x.OrgId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── audit_events ───────────────────────────────────────────────
@@ -1332,6 +1396,14 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .HasForeignKey(x => x.UserId);
             b.HasIndex(x => new { x.OrgId, x.EntityType, x.EntityId, x.CreatedAt })
              .HasDatabaseName("IX_audit_events_org_id_entity_type_entity_id_created_at");
+            // (org_id, created_at DESC) serves the org-wide audit listing, which filters on org_id
+            // and orders by created_at descending with no entity predicate. The index above cannot:
+            // it leads (org_id, entity_type, entity_id), so a listing with no entity filter has to
+            // read every row for the organisation and sort them. Descending on created_at matches
+            // the query's own direction, which keeps the paged Skip/Take a forward index scan.
+            b.HasIndex(x => new { x.OrgId, x.CreatedAt })
+             .IsDescending(false, true)
+             .HasDatabaseName("IX_audit_events_org_id_created_at_desc");
         });
 
         // ── auto_send_dry_runs (WP-33 stage 1) ─────────────────────────────
@@ -1552,6 +1624,12 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // Org-scoped lookup; the unique active key per (org, connection, scope) is enforced in app
             // logic (soft-delete means a partial unique index would need a filtered index — kept simple).
             b.HasIndex(x => new { x.OrgId, x.ConnectionId }).HasDatabaseName("IX_canonical_field_defs_org_id_connection_id");
+            // CASCADE: tenant configuration. Custom canonical fields describe one organisation's
+            // own document model and mean nothing without it.
+            b.HasOne<Organisation>()
+             .WithMany()
+             .HasForeignKey(x => x.OrgId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── supplier_connection_revisions (the immutable versioned bundle) ──
@@ -1699,6 +1777,13 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             e.HasIndex(x => x.InvoiceId);
             e.HasOne(x => x.Invoice).WithMany(i => i.Lines)
              .HasForeignKey(x => x.InvoiceId).OnDelete(DeleteBehavior.Cascade);
+            // CASCADE: a child of an invoice that already cascades from the organisation. The
+            // organisation column was carried without a constraint, so raw-SQL or ops deletes could
+            // leave lines behind; this closes that route.
+            e.HasOne<Organisation>()
+             .WithMany()
+             .HasForeignKey(x => x.OrganisationId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── AdvanceShippingNoticeEntity ────────────────────────────────────────────
@@ -1737,6 +1822,12 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             e.HasIndex(x => x.AdvanceShippingNoticeId);
             e.HasOne(x => x.Asn).WithMany(a => a.Packages)
              .HasForeignKey(x => x.AdvanceShippingNoticeId).OnDelete(DeleteBehavior.Cascade);
+            // CASCADE: child of an advance shipping notice that already cascades from the
+            // organisation; the organisation arm closes the unconstrained second route.
+            e.HasOne<Organisation>()
+             .WithMany()
+             .HasForeignKey(x => x.OrganisationId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── AsnPackageLineEntity ───────────────────────────────────────────────────
@@ -1754,6 +1845,11 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             e.HasIndex(x => x.PackageId);
             e.HasOne(x => x.Package).WithMany(p => p.Lines)
              .HasForeignKey(x => x.PackageId).OnDelete(DeleteBehavior.Cascade);
+            // CASCADE: the same reasoning as asn_packages, one level further down.
+            e.HasOne<Organisation>()
+             .WithMany()
+             .HasForeignKey(x => x.OrganisationId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── TenantApiKey ──────────────────────────────────────────────────────────
@@ -1839,6 +1935,13 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // Phase 1: additive supplier-binding column. Default "" so the migration backfills
             // existing fingerprint rows (NOT NULL with no default would fail on existing data).
             b.Property(x => x.SupplierIdsCsv).HasDefaultValue("");
+            // CASCADE: derived detection statistics about one organisation's own column layouts.
+            // Explicitly org-scoped by design, with no cross-org sharing, so nothing survives the
+            // tenant.
+            b.HasOne<Organisation>()
+             .WithMany()
+             .HasForeignKey(x => x.OrganisationId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── order_confirmations ────────────────────────────────────────────────────
@@ -1904,6 +2007,14 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .HasForeignKey(x => x.PurchaseOrderLineId)
              .IsRequired(false)
              .OnDelete(DeleteBehavior.Restrict);
+
+            // CASCADE on the organisation arm. The line reaches its order only through
+            // order_confirmations, and its link to the ordered PO line is deliberately RESTRICT,
+            // so an organisation delete had no constrained route here at all.
+            b.HasOne<Organisation>()
+             .WithMany()
+             .HasForeignKey(x => x.OrgId)
+             .OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── mapping_corrections ────────────────────────────────────────
