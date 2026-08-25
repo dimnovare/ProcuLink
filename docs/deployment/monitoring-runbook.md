@@ -145,7 +145,7 @@ condition can never swallow the first notification of another.
 | Alert key | Fires when | Tunable |
 |---|---|---|
 | `worker_heartbeat_lost` | no Hangfire server has beaten within 60 s (same rule as `/health/ready`) | — |
-| `dead_letter_backlog` | all-org `delivery_dead_letter` + `delivery_failed` orders ≥ **25** | `DeadLetterThreshold` |
+| `dead_letter_backlog` | all-org `delivery_dead_letter` + `delivery_failed` orders ≥ **1** (lowered from 25 on 2026-08-25: a Pilot org is capped at 20 orders total, so 25 could never fire during a pilot; one dead-lettered order already encodes three concluded failures over ~90 min of backoff) | `DeadLetterThreshold` |
 | `delivery_failure_rate` | ≥ **10** concluded delivery attempts in the last **60 min** and ≥ **50 %** of them failed | `DeliveryFailureMinAttempts`, `DeliveryFailureWindowMinutes`, `DeliveryFailurePercent` |
 | `pull_channel_stalled` | an inbound pull channel with ≥ 1 org enabled has no observed success for ≥ **60 min** | `PullChannelStaleMinutes` |
 | `ai_token_cap_latched` | ≥ 1 org **in good standing** is at/over its monthly OpenAI token budget | — |
@@ -523,9 +523,11 @@ Stated plainly so nobody mistakes a green Actions tab for coverage:
 - **A broken SFTP/S3 credential per org is not detected.** §3's pull-channel condition proves
   the channel is still being polled, not that any given org's poll succeeds. Only IMAP has a
   real per-org success stamp.
-- **The dead-letter threshold is all-org and absolute** (25). A small org drowning while a
-  large one is healthy will not trip it. The same is true of the delivery failure rate: it is a
-  system-wide ratio, so one supplier failing inside a lot of healthy traffic will not trip it.
+- **The dead-letter threshold is all-org and absolute** (1 since 2026-08-25; was 25). At 1 the
+  old caveat — a small org drowning unnoticed inside a healthy fleet — no longer applies to the
+  backlog condition: any org's first dead-lettered order trips it. It still applies to the
+  delivery failure rate, which is a system-wide ratio, so one supplier failing inside a lot of
+  healthy traffic will not trip *that* condition; the backlog condition is what catches it now.
 - **No synthetic end-to-end transaction.** Nothing uploads a test order every N minutes and
   asserts it was delivered. `workerHealthy` proves the Worker is *beating*, not that the
   pipeline is *correct*.
