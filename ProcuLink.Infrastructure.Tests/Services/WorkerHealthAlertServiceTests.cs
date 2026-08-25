@@ -41,17 +41,22 @@ public class WorkerHealthAlertServiceTests
     public async Task RunAsync_DeadLetterBacklogAtThreshold_RaisesAlert()
     {
         var sink = new RecordingSink();
-        // Healthy worker, but dead-letter + failed crosses the threshold (default 25).
+        // Healthy worker, but dead-letter + failed crosses the threshold (default 1). This pins
+        // the DEFAULT on purpose: the previous default of 25 was arithmetically unreachable during
+        // a pilot (a Pilot org is capped at 20 orders total), and the only test of this condition
+        // set an explicit threshold — so the unreachable default was never exercised by anything.
+        // ONE dead-lettered order must fire: by the time an order dead-letters it has already
+        // failed three concluded delivery attempts over ~90 minutes of backoff.
         var health = HealthReturning(new WorkerHealthSnapshot(
             WorkerHealthy: true, ActiveWorkers: 1, SecondsSinceWorkerHeartbeat: 5,
-            DeadLetterOrders: 20, FailedDeliveryOrders: 5));
+            DeadLetterOrders: 1, FailedDeliveryOrders: 0));
 
         var alerted = await CreateService(health, sink).RunAsync(default);
 
         alerted.Should().BeTrue();
         sink.Calls.Should().ContainSingle();
         sink.Calls[0].Key.Should().Be(OperationalAlertKeys.DeadLetterBacklog);
-        sink.Calls[0].Message.Should().Contain("dead-letter+failed deliveries = 25");
+        sink.Calls[0].Message.Should().Contain("dead-letter+failed deliveries = 1");
     }
 
     [Fact]
@@ -60,7 +65,7 @@ public class WorkerHealthAlertServiceTests
         var sink = new RecordingSink();
         var health = HealthReturning(new WorkerHealthSnapshot(
             WorkerHealthy: true, ActiveWorkers: 1, SecondsSinceWorkerHeartbeat: 2,
-            DeadLetterOrders: 12, FailedDeliveryOrders: 12)); // 24 < 25 threshold
+            DeadLetterOrders: 0, FailedDeliveryOrders: 0)); // 0 < 1 threshold
 
         var alerted = await CreateService(health, sink).RunAsync(default);
 
@@ -350,9 +355,12 @@ public class WorkerHealthAlertServiceTests
     public async Task RunAsync_Healthy_DoesNotAlert()
     {
         var sink = new RecordingSink();
+        // Genuinely all clear: zero dead-lettered, zero failed. This fixture used to carry 1+1
+        // under the old threshold of 25 — under the pilot-scale default of 1, an order sitting in
+        // dead_letter IS the incident, so "healthy" now means none.
         var health = HealthReturning(new WorkerHealthSnapshot(
             WorkerHealthy: true, ActiveWorkers: 2, SecondsSinceWorkerHeartbeat: 3,
-            DeadLetterOrders: 1, FailedDeliveryOrders: 1)); // well under threshold
+            DeadLetterOrders: 0, FailedDeliveryOrders: 0));
 
         var alerted = await CreateService(health, sink).RunAsync(default);
 

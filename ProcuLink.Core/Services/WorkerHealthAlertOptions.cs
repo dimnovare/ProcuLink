@@ -19,9 +19,16 @@ public sealed class WorkerHealthAlertOptions
 
     /// <summary>
     /// All-org dead-letter + failed-delivery order count at/above which an alert fires.
-    /// Default 25. A non-positive configured value falls back to the default.
+    /// Default 1 — deliberately LOW, for the same pilot-scale reason as
+    /// <see cref="PipelineFailureThreshold"/>: a single dead-lettered order already encodes three
+    /// concluded delivery failures over ~90 minutes of backoff, so it is unambiguously wrong, not
+    /// noise. The old default of 25 was arithmetically unreachable during a pilot — a Pilot org is
+    /// capped at 20 orders TOTAL — which meant a dead supplier endpoint alerted nobody. The
+    /// anti-false-page rule this file opens with is satisfied by what the counter counts, not by
+    /// the threshold: an order only enters this count after retries are exhausted. A non-positive
+    /// configured value falls back to the default.
     /// </summary>
-    public int DeadLetterThreshold { get; set; } = 25;
+    public int DeadLetterThreshold { get; set; } = 1;
 
     /// <summary>
     /// All-org failed + transform-failed (pre-delivery pipeline) order count at/above which an
@@ -67,7 +74,7 @@ public sealed class WorkerHealthAlertOptions
     public int PullChannelStaleMinutes { get; set; } = 60;
 
     /// <summary>Effective dead-letter threshold (never non-positive).</summary>
-    public int EffectiveDeadLetterThreshold => DeadLetterThreshold > 0 ? DeadLetterThreshold : 25;
+    public int EffectiveDeadLetterThreshold => DeadLetterThreshold > 0 ? DeadLetterThreshold : 1;
 
     /// <summary>Effective pipeline-failure threshold (never non-positive).</summary>
     public int EffectivePipelineFailureThreshold =>
