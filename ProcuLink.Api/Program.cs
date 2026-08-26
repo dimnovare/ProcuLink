@@ -454,6 +454,20 @@ builder.Services.AddProblemDetails(options =>
     };
 });
 
+// ── An unresolved tenant is not a server fault ─────────────────────────────
+// UseExceptionHandler() below consults the IExceptionHandler chain before falling back to the
+// default ProblemDetails response. This one recognises exactly one exception —
+// TenantNotResolvedException, thrown by ICurrentTenantService.OrganisationId — and answers it
+// 503 + Retry-After instead of the 500 an unmapped exception gets. A brand-new organisation's
+// first page load hits it: Clerk mints the session token before the organisation claim is
+// attached, so a real signed-in user momentarily belongs to no organisation we can see.
+//
+// Mapped centrally, here, rather than per controller: every tenant-scoped endpoint reads
+// OrganisationId, so there is no controller that could opt out of this and stay correct.
+// The rejected alternatives (401 signs the user out, 403 claims a permanent refusal) are
+// argued in the handler's own summary.
+builder.Services.AddExceptionHandler<TenantNotResolvedExceptionHandler>();
+
 // ── CORS — Next.js frontend ────────────────────────────────────────────────
 // Frontend:Url can be a single URL or a comma-separated EXACT list, e.g.
 //   Frontend:Url=https://proculink.eu,https://www.proculink.eu
