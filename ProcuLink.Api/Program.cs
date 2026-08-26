@@ -58,6 +58,28 @@ builder.WebHost.UseSentry(o =>
     // request before anything leaves the process. Shared with ProcuLink.Worker so the two hosts
     // cannot drift; this subsumes the inbound-email ?token= rule that used to live inline here.
     o.UseProcuLinkScrubbing();
+
+    // An expected refusal is not an error report.
+    //
+    // TenantNotResolvedException is CAUGHT and answered 503 + Retry-After by
+    // TenantNotResolvedExceptionHandler. But Sentry's middleware is installed here, before the
+    // request ever reaches UseExceptionHandler (the AddProblemDetails comment further down says
+    // so), which means Sentry sees every throw regardless of whether anything handled it. Left
+    // alone, EVERY new-organisation signup posts errors to the dashboard for a condition that is
+    // normal, momentary and self-correcting — Clerk simply has not attached the organisation claim
+    // to the session token yet. That is the noise that teaches people to stop reading Sentry, and
+    // the smoke gate already reports these where they can be counted.
+    //
+    // Filtered by TYPE, deliberately, and not with SetBeforeSend: UseProcuLinkScrubbing above
+    // installs one, Sentry's SetBeforeSend REPLACES rather than chains, and a second call here
+    // would silently disable secret redaction. SentryScrubbingHostWiringTests already fails the
+    // build if "SetBeforeSend" appears in either host's Program.cs — this filter is the mechanism
+    // that does not fight that guard.
+    //
+    // Scope is exactly one type. Its sibling on ICurrentTenantService — the
+    // UnauthorizedAccessException for "no sub claim found", meaning no authenticated user at all —
+    // is a different condition that must keep reaching Sentry, and does.
+    o.AddExceptionFilterForType<TenantNotResolvedException>();
 });
 
 // ── Stripe SDK ────────────────────────────────────────────────────────────
