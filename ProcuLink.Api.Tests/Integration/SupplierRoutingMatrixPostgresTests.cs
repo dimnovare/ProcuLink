@@ -13,6 +13,7 @@ using MimeKit;
 using Moq;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Controllers;
+using ProcuLink.Api.Tests.Architecture;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -71,7 +72,7 @@ namespace ProcuLink.Api.Tests.Integration;
 //   5b    assign-supplier    order already routed (ready)                rejected 409, untouched
 //   6a    learning           assign then re-parse binds the layout       fingerprint bound
 //   6b    learning           2nd same-layout doc, supplier-less          parked unrouted (no auto-bind)
-//   7a    ASN / DESADV       EDIFACT DESADV upload                       rejected 501
+//   7a    ASN / DESADV       EDIFACT DESADV has no ingress route         no order (no endpoint)
 //
 //  WHY REAL POSTGRES. Three of these cells cannot be answered anywhere else:
 //  2b is a case-insensitive name match that EF translates to Postgres <c>lower()</c>;
@@ -240,7 +241,9 @@ public sealed class SupplierRoutingMatrixPostgresTests
         new("6a", "learning",        "assign then re-parse binds the layout",     RoutingOutcome.Routed,         200),
         new("6b", "learning",        "2nd same-layout doc, supplier-less",        RoutingOutcome.ParkedUnrouted),
 
-        new("7a", "ASN / DESADV",    "EDIFACT DESADV upload",                     RoutingOutcome.Rejected,       501),
+        // No ExpectedHttpStatus: there is no longer an ASN ingress endpoint to answer one. See
+        // DesadvCellAsync — the refusal is now structural rather than a 501.
+        new("7a", "ASN / DESADV",    "EDIFACT DESADV has no ingress route",       RoutingOutcome.Rejected),
     };
 
     public static TheoryData<string> CellIds
@@ -277,9 +280,10 @@ public sealed class SupplierRoutingMatrixPostgresTests
             $"orders={actual.OrderCount}");
 
         // BOTH halves are checked, so no cell reaches the outcome switch having examined nothing:
-        // an HTTP-fronted cell must answer the status its row declares, and a pull channel has no
-        // caller to answer at all — a status appearing there means the cell drove some producer
-        // other than the one its row names.
+        // an HTTP-fronted cell must answer the status its row declares, and a cell with no HTTP
+        // caller to answer — a pull channel, or a channel with no endpoint at all — has no status
+        // to report. A status appearing there means the cell drove some producer other than the
+        // one its row names.
         if (cell.ExpectedHttpStatus is { } expectedHttp)
         {
             actual.HttpStatus.Should().Be(expectedHttp,
@@ -288,7 +292,7 @@ public sealed class SupplierRoutingMatrixPostgresTests
         else
         {
             actual.HttpStatus.Should().BeNull(
-                "{0} is a pull channel with no HTTP caller, so a status code here means the cell "
+                "{0} has no HTTP caller to answer, so a status code here means the cell "
                 + "exercised a path the matrix does not describe", cell.Label);
         }
 
@@ -867,25 +871,49 @@ public sealed class SupplierRoutingMatrixPostgresTests
     // ── Cell 7: the untested format stays refused ───────────────────────────────────────
 
     /// <summary>
-    /// Routing must never be the reason a document is accepted. ASN / EDIFACT DESADV has no
-    /// parser (offer ⇔ works), so it is refused 501 with a supplier supplied — the honest answer
-    /// rather than accepting and silently shelving a file that can never be parsed.
+    /// Routing must never be the reason a document is accepted. ASN / EDIFACT DESADV has no parser
+    /// (offer ⇔ works), so an EDIFACT ASN must not be able to produce an order — least of all one
+    /// pointed at a supplier nothing resolved.
+    ///
+    /// <para><b>The guarantee is unchanged; the way it holds got stronger.</b> Until 2026-08-26 this
+    /// cell called <c>DesadvController.Upload</c> and pinned its 501: the door said no. That endpoint
+    /// has since been deleted — it answered nothing but 501 and no caller in either repository named
+    /// it — so the cell now proves there is no door. It reads the REAL MVC route table, the same
+    /// inventory <c>EndpointReachabilityGuardTests</c> builds, and asserts the entire
+    /// <c>/api/asns</c> surface is read-only. Nothing can hand an ASN to this product, so nothing
+    /// can mis-route one.</para>
+    ///
+    /// <para>The org is still seeded WITH a supplier on purpose: the claim is not merely "no order
+    /// appeared", it is "no order appeared even though a supplier was sitting right there to be
+    /// mis-routed to".</para>
+    ///
+    /// <para><b>This cell is meant to re-light.</b> The day the EDI licence lands and an ASN ingress
+    /// endpoint comes back, this assertion fails — deliberately. That is the prompt to answer the
+    /// matrix's question for the ASN channel (which supplier, and what happens when none can be
+    /// determined) before the endpoint ships, rather than after.</para>
     /// </summary>
     private async Task<(CellActual, Guid?)> DesadvCellAsync(RoutingCell cell)
     {
-        var (orgId, supplierId) = await SeedOrgWithSupplierAsync(cell.Id);
+        // Seeded but unused: a supplier that exists and must still not be reached.
+        var (orgId, _) = await SeedOrgWithSupplierAsync(cell.Id);
 
-        var tenant = new Mock<ICurrentTenantService>();
-        tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
+        var asnRoutes = EndpointReachabilityScanner
+            .Endpoints(typeof(DesadvController).Assembly)
+            .Where(e => e.Path.StartsWith("/api/asns", StringComparison.Ordinal))
+            .ToList();
 
-        var ctrl = new DesadvController(new Mock<IDesadvService>().Object, tenant.Object)
-        {
-            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
-        };
+        // Anti-vacuity: "no writing route" is trivially true of a route table that resolved
+        // nothing, which is how this cell would go green by having looked at nothing at all.
+        asnRoutes.Should().NotBeEmpty(
+            "{0} reads the real route table, and finding NO /api/asns route means the MVC inventory "
+            + "broke — not that the ingress door is gone", cell.Label);
 
-        var result = ctrl.Upload(FormFileFor("asn.edi", CsvBytes, "application/edifact"), supplierId);
+        asnRoutes.Where(e => e.Method != "GET").Should().BeEmpty(
+            "{0}: /api/asns is read-only. A writing ASN route is an ingress path for a format this "
+            + "product cannot parse, and it must answer this matrix's routing question before it "
+            + "ships", cell.Label);
 
-        return (await ObserveAsync(orgId, HttpStatusOf(result)), null);
+        return (await ObserveAsync(orgId, null), null);
     }
 
     // ── Observation ─────────────────────────────────────────────────────────────────────
