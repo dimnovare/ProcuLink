@@ -5,9 +5,20 @@ using ProcuLink.Core.Services;
 namespace ProcuLink.Api.Controllers;
 
 /// <summary>
-/// DESADV (Advance Shipping Notice) endpoints.
-/// Full EDIFACT DESADV parsing is deferred pending EdiFabric licence.
-/// Upload and list work; parsing returns 202 Accepted (file stored, not yet parsed).
+/// DESADV (Advance Shipping Notice) endpoints. Read-only: this controller lists the ASNs an
+/// organisation already holds, and nothing here ingests one.
+///
+/// <para><b>Why there is no upload.</b> Full EDIFACT DESADV parsing needs a commercial EDI licence
+/// (<c>EdifactDesadvParser</c> throws <c>NotImplementedException</c>), so <c>POST /api/asns/upload</c>
+/// could only ever refuse — it answered 501 with a licence note, and the ASN page deliberately
+/// rendered no control that reached it. <c>GET /api/asns/{id}</c> likewise had no caller in either
+/// repository. Both were deleted 2026-08-26: a door that nothing can open is not a smaller feature
+/// than a working one, it is a claim the product cannot honour, and the endpoint reachability guard
+/// exists to say so.</para>
+///
+/// <para><b>When the licence lands</b>, the upload endpoint comes back — with a parser behind it,
+/// and with cell <c>7a</c> of <c>SupplierRoutingMatrixPostgresTests</c> demanding it answer the
+/// supplier-routing question before it can ship.</para>
 /// </summary>
 [Authorize]
 [ApiController]
@@ -23,25 +34,15 @@ public sealed class DesadvController : ControllerBase
         _tenant = tenant;
     }
 
-    // POST /api/asns/upload
-    [HttpPost("upload")]
-    [RequestSizeLimit(10 * 1024 * 1024)]
-    public IActionResult Upload(IFormFile file, [FromQuery] Guid? supplierId)
-    {
-        // EDIFACT DESADV parsing is not implemented (it requires a commercial EDI
-        // licence — see EdifactDesadvParser, which throws NotImplementedException).
-        // 501 is the honest contract: we do NOT accept + silently shelve a file we
-        // can never parse (the old 202 implied processing that never happens).
-        // ASN/DESADV intake is also hidden in the UI (NEXT_PUBLIC_INBOUND_ENABLED
-        // off); this guards a direct API caller.
-        _ = file; _ = supplierId;
-        return StatusCode(501, new
-        {
-            error = "ASN / EDIFACT DESADV ingestion is not available yet (it requires a commercial EDI licence). Contact support if you need it.",
-        });
-    }
-
     // GET /api/asns
+    //
+    // `packageCount` is a field the client has always asked for and never got — AsnDto in
+    // project-proculink declares `packageCount: number` and the ASN page renders a Packages
+    // column, which read `undefined` because this projection never counted them. It is also now
+    // the only reader of the AsnPackages table anywhere in this repo: deleting GET /api/asns/{id}
+    // took away its `.Include(a => a.Packages)`, and OrphanGuardTests correctly refused a table
+    // that is written and never queried. The remaining AsnDto mismatches (asnNumber, shipDate,
+    // supplierName) are a separate pre-existing defect and are deliberately untouched here.
     [HttpGet]
     public async Task<IActionResult> List(CancellationToken ct)
     {
@@ -50,17 +51,7 @@ public sealed class DesadvController : ControllerBase
         return Ok(asns.Select(a => new
         {
             a.Id, a.ShipmentId, a.Status, a.DespatchDate,
-            a.SourceFileName, a.CreatedAt,
+            a.SourceFileName, a.CreatedAt, a.PackageCount,
         }));
-    }
-
-    // GET /api/asns/{id}
-    [HttpGet("{id:guid}")]
-    public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
-    {
-        var orgId = _tenant.OrganisationId;
-        var asn   = await _desadv.GetAsync(orgId, id, ct);
-        if (asn is null) return NotFound();
-        return Ok(asn);
     }
 }
