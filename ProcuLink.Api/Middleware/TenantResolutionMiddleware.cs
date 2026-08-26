@@ -64,7 +64,12 @@ public sealed class TenantResolutionMiddleware
     // Retry-After on the 503 we answer when the database could not be reached. Two seconds is
     // longer than a Neon cold start normally takes and short enough that a retry still reads as a
     // slow page rather than an outage.
-    private const string RetryAfterSeconds = "2";
+    //
+    // Shared with TenantNotResolvedExceptionHandler, which answers the sibling condition — the
+    // request reached a tenant-scoped endpoint with no organisation resolved. From the client's
+    // side those are one situation ("no tenant right now"), so they must not advertise two
+    // different retry cadences; they differ only in where the request gave up.
+    internal const string RetryAfterSeconds = "2";
 
     // Hard upper bound on the number of distinct throttle keys we keep state for. The
     // sliding window only protects against repeats from the SAME key; without this cap a
@@ -130,9 +135,13 @@ public sealed class TenantResolutionMiddleware
     {
         // Tenant resolution touches the database, and the database is Neon, which suspends when
         // idle. A transient fault here used to reach the client as whatever the failure happened
-        // to look like downstream — most often UnauthorizedAccessException("Organisation not
-        // resolved"), which reads as "you are not allowed in" when the truth was "the database
-        // was still waking up". Answer honestly instead, and let the caller retry.
+        // to look like downstream — most often the unresolved-tenant throw from
+        // CurrentTenantService.OrganisationId, which was an UnauthorizedAccessException reading
+        // "you are not allowed in" when the truth was "the database was still waking up". Answer
+        // honestly instead, and let the caller retry. (That downstream throw is now
+        // TenantNotResolvedException and answers 503 in its own right — see
+        // TenantNotResolvedExceptionHandler — so the two paths agree even when this one is not
+        // the one that fires.)
         try
         {
             await ResolveTenantAsync(context, analytics, dbOptions);
@@ -403,8 +412,8 @@ public sealed class TenantResolutionMiddleware
             // them, and on a cold database the winner's INSERT can take seconds to commit. Every
             // sibling in that burst therefore arrives here having also seen "no row", spends a
             // reservation, and the ones past the cap were failed closed. Downstream that surfaced
-            // as UnauthorizedAccessException("Organisation not resolved") — an authorization
-            // error on the first screen a new customer ever sees, caused by a slow database.
+            // as "Organisation not resolved" — then an authorization error, and a 500 at the edge,
+            // on the first screen a new customer ever sees, caused by a slow database.
             //
             // So re-read before giving up. If the row exists now, a sibling created it and this
             // request simply belongs to it. Nothing is created on this path, so the
