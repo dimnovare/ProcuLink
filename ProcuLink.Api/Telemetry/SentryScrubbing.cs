@@ -41,7 +41,15 @@ public static class SentryScrubbing
         // only hook that works: SentryEvent.Breadcrumbs is read-only, so BeforeSend cannot rewrite
         // breadcrumbs that are already on the event.
         options.SetBeforeBreadcrumb((breadcrumb, _) => Scrub(breadcrumb));
-        options.SetBeforeSend((e, _) => Scrub(e));
+
+        // The ONE BeforeSend, doing two jobs, because there can only be one: Sentry's
+        // SetBeforeSend replaces rather than chains, and SentryScrubbingHostWiringTests fails the
+        // build if a second call appears in either host's Program.cs. So a filter that needs this
+        // hook has to be composed here rather than registered separately.
+        //
+        // Dropping is checked BEFORE redaction, which is only an efficiency: an event on its way
+        // to /dev/null does not need its secrets rewritten first.
+        options.SetBeforeSend((e, _) => ExpectedLogNoise.ShouldDrop(e) ? null : Scrub(e));
         options.SetBeforeSendTransaction((t, _) => Scrub(t));
     }
 

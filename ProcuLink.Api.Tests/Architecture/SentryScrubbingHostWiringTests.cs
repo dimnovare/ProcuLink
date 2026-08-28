@@ -261,7 +261,9 @@ public class SentryScrubbingHostWiringTests
     /// <c>SentryScrubbing.Scrub</c> directly is the point: it proves the delegate is genuinely
     /// installed, not merely that a redaction method exists somewhere.
     /// </summary>
-    private static T? Internal<T>(SentryOptions options, string propertyName) where T : class
+    // internal, not private: ExpectedLogNoiseTests needs the same hook to prove the filter is
+    // actually attached, and a second copy of a reflection hack is a second thing to drift.
+    internal static T? Internal<T>(SentryOptions options, string propertyName) where T : class
     {
         var property = typeof(SentryOptions).GetProperty(
             propertyName, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
