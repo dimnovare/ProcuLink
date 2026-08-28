@@ -10,7 +10,25 @@
 - **No test pins the throw, though one incidentally trips it.** Zero hits for `parseStatus` or `unknown standards catalog id` across `*.test.ts(x)` — delete the `throw`, return a default, and nothing goes red. A typo'd id *does* also fail `bun run test` (**FE** `ci.yml:110`) because `gatedCapabilityClaims.test.ts:6` imports the module and ES-module evaluation runs `:71-75`. That is a side effect of an import, not a pin.
 - **Scope limit:** the guard fires on the `id` argument only. A wrong `name`, `note`, or a wrong `parse:` level in `standards/catalog.ts` renders a silently wrong badge. It also covers `IMPORT_FORMATS` only — `OUTPUT_FORMATS` (`format-catalog.ts:94-102`) is seven hardcoded literals with no derivation at all, which is exactly where the outbound over-claim below slipped through.
 
-**Target implementation (`WP-40`) — NOT BUILT.** `FE/src/lib/capability-ledger.ts` does not exist: zero hits for `capability-ledger` / `capabilityLedger` / `CapabilityLedger` across `src/`, `scripts/` and `.github/`. **Nothing carries this document's schema** — no typed row with `documented` / `exposed` / `selfService` / `liveProven` columns, and therefore no check that fails when copy claims a capability with no row. The frontend does have two genuinely adjacent mechanisms, and the honest statement is that they cover *different* claim surfaces rather than this one: `standards/catalog.ts:35,40-56,74` is a typed capability-row table (`parse` / `transform` / `conformance` levels), and `legalCommitments.test.tsx:841-854` is a coverage guard that fails when a public page has no row in `PUBLIC_PAGES` (`:456`) and no reasoned exclusion (`:766`). `gatedCapabilityClaims.test.ts` checks **tier** correctness against a hand-typed mirror. None of the three can fail on "this sentence claims a capability nothing implements". This document is therefore still prose, and still rots. **Building the typed constant remains open work; this revision only re-derives the content.**
+**Target implementation (`WP-40`) — RETIRED 2026-08-28, not built and not to be built.**
+
+`FE/src/lib/capability-ledger.ts` still does not exist. It was scoped on 2026-07-27, re-derived once under WP-40 on 2026-08-01, and carried as open work for a month. Retiring it is a decision, not a lapse, and the reasoning is recorded here so month seven does not re-open it.
+
+**The stated target is not mechanically decidable.** It was "a check that fails when copy claims a capability with no row". To fail, something has to decide which sentences are claims — and nothing can, short of a human reading them. Every attempt at that shape in this repo has ended as a hand-typed list of claims, which is one more mirror that rots: the exact failure this ledger exists to name. A guard that needs a human to maintain its input does not replace the audit; it adds a second thing to keep true.
+
+**Where a claim IS machine-identifiable, it is already guarded.** Verified against the tree on 2026-08-28, not taken from this document's own say-so:
+
+| Guard | Fails when | Verified |
+|---|---|---|
+| `format-catalog.ts:45` unknown-id throw | a format id has no catalog row — at module-init inside a prerendered page, so `bun run build` fails | as documented above |
+| `FE/src/lib/standards/catalog.ts` | — | typed rows exist; **the path in the paragraph this replaces was stale** (it read `standards/catalog.ts` under `(app)`) |
+| `legalCommitments.test.tsx:847-852` | a marketing page is in neither `PUBLIC_PAGES` (`:456`) nor `NOT_IN_THE_TABLE` (`:761`) | present and asserting |
+| `gatedCapabilityClaims.test.ts` | an advertised tier does not match the enforced tier; a pricing card sells a capability whose backend gate was deleted; a channel is not sold from Growth up; the Pilot card sells a gated capability | 73 assertions across those cases |
+| `BillingGateEnforcementIsRealTests` (BE) | a feature's named production method does not provably reach the gate primitive — read from compiled IL, both directions | the guard §11.5 of the FE CLAUDE.md points at |
+
+**What stays.** This document, as a document: the schema, the rows and — the part with live value — the numbered unknowns. Two are still open (#9 rotation record, #10 filename-change notice) and both are founder actions. Prose that is read by a person on a schedule is a weaker mechanism than a build error, and it is the honest one here. Calling it "still open work" for another month would have been the fiction.
+
+**If this is ever revisited**, the tractable version is narrower than the original: pick ONE surface where claims are already enumerated as data — output formats are the obvious candidate, since `OUTPUT_FORMATS` (`format-catalog.ts:94-102`) is seven hardcoded literals with no derivation and is exactly where the outbound over-claim slipped through — and derive it, the way `IMPORT_FORMATS` already is. That is a real gap with a real mechanism. "A row for every capability in the product" is not.
 
 ---
 
