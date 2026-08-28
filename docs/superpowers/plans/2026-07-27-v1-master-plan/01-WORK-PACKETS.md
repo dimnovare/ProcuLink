@@ -386,10 +386,12 @@ Check 1 result: **`Connections__RevisionAuthority = true` on BOTH Railway servic
 **AC:** 12 journeys, both viewports, every finding in this plan either confirmed or struck with evidence.
 **Deps:** Wave 4 complete. **Skills:** `design-review`.
 
-## WP-40 · Reconcile the ledger — `M` — risk: low
-**Do:** every row in `04-CAPABILITY-TRUTH-LEDGER.md` gets a live-proof link or an honest in-product label. CI fails if a marketing string claims something no ledger row supports.
+## WP-40 · Reconcile the ledger — `M` — risk: low — **CLOSED 2026-08-28**
+**Do:** every row in `04-CAPABILITY-TRUTH-LEDGER.md` gets a live-proof link or an honest in-product label. ~~CI fails if a marketing string claims something no ledger row supports.~~
 **AC:** zero rows claim `live-proven` without an evidence link.
 **Deps:** WP-38, WP-39. **Skills:** `superpowers:verification-before-completion`.
+
+**Outcome.** First half done 2026-08-01 (the ledger was re-derived from code). Second half **retired, not built** — a check cannot fail on "this sentence claims a capability" without a human deciding which sentences are claims, and every attempt at that shape here becomes another hand-typed list that rots. The surfaces where a claim IS enumerable as data are already guarded by five mechanisms, verified against the tree on 2026-08-28. Full reasoning, the verification table, and the one narrower version worth building if it is ever revisited: `04-CAPABILITY-TRUTH-LEDGER.md`.
 
 ## WP-41 · Accessibility + visual-regression CI — `M` — risk: low
 **Why:** no automated a11y or visual check anywhere, and exactly **one** mobile-viewport assertion runs in CI.
