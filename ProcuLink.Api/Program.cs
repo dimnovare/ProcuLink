@@ -153,7 +153,11 @@ builder.Services.AddDataProtection()
 
 if (!string.IsNullOrWhiteSpace(builder.Configuration["DataProtection:EncryptionKey"]))
 {
-    builder.Services.AddTransient<AesGcmXmlDecryptor>();
+    // No AddTransient<AesGcmXmlDecryptor> here, deliberately. One used to sit on
+    // this line and did nothing: the key ring names the decryptor type in its XML
+    // and DataProtection builds it with its own activator, which never looks in the
+    // service collection. The decryptor's IServiceProvider constructor is what makes
+    // it constructible — see the comment on it.
     builder.Services.Configure<KeyManagementOptions>(options =>
     {
         options.XmlEncryptor = new AesGcmXmlEncryptor(builder.Configuration);
