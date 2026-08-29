@@ -106,6 +106,10 @@ StripeConfiguration.AppInfo = new AppInfo { Name = "ProcuLink", Url = "https://p
 // every DbContext, so all tracked Status writes flow through one observation point. It
 // only logs warnings on unexpected transitions — it never blocks or mutates a save.
 builder.Services.AddSingleton<ProcuLink.Infrastructure.Services.OrderStatusTransitionObserver>();
+// Time-boxed diagnostic: record database faults against the in-flight request so the
+// middleware below can say whether that request survived them. See DatabaseFaultOutcome.
+builder.Services.AddSingleton<ProcuLink.Api.Middleware.DatabaseFaultOutcome.ConnectionObserver>();
+builder.Services.AddSingleton<ProcuLink.Api.Middleware.DatabaseFaultOutcome.TransactionObserver>();
 builder.Services.AddDbContext<ProcuLinkDbContext>((sp, options) =>
     // Read the connection string LAZILY here (per DbContext creation, after the host is
     // built) so WebApplicationFactory integration tests that override
@@ -114,7 +118,10 @@ builder.Services.AddDbContext<ProcuLinkDbContext>((sp, options) =>
     // BuildPooledConnectionString.
     options.UseNpgsql(BuildPooledConnectionString(
             builder.Configuration.GetConnectionString("DefaultConnection"), maxPoolSize: 30))
-        .AddInterceptors(sp.GetRequiredService<ProcuLink.Infrastructure.Services.OrderStatusTransitionObserver>()));
+        .AddInterceptors(
+            sp.GetRequiredService<ProcuLink.Infrastructure.Services.OrderStatusTransitionObserver>(),
+            sp.GetRequiredService<ProcuLink.Api.Middleware.DatabaseFaultOutcome.ConnectionObserver>(),
+            sp.GetRequiredService<ProcuLink.Api.Middleware.DatabaseFaultOutcome.TransactionObserver>()));
 
 static string? BuildPooledConnectionString(string? raw, int maxPoolSize)
 {
@@ -942,6 +949,11 @@ var app = builder.Build();
 // throttle) or Request.Scheme. Trust decision + ForwardLimit=1 rationale are
 // documented at the ForwardedHeadersOptions registration above.
 app.UseForwardedHeaders();
+
+// Immediately after forwarded headers so it wraps everything below and the status
+// code it reads is the one actually sent. Logs nothing unless a database fault was
+// recorded during the request.
+app.UseDatabaseFaultOutcome();
 
 // ── Startup configuration validation ─────────────────────────────────────
 // In Production any missing required key throws and lists every gap in one
