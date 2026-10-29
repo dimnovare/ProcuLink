@@ -1,4 +1,5 @@
 using System.Xml;
+using ProcuLink.Core.Catalog;
 using ProcuLink.Core.Entities;
 using ProcuLink.Transform.Parsing;
 
@@ -106,6 +107,12 @@ public static partial class SupplierCatalogFileParser
         var drafts = new List<SupplierProduct>();
         using var reader = XmlReader.Create(stream, SafeXmlReaderSettings());
 
+        // Presence (cXML Index): a field is present when ANY IndexItem carries the element (or
+        // Money@currency attribute) that maps to it, empty or not. The fixed header list above is
+        // what the standard COULD carry, not what this file did, so it is not used. A cXML Index
+        // has no barcode element at all, which is exactly why re-pulling one must not clear them.
+        var present = CatalogFields.None;
+
         var rows = 0;
         try
         {
@@ -125,6 +132,7 @@ public static partial class SupplierCatalogFileParser
                 // global CSV/CIF aliases don't cover PascalCase cXML names). Per-source overrides
                 // still win (D3) so a non-standard feed can retarget any element.
                 var fields = MapNamedRow(raw, MergeCxmlOverrides(overrides));
+                present |= PresenceOf(fields.Keys);
                 var draft = RowToDraft(fields);
                 if (draft is not null) drafts.Add(draft);
             }
@@ -134,7 +142,7 @@ public static partial class SupplierCatalogFileParser
             throw new InvalidDataException("Catalog XML could not be parsed.", ex);
         }
 
-        return new CatalogFileParseResult(drafts, CxmlIndexHeaderColumns, "cxml_index");
+        return new CatalogFileParseResult(drafts, CxmlIndexHeaderColumns, "cxml_index", present);
     }
 
     /// <summary>
@@ -234,6 +242,13 @@ public static partial class SupplierCatalogFileParser
         var headerSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var rows = 0;
 
+        // Presence (generic XML): a field is present when ANY row carries an attribute or a scalar
+        // child element that maps to it — union over the file, the same rule as JSON. An empty
+        // element (<Barcode/>) is XML's blank cell, so it counts. A nested, non-scalar element is
+        // never read as a value, so it does not.
+        var present = CatalogFields.None;
+        var emptyChildren = new List<string>();
+
         using var reader = XmlReader.Create(stream, SafeXmlReaderSettings());
         try
         {
@@ -247,9 +262,21 @@ public static partial class SupplierCatalogFileParser
                 if (++rows > MaxCatalogRows) throw new CatalogTooLargeException(RowCapMessage);
 
                 var raw = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-                FlattenElement(reader, raw, headerOrder, headerSeen, ct);
+                emptyChildren.Clear();
+                FlattenElement(reader, raw, headerOrder, headerSeen, emptyChildren, ct);
 
                 var fields = MapNamedRow(raw, overrides);
+                present |= PresenceOf(fields.Keys);
+                if (emptyChildren.Count > 0)
+                {
+                    // Empty elements are kept OUT of `raw`, so they can never displace a populated
+                    // element for the same field (an empty <EAN/> ahead of <Barcode>…</Barcode>).
+                    // They only contribute presence, through the same name → field mapping.
+                    var declared = new Dictionary<string, string?>(raw, StringComparer.OrdinalIgnoreCase);
+                    foreach (var name in emptyChildren) declared.TryAdd(name, null);
+                    present |= PresenceOf(MapNamedRow(declared, overrides).Keys);
+                }
+
                 var draft = RowToDraft(fields);
                 if (draft is not null) drafts.Add(draft);
             }
@@ -259,7 +286,7 @@ public static partial class SupplierCatalogFileParser
             throw new InvalidDataException("Catalog XML could not be parsed.", ex);
         }
 
-        return new CatalogFileParseResult(drafts, headerOrder, "xml");
+        return new CatalogFileParseResult(drafts, headerOrder, "xml", present);
     }
 
     /// <summary>
@@ -315,11 +342,13 @@ public static partial class SupplierCatalogFileParser
     /// Flattens one row element into name→value: all ATTRIBUTES, plus each SCALAR child element's
     /// text (children with their own element children — nested trees like <c>ImgGal</c> — are
     /// skipped, not recursed). First value for a name wins. Header names are collected in
-    /// first-seen order for the honesty report.
+    /// first-seen order for the honesty report. Empty child elements carry no value and stay out
+    /// of <paramref name="raw"/>; their names go to <paramref name="emptyChildren"/> for presence.
     /// </summary>
     private static void FlattenElement(
         XmlReader outer, IDictionary<string, string?> raw,
-        List<string> headerOrder, HashSet<string> headerSeen, CancellationToken ct)
+        List<string> headerOrder, HashSet<string> headerSeen, List<string> emptyChildren,
+        CancellationToken ct)
     {
         // Attributes of the row element (captured before we descend into a subtree reader).
         if (outer.HasAttributes)
@@ -361,6 +390,7 @@ public static partial class SupplierCatalogFileParser
             if (reader.IsEmptyElement)
             {
                 if (headerSeen.Add(childName)) headerOrder.Add(childName);
+                emptyChildren.Add(childName);
                 moved = reader.Read();
                 continue;
             }
@@ -519,6 +549,10 @@ public static partial class SupplierCatalogFileParser
             if (draft is not null) drafts.Add(draft);
         }
 
-        return new CatalogFileParseResult(drafts, header, "cif");
+        // Presence (CIF): the FIELDNAMES columns that mapped, like a CSV header — plus currency
+        // when the header block declares CURRENCY:, since that value is applied to every row.
+        var present = PresenceOf(colMap.Values);
+        if (defaultCurrency is not null) present |= CatalogFields.Currency;
+        return new CatalogFileParseResult(drafts, header, "cif", present);
     }
 }

@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Text;
 using ClosedXML.Excel;
 using FluentAssertions;
+using ProcuLink.Core.Catalog;
 using ProcuLink.Transform.Catalog;
 using SharpCompress.Common;
 using SharpCompress.Writers;
@@ -439,5 +440,148 @@ public class SupplierCatalogFileParserTests
 
         result.Format.Should().Be("csv");
         result.Drafts.Should().ContainSingle().Which.Code.Should().Be("A-1");
+    }
+    // ── Present fields: which catalog columns the file actually carried ──────
+    //
+    // A re-import must only overwrite the columns the file spoke about. Every parser therefore
+    // reports the set of fields it found a column for; a blank cell inside a present column is
+    // still "present" (that is how a supplier removes a value), an absent column is not.
+
+    private static Stream Utf8(string content) => new MemoryStream(Encoding.UTF8.GetBytes(content));
+
+    [Fact]
+    public async Task ParseCsv_PresentFields_AreExactlyTheMappedColumns()
+    {
+        var result = await SupplierCatalogFileParser.ParseCsvAsync(
+            Csv("code,price,internal_notes\nRES-220,0.05,ignore me\n"), CancellationToken.None);
+
+        result.PresentFields.Should().Be(CatalogFields.Price,
+            "a price-update file says nothing about names, units or barcodes, and an unmapped "
+            + "column is not a catalog field");
+    }
+
+    [Fact]
+    public async Task ParseCsv_PresentFields_IncludeAColumnWhoseCellIsBlank()
+    {
+        var result = await SupplierCatalogFileParser.ParseCsvAsync(
+            Csv("sku,description,uom,unit_price,gtin\nRES-220,Resistor,PCS,0.04,\n"), CancellationToken.None);
+
+        result.PresentFields.Should().Be(
+            CatalogFields.Name | CatalogFields.Unit | CatalogFields.Price | CatalogFields.Barcode);
+        result.Drafts.Should().ContainSingle().Which.Barcode.Should().BeNull("the cell itself is blank");
+    }
+
+    [Fact]
+    public async Task ParseCsv_Headerless_PresentFields_AreThePositionalMappings()
+    {
+        var overrides = new Dictionary<string, string>
+        {
+            ["__noheader__"] = "true",
+            ["0"] = "code",
+            ["2"] = "price",
+        };
+
+        var result = await SupplierCatalogFileParser.ParseCsvAsync(
+            Csv("RES-220,not mapped,0.05\n"), CancellationToken.None, overrides, encoding: null);
+
+        result.PresentFields.Should().Be(CatalogFields.Price);
+        result.Drafts.Should().ContainSingle().Which.Price.Should().Be(0.05m);
+    }
+
+    [Fact]
+    public void ParseXlsx_PresentFields_AreExactlyTheMappedColumns()
+    {
+        using var xlsx = BuildXlsx(
+            new[] { "code", "price", "internal_notes" },
+            new[] { new string?[] { "RES-220", "0.05", "ignore me" } });
+
+        var result = SupplierCatalogFileParser.ParseXlsx(xlsx);
+
+        result.PresentFields.Should().Be(CatalogFields.Price);
+    }
+
+    [Fact]
+    public async Task ParseJson_PresentFields_AreTheUnionOfMappedKeysAcrossAllObjects()
+    {
+        // No object has a name key → name absent. One object states "barcode": null → a stated
+        // blank, so barcode counts as present for the whole file.
+        var json = """[ { "code": "A-1", "price": 1.5 }, { "code": "A-2", "barcode": null } ]""";
+
+        var result = await SupplierCatalogFileParser.ParseJsonAsync(Json(json), CancellationToken.None);
+
+        result.PresentFields.Should().Be(CatalogFields.Price | CatalogFields.Barcode);
+    }
+
+    [Fact]
+    public async Task ParseGenericXml_PresentFields_CountAnEmptyElement_ButNotAMissingOne()
+    {
+        // <Barcode/> is XML's blank cell — present. No row has a Name element — absent.
+        var xml = "<Products>"
+                + "<Product><Code>A-1</Code><Price>1.50</Price><Barcode/></Product>"
+                + "<Product><Code>A-2</Code><Price>2.00</Price><Barcode/></Product>"
+                + "</Products>";
+
+        var result = await SupplierCatalogFileParser.ParseXmlAsync(Utf8(xml), CancellationToken.None);
+
+        result.Format.Should().Be("xml");
+        result.PresentFields.Should().Be(CatalogFields.Price | CatalogFields.Barcode);
+        result.Drafts.Should().HaveCount(2).And.OnlyContain(d => d.Barcode == null && d.Name == null);
+    }
+
+    [Fact]
+    public async Task ParseGenericXml_EmptyElement_DoesNotDisplaceALaterValueForTheSameField()
+    {
+        // Presence tracking must not change a draft value: an empty <EAN/> ahead of a populated
+        // <Barcode> (both alias to barcode) still yields the populated value, as it always did.
+        var xml = "<Products>"
+                + "<Product><Code>A-1</Code><EAN/><Barcode>4001234000010</Barcode></Product>"
+                + "<Product><Code>A-2</Code><EAN/><Barcode>4001234000027</Barcode></Product>"
+                + "</Products>";
+
+        var result = await SupplierCatalogFileParser.ParseXmlAsync(Utf8(xml), CancellationToken.None);
+
+        result.Drafts.Select(d => d.Barcode).Should().Equal("4001234000010", "4001234000027");
+        result.PresentFields.Should().Be(CatalogFields.Barcode);
+    }
+
+    [Fact]
+    public async Task ParseGenericXml_AttributeStyleRows_PresentFields_AreTheMappedAttributes()
+    {
+        var xml = "<Result><StoItem Code=\"A-1\" Price=\"1.50\"/><StoItem Code=\"A-2\" Price=\"2.00\"/></Result>";
+
+        var result = await SupplierCatalogFileParser.ParseXmlAsync(Utf8(xml), CancellationToken.None);
+
+        result.Drafts.Should().HaveCount(2);
+        result.PresentFields.Should().Be(CatalogFields.Price);
+    }
+
+    [Fact]
+    public async Task ParseCxmlIndex_PresentFields_AreTheElementsTheItemsCarried()
+    {
+        // A cXML Index has no barcode element at all, so re-pulling one must never wipe barcodes
+        // that a CSV import supplied.
+        var xml = "<Index><IndexItem><IndexItemAdd>"
+                + "<ItemID><SupplierPartID>A-1</SupplierPartID></ItemID>"
+                + "<ItemDetail><UnitPrice><Money currency=\"EUR\">7.01</Money></UnitPrice>"
+                + "<Description>Widget</Description><UnitOfMeasure>EA</UnitOfMeasure></ItemDetail>"
+                + "</IndexItemAdd></IndexItem></Index>";
+
+        var result = await SupplierCatalogFileParser.ParseXmlAsync(Utf8(xml), CancellationToken.None);
+
+        result.Format.Should().Be("cxml_index");
+        result.PresentFields.Should().Be(
+            CatalogFields.Name | CatalogFields.Unit | CatalogFields.Price | CatalogFields.Currency);
+    }
+
+    [Fact]
+    public async Task ParseCif_PresentFields_IncludeTheHeaderBlockCurrency()
+    {
+        var cif = "CIF_I_V3.0\nCURRENCY: EUR\nFIELDNAMES: Supplier Part ID,Unit Price\nDATA\nA-1,7.01\nENDOFDATA\n";
+
+        var result = await SupplierCatalogFileParser.ParseCifAsync(Utf8(cif), CancellationToken.None);
+
+        result.Format.Should().Be("cif");
+        result.PresentFields.Should().Be(CatalogFields.Price | CatalogFields.Currency,
+            "CURRENCY: supplies every row's currency, so the file does speak about it");
     }
 }

@@ -196,7 +196,10 @@ public class CatalogPullService : ICatalogPullService
             if (withCode == 0)
                 throw new CatalogSyncException(ErrNoCodeColumn);
 
-            var (created, updated) = await _catalog.UpsertManyAsync(orgId, source.SupplierId, drafts, ct);
+            // Only the columns the pulled file carried are written to existing products, so a feed
+            // without e.g. a barcode column never erases barcodes an earlier import supplied.
+            var (created, updated) = await _catalog.UpsertManyAsync(
+                orgId, source.SupplierId, drafts, ct, fetched.Parse.PresentFields);
             var skipped = drafts.Count - withCode;
 
             source.LastSyncAt = DateTime.UtcNow;

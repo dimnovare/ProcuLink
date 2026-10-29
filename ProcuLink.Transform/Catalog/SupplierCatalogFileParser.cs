@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using ProcuLink.Core.Catalog;
 using ProcuLink.Core.Entities;
 using ProcuLink.Transform.Parsing;
 
@@ -248,6 +249,32 @@ public static partial class SupplierCatalogFileParser
     }
 
     /// <summary>
+    /// The presence flags for a set of canonical field names — the fields a file carried a column
+    /// for, which the upsert uses to keep stored values for every column the file did not have.
+    /// <c>code</c> maps to nothing: it is the upsert key and always present.
+    /// </summary>
+    private static CatalogFields PresenceOf(IEnumerable<string> canonicalFields)
+    {
+        var present = CatalogFields.None;
+        foreach (var field in canonicalFields)
+        {
+            present |= field switch
+            {
+                "name"                     => CatalogFields.Name,
+                "unit"                     => CatalogFields.Unit,
+                "price"                    => CatalogFields.Price,
+                "currency"                 => CatalogFields.Currency,
+                "barcode"                  => CatalogFields.Barcode,
+                "external_id"              => CatalogFields.ExternalId,
+                "manufacturer_part_number" => CatalogFields.ManufacturerPartNumber,
+                "manufacturer_name"        => CatalogFields.ManufacturerName,
+                _                          => CatalogFields.None,
+            };
+        }
+        return present;
+    }
+
+    /// <summary>
     /// Locale-tolerant decimal parse for catalog prices (plan 2026-07-02, locale-bug memory).
     /// Real EU distributor feeds ship comma decimals (e.g. <c>674,68</c>); invariant
     /// <see cref="System.Globalization.NumberStyles.Any"/> would read that as <c>67468</c>
@@ -490,7 +517,9 @@ public static partial class SupplierCatalogFileParser
                 if (++dataRows > MaxCatalogRows) throw new CatalogTooLargeException(RowCapMessage);
                 AddRow(SplitDelimitedLine(line, delimiter), colMapNh, drafts);
             }
-            return new CatalogFileParseResult(drafts, header, "csv");
+            // Presence (headerless): the fields a positional mapping addressed. A row too short to
+            // reach a mapped index reads that field as blank, like an empty cell.
+            return new CatalogFileParseResult(drafts, header, "csv", PresenceOf(colMapNh.Values));
         }
 
         header = SplitDelimitedLine(firstLine, delimiter).Select(h => h.Trim().Trim('"')).ToList();
@@ -510,7 +539,9 @@ public static partial class SupplierCatalogFileParser
             AddRow(SplitDelimitedLine(line, delimiter), colMap, drafts);
         }
 
-        return new CatalogFileParseResult(drafts, header, "csv");
+        // Presence (CSV): exactly the fields the header mapped to a column. A blank cell in one of
+        // them is present-and-empty; a field with no column is absent and keeps its stored value.
+        return new CatalogFileParseResult(drafts, header, "csv", PresenceOf(colMap.Values));
 
         static void AddRow(List<string> parts, Dictionary<int, string> map, List<SupplierProduct> sink)
         {
@@ -609,7 +640,8 @@ public static partial class SupplierCatalogFileParser
             if (draft is not null) drafts.Add(draft);
         }
 
-        return new CatalogFileParseResult(drafts, header, "xlsx");
+        // Presence (XLSX): same rule as CSV — the fields the header row mapped to a column.
+        return new CatalogFileParseResult(drafts, header, "xlsx", PresenceOf(colMap.Values));
     }
 
     // ── JSON catalog parser (http API pull, plan 2026-06-12 v2 — B4) ───────────
@@ -660,6 +692,12 @@ public static partial class SupplierCatalogFileParser
             var headerOrder = new List<string>();
             var headerSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+            // Presence (JSON): a field is present when ANY object in the file has a key mapping to
+            // it — an explicit null included, which is a stated blank. Union over the file, not per
+            // object, because APIs that omit null properties mean "no value" by the omission; the
+            // only thing treated as silence is a field no object in the whole file mentions.
+            var present = CatalogFields.None;
+
             var dataRows = 0;
             foreach (var element in array.EnumerateArray())
             {
@@ -687,11 +725,12 @@ public static partial class SupplierCatalogFileParser
                         fields[canonical] = JsonValueToString(prop.Value);
                 }
 
+                present |= PresenceOf(fields.Keys);
                 var draft = RowToDraft(fields);
                 if (draft is not null) drafts.Add(draft);
             }
 
-            return new CatalogFileParseResult(drafts, headerOrder, "json");
+            return new CatalogFileParseResult(drafts, headerOrder, "json", present);
         }
     }
 
@@ -827,11 +866,18 @@ public static partial class SupplierCatalogFileParser
 /// <summary>
 /// Result of parsing one catalog file: the product drafts plus the header columns and the
 /// format that was actually parsed (consumed by the test-fetch honesty report).
+///
+/// <see cref="PresentFields"/> is the set of catalog fields the file carried a column for, which
+/// the upsert needs to tell "no such column" (keep the stored value) apart from "column with a
+/// blank cell" (clear it) — both reach it as a null draft field. Each parser states its own
+/// presence rule where it builds the result. Defaults to <see cref="CatalogFields.All"/>, the
+/// behaviour from before presence was tracked, for any result built without one.
 /// </summary>
 public sealed record CatalogFileParseResult(
     List<SupplierProduct> Drafts,
     IReadOnlyList<string> HeaderColumns,
-    string Format);
+    string Format,
+    CatalogFields PresentFields = CatalogFields.All);
 
 /// <summary>
 /// Thrown when a catalog file exceeds the row cap or trips the XLSX decompression-bomb

@@ -10,6 +10,7 @@ using ProcuLink.Api.Auth;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Services.StarterTemplates;
 using ProcuLink.Core.Canonical;
+using ProcuLink.Core.Catalog;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
@@ -955,6 +956,7 @@ public class SuppliersController : ControllerBase
         if (!await SupplierExistsAsync(orgId, id, ct)) return NotFound();
 
         List<SupplierProduct> drafts;
+        CatalogFields presentFields;
         try
         {
             // Shared parser (extension routing identical to the previous in-controller logic;
@@ -963,6 +965,7 @@ public class SuppliersController : ControllerBase
             await using var stream = file.OpenReadStream();
             var parseResult = await SupplierCatalogFileParser.ParseByFileNameAsync(stream, file.FileName, ct);
             drafts = parseResult.Drafts;
+            presentFields = parseResult.PresentFields;
         }
         catch (CatalogTooLargeException ex)
         {
@@ -978,7 +981,9 @@ public class SuppliersController : ControllerBase
         if (withCode == 0)
             return BadRequest("No rows with a product code were found. Ensure the file has a 'code' column.");
 
-        var (created, updated) = await _catalog.UpsertManyAsync(orgId, id, drafts, ct);
+        // Only the columns this file carried are written to existing products — a price-update
+        // file of code + price must not erase the names, units and barcodes already stored.
+        var (created, updated) = await _catalog.UpsertManyAsync(orgId, id, drafts, ct, presentFields);
 
         return Ok(new
         {

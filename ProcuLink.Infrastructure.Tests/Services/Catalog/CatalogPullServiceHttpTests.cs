@@ -467,10 +467,10 @@ public class CatalogPullServiceHttpTests
 
         public Task<IReadOnlyList<SupplierProduct>> ListAsync(Guid orgId, Guid supplierId, string? query, int? take, CancellationToken ct)
             => _inner.ListAsync(orgId, supplierId, query, take, ct);
-        public Task<(int Created, int Updated)> UpsertManyAsync(Guid orgId, Guid supplierId, IEnumerable<SupplierProduct> products, CancellationToken ct)
+        public Task<(int Created, int Updated)> UpsertManyAsync(Guid orgId, Guid supplierId, IEnumerable<SupplierProduct> products, CancellationToken ct, ProcuLink.Core.Catalog.CatalogFields presentFields = ProcuLink.Core.Catalog.CatalogFields.All)
         {
             UpsertCalls++;
-            return _inner.UpsertManyAsync(orgId, supplierId, products, ct);
+            return _inner.UpsertManyAsync(orgId, supplierId, products, ct, presentFields);
         }
         public Task<int> CountAsync(Guid orgId, Guid supplierId, CancellationToken ct) => _inner.CountAsync(orgId, supplierId, ct);
         public Task<int> DeleteAsync(Guid orgId, Guid supplierId, CancellationToken ct) => _inner.DeleteAsync(orgId, supplierId, ct);

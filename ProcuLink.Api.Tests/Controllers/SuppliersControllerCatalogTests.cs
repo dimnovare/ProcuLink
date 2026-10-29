@@ -133,6 +133,65 @@ public class SuppliersControllerCatalogTests
         rows[0].Price.Should().Be(11.50m);
     }
 
+    // ── re-import with fewer columns ─────────────────────────────────────────
+
+    private static readonly string FullCatalogCsv =
+        "code,name,unit,price,barcode\n" +
+        "RES-220,Resistor 220 Ohm,PCS,0.04,4001234000010\n" +
+        "CAP-100,Capacitor 100uF,PCS,0.12,4001234000027\n";
+
+    [Fact]
+    public async Task ImportCatalog_PriceOnlyReimport_KeepsNamesUnitsAndBarcodes()
+    {
+        // A supplier's monthly price update is code + price. It must update the prices and leave
+        // the rest of the product sheet from the first import alone.
+        var (controller, orgId, db) = BuildController();
+        var supplier = AddSupplier(db, orgId);
+        await db.SaveChangesAsync();
+
+        await controller.ImportCatalog(supplier.Id, CsvFile(FullCatalogCsv), CancellationToken.None);
+
+        var priceUpdate = "code,price\nRES-220,0.05\nCAP-100,0.15\n";
+        var result = await controller.ImportCatalog(supplier.Id, CsvFile(priceUpdate, "prices.csv"), CancellationToken.None);
+
+        var ok = result.Should().BeOfType<OkObjectResult>().Subject;
+        int updated = ((dynamic)ok.Value!).updated;
+        updated.Should().Be(2);
+
+        var rows = await db.SupplierProducts
+            .Where(p => p.OrgId == orgId && p.SupplierId == supplier.Id)
+            .ToListAsync();
+        rows.Should().HaveCount(2);
+        rows.Should().ContainSingle(p => p.Code == "RES-220" && p.Price == 0.05m
+                                         && p.Name == "Resistor 220 Ohm" && p.Unit == "PCS"
+                                         && p.Barcode == "4001234000010");
+        rows.Should().ContainSingle(p => p.Code == "CAP-100" && p.Price == 0.15m
+                                         && p.Name == "Capacitor 100uF" && p.Unit == "PCS"
+                                         && p.Barcode == "4001234000027");
+    }
+
+    [Fact]
+    public async Task ImportCatalog_BlankCellInAColumnTheFileCarries_ClearsThatValue()
+    {
+        // Present column, blank cell → the supplier removed the value. Absent column → kept.
+        var (controller, orgId, db) = BuildController();
+        var supplier = AddSupplier(db, orgId);
+        await db.SaveChangesAsync();
+
+        await controller.ImportCatalog(supplier.Id, CsvFile(FullCatalogCsv), CancellationToken.None);
+
+        var update = "code,price,barcode\nRES-220,0.05,\nCAP-100,0.15,4001234000099\n";
+        await controller.ImportCatalog(supplier.Id, CsvFile(update, "update.csv"), CancellationToken.None);
+
+        var rows = await db.SupplierProducts
+            .Where(p => p.OrgId == orgId && p.SupplierId == supplier.Id)
+            .ToListAsync();
+        rows.Should().ContainSingle(p => p.Code == "RES-220" && p.Barcode == null
+                                         && p.Name == "Resistor 220 Ohm" && p.Price == 0.05m);
+        rows.Should().ContainSingle(p => p.Code == "CAP-100" && p.Barcode == "4001234000099"
+                                         && p.Name == "Capacitor 100uF");
+    }
+
     [Fact]
     public async Task ImportCatalog_NoCodeColumn_Returns400()
     {

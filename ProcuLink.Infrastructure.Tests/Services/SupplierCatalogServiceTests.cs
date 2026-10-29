@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Core.Catalog;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
@@ -495,5 +496,123 @@ public class SupplierCatalogServiceTests
         // the search, it did not make it match everything.
         (await svc.ListAsync(orgId, supplierId, "LS2208", null, CancellationToken.None))
             .Should().BeEmpty();
+    }
+    // ── Re-import with a partial column set ───────────────────────────────────
+    //
+    // presentFields carries which columns the import file had. Absent → keep the stored value;
+    // present but blank → clear it. A null draft field alone cannot tell those apart.
+
+    [Fact]
+    public async Task UpsertManyAsync_Update_KeepsEveryFieldTheFileHadNoColumnFor()
+    {
+        // The customer scenario: the first import is the full product sheet, a later price update
+        // ships only code + price. Before presence was tracked it erased every name, unit,
+        // barcode and manufacturer part in the catalog.
+        await using var db = NewDb();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var svc = new SupplierCatalogService(db);
+
+        await svc.UpsertManyAsync(orgId, supplierId, new[]
+        {
+            Draft("RES-220", "Resistor 220 Ohm", 0.04m, "PCS", "4001234000010",
+                manufacturerPartNumber: "CFR-25JB-52-220R", manufacturerName: "Yageo"),
+        }, CancellationToken.None);
+
+        // Discontinue it in between, to prove a partial re-import still reactivates the code.
+        var stored = await db.SupplierProducts.SingleAsync(p => p.Code == "RES-220");
+        stored.IsActive = false;
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        var (created, updated) = await svc.UpsertManyAsync(orgId, supplierId, new[]
+        {
+            Draft("RES-220", price: 0.05m),
+        }, CancellationToken.None, CatalogFields.Price);
+
+        created.Should().Be(0);
+        updated.Should().Be(1);
+
+        var row = await RowAsync(db, "RES-220");
+        row.Price.Should().Be(0.05m, "price was in the file");
+        row.Name.Should().Be("Resistor 220 Ohm");
+        row.Unit.Should().Be("PCS");
+        row.Barcode.Should().Be("4001234000010");
+        row.ManufacturerPartNumber.Should().Be("CFR-25JB-52-220R");
+        row.ManufacturerPartNumberNormalized.Should().Be("CFR25JB52220R",
+            "the key stays paired with the raw value it was derived from");
+        row.ManufacturerName.Should().Be("Yageo");
+        row.IsActive.Should().BeTrue("a re-import reactivates the code whatever columns it carries");
+    }
+
+    [Fact]
+    public async Task UpsertManyAsync_Update_ClearsAFieldWhoseColumnIsPresentButBlank()
+    {
+        // A blank cell in a column the file DOES carry is how a supplier removes a value.
+        await using var db = NewDb();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var svc = new SupplierCatalogService(db);
+
+        await svc.UpsertManyAsync(orgId, supplierId, new[]
+        {
+            Draft("RES-220", "Resistor 220 Ohm", 0.04m, "PCS", "4001234000010"),
+        }, CancellationToken.None);
+
+        await svc.UpsertManyAsync(orgId, supplierId, new[]
+        {
+            Draft("RES-220", price: 0.05m, barcode: null),
+        }, CancellationToken.None, CatalogFields.Price | CatalogFields.Barcode);
+
+        var row = await RowAsync(db, "RES-220");
+        row.Barcode.Should().BeNull("the barcode column was present and its cell blank");
+        row.Price.Should().Be(0.05m);
+        row.Name.Should().Be("Resistor 220 Ohm", "no name column — kept");
+    }
+
+    [Fact]
+    public async Task UpsertManyAsync_Update_PresentButBlankMpn_ClearsTheRawValueAndItsKeyTogether()
+    {
+        await using var db = NewDb();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var svc = new SupplierCatalogService(db);
+
+        await svc.UpsertManyAsync(orgId, supplierId, new[]
+        {
+            Draft("FAB-SCAN-77120", "Handheld scanner", manufacturerPartNumber: "LTQ2500-BK-BTK1"),
+        }, CancellationToken.None);
+
+        await svc.UpsertManyAsync(orgId, supplierId, new[]
+        {
+            Draft("FAB-SCAN-77120", manufacturerPartNumber: null),
+        }, CancellationToken.None, CatalogFields.ManufacturerPartNumber);
+
+        var row = await RowAsync(db, "FAB-SCAN-77120");
+        row.ManufacturerPartNumber.Should().BeNull();
+        row.ManufacturerPartNumberNormalized.Should().BeNull();
+        row.Name.Should().Be("Handheld scanner");
+    }
+
+    [Fact]
+    public async Task UpsertManyAsync_Insert_WritesTheWholeDraft_WhateverColumnsArePresent()
+    {
+        // Presence only protects stored values. A new product has none, so it is written from
+        // the draft exactly as before.
+        await using var db = NewDb();
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var svc = new SupplierCatalogService(db);
+
+        var (created, _) = await svc.UpsertManyAsync(orgId, supplierId, new[]
+        {
+            Draft("NEW-1", "New product", 3.5m, "PCS"),
+        }, CancellationToken.None, CatalogFields.Price);
+
+        created.Should().Be(1);
+        var row = await RowAsync(db, "NEW-1");
+        row.Name.Should().Be("New product");
+        row.Unit.Should().Be("PCS");
+        row.Price.Should().Be(3.5m);
     }
 }

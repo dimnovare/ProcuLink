@@ -388,6 +388,16 @@ internal sealed class OrderResolutionService
             return Result<int>.Fail(SourceFileCannotBeFixedHere);
 
         var acceptedCount = 0;
+        var learnedMappings = 0;
+
+        // Same transaction shape as ResolveAsync, and for the same reason: IItemMappingService.
+        // UpsertAsync calls SaveChanges on this shared context, so the first learned mapping also
+        // flushes every line mutated so far. Without the transaction a failure after that point
+        // would leave lines accepted with the status, audit event and decision history unwritten
+        // (relational providers only; the InMemory test provider does not support transactions).
+        await using var tx = _db.Database.IsRelational()
+            ? await _db.Database.BeginTransactionAsync(ct)
+            : null;
 
         // Capture decisions BEFORE clearing the transient Ai* fields below.
         var decisionRecords = new List<AiSuggestionDecisionRecord>();
@@ -408,6 +418,11 @@ internal sealed class OrderResolutionService
 
             var chosen = line.AiSuggestedSupplierItemCode;
 
+            // The model's own score for THIS suggestion, read before the Ai* fields are cleared
+            // below. May be null (an unscored suggestion clears a zero threshold) — it is then
+            // stored as null, never replaced with a placeholder.
+            var modelConfidence = line.AiSuggestionConfidence;
+
             // The bulk-accept path always keeps the AI's suggested code verbatim → "accepted",
             // decided by the AI/system (no human review). Recorded before the fields are cleared.
             decisionRecords.Add(BuildDecisionFromLine(line, chosen, decidedBy: "ai"));
@@ -424,6 +439,22 @@ internal sealed class OrderResolutionService
             line.AiSuggestionReason         = null;
             line.AiSuggestionProvenance     = null;
 
+            // Teach the mapping, exactly as accepting one suggestion on the review screen does
+            // (ResolveAsync, saveMappings): without it the next order carrying this buyer code was
+            // flagged for review all over again, and "teach each product once" was only true one
+            // line at a time. Source is Suggested — the model's code, kept verbatim — with the
+            // model's real score. An order with no supplier has nothing to scope a mapping to (the
+            // item_mappings.supplier_id foreign key would refuse Guid.Empty), so it learns nothing.
+            if (entity.SupplierId is Guid supplierId && !string.IsNullOrWhiteSpace(line.BuyerItemCode))
+            {
+                await _mappings.UpsertAsync(
+                    organisationId, supplierId,
+                    line.BuyerItemCode, chosen,
+                    MappingSource.Suggested,
+                    modelConfidence, ct);
+                learnedMappings++;
+            }
+
             acceptedCount++;
         }
 
@@ -437,7 +468,8 @@ internal sealed class OrderResolutionService
         {
             acceptedCount,
             minConfidence,
-            newStatus = entity.Status
+            newStatus = entity.Status,
+            learnedMappings,
         }));
 
         await _db.SaveChangesAsync(ct);
@@ -449,6 +481,9 @@ internal sealed class OrderResolutionService
         await _shared.EmitPassportEventAsync(organisationId, orderId, "Map", "AiAccepted",
             actorType: "ai",
             payload: new { accepted = acceptedCount }, ct: ct);
+
+        if (tx is not null)
+            await tx.CommitAsync(ct);
 
         await _shared.SafeReconcileExceptionsAsync(organisationId, orderId, ct);
 

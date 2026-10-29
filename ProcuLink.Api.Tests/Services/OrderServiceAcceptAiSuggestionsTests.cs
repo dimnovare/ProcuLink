@@ -8,6 +8,7 @@ using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Services;
 using ProcuLink.Transform.Output;
 using ProcuLink.Transform.Parsing;
 
@@ -20,7 +21,7 @@ public class OrderServiceAcceptAiSuggestionsTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 
-    private static OrderService BuildService(ProcuLinkDbContext db)
+    private static OrderService BuildService(ProcuLinkDbContext db, IItemMappingService? realMappings = null)
     {
         var parserFactory = new OrderParserFactory(new IPurchaseOrderParser[]
         {
@@ -73,7 +74,7 @@ public class OrderServiceAcceptAiSuggestionsTests
             db,
             fileStorage.Object,
             parserFactory,
-            itemMappings.Object,
+            realMappings ?? itemMappings.Object,
             new ProcuLink.Infrastructure.Services.OrderExceptionService(db),
             poMappings.Object,
             aiMappings.Object,
@@ -290,5 +291,149 @@ public class OrderServiceAcceptAiSuggestionsTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal("Order not found.", result.Error);
+    }
+    // ── Test (e): bulk accept TEACHES the mapping, like a one-line accept does ──
+    //
+    // The single-line resolve path saves buyer code → supplier code when it accepts a suggestion;
+    // bulk accept set the supplier code on each line and saved nothing, so the next order with
+    // the same buyer code was flagged for review all over again. These run the REAL mapping store.
+
+    [Fact]
+    public async Task AcceptAiSuggestionsAsync_SavesASuggestedMapping_ForEveryAcceptedLine()
+    {
+        var lines = new[]
+        {
+            new PurchaseOrderLineEntity
+            {
+                Id                          = Guid.NewGuid(),
+                LineNumber                  = 1,
+                BuyerItemCode               = "BC-001",
+                NeedsReview                 = true,
+                AiSuggestedSupplierItemCode = "SUP-111",
+                AiSuggestionConfidence      = 0.92f,
+            },
+            new PurchaseOrderLineEntity
+            {
+                // Accepted, but there is no buyer code to key a mapping on.
+                Id                          = Guid.NewGuid(),
+                LineNumber                  = 2,
+                BuyerItemCode               = "   ",
+                NeedsReview                 = true,
+                AiSuggestedSupplierItemCode = "SUP-222",
+                AiSuggestionConfidence      = 0.95f,
+            },
+            new PurchaseOrderLineEntity
+            {
+                // Below the threshold — not accepted, so nothing is learned from it.
+                Id                          = Guid.NewGuid(),
+                LineNumber                  = 3,
+                BuyerItemCode               = "BC-003",
+                NeedsReview                 = true,
+                AiSuggestedSupplierItemCode = "SUP-333",
+                AiSuggestionConfidence      = 0.60f,
+            },
+        };
+
+        var (db, orgId, orderId) = await SeedOrderWithLinesAsync(lines);
+        var mappings = new ItemMappingService(db);
+        var svc = BuildService(db, mappings);
+
+        var result = await svc.AcceptAiSuggestionsAsync(orgId, orderId, minConfidence: 0.85, CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, result.Value);
+
+        var supplierId = (await db.PurchaseOrders.AsNoTracking().FirstAsync(o => o.Id == orderId)).SupplierId!.Value;
+        var saved = await db.ItemMappings.AsNoTracking()
+            .Where(m => m.OrgId == orgId && m.SupplierId == supplierId)
+            .ToListAsync();
+
+        var mapping = Assert.Single(saved);
+        Assert.Equal("BC-001", mapping.BuyerItemCode);
+        Assert.Equal("SUP-111", mapping.SupplierItemCode);
+        Assert.Equal("suggested", mapping.Source);
+        Assert.Equal(0.92f, mapping.Confidence);
+
+        // The next order carrying BC-001 resolves through the same lookup ingestion uses, so it
+        // no longer needs review.
+        var next = await mappings.ResolveManyAsync(orgId, supplierId, new[] { "BC-001", "BC-003" }, CancellationToken.None);
+        Assert.Equal("SUP-111", next["BC-001"]);
+        Assert.Null(next["BC-003"]);
+    }
+
+    [Fact]
+    public async Task AcceptAiSuggestionsAsync_SuggestionWithNoScore_LearnsAMappingWithNoScore()
+    {
+        // At a zero threshold an unscored suggestion is accepted. The mapping it teaches must say
+        // "unscored" — never a placeholder confidence.
+        var lines = new[]
+        {
+            new PurchaseOrderLineEntity
+            {
+                Id                          = Guid.NewGuid(),
+                LineNumber                  = 1,
+                BuyerItemCode               = "BC-009",
+                NeedsReview                 = true,
+                AiSuggestedSupplierItemCode = "SUP-999",
+                AiSuggestionConfidence      = null,
+            },
+        };
+
+        var (db, orgId, orderId) = await SeedOrderWithLinesAsync(lines);
+        var svc = BuildService(db, new ItemMappingService(db));
+
+        var result = await svc.AcceptAiSuggestionsAsync(orgId, orderId, minConfidence: 0.0, CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(1, result.Value);
+
+        var mapping = Assert.Single(await db.ItemMappings.AsNoTracking().Where(m => m.OrgId == orgId).ToListAsync());
+        Assert.Equal("BC-009", mapping.BuyerItemCode);
+        Assert.Equal("SUP-999", mapping.SupplierItemCode);
+        Assert.Equal("suggested", mapping.Source);
+        Assert.Null(mapping.Confidence);
+    }
+
+    [Fact]
+    public async Task AcceptAiSuggestionsAsync_ReAccepting_UpdatesTheLearnedMapping_NeverADuplicate()
+    {
+        // A second order for the same buyer code, bulk-accepted again, must update the one
+        // learned row rather than insert a twin.
+        var (db, orgId, orderId) = await SeedOrderWithLinesAsync(new[]
+        {
+            new PurchaseOrderLineEntity
+            {
+                Id = Guid.NewGuid(), LineNumber = 1, BuyerItemCode = "BC-001", NeedsReview = true,
+                AiSuggestedSupplierItemCode = "SUP-111", AiSuggestionConfidence = 0.90f,
+            },
+        });
+        var svc = BuildService(db, new ItemMappingService(db));
+        var supplierId = (await db.PurchaseOrders.AsNoTracking().FirstAsync(o => o.Id == orderId)).SupplierId!.Value;
+
+        await svc.AcceptAiSuggestionsAsync(orgId, orderId, minConfidence: 0.85, CancellationToken.None);
+
+        var secondOrderId = Guid.NewGuid();
+        db.PurchaseOrders.Add(new PurchaseOrderEntity
+        {
+            Id = secondOrderId, OrgId = orgId, SupplierId = supplierId, PoNumber = "PO-TEST-2",
+            OrderDate = DateOnly.FromDateTime(DateTime.UtcNow), Currency = "EUR",
+            Status = OrderStatusConstants.PendingReview, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            Lines = new List<PurchaseOrderLineEntity>
+            {
+                new()
+                {
+                    Id = Guid.NewGuid(), OrderId = secondOrderId, LineNumber = 1, BuyerItemCode = "BC-001",
+                    NeedsReview = true, AiSuggestedSupplierItemCode = "SUP-111", AiSuggestionConfidence = 0.97f,
+                },
+            },
+        });
+        await db.SaveChangesAsync();
+
+        await svc.AcceptAiSuggestionsAsync(orgId, secondOrderId, minConfidence: 0.85, CancellationToken.None);
+
+        var mapping = Assert.Single(await db.ItemMappings.AsNoTracking().Where(m => m.OrgId == orgId).ToListAsync());
+        Assert.Equal("SUP-111", mapping.SupplierItemCode);
+        Assert.Equal(0.97f, mapping.Confidence);
+        Assert.Equal(2, mapping.AppliedCount);
     }
 }
