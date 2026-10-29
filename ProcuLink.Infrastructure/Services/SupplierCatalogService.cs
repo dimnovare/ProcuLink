@@ -108,7 +108,8 @@ public sealed class SupplierCatalogService : ISupplierCatalogService
 
     /// <inheritdoc/>
     public async Task<(int Created, int Updated)> UpsertManyAsync(
-        Guid orgId, Guid supplierId, IEnumerable<SupplierProduct> products, CancellationToken ct)
+        Guid orgId, Guid supplierId, IEnumerable<SupplierProduct> products, CancellationToken ct,
+        CatalogFields presentFields = CatalogFields.All)
     {
         // ── DELIBERATELY Ordinal, unlike every READ of this column ───────────────────────────
         // The catalog RESOLVER folds case (OrderServiceShared.BuildCatalogLookupAsync,
@@ -170,18 +171,28 @@ public sealed class SupplierCatalogService : ISupplierCatalogService
             {
                 if (byCode.TryGetValue(code, out var row))
                 {
-                    row.Name       = Clean(draft.Name);
-                    row.Unit       = Clean(draft.Unit);
-                    row.Price      = draft.Price;
-                    row.Currency   = Clean(draft.Currency);
-                    row.Barcode    = Clean(draft.Barcode);
-                    row.ExternalId = Clean(draft.ExternalId);
+                    // Only the columns the file carried. A null draft field means EITHER "no such
+                    // column" or "blank cell", and only presentFields can tell them apart: absent
+                    // keeps the stored value, present-but-blank clears it. Overwriting everything
+                    // regardless is how a code+price update file used to erase a whole catalog's
+                    // names, units and barcodes.
+                    if (Has(presentFields, CatalogFields.Name))       row.Name       = Clean(draft.Name);
+                    if (Has(presentFields, CatalogFields.Unit))       row.Unit       = Clean(draft.Unit);
+                    if (Has(presentFields, CatalogFields.Price))      row.Price      = draft.Price;
+                    if (Has(presentFields, CatalogFields.Currency))   row.Currency   = Clean(draft.Currency);
+                    if (Has(presentFields, CatalogFields.Barcode))    row.Barcode    = Clean(draft.Barcode);
+                    if (Has(presentFields, CatalogFields.ExternalId)) row.ExternalId = Clean(draft.ExternalId);
                     // Manufacturer part number + its normalised lookup key are written together,
-                    // here and nowhere else, so the key can never drift from the raw value.
-                    row.ManufacturerPartNumber = Clean(draft.ManufacturerPartNumber);
-                    row.ManufacturerPartNumberNormalized =
-                        ProductKeyNormalizer.Normalize(row.ManufacturerPartNumber);
-                    row.ManufacturerName = Clean(draft.ManufacturerName);
+                    // here and nowhere else, so the key can never drift from the raw value — and
+                    // that includes being skipped together when the file has no MPN column.
+                    if (Has(presentFields, CatalogFields.ManufacturerPartNumber))
+                    {
+                        row.ManufacturerPartNumber = Clean(draft.ManufacturerPartNumber);
+                        row.ManufacturerPartNumberNormalized =
+                            ProductKeyNormalizer.Normalize(row.ManufacturerPartNumber);
+                    }
+                    if (Has(presentFields, CatalogFields.ManufacturerName))
+                        row.ManufacturerName = Clean(draft.ManufacturerName);
                     row.IsActive   = true; // re-import reactivates a previously discontinued code
                     row.UpdatedAt  = now;
                     updated++;
@@ -257,4 +268,6 @@ public sealed class SupplierCatalogService : ISupplierCatalogService
 
     private static string? Clean(string? v) =>
         string.IsNullOrWhiteSpace(v) ? null : v.Trim();
+
+    private static bool Has(CatalogFields present, CatalogFields field) => (present & field) == field;
 }

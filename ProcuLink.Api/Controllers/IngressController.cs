@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Core.Catalog;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
@@ -263,6 +264,7 @@ public sealed class IngressController : ControllerBase
             return NotFound(new { error = "Supplier not found." });
 
         List<SupplierProduct> drafts;
+        CatalogFields presentFields;
         try
         {
             if (Request.HasFormContentType)
@@ -275,11 +277,13 @@ public sealed class IngressController : ControllerBase
                 await using var stream = file.OpenReadStream();
                 var parsed = await SupplierCatalogFileParser.ParseByFileNameAsync(stream, file.FileName, ct);
                 drafts = parsed.Drafts;
+                presentFields = parsed.PresentFields;
             }
             else if (IsRawCsvContentType(Request.ContentType))
             {
                 var parsed = await SupplierCatalogFileParser.ParseCsvAsync(Request.Body, ct);
                 drafts = parsed.Drafts;
+                presentFields = parsed.PresentFields;
             }
             else
             {
@@ -302,7 +306,8 @@ public sealed class IngressController : ControllerBase
         if (withCode == 0)
             return BadRequest(new { error = "No rows with a product code were found. Ensure the file has a 'code' column." });
 
-        var (created, updated) = await catalog.UpsertManyAsync(orgId, supplierId, drafts, ct);
+        // Only the columns the pushed file carried are written to existing products.
+        var (created, updated) = await catalog.UpsertManyAsync(orgId, supplierId, drafts, ct, presentFields);
 
         return Ok(new
         {

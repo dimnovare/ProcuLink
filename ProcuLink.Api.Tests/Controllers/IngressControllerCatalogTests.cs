@@ -156,6 +156,25 @@ public class IngressControllerCatalogTests
         (await h.Db.SupplierProducts.CountAsync()).Should().Be(2, "no duplicates on replay");
     }
 
+    [Fact]
+    public async Task Push_FileWithoutABarcodeColumn_KeepsTheStoredBarcode()
+    {
+        var h = Build();
+        await h.Catalog.UpsertManyAsync(h.OrgId, h.SupplierId, new[]
+        {
+            new SupplierProduct { Code = "A-1", Name = "Old name", Unit = "PCS", Barcode = "4001234000010" },
+        }, CancellationToken.None);
+
+        SetRawCsvBody(h.Http, Csv); // code,name,unit_price — no unit, no barcode column
+        await h.Controller.PushCatalog(Slug, h.SupplierId, h.Catalog, CancellationToken.None);
+
+        var row = await h.Db.SupplierProducts.AsNoTracking().SingleAsync(p => p.Code == "A-1");
+        row.Name.Should().Be("Widget");
+        row.Price.Should().Be(9.50m);
+        row.Unit.Should().Be("PCS");
+        row.Barcode.Should().Be("4001234000010");
+    }
+
     // ── auth / tenancy ────────────────────────────────────────────────────────
 
     [Fact]

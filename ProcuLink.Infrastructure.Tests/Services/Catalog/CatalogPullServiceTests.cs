@@ -294,6 +294,28 @@ public class CatalogPullServiceTests
         h.Sink.UpsertCalls.Should().Be(1);
     }
 
+    [Fact]
+    public async Task Pull_FileWithoutSomeColumns_KeepsTheStoredValuesForThoseColumns()
+    {
+        // The pulled feed is code,name,unit_price. A product already holding a unit and a barcode
+        // (from an earlier, fuller import) must keep both — the feed has no column for either.
+        var h = await BuildAsync();
+        await new SupplierCatalogService(h.Db).UpsertManyAsync(h.OrgId, h.SupplierId, new[]
+        {
+            new SupplierProduct { Code = "A-1", Name = "Old name", Unit = "PCS", Price = 9.00m, Barcode = "4001234000010" },
+        }, CancellationToken.None);
+
+        var result = await h.Service.PullAsync(h.OrgId, h.SourceId, CancellationToken.None);
+
+        result.Status.Should().Be("ok");
+        var row = await h.Db.SupplierProducts.AsNoTracking()
+            .SingleAsync(p => p.OrgId == h.OrgId && p.SupplierId == h.SupplierId && p.Code == "A-1");
+        row.Name.Should().Be("Widget", "the feed carries a name column");
+        row.Price.Should().Be(9.50m, "the feed carries a price column");
+        row.Unit.Should().Be("PCS", "the feed has no unit column");
+        row.Barcode.Should().Be("4001234000010", "the feed has no barcode column");
+    }
+
     // ── unchanged-hash short-circuit (no parse) ───────────────────────────────
 
     [Fact]
@@ -617,10 +639,10 @@ public class CatalogPullServiceTests
         public Task<IReadOnlyList<SupplierProduct>> ListAsync(Guid orgId, Guid supplierId, string? query, int? take, CancellationToken ct)
             => _inner.ListAsync(orgId, supplierId, query, take, ct);
 
-        public Task<(int Created, int Updated)> UpsertManyAsync(Guid orgId, Guid supplierId, IEnumerable<SupplierProduct> products, CancellationToken ct)
+        public Task<(int Created, int Updated)> UpsertManyAsync(Guid orgId, Guid supplierId, IEnumerable<SupplierProduct> products, CancellationToken ct, ProcuLink.Core.Catalog.CatalogFields presentFields = ProcuLink.Core.Catalog.CatalogFields.All)
         {
             UpsertCalls++;
-            return _inner.UpsertManyAsync(orgId, supplierId, products, ct);
+            return _inner.UpsertManyAsync(orgId, supplierId, products, ct, presentFields);
         }
 
         public Task<int> CountAsync(Guid orgId, Guid supplierId, CancellationToken ct)
