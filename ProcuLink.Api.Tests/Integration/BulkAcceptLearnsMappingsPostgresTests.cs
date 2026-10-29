@@ -71,7 +71,11 @@ public sealed class BulkAcceptLearnsMappingsPostgresTests(PostgresContainerFixtu
                 Assert.Equal("BUY-1", m.BuyerItemCode);
                 Assert.Equal("SUP-1", m.SupplierItemCode);
                 Assert.Equal("suggested", m.Source);
-                Assert.Equal(0.93f, m.Confidence); // the later line's score — the row was updated, not duplicated
+                // Both lines landed on ONE row: the second updated it rather than inserting a twin.
+                Assert.Equal(2, m.AppliedCount);
+                // Which line is applied last is not defined — the order's lines are loaded without
+                // an ORDER BY — so the stored score is whichever of the two came second.
+                Assert.Contains(m.Confidence, new float?[] { 0.91f, 0.93f });
             },
             m =>
             {
