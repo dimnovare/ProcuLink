@@ -116,6 +116,10 @@ internal sealed class OrderResolutionService
         // so the durable history survives resolution (the fields are about to be nulled out).
         var decisionRecords = new List<AiSuggestionDecisionRecord>();
 
+        // savedMappings in the audit row is what the caller ASKED for; this is what was written. They
+        // differ on an order with no supplier, which learns nothing even when asked to.
+        var learnedMappings = 0;
+
         // Apply resolutions
         foreach (var res in resolutions)
         {
@@ -149,17 +153,21 @@ internal sealed class OrderResolutionService
             line.AiSuggestionReason = null;
             line.AiSuggestionProvenance = null;
 
-            // Persist the mapping so future uploads auto-resolve it.
-            if (saveMappings && !string.IsNullOrWhiteSpace(line.BuyerItemCode))
+            // Persist the mapping so future uploads auto-resolve it. An order with no supplier has
+            // nothing to scope a mapping to: this used to write it under Guid.Empty, which the
+            // item_mappings.supplier_id foreign key refused, rolling the whole resolve back. The line
+            // still resolves; it just teaches nothing — the same rule as AcceptAiSuggestionsAsync.
+            if (saveMappings && entity.SupplierId is Guid supplierId && !string.IsNullOrWhiteSpace(line.BuyerItemCode))
             {
                 await _mappings.UpsertAsync(
-                    organisationId, entity.SupplierId ?? Guid.Empty,
+                    organisationId, supplierId,
                     line.BuyerItemCode, line.SupplierItemCode,
                     // Accepting the model's code verbatim is not the same act as typing one, and
                     // the supplier screen prints this source. Recording BOTH as "manual" is what
                     // made the Source column unable to explain the score beside it.
                     acceptedModelCode ? MappingSource.Suggested : MappingSource.Manual,
                     modelConfidence, ct);
+                learnedMappings++;
             }
         }
 
@@ -273,6 +281,7 @@ internal sealed class OrderResolutionService
         {
             lineCount    = resolutions.Count,
             savedMappings = saveMappings,
+            learnedMappings,
             newStatus    = entity.Status,
             headerFieldsChanged = changedHeaderFields
         }));
