@@ -9,6 +9,7 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Tenancy;
 
 namespace ProcuLink.Api.Controllers;
@@ -819,6 +820,45 @@ public sealed class AdminController : ControllerBase
             },
             ct);
         return Ok(result);
+    }
+
+    // ── POST /api/admin/organisations/{orgId}/erase ───────────────────────
+    /// <summary>
+    /// Hard-erases a whole workspace via <see cref="IOrganisationEraser"/>. The body must echo the
+    /// org's exact slug (400 otherwise) — the fat-finger guard. A live Stripe subscription or billed
+    /// overage refuses with 409. The receipt is returned and kept in platform_audit_events, because
+    /// the org's own audit_events are erased with it (so <see cref="WriteAdminAuditAsync"/> cannot hold it).
+    /// </summary>
+    [HttpPost("organisations/{orgId:guid}/erase")]
+    [ProducesResponseType(typeof(OrgEraseReceipt), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> EraseOrganisation(
+        Guid orgId, [FromBody] EraseOrganisationRequest request,
+        [FromServices] IOrganisationEraser eraser, CancellationToken ct)
+    {
+        var slug = await _db.Organisations.Where(o => o.Id == orgId).Select(o => o.Slug).FirstOrDefaultAsync(ct);
+        if (slug is null)
+        {
+            // Already erased — a retry after a timeout, a double click: hand back the receipt that survived.
+            var prior = await _db.PlatformAuditEvents
+                .Where(e => e.SubjectOrgId == orgId && e.Action == OrganisationEraser.AuditAction)
+                .Select(e => e.Payload).FirstOrDefaultAsync(ct);
+            return prior is null ? NotFound(new { error = "Organisation not found." }) : Content(prior, "application/json");
+        }
+        if (string.IsNullOrEmpty(request?.ConfirmSlug) || request.ConfirmSlug != slug)
+            return BadRequest(new { error = "confirmSlug must equal the organisation's slug exactly." });
+
+        var receipt = await eraser.EraseAsync(
+            orgId, $"admin:{User.FindFirst("sub")?.Value}", "Erased from the admin customers table.", ct);
+        return receipt.Outcome switch
+        {
+            OrgEraseOutcome.Erased => Ok(receipt),
+            OrgEraseOutcome.RefusedPaidSubscription => Conflict(new { error = "paid_subscription" }),
+            OrgEraseOutcome.RefusedBillingEvidence => Conflict(new { error = "billing_evidence" }),
+            _ => NotFound(new { error = "Organisation not found." }),
+        };
     }
 
     // ── Durable admin audit (GDPR Art.5(2) accountability) ────────────────────
