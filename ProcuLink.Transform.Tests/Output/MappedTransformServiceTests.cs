@@ -217,6 +217,25 @@ public class MappedTransformServiceTests
         rows[1].Should().Be("ProcuLink,SUP-1");
     }
 
+    // CSV injection: mapped cells are untyped strings, so a formula is neutralised by value while a
+    // plain number like -5 is left numeric. OutputTemplateEmitter shares the same Escape.
+    [Fact]
+    public void Build_Csv_FormulaNeutralised_PlainNumberStaysNumeric()
+    {
+        var ov = new OrderMappingOverride
+        {
+            Output = new OutputMappingConfig
+            {
+                Header = { ["src"] = new OutputFieldRule { OutputPath = "Note", FixedValue = "=HYPERLINK(\"x\")" } },
+                Lines  = { ["adj"] = new OutputFieldRule { OutputPath = "Adj", FixedValue = "-5" } },
+            },
+        };
+
+        var rows = ReadCsv(new MappedTransformService().Build(BuildOrder(), ov, OutputFormat.Csv)).Replace("\r\n", "\n").Split('\n');
+
+        rows[1].Should().Be("\"'=HYPERLINK(\"\"x\"\")\",-5");
+    }
+
     [Fact]
     public void Build_Json_EmitsHeaderAndLineObjects()
     {

@@ -127,11 +127,13 @@ public sealed class CsvTransformService : ITransformService
 
     /// <summary>
     /// OWASP CSV injection: Excel/Sheets run a cell starting with = + - @ tab or CR as a formula; a
-    /// leading ' makes it literal text. TEXT cells only — passing a number through here would turn
-    /// -5 into the string '-5.
+    /// leading ' makes it literal text. A plain number (-5, +3.20) is left alone: it is not a formula,
+    /// and the untyped mapped/designer CSV emitters cannot otherwise tell it from text.
     /// </summary>
     internal static string NeutraliseFormula(string value) =>
-        value.Length > 0 && "=+-@\t\r".Contains(value[0]) ? "'" + value : value;
+        value.Length > 0 && "=+-@\t\r".Contains(value[0])
+        && !decimal.TryParse(value, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out _)
+            ? "'" + value : value;
 
     /// <summary>
     /// RFC 4180: wrap in double-quotes if the value contains comma, quote, or newline — and also ';'

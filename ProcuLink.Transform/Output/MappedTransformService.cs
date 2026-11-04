@@ -699,14 +699,19 @@ public sealed class MappedTransformService
     /// <para>The delimiter is a STRING, not a char: a dialect may legitimately be a tab or a
     /// multi-character sequence, and a caller holding one should not have to prove it is a single
     /// character before it can escape correctly.</para>
+    ///
+    /// <para>CSV injection: every cell is formula-neutralised first (<see cref="CsvTransformService.NeutraliseFormula"/>),
+    /// and ',' ';' and tab are always quoted whatever the dialect, so a spreadsheet whose locale
+    /// splits on a different separator cannot start a new cell that check never saw.</para>
     /// </summary>
     internal static string Escape(string value, string delimiter, bool quoteAlways)
     {
+        value = CsvTransformService.NeutraliseFormula(value);
         if (quoteAlways) return $"\"{value.Replace("\"", "\"\"")}\"";
 
         var needsQuoting =
             (delimiter.Length > 0 && value.Contains(delimiter, StringComparison.Ordinal))
-            || value.Contains('"') || value.Contains('\n') || value.Contains('\r');
+            || value.IndexOfAny([',', ';', '\t', '"', '\n', '\r']) >= 0;
 
         return needsQuoting ? $"\"{value.Replace("\"", "\"\"")}\"" : value;
     }

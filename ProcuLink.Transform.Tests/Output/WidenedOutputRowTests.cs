@@ -132,12 +132,13 @@ public class WidenedOutputRowTests
 
     // ── 1. One assertion per newly exposed HEADER field ──────────────────────────
 
+    // Phones carry a leading ': a leading + is a CSV formula prefix (CsvTransformService.NeutraliseFormula).
     [Theory]
     [InlineData("BuyerOrderRef",    "REQ-9001")]
     [InlineData("BuyerTaxId",       "EE100123456")]
     [InlineData("ContactName",      "Mari Tamm")]
     [InlineData("ContactEmail",     "mari.tamm@acme.example")]
-    [InlineData("ContactPhone",     "+372 555 0101")]
+    [InlineData("ContactPhone",     "'+372 555 0101")]
     [InlineData("Incoterms",        "DAP")]
     [InlineData("ShippingMethod",   "Road freight")]
     [InlineData("ShipToName",       "Acme Warehouse")]
@@ -147,7 +148,7 @@ public class WidenedOutputRowTests
     [InlineData("ShipToPostalCode", "10111")]
     [InlineData("ShipToCountry",    "EE")]
     [InlineData("ShipToEmail",      "warehouse@acme.example")]
-    [InlineData("ShipToPhone",      "+372 555 0202")]
+    [InlineData("ShipToPhone",      "'+372 555 0202")]
     [InlineData("BillToName",       "Acme Finance")]
     [InlineData("BillToDeliverTo",  "Accounts Payable")]
     [InlineData("BillToStreet",     "Pärnu mnt 5")]
@@ -155,7 +156,7 @@ public class WidenedOutputRowTests
     [InlineData("BillToPostalCode", "51004")]
     [InlineData("BillToCountry",    "EE")]
     [InlineData("BillToEmail",      "ap@acme.example")]
-    [InlineData("BillToPhone",      "+372 555 0303")]
+    [InlineData("BillToPhone",      "'+372 555 0303")]
     public void CsvOutput_BindingANewHeaderField_EmitsTheParsedValue(string field, string expected)
     {
         SingleCsvValue(FullyPopulatedOrder(), BindOne(field, lineScope: false))
