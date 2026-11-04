@@ -122,28 +122,26 @@ public sealed class CsvTransformService : ITransformService
             throw new TransformValidationException(unresolved);
     }
 
-    /// <summary>A text cell: formula-neutralised, then RFC 4180 escaped. Numeric columns never pass through here.</summary>
-    internal static string Cell(string? value) => Escape(NeutraliseFormula(value ?? string.Empty));
+    /// <summary>A text cell: null-safe <see cref="Escape"/>.</summary>
+    internal static string Cell(string? value) => Escape(value ?? string.Empty);
 
     /// <summary>
     /// OWASP CSV injection: Excel/Sheets run a cell starting with = + - @ tab or CR as a formula; a
-    /// leading ' makes it literal text. A plain number (-5, +3.20) is left alone: it is not a formula,
-    /// and the untyped mapped/designer CSV emitters cannot otherwise tell it from text.
+    /// leading ' makes it literal text. A plain signed number — digits with '.' or ',' separators, in
+    /// any culture's format (-5, +3.20, -1,234.50, -5,50) — is left alone: it cannot be a formula, and
+    /// the untyped mapped/designer CSV emitters cannot otherwise tell it from text.
     /// </summary>
     internal static string NeutraliseFormula(string value) =>
-        value.Length > 0 && "=+-@\t\r".Contains(value[0])
-        && !decimal.TryParse(value, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out _)
-            ? "'" + value : value;
+        value.Length > 0 && "=+-@\t\r".Contains(value[0]) && !IsPlainSignedNumber(value) ? "'" + value : value;
+
+    private static bool IsPlainSignedNumber(string v) =>
+        v.Length > 1 && v[0] is '+' or '-'
+        && v.Skip(1).Any(char.IsAsciiDigit) && v.Skip(1).All(c => char.IsAsciiDigit(c) || c is '.' or ',');
 
     /// <summary>
-    /// RFC 4180: wrap in double-quotes if the value contains comma, quote, or newline — and also ';'
-    /// or tab, which a ';'-locale Excel or a delimiter-sniffing import splits on, starting a new cell
-    /// that <see cref="NeutraliseFormula"/> never saw.
+    /// Formula-neutralised, RFC 4180-escaped comma CSV cell. The one implementation lives in
+    /// <see cref="MappedTransformService.Escape(string, string, bool)"/>, so the fixed, invoice, mapped
+    /// and designer CSV cannot drift apart again.
     /// </summary>
-    internal static string Escape(string value)
-    {
-        if (value.IndexOfAny([',', '"', '\n', '\r', ';', '\t']) >= 0)
-            return $"\"{value.Replace("\"", "\"\"")}\"";
-        return value;
-    }
+    internal static string Escape(string value) => MappedTransformService.Escape(value, ",", quoteAlways: false);
 }

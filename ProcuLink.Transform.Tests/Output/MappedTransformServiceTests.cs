@@ -218,7 +218,7 @@ public class MappedTransformServiceTests
     }
 
     // CSV injection: mapped cells are untyped strings, so a formula is neutralised by value while a
-    // plain number like -5 is left numeric. OutputTemplateEmitter shares the same Escape.
+    // plain number like -5,50 (a culture-formatted amount) is left numeric. OutputTemplateEmitter shares the same Escape.
     [Fact]
     public void Build_Csv_FormulaNeutralised_PlainNumberStaysNumeric()
     {
@@ -227,13 +227,13 @@ public class MappedTransformServiceTests
             Output = new OutputMappingConfig
             {
                 Header = { ["src"] = new OutputFieldRule { OutputPath = "Note", FixedValue = "=HYPERLINK(\"x\")" } },
-                Lines  = { ["adj"] = new OutputFieldRule { OutputPath = "Adj", FixedValue = "-5" } },
+                Lines  = { ["adj"] = new OutputFieldRule { OutputPath = "Adj", FixedValue = "-5,50" } },
             },
         };
 
         var rows = ReadCsv(new MappedTransformService().Build(BuildOrder(), ov, OutputFormat.Csv)).Replace("\r\n", "\n").Split('\n');
 
-        rows[1].Should().Be("\"'=HYPERLINK(\"\"x\"\")\",-5");
+        rows[1].Should().Be("\"'=HYPERLINK(\"\"x\"\")\",\"-5,50\"");
     }
 
     [Fact]
