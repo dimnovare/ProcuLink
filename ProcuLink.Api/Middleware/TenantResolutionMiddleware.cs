@@ -5,6 +5,7 @@ using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Tenancy;
 
 namespace ProcuLink.Api.Middleware;
@@ -158,6 +159,9 @@ public sealed class TenantResolutionMiddleware
             context.Response.Headers.RetryAfter = RetryAfterSeconds;
             return;
         }
+
+        // Resolution answered the request itself (workspace_erased).
+        if (context.Response.StatusCode == StatusCodes.Status403Forbidden) return;
 
         ApplyOrganisationScope(context, requestDb);
 
@@ -396,6 +400,16 @@ public sealed class TenantResolutionMiddleware
                 StampRole(context, ClerkOrgRole.FromClaims(context.User));
                 return;
             }
+        }
+
+        // An erased workspace stays erased: its Clerk org may outlive the erase, and a member signing
+        // back in must not mint an empty replacement. InvokeAsync stops the request on this 403.
+        if (await db.PlatformAuditEvents.AnyAsync(
+                e => e.SubjectClerkOrgId == clerkOrgId && e.Action == OrganisationEraser.AuditAction, ct))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await context.Response.WriteAsJsonAsync(new { error = "workspace_erased" }, ct);
+            return;
         }
 
         // PROVISION FRESH: throttle so a script minting fresh Clerk identities cannot

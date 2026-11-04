@@ -279,6 +279,9 @@ builder.Services.AddSingleton(_ =>
 });
 builder.Services.AddScoped<IBlobRetentionService, BlobRetentionService>();
 builder.Services.AddScoped<BlobRetentionSweepJob>();
+// Erases leftover production-smoke workspaces (empty, old, unsubscribed) through IOrganisationEraser.
+builder.Services.AddScoped<IOrganisationEraser, OrganisationEraser>();
+builder.Services.AddScoped<DisposableOrgSweepJob>();
 
 builder.Services.AddScoped<IErpConnector, ErplyConnector>();
 builder.Services.AddScoped<IErpConnector, DirectoConnector>();

@@ -94,6 +94,11 @@ public static class OrgQueryFilters
                 "conditions are evaluated across every organisation at once, so there is no org " +
                 "to scope by. It is written by the Worker's recurring sweep on a DI scope with no " +
                 "tenant resolved, so a filter would refuse to read it at all.",
+
+            [typeof(PlatformAuditEvent)] =
+                "Platform accountability records that must outlive the organisation they are " +
+                "about (the organisation-erase receipt). An org column with an FK would erase " +
+                "the receipt with the org; SubjectOrgId is deliberately not an org column.",
         };
 
     /// <summary>

@@ -156,3 +156,6 @@ public sealed record OrgRetentionResponse(
     string Name,
     int? RetentionDays,
     bool RetentionEnabled);
+
+/// <summary>Body of <c>POST /api/admin/organisations/{orgId}/erase</c>: the org's exact slug, typed back.</summary>
+public sealed record EraseOrganisationRequest(string ConfirmSlug);
