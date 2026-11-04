@@ -18,7 +18,7 @@ namespace ProcuLink.Infrastructure.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "8.0.30")
+                .HasAnnotation("ProductVersion", "8.0.32")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -1939,6 +1939,51 @@ namespace ProcuLink.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("overage_billing_records", (string)null);
+                });
+
+            modelBuilder.Entity("ProcuLink.Core.Entities.PlatformAuditEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("action");
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("actor");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("payload");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("reason");
+
+                    b.Property<Guid>("SubjectOrgId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("subject_org_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SubjectOrgId");
+
+                    b.ToTable("platform_audit_events", (string)null);
                 });
 
             modelBuilder.Entity("ProcuLink.Core.Entities.PoPassportEvent", b =>

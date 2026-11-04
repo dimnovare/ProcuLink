@@ -193,6 +193,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
 
     // ── Operator alerting: per-condition cooldown that must outlive a restart ───
     public DbSet<WorkerHealthAlertCooldown>      WorkerHealthAlertCooldowns    { get; set; } = null!;
+    // ── Platform audit: receipts that must outlive the organisation they record ─
+    public DbSet<PlatformAuditEvent>             PlatformAuditEvents           { get; set; } = null!;
 
     // ── Org plan-history chokepoint ──────────────────────────────────────────
     // Overage metering must resolve the plan + order-limit override AS OF each
@@ -1116,6 +1118,22 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.CreatedAt)
              .HasColumnName("created_at")
              .HasColumnType("timestamptz");
+        });
+
+        // ── platform_audit_events ──────────────────────────────────────
+        // No org_id and no FK on purpose: an organisation-erase receipt must survive the erase.
+        modelBuilder.Entity<PlatformAuditEvent>(b =>
+        {
+            b.ToTable("platform_audit_events");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.Action).HasColumnName("action").HasMaxLength(100).IsRequired();
+            b.Property(x => x.SubjectOrgId).HasColumnName("subject_org_id");
+            b.Property(x => x.Actor).HasColumnName("actor").HasMaxLength(200).IsRequired();
+            b.Property(x => x.Reason).HasColumnName("reason").HasMaxLength(500).IsRequired();
+            b.Property(x => x.Payload).HasColumnName("payload").HasColumnType("jsonb").IsRequired();
+            b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.HasIndex(x => x.SubjectOrgId);
         });
 
         // ── worker_health_alert_cooldowns ──────────────────────────────
