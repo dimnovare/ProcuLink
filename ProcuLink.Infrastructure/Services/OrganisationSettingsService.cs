@@ -17,17 +17,20 @@ public sealed class OrganisationSettingsService : IOrganisationSettingsService
         var settings = await _db.Organisations
             .AsNoTracking()
             .Where(x => x.Id == orgId)
-            .Select(x => new { x.OrderDirection, x.Slug })
+            .Select(x => new { x.OrderDirection, x.Slug, x.InvoiceDestinationSupplierId })
             .FirstOrDefaultAsync(ct);
 
         return new OrgSettingsResponse(
             settings?.OrderDirection ?? default,
-            settings?.Slug ?? string.Empty);
+            settings?.Slug ?? string.Empty,
+            settings?.InvoiceDestinationSupplierId);
     }
 
-    public async Task<OrgSettingsResponse> UpdateDirectionAsync(
+    /// <summary>Applies only the fields the request carries. The caller has already checked that
+    /// an invoice destination is one of this org's live suppliers.</summary>
+    public async Task<OrgSettingsResponse> UpdateAsync(
         Guid orgId,
-        UpdateOrderDirectionRequest req,
+        UpdateOrgSettingsRequest req,
         CancellationToken ct)
     {
         var org = await _db.Organisations
@@ -35,9 +38,10 @@ public sealed class OrganisationSettingsService : IOrganisationSettingsService
             .FirstOrDefaultAsync(ct)
             ?? throw new InvalidOperationException($"Organisation {orgId} not found.");
 
-        org.OrderDirection = req.Direction;
+        if (req.Direction is { } direction) org.OrderDirection = direction;
+        if (req.InvoiceDestinationSet) org.InvoiceDestinationSupplierId = req.InvoiceDestinationSupplierId;
         await _db.SaveChangesAsync(ct);
 
-        return new OrgSettingsResponse(org.OrderDirection, org.Slug);
+        return new OrgSettingsResponse(org.OrderDirection, org.Slug, org.InvoiceDestinationSupplierId);
     }
 }

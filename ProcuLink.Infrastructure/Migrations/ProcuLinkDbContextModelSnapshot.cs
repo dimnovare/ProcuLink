@@ -1744,6 +1744,10 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasDefaultValue(false)
                         .HasColumnName("email_polling_enabled");
 
+                    b.Property<Guid?>("InvoiceDestinationSupplierId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("invoice_destination_supplier_id");
+
                     b.Property<DateTime?>("LastStripeEventAt")
                         .HasColumnType("timestamptz")
                         .HasColumnName("last_stripe_event_at");

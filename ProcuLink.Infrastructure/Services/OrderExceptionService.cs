@@ -8,8 +8,9 @@ namespace ProcuLink.Infrastructure.Services;
 /// <summary>
 /// EF Core implementation of <see cref="IOrderExceptionService"/>.
 /// All exception generation flows through the idempotent <see cref="ReconcileAsync"/>:
-/// callers never construct exceptions directly. Reconcile is the single source of truth
-/// for clearing — it compares the order's current status + lines against existing
+/// callers never construct exceptions directly (the one exception: <see cref="InvoiceCheckCode"/>
+/// rows, which the invoice path writes and reconcile leaves alone). Reconcile is the single source
+/// of truth for clearing — it compares the order's current status + lines against existing
 /// exceptions and decides resolve-vs-recreate per (orderId, code):
 ///   • condition still holds + no open/ignored row for that code → OPEN a new one;
 ///   • condition still holds + an open/ignored row already exists  → leave it (no dup);
@@ -62,6 +63,13 @@ public sealed class OrderExceptionService : IOrderExceptionService
     public const string DuplicatePoNumberCode = "duplicate_po_number";
 
     /// <summary>
+    /// Exception code for a failed invoice check. These rows are written by the invoice path
+    /// (<c>OrderIngestionService.ApplyInvoicePathAsync</c>), which re-runs the checks itself, so
+    /// <see cref="ReconcileAsync"/> leaves them alone: it cannot re-derive them from status.
+    /// </summary>
+    public const string InvoiceCheckCode = "invoice_check";
+
+    /// <summary>
     /// How far either side of an order's creation another order must fall to count as a duplicate
     /// of it.
     ///
@@ -80,13 +88,15 @@ public sealed class OrderExceptionService : IOrderExceptionService
     public static readonly TimeSpan DuplicatePoNumberWindow = TimeSpan.FromDays(90);
 
     private static (string Code, string Stage, string Severity, string Message)? ProblemFor(
-        string status, bool hasUnresolvedLines)
+        string status, bool hasUnresolvedLines, bool isInvoice)
     {
         // Unrouted takes PRECEDENCE over unresolved lines: with no supplier you cannot resolve
         // item codes, so "assign a supplier" is the one actionable problem to surface.
         if (status == OrderStatusConstants.Unrouted)
             return ("unrouted_order", "Route", "warning", "Order needs a supplier before it can be routed.");
-        if (status == OrderStatusConstants.PendingReview || hasUnresolvedLines)
+        // An invoice has no item codes to map: its pending_review is the invoice checks' hold,
+        // and those carry their own invoice_check rows.
+        if (!isInvoice && (status == OrderStatusConstants.PendingReview || hasUnresolvedLines))
             return ("unresolved_mapping", "Map", "warning", "Order has lines that need a supplier item code.");
         if (status == OrderStatusConstants.Failed)
             return ("parse_failed", "Parse", "error", "Parsing the source file failed for this order.");
@@ -115,7 +125,7 @@ public sealed class OrderExceptionService : IOrderExceptionService
     {
         var order = await _db.PurchaseOrders
             .Where(o => o.Id == orderId && o.OrgId == orgId)
-            .Select(o => new { o.Status, o.PoNumber, o.PoNumberNormalized, o.CreatedAt, o.IsSample })
+            .Select(o => new { o.Status, o.PoNumber, o.PoNumberNormalized, o.CreatedAt, o.IsSample, o.DocumentType })
             .FirstOrDefaultAsync(ct);
         if (order is null) return;
 
@@ -123,7 +133,8 @@ public sealed class OrderExceptionService : IOrderExceptionService
         // regardless of whether the caller's DbContext maps the collection navigation.
         var hasUnresolved = await _db.PurchaseOrderLines
             .AnyAsync(l => l.OrderId == orderId && l.NeedsReview, ct);
-        var problem = ProblemFor(order.Status, hasUnresolved);
+        var isInvoice = order.DocumentType == "invoice";
+        var problem = ProblemFor(order.Status, hasUnresolved, isInvoice);
 
         // A parked order's sentence is the park's OWN, read back rather than rebuilt. The park
         // knows WHY it stopped and writes that to the attempt it finalises; this method knows only
@@ -167,8 +178,10 @@ public sealed class OrderExceptionService : IOrderExceptionService
         //     none of them can see any of the others. The PO number is the only key the two copies
         //     share, and until now nothing in production looked an order up by it at all.
         // Placeholders (null key) and sample orders are excluded — see PoNumberIdentity and
-        // SampleOrderService for why comparing either would fabricate warnings.
-        if (!order.IsSample && order.PoNumberNormalized is { } poKey)
+        // SampleOrderService for why comparing either would fabricate warnings. Invoices are out on
+        // both sides: an invoice number is the vendor's, not a PO number, and the invoice path runs
+        // its own vendor-scoped duplicate check.
+        if (!isInvoice && !order.IsSample && order.PoNumberNormalized is { } poKey)
         {
             var windowStart = order.CreatedAt - DuplicatePoNumberWindow;
             var windowEnd   = order.CreatedAt + DuplicatePoNumberWindow;
@@ -178,6 +191,7 @@ public sealed class OrderExceptionService : IOrderExceptionService
                 .AnyAsync(o => o.OrgId == orgId
                             && o.Id != orderId
                             && !o.IsSample
+                            && o.DocumentType != "invoice"
                             && o.PoNumberNormalized == poKey
                             && o.CreatedAt >= windowStart
                             && o.CreatedAt <= windowEnd, ct);
@@ -216,7 +230,7 @@ public sealed class OrderExceptionService : IOrderExceptionService
         // deliberately. Resolved rows are already terminal and left alone.
         foreach (var ex in existing)
         {
-            if (ex.State != "open") continue;
+            if (ex.State != "open" || ex.Code == InvoiceCheckCode) continue;
             // Diffed against the whole problem SET, not one problem: an open row survives as long
             // as ANY current problem still carries its code. Comparing against a single problem is
             // what used to auto-resolve a real duplicate_po_number the moment the order also needed

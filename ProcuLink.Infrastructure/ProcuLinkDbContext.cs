@@ -407,6 +407,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .HasMaxLength(16)
              .HasDefaultValue(OrderDirection.Outbound)
              .IsRequired();
+            b.Property(x => x.InvoiceDestinationSupplierId)
+             .HasColumnName("invoice_destination_supplier_id");
         });
 
         // ── users ──────────────────────────────────────────────────────

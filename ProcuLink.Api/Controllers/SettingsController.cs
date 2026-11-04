@@ -55,8 +55,8 @@ public sealed class SettingsController : ControllerBase
         await _db.Suppliers.AsNoTracking()
             .AnyAsync(x => x.OrgId == orgId && x.Id == supplierId && x.DeletedAt == null, ct);
 
-    // ── Organisation settings (order direction) ────────────────────────────────
-    // Order direction is a free per-org presentation flag — no billing gate.
+    // ── Organisation settings (order direction, invoice destination) ───────────
+    // Both are free per-org settings — no billing gate.
 
     [HttpGet("organisation")]
     [ProducesResponseType(typeof(OrgSettingsResponse), StatusCodes.Status200OK)]
@@ -65,8 +65,15 @@ public sealed class SettingsController : ControllerBase
 
     [HttpPut("organisation")]
     [ProducesResponseType(typeof(OrgSettingsResponse), StatusCodes.Status200OK)]
-    public async Task<IActionResult> UpdateOrganisation([FromBody] UpdateOrderDirectionRequest req, CancellationToken ct)
-        => Ok(await _orgSettings.UpdateDirectionAsync(_tenant.OrganisationId, req, ct));
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> UpdateOrganisation([FromBody] UpdateOrgSettingsRequest req, CancellationToken ct)
+    {
+        if (req.InvoiceDestinationSupplierId is { } destination
+            && !await SupplierExistsAsync(_tenant.OrganisationId, destination, ct))
+            return BadRequest(new { error = "invoice_destination_not_found" });
+
+        return Ok(await _orgSettings.UpdateAsync(_tenant.OrganisationId, req, ct));
+    }
 
     // ── Hosted inbound-email addresses ─────────────────────────────────────────
     // The addresses buyers send purchase orders to. Each one is a CREDENTIAL: presenting it is

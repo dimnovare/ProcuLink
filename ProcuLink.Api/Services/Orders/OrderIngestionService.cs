@@ -10,6 +10,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Detection;
+using ProcuLink.Core.Services.Documents;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
@@ -499,17 +500,17 @@ internal sealed class OrderIngestionService
         // reaches the AI suggest call), and every other caller already guarantees one —
         // GetSupplierNameAsync falls back to string.Empty rather than returning null.
         var resolveSupplierName = supplier?.Name ?? string.Empty;
+        // An invoice received via email/REST takes the invoice path (ApplyInvoicePathAsync below),
+        // the same as one parsed from a file.
+        var documentType  = NormalizeDocumentType(order.DocumentType);
+        var isInvoice     = documentType == "invoice";
         var aiCandidates  = await GetAiMappingCandidatesAsync(organisationId, resolveSupplierId, ct);
         var lineEntities  = await BuildLineEntitiesAsync(
-            organisationId, resolveSupplierId, resolveSupplierName, parsedLines, aiCandidates, ct);
+            organisationId, resolveSupplierId, resolveSupplierName, parsedLines, aiCandidates, ct, invoice: isInvoice);
 
         var anyUnresolved     = lineEntities.Any(l => l.NeedsReview);
         var aiSuggestionCount = lineEntities.Count(l => !string.IsNullOrWhiteSpace(l.AiSuggestedSupplierItemCode));
 
-        // Phase 4: same invoice-classification safety as the PDF path — an invoice
-        // received via email/REST must not be silently treated as a deliverable PO.
-        var documentType  = NormalizeDocumentType(order.DocumentType);
-        var isInvoice     = documentType == "invoice";
         var supplierName  = string.IsNullOrWhiteSpace(order.SupplierName) ? null : order.SupplierName.Trim();
         var paymentTerms  = string.IsNullOrWhiteSpace(order.PaymentTerms) ? null : order.PaymentTerms.Trim();
 
@@ -580,7 +581,7 @@ internal sealed class OrderIngestionService
             // decision only when no supplier is set.
             Status        = supplierId is null
                                 ? OrderStatusConstants.Unrouted
-                                : (anyUnresolved || isInvoice) ? "pending_review" : "ready",
+                                : anyUnresolved ? "pending_review" : "ready",
             SourceFileKey = null,
             CanonicalJson = canonicalJson,
             CreatedAt     = now,
@@ -592,12 +593,13 @@ internal sealed class OrderIngestionService
             BuyerTaxId    = string.IsNullOrWhiteSpace(order.BuyerTaxId) ? null : order.BuyerTaxId.Trim(),
             // Same uncaptured-0 normalization as GrandTotal below (SubTotal), plus a negative-tax
             // guard — see NormalizeExtractedSubTotal / NormalizeExtractedTaxTotal.
-            SubTotal      = NormalizeExtractedSubTotal(order.SubTotal),
-            TaxTotal      = NormalizeExtractedTaxTotal(order.TaxTotal),
+            // An invoice's totals are kept as read: a credit note is negative, and its checks need them.
+            SubTotal      = isInvoice ? order.SubTotal : NormalizeExtractedSubTotal(order.SubTotal),
+            TaxTotal      = isInvoice ? order.TaxTotal : NormalizeExtractedTaxTotal(order.TaxTotal),
             // Normalize an uncaptured/non-positive extracted grand total to NULL so downstream
             // derivation (sum Qty*UnitPrice) takes over — a stored 0 would otherwise be emitted
             // verbatim into delivered supplier documents. See NormalizeExtractedGrandTotal.
-            GrandTotal    = NormalizeExtractedGrandTotal(order.GrandTotal),
+            GrandTotal    = isInvoice ? order.GrandTotal : NormalizeExtractedGrandTotal(order.GrandTotal),
             PaymentTerms  = paymentTerms,
             DocumentType  = documentType,
             // V5: header-level requested delivery date — real persisted column (requested_delivery_date).
@@ -643,13 +645,17 @@ internal sealed class OrderIngestionService
             InboundSenderDomainCapturedAt = inboundSenderDomain is null ? null : now,
         };
 
+        if (isInvoice)
+            await ApplyInvoicePathAsync(entity, supplierChosenByPerson: false, ct);
+
         // ── Supplier auto-detect, sync path ───────────────────────────────────
         // This order is persisted whole and NEVER enqueues ParseOrderJob, so the hook in
         // ParseStoredFileAsync can never see it. Without this call the prose-only unrouted order —
         // the exact case BE-1 created, and the one with the least other evidence, since it has no
         // file and therefore no column layout to fingerprint — would be the one class of unrouted
         // order that silently gets no suggestions while the UI offers them everywhere else.
-        var supplierSuggestions = supplierId is null
+        // Never for an invoice: the candidates would be its VENDOR, and invoices do not go there.
+        var supplierSuggestions = supplierId is null && !isInvoice
             ? await SafeSuggestSuppliersAsync(
                 organisationId, newOrderId,
                 documentSupplierName: order.SupplierName,
@@ -669,13 +675,13 @@ internal sealed class OrderIngestionService
             aiSuggestionCount,
             documentType,
             classifiedAsInvoice = isInvoice,
-            connectionRevisionId,
+            connectionRevisionId = entity.ConnectionRevisionId,
         }));
         if (isInvoice)
         {
             _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, newOrderId, "ClassifiedAsInvoice", new
             {
-                note = "This document looks like an invoice, not a purchase order — flagged for review before delivery.",
+                note = "This document is an invoice: it goes to the invoice destination and is checked instead of having item codes resolved.",
                 grandTotal = order.GrandTotal,
             }));
         }
@@ -1043,12 +1049,21 @@ internal sealed class OrderIngestionService
                 }
             }
 
+            // An LLM doc-type of "invoice" takes the invoice path (ApplyInvoicePathAsync below) instead
+            // of item-code resolution. Normalised here too (defense-in-depth): the LLM extractor already
+            // normalises, but a future IStructuredOrderExtractor must not be able to slip an odd-cased
+            // value past it. An order that was ALREADY an invoice before this parse is one parked
+            // unrouted and re-parsed by assign-supplier, so its supplier is a person's choice.
+            var newDocumentType = NormalizeDocumentType(parsedOrder.DocumentType);
+            var isInvoice = newDocumentType == "invoice";
+            var supplierChosenByPerson = NormalizeDocumentType(entity.DocumentType) == "invoice";
+
             var supplierName = entity.Supplier?.Name
                                ?? await GetSupplierNameAsync(organisationId, entity.SupplierId ?? Guid.Empty, ct);
             var aiCandidates = await GetAiMappingCandidatesAsync(organisationId, entity.SupplierId ?? Guid.Empty, ct);
             var lineEntities = await BuildLineEntitiesAsync(
                 organisationId, entity.SupplierId ?? Guid.Empty, supplierName, parsedOrder.Lines, aiCandidates, ct,
-                itemMappingSnapshot);
+                itemMappingSnapshot, invoice: isInvoice);
 
             // Overlay structured-extraction review flags so a numerically-suspect
             // line surfaces in /operations/exceptions rather than being delivered blind.
@@ -1068,7 +1083,8 @@ internal sealed class OrderIngestionService
             //
             // This changes NO status. The order still parks 'unrouted'; a suggestion is a sibling
             // row, never a routing decision (founder ruling D3 — suggest, never auto-assign).
-            var supplierSuggestions = entity.SupplierId is null
+            // Never for an invoice: the candidates would be its VENDOR, and invoices do not go there.
+            var supplierSuggestions = entity.SupplierId is null && !isInvoice
                 ? await SafeSuggestSuppliersAsync(
                     organisationId, orderId,
                     documentSupplierName: parsedOrder.SupplierName,
@@ -1114,15 +1130,7 @@ internal sealed class OrderIngestionService
                                 ? DateOnly.FromDateTime(parsedOrder.OrderDate.Value)
                                 : DateOnly.FromDateTime(now);
             var newCurrency  = parsedOrder.Currency ?? "EUR";
-            // Phase 4: an LLM doc-type of "invoice" forces review — an invoice arrived on
-            // the PO path (there is no invoice routing here) and must not be silently
-            // transformed and delivered as a purchase order.
-            // Normalise the doc-type here too (defense-in-depth): the LLM extractor
-            // already normalises, but a future IStructuredOrderExtractor must not be
-            // able to bypass the invoice safety force with an odd-cased value.
-            var newDocumentType = NormalizeDocumentType(parsedOrder.DocumentType);
-            var isInvoice = newDocumentType == "invoice";
-            var newStatus    = (anyUnresolved || isInvoice) ? "pending_review" : "ready";
+            var newStatus    = anyUnresolved ? "pending_review" : "ready";
             // Phase 1 routing: a supplier-less order is PARKED 'unrouted' after extraction. Its
             // header + parties + (unresolved) lines are persisted below so the triage queue shows
             // what arrived, but it cannot reach 'ready' — there is no supplier to resolve item codes
@@ -1138,12 +1146,13 @@ internal sealed class OrderIngestionService
             var newSupplierName = string.IsNullOrWhiteSpace(parsedOrder.SupplierName) ? null : parsedOrder.SupplierName.Trim();
             var newPaymentTerms = string.IsNullOrWhiteSpace(parsedOrder.PaymentTerms) ? null : parsedOrder.PaymentTerms.Trim();
             // Normalize uncaptured/non-positive SubTotal (mirrors GrandTotal) + scrub negative tax.
-            var newSubTotal   = NormalizeExtractedSubTotal(parsedOrder.SubTotal);
-            var newTaxTotal   = NormalizeExtractedTaxTotal(parsedOrder.TaxTotal);
+            // An invoice's totals are kept as read: a credit note is negative, and its checks need them.
+            var newSubTotal   = isInvoice ? parsedOrder.SubTotal : NormalizeExtractedSubTotal(parsedOrder.SubTotal);
+            var newTaxTotal   = isInvoice ? parsedOrder.TaxTotal : NormalizeExtractedTaxTotal(parsedOrder.TaxTotal);
             // Normalize an uncaptured/non-positive extracted grand total to NULL (see the sync
             // ingest seam above and NormalizeExtractedGrandTotal). This value flows to BOTH the
             // ExecuteUpdateAsync below and the InMemory entity-setter fallback further down.
-            var newGrandTotal = NormalizeExtractedGrandTotal(parsedOrder.GrandTotal);
+            var newGrandTotal = isInvoice ? parsedOrder.GrandTotal : NormalizeExtractedGrandTotal(parsedOrder.GrandTotal);
             // V5: header-level requested delivery date — real persisted column (requested_delivery_date).
             var newRequestedDeliveryDate = parsedOrder.RequestedDeliveryDate;
             // Invoice-only fields (null on orders).
@@ -1182,6 +1191,24 @@ internal sealed class OrderIngestionService
             var newBillToEmail      = billParty?.Email;
             var newBillToPhone      = billParty?.Phone;
 
+            // Invoice path: decided on the document as it is about to be written. The tracked row is
+            // only changed by the ExecuteUpdate below, so the checks read a detached view of it.
+            var newSupplierId           = entity.SupplierId;
+            var newConnectionRevisionId = entity.ConnectionRevisionId;
+            if (isInvoice)
+            {
+                var invoice = new PurchaseOrderEntity
+                {
+                    Id = orderId, OrgId = organisationId, SupplierId = entity.SupplierId,
+                    ConnectionRevisionId = entity.ConnectionRevisionId, PoNumber = newPoNumber,
+                    SupplierName = newSupplierName, SubTotal = newSubTotal, TaxTotal = newTaxTotal,
+                    GrandTotal = newGrandTotal, PaymentIban = newPaymentIban, Lines = lineEntities,
+                };
+                await ApplyInvoicePathAsync(invoice, supplierChosenByPerson, ct);
+                (newStatus, newSupplierId, newConnectionRevisionId) =
+                    (invoice.Status, invoice.SupplierId, invoice.ConnectionRevisionId);
+            }
+
             // ── Atomic persist (all-or-nothing) ───────────────────────────────
             // The status flip below is an ExecuteUpdateAsync — it auto-commits its own SQL the
             // instant it runs, independently of the SaveChangesAsync that writes the child rows
@@ -1218,6 +1245,8 @@ internal sealed class OrderIngestionService
                     .SetProperty(o => o.OrderDate,    newOrderDate)
                     .SetProperty(o => o.Currency,     newCurrency)
                     .SetProperty(o => o.Status,       newStatus)
+                    .SetProperty(o => o.SupplierId,   newSupplierId)
+                    .SetProperty(o => o.ConnectionRevisionId, newConnectionRevisionId)
                     .SetProperty(o => o.BuyerName,    newBuyerName)
                     .SetProperty(o => o.SupplierName, newSupplierName)
                     .SetProperty(o => o.SubTotal,     newSubTotal)
@@ -1315,7 +1344,7 @@ internal sealed class OrderIngestionService
             {
                 _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "ClassifiedAsInvoice", new
                 {
-                    note = "This document looks like an invoice, not a purchase order — flagged for review before delivery.",
+                    note = "This document is an invoice: it goes to the invoice destination and is checked instead of having item codes resolved.",
                     grandTotal = newGrandTotal,
                 }));
             }
@@ -1384,6 +1413,8 @@ internal sealed class OrderIngestionService
             entity.OrderDate = newOrderDate;
             entity.Currency  = newCurrency;
             entity.Status    = newStatus;
+            entity.SupplierId           = newSupplierId;
+            entity.ConnectionRevisionId = newConnectionRevisionId;
             entity.BuyerName = newBuyerName;
             entity.SupplierName          = newSupplierName;
             entity.SubTotal              = newSubTotal;
@@ -1483,20 +1514,33 @@ internal sealed class OrderIngestionService
                 NetAmount:              l.NetAmount))
             .ToList();
 
+        // The document type was classified at ingest and no re-read can change it.
+        var isInvoice = NormalizeDocumentType(entity.DocumentType) == "invoice";
         var supplierId   = entity.SupplierId ?? Guid.Empty;
         var supplierName = entity.Supplier?.Name ?? await GetSupplierNameAsync(organisationId, supplierId, ct);
         var aiCandidates = await GetAiMappingCandidatesAsync(organisationId, supplierId, ct);
         var lineEntities = await BuildLineEntitiesAsync(
-            organisationId, supplierId, supplierName, parsedLines, aiCandidates, ct);
+            organisationId, supplierId, supplierName, parsedLines, aiCandidates, ct, invoice: isInvoice);
 
         var anyUnresolved     = lineEntities.Any(l => l.NeedsReview);
         var aiSuggestionCount = lineEntities.Count(l => !string.IsNullOrWhiteSpace(l.AiSuggestedSupplierItemCode));
-        // The document type was classified at ingest and no re-read can change it; an invoice still
-        // forces review so it is never silently transformed and delivered as a purchase order.
-        var isInvoice = NormalizeDocumentType(entity.DocumentType) == "invoice";
         var newStatus = entity.SupplierId is null
             ? OrderStatusConstants.Unrouted
-            : (anyUnresolved || isInvoice) ? OrderStatusConstants.PendingReview : OrderStatusConstants.Ready;
+            : anyUnresolved ? OrderStatusConstants.PendingReview : OrderStatusConstants.Ready;
+
+        // A file-less order only re-resolves after assign-supplier, so an invoice here keeps the
+        // supplier a person chose. The checks read a detached view carrying the rebuilt lines.
+        if (isInvoice)
+        {
+            var invoice = new PurchaseOrderEntity
+            {
+                Id = orderId, OrgId = organisationId, SupplierId = entity.SupplierId, PoNumber = entity.PoNumber,
+                SupplierName = entity.SupplierName, SubTotal = entity.SubTotal, TaxTotal = entity.TaxTotal,
+                GrandTotal = entity.GrandTotal, PaymentIban = entity.PaymentIban, Lines = lineEntities,
+            };
+            await ApplyInvoicePathAsync(invoice, supplierChosenByPerson: true, ct);
+            newStatus = invoice.Status;
+        }
 
         var now = DateTime.UtcNow;
 
@@ -1580,6 +1624,90 @@ internal sealed class OrderIngestionService
         // No column headers and no detected format: prose has neither. The schema-fingerprint
         // recorder treats a null header list as "nothing to fingerprint" and skips.
         return Result<ParsedFileOutput>.Ok(new ParsedFileOutput(entity, null, "unknown"));
+    }
+
+    // ── Invoice path ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// What an invoice gets instead of item-code resolution, at each place a document's type is
+    /// settled. It goes to the org's invoice destination whoever sent it, unless
+    /// <paramref name="supplierChosenByPerson"/> (assign-supplier on an invoice parked because no
+    /// destination was set). Its codes go through as printed. It is held <c>pending_review</c> only
+    /// when its checks find problems, one open <c>invoice_check</c> row each; otherwise it gets the
+    /// status a fully resolved order gets, and the destination's automation applies as for orders.
+    /// Mutates <paramref name="invoice"/> (supplier, revision, status, lines) and stages the rows;
+    /// the caller persists.
+    /// </summary>
+    private async Task ApplyInvoicePathAsync(PurchaseOrderEntity invoice, bool supplierChosenByPerson, CancellationToken ct)
+    {
+        if (!supplierChosenByPerson)
+        {
+            // A deleted destination counts as not set: the invoice parks unrouted.
+            var destination = await _db.Suppliers.FirstOrDefaultAsync(s =>
+                s.OrgId == invoice.OrgId && s.DeletedAt == null
+                && _db.Organisations.Any(o => o.Id == invoice.OrgId && o.InvoiceDestinationSupplierId == s.Id), ct);
+            invoice.SupplierId = destination?.Id;
+            invoice.Supplier = destination!;
+            invoice.ConnectionRevisionId = destination is null
+                ? null
+                : await ResolveConnectionRevisionAsync(invoice.OrgId, destination.Id, ct);
+        }
+
+        foreach (var line in invoice.Lines)
+        {
+            line.SupplierItemCode = line.BuyerItemCode;
+            line.NeedsReview = false;
+        }
+
+        var problems = await CollectInvoiceProblemsAsync(_db, invoice, ct);
+        invoice.Status = invoice.SupplierId is null ? OrderStatusConstants.Unrouted
+            : problems.Count > 0 ? OrderStatusConstants.PendingReview
+            : OrderStatusConstants.Ready;
+
+        // Re-runnable (assign-supplier re-parses a parked invoice): the current problems replace
+        // this order's open rows. Reconcile never touches invoice_check rows.
+        var now = DateTime.UtcNow;
+        var stale = await _db.OrderExceptions
+            .Where(e => e.OrgId == invoice.OrgId && e.OrderId == invoice.Id
+                     && e.Code == OrderExceptionService.InvoiceCheckCode && e.State == "open")
+            .ToListAsync(ct);
+        foreach (var row in stale)
+        {
+            row.State = "resolved";
+            row.ResolvedAt = now;
+        }
+        _db.OrderExceptions.AddRange(problems.Select(p => new OrderException
+        {
+            Id = Guid.NewGuid(), OrgId = invoice.OrgId, OrderId = invoice.Id, Stage = "validate",
+            Code = OrderExceptionService.InvoiceCheckCode, Severity = "warning", State = "open",
+            Message = p, CreatedAt = now,
+        }));
+    }
+
+    /// <summary>
+    /// Every problem an invoice has: <see cref="InvoiceChecks.Run"/> plus the one check that needs
+    /// the database, another live invoice from the same vendor under the same number. Static over
+    /// the context so the header-edit path re-runs exactly these checks, duplicate included.
+    /// </summary>
+    internal static async Task<IReadOnlyList<string>> CollectInvoiceProblemsAsync(
+        ProcuLinkDbContext db, PurchaseOrderEntity invoice, CancellationToken ct)
+    {
+        var problems = InvoiceChecks.Run(invoice).ToList();
+
+        if (invoice.SupplierName?.Trim().ToLowerInvariant() is { Length: > 0 } vendor)
+        {
+            var received = await db.PurchaseOrders.AsNoTracking()
+                .Where(o => o.OrgId == invoice.OrgId && o.Id != invoice.Id && !o.IsSample
+                         && o.DocumentType == "invoice" && o.Status != OrderStatusConstants.Failed
+                         && o.PoNumber == invoice.PoNumber && o.SupplierName!.ToLower() == vendor)
+                .OrderBy(o => o.CreatedAt)
+                .Select(o => (DateTime?)o.CreatedAt)
+                .FirstOrDefaultAsync(ct);
+            if (received is { } at)
+                problems.Add(FormattableString.Invariant($"Possible duplicate of an invoice received {at:yyyy-MM-dd}."));
+        }
+
+        return problems;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -1880,15 +2008,21 @@ internal sealed class OrderIngestionService
         IReadOnlyList<ParsedOrderLine> lines,
         IReadOnlyList<AiMappingCandidate> aiCandidates,
         CancellationToken ct,
-        IReadOnlyList<EffectiveRevisionItemMapping>? itemMappingSnapshot = null)
+        IReadOnlyList<EffectiveRevisionItemMapping>? itemMappingSnapshot = null,
+        bool invoice = false)
     {
+        // An invoice's codes go through as printed (ApplyInvoicePathAsync), so nothing is looked up
+        // and no AI call is made: every line counts as resolved, which keeps its ReviewReason down
+        // to what the parser or extractor flagged.
         // Pass 1 — deterministic resolve for every line. Either the pinned revision's
         // item-mapping SNAPSHOT (launch batch 7 — exact-match, in-memory, mirrors
         // ResolveManyAsync's trimmed Ordinal keying) or the live table in a single query.
         // Both dictionaries are keyed Ordinal on the trimmed code the LINE carries: the case rule
         // lives in the match against stored rows, not in the keys, so two lines whose codes differ
         // only in case still get one answer each.
-        var resolvedMap = itemMappingSnapshot is not null
+        var resolvedMap = invoice
+            ? new Dictionary<string, string?>()
+            : itemMappingSnapshot is not null
             ? ResolveFromSnapshot(itemMappingSnapshot, lines)
             : await _mappings.ResolveManyAsync(
                 organisationId,
@@ -1903,9 +2037,12 @@ internal sealed class OrderIngestionService
             return map.TryGetValue(buyerItemCode.Trim(), out var code) ? code : null;
         }
 
+        bool IsUnresolved(ParsedOrderLine l) =>
+            !invoice && string.IsNullOrWhiteSpace(ResolveFromMap(resolvedMap, l.BuyerItemCode));
+
         // Pass 2 — gather the still-unresolved lines and make ONE batched AI call.
         var unresolvedContexts = lines
-            .Where(l => string.IsNullOrWhiteSpace(ResolveFromMap(resolvedMap, l.BuyerItemCode)))
+            .Where(IsUnresolved)
             .Select(l => new AiMappingLineContext(
                 l.LineNumber,
                 l.BuyerItemCode,
@@ -1963,7 +2100,7 @@ internal sealed class OrderIngestionService
         var mpnLookups = await ResolveByManufacturerPartAsync(
             organisationId,
             supplierId,
-            lines.Where(l => string.IsNullOrWhiteSpace(ResolveFromMap(resolvedMap, l.BuyerItemCode))).ToList(),
+            lines.Where(IsUnresolved).ToList(),
             ct);
 
         // Materialise entities from the in-memory dictionaries — no further I/O.
@@ -1971,7 +2108,7 @@ internal sealed class OrderIngestionService
         foreach (var line in lines)
         {
             var supplierCode = ResolveFromMap(resolvedMap, line.BuyerItemCode);
-            bool resolved = !string.IsNullOrWhiteSpace(supplierCode);
+            bool resolved = !IsUnresolved(line);
 
             // The parser flags a line whose quantity / unit price was ambiguous or
             // unparseable (e.g. scientific notation) so a silently-wrong number never
