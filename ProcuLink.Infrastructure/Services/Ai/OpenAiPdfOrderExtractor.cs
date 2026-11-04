@@ -1009,8 +1009,9 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         }
     }
 
+    // Unsigned: the source tokens carry no sign, so a credit note's -60.00 must match a printed 60.00.
     private static bool NumberAppearsInSource(decimal value, HashSet<decimal> sourceNumbers) =>
-        sourceNumbers.Contains(Normalize(value));
+        sourceNumbers.Contains(Normalize(Math.Abs(value)));
 
     // Round to 4dp so double→decimal noise and trailing zeros don't cause spurious misses.
     private static decimal Normalize(decimal value) => Math.Round(value, 4, MidpointRounding.AwayFromZero);

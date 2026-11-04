@@ -365,7 +365,7 @@ public class OpenAiPdfOrderExtractorTests
     {
         // Regression: "125 500" (price 125, amount 500) must tokenise as two numbers,
         // not one grouped "125 500" = 125500 — otherwise both trip the source check.
-        const string source = "1 WIDGET-X 4 PCS 125 500";
+        const string source = "1 WIDGET-X 4 PCS 125 500\n2 CREDIT-X 1 PCS -125 -125";
 
         var dto = new OpenAiPdfOrderExtractor.ExtractionDto(
             Confidence: 0.9, PoNumber: "PO-1", OrderDate: "", Currency: "EUR", BuyerName: "Acme",
@@ -373,12 +373,14 @@ public class OpenAiPdfOrderExtractorTests
             {
                 // 4 x 125 = 500 — internally consistent, every number in the source.
                 new OpenAiPdfOrderExtractor.ExtractionLineDto(1, "WIDGET-X", "Widget", 4, "PCS", 125, 500),
+                // A credit-note line: the source tokens carry no sign, so -125 must match "125".
+                new OpenAiPdfOrderExtractor.ExtractionLineDto(2, "CREDIT-X", "Credit", 1, "PCS", -125, -125),
             });
 
         var result = OpenAiPdfOrderExtractor.ValidateAndMap(dto, source);
 
         result.Success.Should().BeTrue();
-        result.ReviewLineNumbers.Should().BeEmpty("125 and 500 both appear verbatim in the source");
+        result.ReviewLineNumbers.Should().BeEmpty("125 and 500 both appear verbatim in the source, sign aside");
     }
 
     [Fact]

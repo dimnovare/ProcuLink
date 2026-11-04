@@ -504,7 +504,9 @@ internal sealed class OrderIngestionService
         // the same as one parsed from a file.
         var documentType  = NormalizeDocumentType(order.DocumentType);
         var isInvoice     = documentType == "invoice";
-        var aiCandidates  = await GetAiMappingCandidatesAsync(organisationId, resolveSupplierId, ct);
+        var aiCandidates  = isInvoice
+            ? Array.Empty<AiMappingCandidate>()
+            : await GetAiMappingCandidatesAsync(organisationId, resolveSupplierId, ct);
         var lineEntities  = await BuildLineEntitiesAsync(
             organisationId, resolveSupplierId, resolveSupplierName, parsedLines, aiCandidates, ct, invoice: isInvoice);
 
@@ -646,7 +648,7 @@ internal sealed class OrderIngestionService
         };
 
         if (isInvoice)
-            await ApplyInvoicePathAsync(entity, supplierChosenByPerson: false, ct);
+            await ApplyInvoiceProblemsAsync(_db, entity, await ApplyInvoicePathAsync(entity, supplierChosenByPerson: false, ct), ct);
 
         // ── Supplier auto-detect, sync path ───────────────────────────────────
         // This order is persisted whole and NEVER enqueues ParseOrderJob, so the hook in
@@ -1060,7 +1062,9 @@ internal sealed class OrderIngestionService
 
             var supplierName = entity.Supplier?.Name
                                ?? await GetSupplierNameAsync(organisationId, entity.SupplierId ?? Guid.Empty, ct);
-            var aiCandidates = await GetAiMappingCandidatesAsync(organisationId, entity.SupplierId ?? Guid.Empty, ct);
+            var aiCandidates = isInvoice
+                ? Array.Empty<AiMappingCandidate>()
+                : await GetAiMappingCandidatesAsync(organisationId, entity.SupplierId ?? Guid.Empty, ct);
             var lineEntities = await BuildLineEntitiesAsync(
                 organisationId, entity.SupplierId ?? Guid.Empty, supplierName, parsedOrder.Lines, aiCandidates, ct,
                 itemMappingSnapshot, invoice: isInvoice);
@@ -1195,18 +1199,20 @@ internal sealed class OrderIngestionService
             // only changed by the ExecuteUpdate below, so the checks read a detached view of it.
             var newSupplierId           = entity.SupplierId;
             var newConnectionRevisionId = entity.ConnectionRevisionId;
+            PurchaseOrderEntity? invoice = null;
+            IReadOnlyList<string> invoiceProblems = Array.Empty<string>();
             if (isInvoice)
             {
-                var invoice = new PurchaseOrderEntity
+                invoice = new PurchaseOrderEntity
                 {
                     Id = orderId, OrgId = organisationId, SupplierId = entity.SupplierId,
                     ConnectionRevisionId = entity.ConnectionRevisionId, PoNumber = newPoNumber,
                     SupplierName = newSupplierName, SubTotal = newSubTotal, TaxTotal = newTaxTotal,
                     GrandTotal = newGrandTotal, PaymentIban = newPaymentIban, Lines = lineEntities,
                 };
-                await ApplyInvoicePathAsync(invoice, supplierChosenByPerson, ct);
+                invoiceProblems = await ApplyInvoicePathAsync(invoice, supplierChosenByPerson, ct);
                 (newStatus, newSupplierId, newConnectionRevisionId) =
-                    (invoice.Status, invoice.SupplierId, invoice.ConnectionRevisionId);
+                    (InvoiceStatus(invoice, invoiceProblems), invoice.SupplierId, invoice.ConnectionRevisionId);
             }
 
             // ── Atomic persist (all-or-nothing) ───────────────────────────────
@@ -1331,6 +1337,9 @@ internal sealed class OrderIngestionService
             // tracked parent's navigation yet, so EF relationship fixup cannot supply it.
             foreach (var line in lineEntities) line.OrderId = orderId;
             _db.PurchaseOrderLines.AddRange(lineEntities);
+            // Staged only now the claim has succeeded, so a lost claim leaves nothing tracked.
+            if (invoice is not null)
+                await ApplyInvoiceProblemsAsync(_db, invoice, invoiceProblems, ct);
             _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "Parsed", new
             {
                 lineCount       = lineEntities.Count,
@@ -1518,7 +1527,9 @@ internal sealed class OrderIngestionService
         var isInvoice = NormalizeDocumentType(entity.DocumentType) == "invoice";
         var supplierId   = entity.SupplierId ?? Guid.Empty;
         var supplierName = entity.Supplier?.Name ?? await GetSupplierNameAsync(organisationId, supplierId, ct);
-        var aiCandidates = await GetAiMappingCandidatesAsync(organisationId, supplierId, ct);
+        var aiCandidates = isInvoice
+            ? Array.Empty<AiMappingCandidate>()
+            : await GetAiMappingCandidatesAsync(organisationId, supplierId, ct);
         var lineEntities = await BuildLineEntitiesAsync(
             organisationId, supplierId, supplierName, parsedLines, aiCandidates, ct, invoice: isInvoice);
 
@@ -1530,16 +1541,18 @@ internal sealed class OrderIngestionService
 
         // A file-less order only re-resolves after assign-supplier, so an invoice here keeps the
         // supplier a person chose. The checks read a detached view carrying the rebuilt lines.
+        PurchaseOrderEntity? invoice = null;
+        IReadOnlyList<string> invoiceProblems = Array.Empty<string>();
         if (isInvoice)
         {
-            var invoice = new PurchaseOrderEntity
+            invoice = new PurchaseOrderEntity
             {
                 Id = orderId, OrgId = organisationId, SupplierId = entity.SupplierId, PoNumber = entity.PoNumber,
                 SupplierName = entity.SupplierName, SubTotal = entity.SubTotal, TaxTotal = entity.TaxTotal,
                 GrandTotal = entity.GrandTotal, PaymentIban = entity.PaymentIban, Lines = lineEntities,
             };
-            await ApplyInvoicePathAsync(invoice, supplierChosenByPerson: true, ct);
-            newStatus = invoice.Status;
+            invoiceProblems = await ApplyInvoicePathAsync(invoice, supplierChosenByPerson: true, ct);
+            newStatus = InvoiceStatus(invoice, invoiceProblems);
         }
 
         var now = DateTime.UtcNow;
@@ -1594,6 +1607,9 @@ internal sealed class OrderIngestionService
 
         foreach (var line in lineEntities) line.OrderId = orderId;
         _db.PurchaseOrderLines.AddRange(lineEntities);
+        // Staged only now the claim has succeeded, so a lost claim leaves nothing tracked.
+        if (invoice is not null)
+            await ApplyInvoiceProblemsAsync(_db, invoice, invoiceProblems, ct);
         _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "Parsed", new
         {
             lineCount       = lineEntities.Count,
@@ -1632,13 +1648,12 @@ internal sealed class OrderIngestionService
     /// What an invoice gets instead of item-code resolution, at each place a document's type is
     /// settled. It goes to the org's invoice destination whoever sent it, unless
     /// <paramref name="supplierChosenByPerson"/> (assign-supplier on an invoice parked because no
-    /// destination was set). Its codes go through as printed. It is held <c>pending_review</c> only
-    /// when its checks find problems, one open <c>invoice_check</c> row each; otherwise it gets the
-    /// status a fully resolved order gets, and the destination's automation applies as for orders.
-    /// Mutates <paramref name="invoice"/> (supplier, revision, status, lines) and stages the rows;
-    /// the caller persists.
+    /// destination was set). Its codes go through as printed. Mutates <paramref name="invoice"/>
+    /// (supplier, revision, lines) and returns its problems; the caller settles them with
+    /// <see cref="ApplyInvoiceProblemsAsync"/> (or <see cref="InvoiceStatus"/> ahead of a claim).
     /// </summary>
-    private async Task ApplyInvoicePathAsync(PurchaseOrderEntity invoice, bool supplierChosenByPerson, CancellationToken ct)
+    private async Task<IReadOnlyList<string>> ApplyInvoicePathAsync(
+        PurchaseOrderEntity invoice, bool supplierChosenByPerson, CancellationToken ct)
     {
         if (!supplierChosenByPerson)
         {
@@ -1659,15 +1674,30 @@ internal sealed class OrderIngestionService
             line.NeedsReview = false;
         }
 
-        var problems = await CollectInvoiceProblemsAsync(_db, invoice, ct);
-        invoice.Status = invoice.SupplierId is null ? OrderStatusConstants.Unrouted
-            : problems.Count > 0 ? OrderStatusConstants.PendingReview
-            : OrderStatusConstants.Ready;
+        return await CollectInvoiceProblemsAsync(_db, invoice, ct);
+    }
 
-        // Re-runnable (assign-supplier re-parses a parked invoice): the current problems replace
-        // this order's open rows. Reconcile never touches invoice_check rows.
+    /// <summary>
+    /// An invoice with no supplier parks unrouted; one with problems is held for review; a clean one
+    /// gets the status a fully resolved order gets, and the destination's automation applies.
+    /// </summary>
+    internal static string InvoiceStatus(PurchaseOrderEntity invoice, IReadOnlyList<string> problems) =>
+        invoice.SupplierId is null ? OrderStatusConstants.Unrouted
+        : problems.Count > 0 ? OrderStatusConstants.PendingReview
+        : OrderStatusConstants.Ready;
+
+    /// <summary>
+    /// Settles an invoice's checks: sets its status and replaces its open <c>invoice_check</c> rows
+    /// with one per current problem. Re-runnable (assign-supplier re-parse, header edit). Stages
+    /// only; the caller saves. Reconcile closes these rows once the invoice leaves the hold.
+    /// </summary>
+    internal static async Task ApplyInvoiceProblemsAsync(
+        ProcuLinkDbContext db, PurchaseOrderEntity invoice, IReadOnlyList<string> problems, CancellationToken ct)
+    {
+        invoice.Status = InvoiceStatus(invoice, problems);
+
         var now = DateTime.UtcNow;
-        var stale = await _db.OrderExceptions
+        var stale = await db.OrderExceptions
             .Where(e => e.OrgId == invoice.OrgId && e.OrderId == invoice.Id
                      && e.Code == OrderExceptionService.InvoiceCheckCode && e.State == "open")
             .ToListAsync(ct);
@@ -1676,9 +1706,9 @@ internal sealed class OrderIngestionService
             row.State = "resolved";
             row.ResolvedAt = now;
         }
-        _db.OrderExceptions.AddRange(problems.Select(p => new OrderException
+        db.OrderExceptions.AddRange(problems.Select(p => new OrderException
         {
-            Id = Guid.NewGuid(), OrgId = invoice.OrgId, OrderId = invoice.Id, Stage = "validate",
+            Id = Guid.NewGuid(), OrgId = invoice.OrgId, OrderId = invoice.Id, Stage = "Validate",
             Code = OrderExceptionService.InvoiceCheckCode, Severity = "warning", State = "open",
             Message = p, CreatedAt = now,
         }));

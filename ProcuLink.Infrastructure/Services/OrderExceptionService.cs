@@ -9,7 +9,7 @@ namespace ProcuLink.Infrastructure.Services;
 /// EF Core implementation of <see cref="IOrderExceptionService"/>.
 /// All exception generation flows through the idempotent <see cref="ReconcileAsync"/>:
 /// callers never construct exceptions directly (the one exception: <see cref="InvoiceCheckCode"/>
-/// rows, which the invoice path writes and reconcile leaves alone). Reconcile is the single source
+/// rows, which the invoice path writes; reconcile only closes them). Reconcile is the single source
 /// of truth for clearing — it compares the order's current status + lines against existing
 /// exceptions and decides resolve-vs-recreate per (orderId, code):
 ///   • condition still holds + no open/ignored row for that code → OPEN a new one;
@@ -64,8 +64,9 @@ public sealed class OrderExceptionService : IOrderExceptionService
 
     /// <summary>
     /// Exception code for a failed invoice check. These rows are written by the invoice path
-    /// (<c>OrderIngestionService.ApplyInvoicePathAsync</c>), which re-runs the checks itself, so
-    /// <see cref="ReconcileAsync"/> leaves them alone: it cannot re-derive them from status.
+    /// (<c>OrderIngestionService.ApplyInvoiceProblemsAsync</c>), which re-runs the checks itself.
+    /// <see cref="ReconcileAsync"/> cannot re-derive them, so it leaves them alone while the invoice
+    /// is held (pending_review / unrouted) and closes them once it is released.
     /// </summary>
     public const string InvoiceCheckCode = "invoice_check";
 
@@ -230,7 +231,10 @@ public sealed class OrderExceptionService : IOrderExceptionService
         // deliberately. Resolved rows are already terminal and left alone.
         foreach (var ex in existing)
         {
-            if (ex.State != "open" || ex.Code == InvoiceCheckCode) continue;
+            if (ex.State != "open") continue;
+            // An invoice's check rows stand while it is held; any release closes them.
+            if (ex.Code == InvoiceCheckCode
+                && order.Status is OrderStatusConstants.PendingReview or OrderStatusConstants.Unrouted) continue;
             // Diffed against the whole problem SET, not one problem: an open row survives as long
             // as ANY current problem still carries its code. Comparing against a single problem is
             // what used to auto-resolve a real duplicate_po_number the moment the order also needed

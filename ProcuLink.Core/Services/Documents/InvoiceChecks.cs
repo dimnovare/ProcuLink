@@ -22,7 +22,7 @@ public static class InvoiceChecks
         else if (doc.SubTotal is { } net && doc.TaxTotal is { } tax && Math.Abs(net + tax - total) > Tolerance)
             problems.Add("Net plus VAT does not equal the total.");
 
-        if (doc.Lines.Count > 0 && doc.SubTotal is { } subTotal
+        if (doc.Lines.Any(l => l.LineAmount is not null || l.UnitPrice != 0) && doc.SubTotal is { } subTotal
             && Math.Abs(doc.Lines.Sum(l => l.LineAmount ?? l.Quantity * l.UnitPrice) - subTotal) > Tolerance)
             problems.Add("Line amounts do not add up to the net total.");
 
