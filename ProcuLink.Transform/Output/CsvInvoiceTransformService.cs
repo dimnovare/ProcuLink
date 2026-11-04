@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using static ProcuLink.Transform.Output.CsvTransformService;
 
 namespace ProcuLink.Transform.Output;
 
@@ -22,13 +23,13 @@ public sealed class CsvInvoiceTransformService : IInvoiceTransformService
 
         // ── Header metadata ───────────────────────────────────────────────
         sb.AppendLine("Field,Value");
-        sb.AppendLine($"InvoiceNumber,{Escape(invoice.InvoiceNumber)}");
+        sb.AppendLine($"InvoiceNumber,{Cell(invoice.InvoiceNumber)}");
         sb.AppendLine($"IssueDate,{invoice.IssueDate:yyyy-MM-dd}");
         sb.AppendLine($"DueDate,{invoice.DueDate?.ToString("yyyy-MM-dd") ?? ""}");
-        sb.AppendLine($"Currency,{Escape(invoice.Currency)}");
-        sb.AppendLine($"BuyerRef,{Escape(invoice.BuyerRef ?? "")}");
-        sb.AppendLine($"SupplierRef,{Escape(invoice.SupplierRef ?? "")}");
-        sb.AppendLine($"PaymentTerms,{Escape(invoice.PaymentTerms ?? "")}");
+        sb.AppendLine($"Currency,{Cell(invoice.Currency)}");
+        sb.AppendLine($"BuyerRef,{Cell(invoice.BuyerRef)}");
+        sb.AppendLine($"SupplierRef,{Cell(invoice.SupplierRef)}");
+        sb.AppendLine($"PaymentTerms,{Cell(invoice.PaymentTerms)}");
         sb.AppendLine($"SubTotal,{invoice.SubTotal.ToString(CultureInfo.InvariantCulture)}");
         sb.AppendLine($"TaxTotal,{invoice.TaxTotal.ToString(CultureInfo.InvariantCulture)}");
         sb.AppendLine($"GrandTotal,{invoice.GrandTotal.ToString(CultureInfo.InvariantCulture)}");
@@ -40,11 +41,11 @@ public sealed class CsvInvoiceTransformService : IInvoiceTransformService
         {
             sb.AppendLine(string.Join(",",
                 l.LineNumber.ToString(CultureInfo.InvariantCulture),
-                Escape(l.BuyerItemCode    ?? ""),
-                Escape(l.SupplierItemCode ?? ""),
-                Escape(l.Description),
+                Cell(l.BuyerItemCode),
+                Cell(l.SupplierItemCode),
+                Cell(l.Description),
                 l.Quantity.ToString(CultureInfo.InvariantCulture),
-                Escape(l.UnitCode),
+                Cell(l.UnitCode),
                 l.UnitPrice.ToString(CultureInfo.InvariantCulture),
                 l.TaxRate.ToString(CultureInfo.InvariantCulture),
                 l.LineTotal.ToString(CultureInfo.InvariantCulture)
@@ -52,12 +53,5 @@ public sealed class CsvInvoiceTransformService : IInvoiceTransformService
         }
 
         return Task.FromResult(Encoding.UTF8.GetBytes(sb.ToString()));
-    }
-
-    private static string Escape(string v)
-    {
-        if (v.Contains(',') || v.Contains('"') || v.Contains('\n') || v.Contains('\r'))
-            return $"\"{v.Replace("\"", "\"\"")}\"";
-        return v;
     }
 }

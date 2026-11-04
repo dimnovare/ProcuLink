@@ -50,6 +50,21 @@ public class CsvInvoiceTransformServiceTests
         csv.Should().Contain("10");
     }
 
+    // CSV injection: a text cell is neutralised, but a credit note's negative numbers stay numeric
+    // (they never pass through CsvTransformService.Cell).
+    [Fact]
+    public async Task TransformAsync_FormulaInText_IsNeutralised_NegativeNumbersStayNumeric()
+    {
+        var line = MakeLine(1);
+        line.Description = "=HYPERLINK(\"x\")";
+        line.Quantity    = -5m;
+        line.LineTotal   = -50m;
+
+        var csv = Encoding.UTF8.GetString(await new CsvInvoiceTransformService().TransformAsync(MakeInvoice(), new[] { line }, default));
+
+        csv.Should().Contain("1,,,\"'=HYPERLINK(\"\"x\"\")\",-5,EA,10,0.20,-50");
+    }
+
     [Fact]
     public void Format_IsCsv()
         => new CsvInvoiceTransformService().Format.Should().Be("csv");

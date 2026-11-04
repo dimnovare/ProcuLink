@@ -123,7 +123,7 @@ public sealed class CsvTransformService : ITransformService
     }
 
     /// <summary>A text cell: formula-neutralised, then RFC 4180 escaped. Numeric columns never pass through here.</summary>
-    private static string Cell(string? value) => Escape(NeutraliseFormula(value ?? string.Empty));
+    internal static string Cell(string? value) => Escape(NeutraliseFormula(value ?? string.Empty));
 
     /// <summary>
     /// OWASP CSV injection: Excel/Sheets run a cell starting with = + - @ tab or CR as a formula; a
