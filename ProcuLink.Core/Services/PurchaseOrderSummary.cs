@@ -26,5 +26,8 @@ public record PurchaseOrderSummary(
     /// Without this flag a caller can see the row but cannot tell it apart from real work, which
     /// is how "Received 0" came to sit beside a table listing one order.
     /// </summary>
-    bool IsSample = false
+    bool IsSample = false,
+
+    /// <summary>"purchase_order" | "invoice" | "other" — null when the document was never classified.</summary>
+    string? DocumentType = null
 );

@@ -1718,6 +1718,10 @@ public sealed class OrdersController : ControllerBase
         if (string.IsNullOrEmpty(formatStr))
             formatStr = "xml"; // safe default when neither the request nor the supplier specifies one
 
+        // An invoice goes out as CSV, JSON or PDF; an order-only format (cXML, EDI, UBL...) is refused here.
+        if (order.DocumentType == "invoice" && formatStr is not ("csv" or "json" or "pdf"))
+            return UnprocessableEntity(new { error = "Invoices go out as CSV, JSON or PDF. Change the output format for where invoices go." });
+
         if (!AllowedTransformFormats.Contains(formatStr))
             return BadRequest(new { error = "Format must be one of: xml, csv, cxml, json, ubl, x12." });
 

@@ -137,6 +137,18 @@ public static class CanonicalRowFields
     public static readonly IReadOnlyDictionary<string, string> ExcludedHeaderFields =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
+            ["DueDate"] =
+                "Invoice-only field, read for invoices and written by the default invoice output ("
+                + "InvoiceDefaultOutput). Not yet bindable by a custom output.",
+            ["SellerTaxId"] =
+                "Invoice-only field, read for invoices and written by the default invoice output ("
+                + "InvoiceDefaultOutput). Not yet bindable by a custom output.",
+            ["PaymentIban"] =
+                "Invoice-only field, read for invoices and written by the default invoice output ("
+                + "InvoiceDefaultOutput). Not yet bindable by a custom output.",
+            ["PaymentReference"] =
+                "Invoice-only field, read for invoices and written by the default invoice output ("
+                + "InvoiceDefaultOutput). Not yet bindable by a custom output.",
             ["Id"] =
                 "Infrastructure: internal surrogate key. Meaningless to a counterparty and a "
                 + "tenant-correlatable identifier we do not put in outbound documents.",
