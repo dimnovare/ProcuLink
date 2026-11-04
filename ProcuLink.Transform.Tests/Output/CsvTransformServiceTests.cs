@@ -150,6 +150,20 @@ public class CsvTransformServiceTests
         rows[1].Should().Contain(",\"'=HYPERLINK(\"\"x\"\")\",10,EA,");
     }
 
+    // Excel in a ';'-list-separator locale (e.g. et-EE, de-DE) splits an opened .csv on ';', so an
+    // unquoted ';' starts a new cell the first-character check never saw. Quoting keeps it one cell.
+    [Fact]
+    public async Task TransformAsync_SemicolonInTextCell_IsQuoted()
+    {
+        var order = BuildOrder();
+        order.Lines.First().Description = "Bolt;=1+1";
+
+        var svc  = new CsvTransformService();
+        var rows = await Rows(await svc.TransformAsync(order, OutputFormat.Csv, CancellationToken.None));
+
+        rows[1].Should().Contain(",\"Bolt;=1+1\",10,EA,");
+    }
+
     [Fact]
     public async Task TransformAsync_LineNeedsReview_ThrowsTransformValidationException()
     {

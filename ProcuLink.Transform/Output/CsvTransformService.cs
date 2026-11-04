@@ -133,10 +133,14 @@ public sealed class CsvTransformService : ITransformService
     internal static string NeutraliseFormula(string value) =>
         value.Length > 0 && "=+-@\t\r".Contains(value[0]) ? "'" + value : value;
 
-    /// <summary>RFC 4180: wrap in double-quotes if the value contains comma, quote, or newline.</summary>
+    /// <summary>
+    /// RFC 4180: wrap in double-quotes if the value contains comma, quote, or newline — and also ';'
+    /// or tab, which a ';'-locale Excel or a delimiter-sniffing import splits on, starting a new cell
+    /// that <see cref="NeutraliseFormula"/> never saw.
+    /// </summary>
     internal static string Escape(string value)
     {
-        if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
+        if (value.IndexOfAny([',', '"', '\n', '\r', ';', '\t']) >= 0)
             return $"\"{value.Replace("\"", "\"\"")}\"";
         return value;
     }
