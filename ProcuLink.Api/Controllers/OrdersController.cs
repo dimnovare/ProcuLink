@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Api.Auth;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Helpers;
 using ProcuLink.Api.Jobs;
@@ -670,6 +671,47 @@ public sealed class OrdersController : ControllerBase
     }
 
     // ── POST /api/orders/{id}/resolve ─────────────────────────────────────────
+
+    public sealed record SendAnywayRequest(string? Reason);
+
+    /// <summary>Audit action for an admin releasing a held invoice; the payload carries <c>by</c> and <c>reason</c>.</summary>
+    public const string InvoiceSentAnywayAction = "InvoiceSentAnyway";
+
+    /// <summary>
+    /// Releases an invoice held by its checks (a false alarm such as a possible duplicate), with a
+    /// required reason kept in the order's history. It does not transform or deliver: the client
+    /// sends next through the normal calls. Administrators only — it overrules the invoice checks.
+    /// </summary>
+    [HttpPost("{id:guid}/send-anyway")]
+    [RequireOrgAdmin]
+    [ProducesResponseType(typeof(OrderDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> SendAnyway(Guid id, [FromBody] SendAnywayRequest? request, CancellationToken ct)
+    {
+        var orgId  = _tenant.OrganisationId;
+        var reason = request?.Reason?.Trim() ?? string.Empty;
+        if (reason.Length is < 3 or > 500)
+            return BadRequest(new { error = "Give a reason of 3 to 500 characters." });
+
+        var invoice = await _db.PurchaseOrders.FirstOrDefaultAsync(o => o.OrgId == orgId && o.Id == id, ct);
+        if (invoice is null) return NotFound();
+
+        var held = invoice.DocumentType == "invoice" && invoice.Status == OrderStatusConstants.PendingReview
+            && await _db.OrderExceptions.AnyAsync(e => e.OrgId == orgId && e.OrderId == id
+                   && e.Code == Infrastructure.Services.OrderExceptionService.InvoiceCheckCode && e.State == "open", ct);
+        if (!held) return Conflict(new { error = "Only an invoice held by its checks can be sent anyway." });
+
+        // Closes the open invoice_check rows and sets the status a clean invoice gets.
+        await OrderIngestionService.ApplyInvoiceProblemsAsync(_db, invoice, [], ct);
+        invoice.UpdatedAt = DateTime.UtcNow;
+        _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(orgId, id, InvoiceSentAnywayAction,
+            new { by = _tenant.ClerkUserId, reason }));
+        await _db.SaveChangesAsync(ct);
+
+        return await Get(id, ct);
+    }
 
     /// <summary>
     /// Apply user-supplied supplier item codes to unresolved lines.

@@ -142,6 +142,11 @@ internal static class OrgAdminGateIlScanner
           + "accepted from the next message, and nothing tells them — a silent redirection of "
           + "where an organisation's documents can arrive."),
 
+        new("OrderIngestionService.ApplyInvoiceProblemsAsync",
+            OnInternalStatic("ProcuLink.Api.Services.OrderIngestionService", "ApplyInvoiceProblemsAsync"),
+            "Releases an invoice held by its checks into the send flow, closing the checks that held it "
+          + "(\"send anyway\"); once it is released a document can reach the vendor's destination."),
+
         new("new IntegrationSubscription / DbSet<IntegrationSubscription>.Add",
             CreatesIntegrationSubscription,
             "Stands up an outbound subscription that ships the payload of every matching order to "
@@ -168,6 +173,19 @@ internal static class OrgAdminGateIlScanner
             member is MethodBase method
             && method.Name == name
             && method.DeclaringType == typeof(TService);
+    }
+
+    /// <summary>
+    /// Matches a call to an internal static method, resolved by reflection NOW for the same reason
+    /// as <see cref="OnInterface{TService}"/>: a rename must throw, not match nothing.
+    /// </summary>
+    private static Func<MemberInfo, bool> OnInternalStatic(string typeName, string name)
+    {
+        var type = ApiAssembly.GetType(typeName)
+            ?? throw new InvalidOperationException($"{typeName} does not exist — update OrgAdminGateIlScanner.");
+        if (type.GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public) is null)
+            throw new InvalidOperationException($"{typeName}.{name} does not exist — update OrgAdminGateIlScanner.");
+        return member => member is MethodBase method && method.Name == name && method.DeclaringType == type;
     }
 
     /// <summary>
