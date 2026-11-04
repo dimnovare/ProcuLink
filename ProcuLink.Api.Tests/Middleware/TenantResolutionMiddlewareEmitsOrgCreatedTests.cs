@@ -87,4 +87,40 @@ public class TenantResolutionMiddlewareEmitsOrgCreatedTests
 
         Assert.Empty(analytics.CapturedEvents);
     }
+
+    [Fact]
+    public async Task InvokeAsync_ErasedWorkspace_IsRefusedNotRecreated()
+    {
+        var dbOptions = new DbContextOptionsBuilder<ProcuLinkDbContext>()
+            .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
+            .Options;
+        await using (var seed = new ProcuLinkDbContext(dbOptions))
+        {
+            seed.PlatformAuditEvents.Add(new ProcuLink.Core.Entities.PlatformAuditEvent
+            {
+                Id = Guid.NewGuid(), Action = ProcuLink.Infrastructure.Services.OrganisationEraser.AuditAction,
+                SubjectOrgId = Guid.NewGuid(), SubjectClerkOrgId = "org_ERASED", Actor = "test", Reason = "test",
+            });
+            await seed.SaveChangesAsync();
+        }
+        await using var requestDb = new ProcuLinkDbContext(dbOptions);
+
+        var nextRan = false;
+        var middleware = new TenantResolutionMiddleware(
+            next: _ => { nextRan = true; return Task.CompletedTask; },
+            logger: NullLogger<TenantResolutionMiddleware>.Instance);
+        var ctx = new DefaultHttpContext();
+        ctx.User = new ClaimsPrincipal(new ClaimsIdentity(new[]
+        {
+            new Claim("org_id", "org_ERASED"),
+            new Claim("sub", "user_ERASED_abc"),
+        }, authenticationType: "test"));
+
+        await middleware.InvokeAsync(ctx, requestDb, new FakeAnalyticsService(), dbOptions);
+
+        Assert.Equal(StatusCodes.Status403Forbidden, ctx.Response.StatusCode);
+        Assert.False(nextRan);
+        await using var verify = new ProcuLinkDbContext(dbOptions);
+        Assert.False(await verify.Organisations.AnyAsync());
+    }
 }

@@ -108,14 +108,6 @@ public sealed class OrphanGuardTests
             + "production projects, no endpoint anywhere in ProcuLink.Api, and no route referencing it "
             + "in project-proculink at origin/main. The correction trail is captured and discarded; "
             + "fingerprint learning runs off SchemaFingerprint, not this table."),
-        new KnownWriteOnly("Membership",
-            "WP-04 finding 2026-07-30, judged INERT rather than write-mostly — checked before calling it "
-            + "dead, including the Clerk hypothesis. No reader AND no writer in app code; no route in "
-            + "ProcuLink.Api; no frontend call (the OrgSwitcher / UserChipMenu / select-organization hits "
-            + "in project-proculink are Clerk's OWN memberships, not this table). Tenancy resolves from "
-            + "Clerk organisation claims. The comment at OrdersController.cs:1936 — 'org membership lives "
-            + "in Membership' — describes an intent that was never wired. Mapped and migrated, never "
-            + "populated. Keep-or-drop decision owed; do not build on it in the meantime."),
         new KnownWriteOnly("RetentionAuditLog",
             "WP-04 finding 2026-07-30, judged LEGITIMATELY write-mostly: an append-only evidence trail "
             + "written by BlobRetentionService (~L225) with a DetailsJson payload, so that 'what did the "

@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.Extensions.Logging;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure.Tenancy;
@@ -23,12 +24,16 @@ public sealed class OrganisationEraser(
 {
     public const string AuditAction = "admin.organisation_erased";
 
-    // Stripe statuses after which a subscription can no longer charge. Anything else next to a
-    // subscription id — including a missing or unknown status — refuses.
-    private static readonly string?[] EndedSubscriptionStatuses = ["canceled", "incomplete_expired"];
-
     /// <summary>camelCase, so a stored receipt reads exactly like the one the endpoint returned.</summary>
     public static readonly JsonSerializerOptions ReceiptJson = new(JsonSerializerDefaults.Web);
+
+    /// <summary>
+    /// The one paid-workspace rule, shared with <c>DisposableOrgSweepJob</c>: any Stripe customer or
+    /// subscription, ended or not (a missed webhook leaves the status stale), or any plan but Pilot
+    /// (an Enterprise contract carries no Stripe ids at all).
+    /// </summary>
+    public static bool IsPaying(Organisation o) =>
+        o.StripeCustomerId is not null || o.StripeSubscriptionId is not null || o.Plan != PlanConstants.Pilot;
 
     public async Task<OrgEraseReceipt> EraseAsync(Guid orgId, string actor, string reason, CancellationToken ct)
     {
@@ -38,63 +43,108 @@ public sealed class OrganisationEraser(
             throw new InvalidOperationException($"OrganisationEraser needs an unscoped DbContext; this one is scoped to {scoped}.");
 
         var org = await db.Organisations.AsNoTracking().FirstOrDefaultAsync(o => o.Id == orgId, ct);
-        OrgEraseReceipt Receipt(OrgEraseOutcome outcome, Dictionary<string, int>? rows = null, int blobs = 0) =>
-            new(outcome, orgId, org?.Slug, rows ?? [], blobs, actor, reason, DateTime.UtcNow);
+        OrgEraseReceipt Receipt(OrgEraseOutcome outcome, Dictionary<string, int>? rows = null, int blobs = 0, List<string>? failed = null) =>
+            new(outcome, orgId, org?.Slug, org?.ClerkOrgId, rows ?? [], blobs, failed ?? [], actor, reason, DateTime.UtcNow);
 
         if (org is null) return Receipt(OrgEraseOutcome.NotFound);
-        if (org.StripeSubscriptionId is not null && !EndedSubscriptionStatuses.Contains(org.StripeSubscriptionStatus))
-            return Receipt(OrgEraseOutcome.RefusedPaidSubscription);
+        if (IsPaying(org)) return Receipt(OrgEraseOutcome.RefusedPaidSubscription);
         if (await db.OverageBillingRecords.AnyAsync(r => r.OrgId == orgId, ct))
             return Receipt(OrgEraseOutcome.RefusedBillingEvidence);
 
-        var tables = db.Model.GetEntityTypes()
+        // The last point a cancellation may stop this. From the transaction on every call runs to
+        // completion: a cancelled request must never leave half an erase, or a commit without cleanup.
+        ct.ThrowIfCancellationRequested();
+        var none = CancellationToken.None;
+        var tables = Tables(db);
+        await using var tx = await db.Database.BeginTransactionAsync(none);
+
+        // Counted and keys collected BEFORE any delete: a cascade from one table can remove rows of
+        // a later one, and those rows must still be reported and their blobs still found.
+        var (rows, blobKeys) = await InspectAsync(db, tables, orgId, withKeys: true, none);
+        var memberIds = await db.Memberships.Where(m => m.OrgId == orgId).Select(m => m.UserId).ToListAsync(none);
+
+        foreach (var (type, orgProperty) in tables)
+            await (Task<int>)Generic(nameof(DeleteRowsAsync), type).Invoke(null, [db, orgId, orgProperty])!;
+        // A member's identity (it carries an email) goes too, once nothing else holds it. Nothing
+        // writes users or memberships today (tenancy is Clerk's); this holds once something does.
+        rows["users"] = await db.Users
+            .Where(u => memberIds.Contains(u.Id) && !db.Memberships.Any(m => m.UserId == u.Id)
+                && !db.AuditEvents.Any(a => a.UserId == u.Id))
+            .ExecuteDeleteAsync(none);
+        rows["organisations"] = await db.Organisations.Where(o => o.Id == orgId).ExecuteDeleteAsync(none);
+
+        // The receipt lives in platform_audit_events (no org FK, so it survives) and commits WITH the
+        // rows. Until cleanup confirms each blob gone it lists every one as failed, so a crash between
+        // commit and cleanup still leaves an honest record of what may remain in storage.
+        var keys = blobKeys.Distinct().ToList();
+        var audit = new PlatformAuditEvent
+        {
+            Id = Guid.NewGuid(), Action = AuditAction, SubjectOrgId = orgId, SubjectClerkOrgId = org.ClerkOrgId,
+            Actor = actor, Reason = reason, CreatedAt = DateTime.UtcNow,
+        };
+        void Record(OrgEraseReceipt r) => audit.Payload = JsonSerializer.Serialize(r, ReceiptJson);
+        Record(Receipt(OrgEraseOutcome.Erased, rows, 0, keys));
+        db.PlatformAuditEvents.Add(audit);
+        await db.SaveChangesAsync(none);
+        await tx.CommitAsync(none);
+
+        // Best-effort, like DataErasureService, and only after the commit: a storage failure never
+        // keeps the rows, and is named in the receipt.
+        var failed = new List<string>();
+        foreach (var key in keys)
+        {
+            try { await storage.DeleteAsync(key, none); }
+            catch (Exception ex)
+            {
+                failed.Add(key);
+                logger.LogError(ex, "Erase org {OrgId}: failed to delete blob {Key}.", orgId, key);
+            }
+        }
+        var receipt = Receipt(OrgEraseOutcome.Erased, rows, keys.Count - failed.Count, failed);
+        Record(receipt);
+        await db.SaveChangesAsync(none);
+
+        logger.LogWarning("ORG ERASE: {OrgId} ({Slug}) erased by {Actor} — {Rows} rows, {Blobs} blobs, {Failed} failed.",
+            orgId, org.Slug, actor, rows.Values.Sum(), receipt.BlobsDeleted, failed.Count);
+        return receipt;
+    }
+
+    /// <summary>
+    /// Rows per org-scoped table for <paramref name="orgId"/>, by the same walk the erase uses —
+    /// how <c>DisposableOrgSweepJob</c> tells an untouched workspace from a used one.
+    /// </summary>
+    public static async Task<Dictionary<string, int>> CountRowsAsync(ProcuLinkDbContext db, Guid orgId, CancellationToken ct) =>
+        (await InspectAsync(db, Tables(db), orgId, withKeys: false, ct)).Rows;
+
+    private static List<(IEntityType Type, string OrgProperty)> Tables(ProcuLinkDbContext db) =>
+        db.Model.GetEntityTypes()
             .Select(t => (Type: t, OrgProperty: OrgQueryFilters.FindOrgPropertyName(t)!))
             .Where(x => x.OrgProperty is not null)
             .OrderByDescending(x => DeleteDepth(x.Type, []))
             .ToList();
 
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
-
-        // Count and collect blob keys BEFORE any delete: a cascade from one table can remove rows of
-        // a later one, and those rows must still be reported and their blobs still found.
+    private static async Task<(Dictionary<string, int> Rows, List<string> Keys)> InspectAsync(
+        ProcuLinkDbContext db, List<(IEntityType Type, string OrgProperty)> tables, Guid orgId, bool withKeys, CancellationToken ct)
+    {
         var rows = new Dictionary<string, int>();
-        var blobKeys = new List<string>();
+        var keys = new List<string>();
         foreach (var (type, orgProperty) in tables)
         {
-            var keyProperties = type.GetProperties()
-                .Where(p => p.ClrType == typeof(string) && p.Name.EndsWith("FileKey"))
-                .Select(p => p.Name).ToArray();
-            var (count, keys) = await (Task<(int, List<string>)>)Generic(nameof(InspectAsync), type)
-                .Invoke(this, [orgId, orgProperty, keyProperties, ct])!;
+            string[] keyProperties = withKeys
+                ? type.GetProperties().Where(p => p.ClrType == typeof(string) && p.Name.EndsWith("FileKey")).Select(p => p.Name).ToArray()
+                : [];
+            var (count, found) = await (Task<(int, List<string>)>)Generic(nameof(InspectTableAsync), type)
+                .Invoke(null, [db, orgId, orgProperty, keyProperties, ct])!;
             rows[type.GetTableName()!] = count;
-            blobKeys.AddRange(keys);
+            keys.AddRange(found);
         }
-
-        foreach (var (type, orgProperty) in tables)
-            await (Task<int>)Generic(nameof(DeleteRowsAsync), type).Invoke(this, [orgId, orgProperty, ct])!;
-        rows["organisations"] = await db.Organisations.Where(o => o.Id == orgId).ExecuteDeleteAsync(ct);
-
-        // Best-effort, like DataErasureService: a storage failure is logged and never keeps the rows.
-        var blobs = 0;
-        foreach (var key in blobKeys.Distinct())
-        {
-            try { await storage.DeleteAsync(key, ct); blobs++; }
-            catch (Exception ex) { logger.LogError(ex, "Erase org {OrgId}: failed to delete blob {Key}.", orgId, key); }
-        }
-
-        // The receipt lives in platform_audit_events, which has no org FK, so it survives the erase.
-        var receipt = Receipt(OrgEraseOutcome.Erased, rows, blobs);
-        db.PlatformAuditEvents.Add(new PlatformAuditEvent
-        {
-            Id = Guid.NewGuid(), Action = AuditAction, SubjectOrgId = orgId, Actor = actor, Reason = reason,
-            Payload = JsonSerializer.Serialize(receipt, ReceiptJson), CreatedAt = receipt.At,
-        });
-        await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
-
-        logger.LogWarning("ORG ERASE: {OrgId} ({Slug}) erased by {Actor} — {Rows} rows, {Blobs} blobs.",
-            orgId, org.Slug, actor, rows.Values.Sum(), blobs);
-        return receipt;
+        // Revision test cases hold stored files but no org column: they go by their revision's
+        // cascade, so their files are found through it.
+        if (withKeys)
+            foreach (var c in await db.Set<ConnectionRevisionTestCase>().Where(c => c.Revision.OrgId == orgId)
+                         .Select(c => new { c.SampleSourceFileKey, c.ExpectedOutputKey }).ToListAsync(ct))
+                keys.AddRange(new[] { c.SampleSourceFileKey, c.ExpectedOutputKey }.OfType<string>().Where(k => k != ""));
+        return (rows, keys);
     }
 
     /// <summary>
@@ -121,22 +171,22 @@ public sealed class OrganisationEraser(
     }
 
     private static MethodInfo Generic(string name, IEntityType type) =>
-        typeof(OrganisationEraser).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance)!
+        typeof(OrganisationEraser).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static)!
             .MakeGenericMethod(type.ClrType);
 
-    private IQueryable<T> Owned<T>(Guid orgId, string orgProperty) where T : class =>
+    private static IQueryable<T> Owned<T>(ProcuLinkDbContext db, Guid orgId, string orgProperty) where T : class =>
         db.Set<T>().Where(e => EF.Property<Guid>(e, orgProperty) == orgId);
 
-    private async Task<(int, List<string>)> InspectAsync<T>(
-        Guid orgId, string orgProperty, string[] keyProperties, CancellationToken ct) where T : class
+    private static async Task<(int, List<string>)> InspectTableAsync<T>(
+        ProcuLinkDbContext db, Guid orgId, string orgProperty, string[] keyProperties, CancellationToken ct) where T : class
     {
         var keys = new List<string>();
         foreach (var p in keyProperties)
-            keys.AddRange(await Owned<T>(orgId, orgProperty)
+            keys.AddRange(await Owned<T>(db, orgId, orgProperty)
                 .Select(e => EF.Property<string>(e, p)).Where(k => k != null && k != "").ToListAsync(ct));
-        return (await Owned<T>(orgId, orgProperty).CountAsync(ct), keys);
+        return (await Owned<T>(db, orgId, orgProperty).CountAsync(ct), keys);
     }
 
-    private Task<int> DeleteRowsAsync<T>(Guid orgId, string orgProperty, CancellationToken ct) where T : class =>
-        Owned<T>(orgId, orgProperty).ExecuteDeleteAsync(ct);
+    private static Task<int> DeleteRowsAsync<T>(ProcuLinkDbContext db, Guid orgId, string orgProperty) where T : class =>
+        Owned<T>(db, orgId, orgProperty).ExecuteDeleteAsync(CancellationToken.None);
 }

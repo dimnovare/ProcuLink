@@ -37,6 +37,13 @@ public sealed class OrganisationEraserPostgresTests(PostgresContainerFixture pos
     private static readonly Type[] NotTenantData =
         [typeof(Organisation), typeof(DataProtectionKey), typeof(WorkerHealthAlertCooldown), typeof(PlatformAuditEvent)];
 
+    /// <summary>
+    /// String columns named *Key that are not stored-file keys (ObjectKey names an object in the
+    /// CUSTOMER's S3 bucket). A new *Key column fails the blob assertion until the eraser deletes
+    /// its files or it is listed here — the definition is this file's, not the eraser's.
+    /// </summary>
+    private static readonly string[] NotFileKeys = ["Key", "IdempotencyKey", "ObjectKey", "BillingKey", "EncryptedSecretKey"];
+
     private DbContextOptions<ProcuLinkDbContext>? _options;
     private string? _connectionString;
 
@@ -57,7 +64,7 @@ public sealed class OrganisationEraserPostgresTests(PostgresContainerFixture pos
     public async Task Erase_RemovesEveryOrgOwnedRow_AndLeavesTheOtherOrgIntact()
     {
         Guid target = Guid.NewGuid(), other = Guid.NewGuid();
-        await SeedEverythingAsync(target, 'a');
+        var targetFiles = await SeedEverythingAsync(target, 'a');
         await SeedEverythingAsync(other, 'b');
 
         await using var check = NewContext();
@@ -71,6 +78,12 @@ public sealed class OrganisationEraserPostgresTests(PostgresContainerFixture pos
             if (await CountAsync(check, t, target) == 0) unseeded.Add(t.GetTableName()!);
         unseeded.Should().BeEmpty("a table the guard never seeded is a table it proves nothing about");
 
+        // Each org's own member, plus the other org's member joining the target: only the first may go.
+        var targetUser = await check.Memberships.Where(m => m.OrgId == target).Select(m => m.UserId).SingleAsync();
+        var otherUser = await check.Memberships.Where(m => m.OrgId == other).Select(m => m.UserId).SingleAsync();
+        check.Memberships.Add(new Membership { Id = Guid.NewGuid(), OrgId = target, UserId = otherUser, Role = "member", CreatedAt = DateTime.UtcNow });
+        await check.SaveChangesAsync();
+
         // Billed overage refuses the erase (RefusedBillingEvidence, pinned in OrganisationEraseTests),
         // so — having proved it seeds — the guard clears that one table for the target.
         await check.OverageBillingRecords.Where(r => r.OrgId == target).ExecuteDeleteAsync();
@@ -82,7 +95,7 @@ public sealed class OrganisationEraserPostgresTests(PostgresContainerFixture pos
                 .EraseAsync(target, "test:guard", "guard", CancellationToken.None);
             receipt.Outcome.Should().Be(OrgEraseOutcome.Erased);
             receipt.RowsDeleted.Keys.Should().Contain(orgTables.Select(t => t.GetTableName()!));
-            receipt.BlobsDeleted.Should().BePositive();
+            receipt.FailedBlobKeys.Should().BeEmpty();
         }
 
         var leftovers = new List<string>();
@@ -95,9 +108,12 @@ public sealed class OrganisationEraserPostgresTests(PostgresContainerFixture pos
         leftovers.Should().BeEmpty("the erased org must own nothing afterwards");
         lost.Should().BeEmpty("the erase must never touch another org");
         (await check.Organisations.AnyAsync(o => o.Id == target)).Should().BeFalse();
-        (await check.PlatformAuditEvents.AnyAsync(e => e.SubjectOrgId == target && e.Action == OrganisationEraser.AuditAction))
-            .Should().BeTrue("the receipt must survive the erase");
-        storage.Verify(s => s.DeleteAsync(It.Is<string>(k => !k.StartsWith('a')), It.IsAny<CancellationToken>()), Times.Never);
+        (await check.PlatformAuditEvents.SingleAsync(e => e.SubjectOrgId == target && e.Action == OrganisationEraser.AuditAction))
+            .SubjectClerkOrgId.Should().Be($"org_a{target:N}", "the receipt survives, keyed so the workspace is not re-created");
+        (await check.Users.AnyAsync(u => u.Id == targetUser)).Should().BeFalse("a member no organisation holds any more is erased");
+        (await check.Users.AnyAsync(u => u.Id == otherUser)).Should().BeTrue("a member of another organisation stays");
+        storage.Invocations.Select(i => (string)i.Arguments[0]).Should().BeEquivalentTo(targetFiles,
+            "every stored file the target owns, children included, and nothing of the other org's");
     }
 
     private static Task<int> CountAsync(ProcuLinkDbContext db, IEntityType type, Guid orgId) =>
@@ -114,12 +130,12 @@ public sealed class OrganisationEraserPostgresTests(PostgresContainerFixture pos
     /// principals first, required FKs pointed at this org's own parents, then a second pass fills
     /// the optional FKs (active revision, delivery attempt → order, confirmation line → order line)
     /// so the RESTRICT / NO ACTION edges the eraser has to order around are really populated.
-    /// Every filled string starts with <paramref name="tag"/>, which is how the blob assertion
-    /// tells the two orgs' keys apart.
+    /// Every filled string starts with <paramref name="tag"/>. Returns the stored-file keys it wrote.
     /// </summary>
-    private async Task SeedEverythingAsync(Guid orgId, char tag)
+    private async Task<HashSet<string>> SeedEverythingAsync(Guid orgId, char tag)
     {
         await using var db = NewContext();
+        var fileKeys = new HashSet<string>();
         db.Organisations.Add(new Organisation
         {
             Id = orgId, ClerkOrgId = $"org_{tag}{orgId:N}", Name = "erase-guard", Slug = $"erase-guard-{tag}{orgId:N}",
@@ -146,6 +162,8 @@ public sealed class OrganisationEraserPostgresTests(PostgresContainerFixture pos
                     : p.IsForeignKey() ? current
                     : Fill(p, current, tag);
                 if (!Equals(value, current)) entry.Property(p.Name).CurrentValue = value;
+                if (p.ClrType == typeof(string) && p.Name.EndsWith("Key") && !NotFileKeys.Contains(p.Name) && value is string { Length: > 0 } key)
+                    fileKeys.Add(key);
             }
             db.Add(entity);
             try { await db.SaveChangesAsync(); }
@@ -162,6 +180,7 @@ public sealed class OrganisationEraserPostgresTests(PostgresContainerFixture pos
                 foreach (var p in fk.Properties)
                     db.Entry(entity).Property(p.Name).CurrentValue = KeyOf(fk, p);
         await db.SaveChangesAsync();
+        return fileKeys;
     }
 
     private static int SeedDepth(IEntityType type) =>

@@ -13,7 +13,7 @@ using ProcuLink.Infrastructure;
 namespace ProcuLink.Infrastructure.Migrations
 {
     [DbContext(typeof(ProcuLinkDbContext))]
-    [Migration("20261104120751_AnEraseReceiptHasToOutliveTheOrganisationItRecords")]
+    [Migration("20261104125838_AnEraseReceiptHasToOutliveTheOrganisationItRecords")]
     partial class AnEraseReceiptHasToOutliveTheOrganisationItRecords
     {
         /// <inheritdoc />
@@ -1978,11 +1978,18 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("character varying(500)")
                         .HasColumnName("reason");
 
+                    b.Property<string>("SubjectClerkOrgId")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("subject_clerk_org_id");
+
                     b.Property<Guid>("SubjectOrgId")
                         .HasColumnType("uuid")
                         .HasColumnName("subject_org_id");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("SubjectClerkOrgId");
 
                     b.HasIndex("SubjectOrgId");
 

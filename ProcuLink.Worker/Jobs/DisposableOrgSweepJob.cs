@@ -1,8 +1,8 @@
-using System.Text.RegularExpressions;
 using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Services;
 
 namespace ProcuLink.Worker.Jobs;
 
@@ -11,17 +11,20 @@ namespace ProcuLink.Worker.Jobs;
 /// (frontend <c>scripts/prod-smoke/clerk-disposable.mjs</c>) deletes only the Clerk org and user, so
 /// the Organisation row the API creates on first call stayed forever.
 ///
-/// <para>An org is erased only when ALL hold: its slug or name starts <c>proculink-ci-smoke-</c> or
-/// matches <c>^smoke-\d{8}-</c>; it is older than 6 hours, so a smoke run in flight is never touched;
-/// it has no orders, invoices or suppliers; and it has no Stripe subscription (which the eraser
-/// re-checks itself). Idempotent: an erased org no longer exists to match.</para>
+/// <para>An org is erased only when ALL hold: its slug or name starts <c>proculink-ci-smoke-</c>
+/// (the only prefix a generator emits); it is older than 6 hours, so a smoke run in flight is never
+/// touched; <see cref="OrganisationEraser.IsPaying"/> is false; and the eraser's own table walk finds
+/// no row outside <see cref="Bookkeeping"/>. Idempotent: an erased org no longer exists to match.</para>
 /// </summary>
 public sealed class DisposableOrgSweepJob(
     ProcuLinkDbContext db, IOrganisationEraser eraser, ILogger<DisposableOrgSweepJob> logger)
 {
     public const string Actor = "system:disposable-sweep";
+    private const string Prefix = "proculink-ci-smoke-";
 
-    private static readonly Regex Disposable = new(@"^(proculink-ci-smoke-|smoke-\d{8}-)", RegexOptions.CultureInvariant);
+    /// <summary>Tables a workspace fills just by being signed into. A row anywhere else means it was used.</summary>
+    private static readonly HashSet<string> Bookkeeping =
+        ["memberships", "audit_events", "org_plan_history", "ai_usage_monthly", "idempotency_keys"];
 
     [Queue("background")]
     [AutomaticRetry(Attempts = 0)]
@@ -30,19 +33,29 @@ public sealed class DisposableOrgSweepJob(
     {
         var cutoff = DateTime.UtcNow.AddHours(-6);
         var candidates = await db.Organisations.AsNoTracking()
-            .Where(o => o.CreatedAt < cutoff && o.StripeSubscriptionId == null
-                && (o.Slug.StartsWith("proculink-ci-smoke-") || o.Slug.StartsWith("smoke-")
-                    || o.Name.StartsWith("proculink-ci-smoke-") || o.Name.StartsWith("smoke-"))
-                && !db.PurchaseOrders.Any(p => p.OrgId == o.Id)
-                && !db.Invoices.Any(i => i.OrganisationId == o.Id)
-                && !db.Suppliers.Any(s => s.OrgId == o.Id))
-            .Select(o => new { o.Id, o.Slug, o.Name })
+            .Where(o => o.CreatedAt < cutoff && (o.Slug.StartsWith(Prefix) || o.Name.StartsWith(Prefix)))
             .ToListAsync(ct);
 
-        foreach (var org in candidates.Where(o => Disposable.IsMatch(o.Slug) || Disposable.IsMatch(o.Name)))
+        foreach (var org in candidates.Where(o => !OrganisationEraser.IsPaying(o)))
         {
-            var receipt = await eraser.EraseAsync(org.Id, Actor, "Leftover production-smoke workspace.", ct);
-            logger.LogInformation("DisposableOrgSweepJob: {Slug} -> {Outcome}.", org.Slug, receipt.Outcome);
+            try
+            {
+                var used = (await OrganisationEraser.CountRowsAsync(db, org.Id, ct))
+                    .Where(t => t.Value > 0 && !Bookkeeping.Contains(t.Key)).Select(t => t.Key).ToList();
+                if (used.Count > 0)
+                {
+                    logger.LogInformation("DisposableOrgSweepJob: {Slug} kept — it has rows in {Tables}.", org.Slug, used);
+                    continue;
+                }
+                var receipt = await eraser.EraseAsync(org.Id, Actor, "Leftover production-smoke workspace.", ct);
+                logger.LogInformation("DisposableOrgSweepJob: {Slug} -> {Outcome}.", org.Slug, receipt.Outcome);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // One bad workspace must neither stop the rest nor leave its tracked receipt for the next save.
+                db.ChangeTracker.Clear();
+                logger.LogError(ex, "DisposableOrgSweepJob: erasing {Slug} failed; continuing.", org.Slug);
+            }
         }
     }
 }

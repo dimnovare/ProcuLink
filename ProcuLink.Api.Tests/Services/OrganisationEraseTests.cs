@@ -20,22 +20,23 @@ public sealed class OrganisationEraseTests
     private static ProcuLinkDbContext NewDb() =>
         new(new DbContextOptionsBuilder<ProcuLinkDbContext>().UseInMemoryDatabase($"org-erase-{Guid.NewGuid()}").Options);
 
-    private static Organisation Org(string slug, int ageHours = 24, string? subscriptionStatus = null) => new()
+    private static Organisation Org(string slug, int ageHours = 24, string? customer = null, string? subscription = null, string plan = "pilot") => new()
     {
-        Id = Guid.NewGuid(), ClerkOrgId = $"org_{Guid.NewGuid():N}", Name = slug, Slug = slug,
+        Id = Guid.NewGuid(), ClerkOrgId = $"org_{Guid.NewGuid():N}", Name = slug, Slug = slug, Plan = plan,
         CreatedAt = DateTime.UtcNow.AddHours(-ageHours), TrialStartedAt = DateTime.UtcNow,
-        StripeSubscriptionId = subscriptionStatus is null ? null : "sub_test", StripeSubscriptionStatus = subscriptionStatus,
+        StripeCustomerId = customer, StripeSubscriptionId = subscription, StripeSubscriptionStatus = subscription is null ? null : "canceled",
     };
 
     [Theory]
-    [InlineData("active", false, OrgEraseOutcome.RefusedPaidSubscription)]
-    [InlineData("past_due", false, OrgEraseOutcome.RefusedPaidSubscription)]
-    [InlineData(null, true, OrgEraseOutcome.RefusedBillingEvidence)]
+    [InlineData("cus_test", null, "pilot", false, OrgEraseOutcome.RefusedPaidSubscription)]       // customer, webhook never landed
+    [InlineData(null, "sub_test", "pilot", false, OrgEraseOutcome.RefusedPaidSubscription)]       // even a "canceled" one
+    [InlineData(null, null, "enterprise", false, OrgEraseOutcome.RefusedPaidSubscription)]        // manual contract, no Stripe ids
+    [InlineData(null, null, "pilot", true, OrgEraseOutcome.RefusedBillingEvidence)]
     public async Task Erase_RefusesAPayingOrBilledOrg_AndDeletesNothing(
-        string? subscriptionStatus, bool billedOverage, OrgEraseOutcome expected)
+        string? customer, string? subscription, string plan, bool billedOverage, OrgEraseOutcome expected)
     {
         await using var db = NewDb();
-        var org = Org("erase-refusal-test", subscriptionStatus: subscriptionStatus);
+        var org = Org("erase-refusal-test", customer: customer, subscription: subscription, plan: plan);
         db.Organisations.Add(org);
         if (billedOverage)
             db.OverageBillingRecords.Add(new OverageBillingRecord { Id = Guid.NewGuid(), OrgId = org.Id, BillingKey = "test" });
@@ -49,25 +50,31 @@ public sealed class OrganisationEraseTests
     }
 
     [Theory]
-    [InlineData("proculink-ci-smoke-run1", 7, false, null, true)]
-    [InlineData("smoke-20260815-run1", 7, false, null, true)]
-    [InlineData("acme-workspace", 7, false, null, false)]          // empty, but not disposable
-    [InlineData("smoke-team", 7, false, null, false)]              // smoke- without the run date
-    [InlineData("proculink-ci-smoke-run1", 1, false, null, false)] // a smoke run may still be in flight
-    [InlineData("proculink-ci-smoke-run1", 7, true, null, false)]  // has an order
-    [InlineData("proculink-ci-smoke-run1", 7, false, "canceled", false)] // has a Stripe subscription
-    public async Task Sweep_ErasesOnlyOldEmptyUnsubscribedSmokeOrgs(
-        string slug, int ageHours, bool hasOrder, string? subscriptionStatus, bool erased)
+    [InlineData("proculink-ci-smoke-run1", 7, null, null, true)]
+    [InlineData("proculink-ci-smoke-run1", 7, "membership", null, true)]   // signed into, never used
+    [InlineData("proculink-ci-smoke-run1", 7, "order", null, false)]       // used
+    [InlineData("proculink-ci-smoke-run1", 7, "buyer", null, false)]       // used, in a table nobody hand-listed
+    [InlineData("proculink-ci-smoke-run1", 1, null, null, false)]          // a smoke run may still be in flight
+    [InlineData("proculink-ci-smoke-run1", 7, null, "cus_test", false)]    // a Stripe customer
+    [InlineData("smoke-20260815-run1", 7, null, null, false)]              // no generator emits this; erased by hand
+    [InlineData("acme-workspace", 7, null, null, false)]
+    // The shapes of real workspaces (invented values — the repo is public) must never match.
+    [InlineData("my-organization-1700000000000000001", 7, null, null, false)]
+    [InlineData("personal-workspace-0a1b", 7, null, null, false)]
+    public async Task Sweep_ErasesOnlyOldUnusedUnpaidSmokeOrgs(
+        string slug, int ageHours, string? row, string? customer, bool erased)
     {
         await using var db = NewDb();
-        var org = Org(slug, ageHours, subscriptionStatus);
+        var org = Org(slug, ageHours, customer);
         db.Organisations.Add(org);
-        if (hasOrder) db.PurchaseOrders.Add(new PurchaseOrderEntity { Id = Guid.NewGuid(), OrgId = org.Id });
+        if (row == "membership") db.Memberships.Add(new Membership { Id = Guid.NewGuid(), OrgId = org.Id, UserId = Guid.NewGuid(), Role = "admin" });
+        if (row == "order") db.PurchaseOrders.Add(new PurchaseOrderEntity { Id = Guid.NewGuid(), OrgId = org.Id });
+        if (row == "buyer") db.Buyers.Add(new Buyer { Id = Guid.NewGuid(), OrgId = org.Id });
         await db.SaveChangesAsync();
 
         var eraser = new Mock<IOrganisationEraser>();
         eraser.Setup(e => e.EraseAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new OrgEraseReceipt(OrgEraseOutcome.Erased, org.Id, slug, new Dictionary<string, int>(), 0, "", "", DateTime.UtcNow));
+            .ReturnsAsync(new OrgEraseReceipt(OrgEraseOutcome.Erased, org.Id, slug, null, new Dictionary<string, int>(), 0, [], "", "", DateTime.UtcNow));
 
         await new DisposableOrgSweepJob(db, eraser.Object, NullLogger<DisposableOrgSweepJob>.Instance)
             .ExecuteAsync(CancellationToken.None);

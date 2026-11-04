@@ -15,6 +15,8 @@ public class PlatformAuditEvent
     public Guid Id { get; set; }
     public string Action { get; set; } = string.Empty;
     public Guid SubjectOrgId { get; set; }
+    /// <summary>The erased org's Clerk id: tenant resolution refuses to re-create a workspace for it.</summary>
+    public string? SubjectClerkOrgId { get; set; }
     public string Actor { get; set; } = string.Empty;
     public string Reason { get; set; } = string.Empty;
     /// <summary>jsonb — the full <c>OrgEraseReceipt</c>.</summary>

@@ -1133,7 +1133,9 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.Reason).HasColumnName("reason").HasMaxLength(500).IsRequired();
             b.Property(x => x.Payload).HasColumnName("payload").HasColumnType("jsonb").IsRequired();
             b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(x => x.SubjectClerkOrgId).HasColumnName("subject_clerk_org_id").HasMaxLength(200);
             b.HasIndex(x => x.SubjectOrgId);
+            b.HasIndex(x => x.SubjectClerkOrgId);
         });
 
         // ── worker_health_alert_cooldowns ──────────────────────────────
