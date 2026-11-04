@@ -20,7 +20,7 @@ public class OrdersSendAnywayTests
     private readonly ProcuLinkDbContext _db = new(new DbContextOptionsBuilder<ProcuLinkDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
 
-    private async Task<PurchaseOrderEntity> SeedAsync(string documentType, string status)
+    private async Task<PurchaseOrderEntity> SeedAsync(string documentType, string status, string exceptionState = "open")
     {
         var order = new PurchaseOrderEntity
         {
@@ -31,7 +31,7 @@ public class OrdersSendAnywayTests
         _db.OrderExceptions.Add(new OrderException
         {
             Id = Guid.NewGuid(), OrgId = _org, OrderId = order.Id, Stage = "Validate", Code = "invoice_check",
-            State = "open", Message = "Possible duplicate.", CreatedAt = DateTime.UtcNow,
+            State = exceptionState, Message = "Possible duplicate.", CreatedAt = DateTime.UtcNow,
         });
         await _db.SaveChangesAsync();
         return order;
@@ -59,23 +59,27 @@ public class OrdersSendAnywayTests
     public async Task HeldInvoice_WithReason_IsReleasedClosedAndAudited()
     {
         var invoice = await SeedAsync("invoice", OrderStatusConstants.PendingReview);
+        var other   = await SeedAsync("invoice", OrderStatusConstants.PendingReview);
 
         var result = await Build(invoice).SendAnyway(invoice.Id, new(" Same bill, re-sent by the vendor. "), default);
 
         Assert.IsType<OkObjectResult>(result);
         Assert.Equal(OrderStatusConstants.Ready, invoice.Status);
-        Assert.DoesNotContain(_db.OrderExceptions, e => e.State == "open");
+        Assert.DoesNotContain(_db.OrderExceptions, e => e.OrderId == invoice.Id && e.State == "open");
+        Assert.Single(_db.OrderExceptions, e => e.OrderId == other.Id && e.State == "open");
         var audit = Assert.Single(_db.AuditEvents, a => a.Action == OrdersController.InvoiceSentAnywayAction);
-        Assert.Contains("user_admin", audit.Payload!.RootElement.GetRawText());
-        Assert.Contains("Same bill, re-sent by the vendor.", audit.Payload.RootElement.GetRawText());
+        using var payload = System.Text.Json.JsonDocument.Parse(audit.Payload!.RootElement.GetRawText());
+        Assert.Equal("user_admin", payload.RootElement.GetProperty("by").GetString());
+        Assert.Equal("Same bill, re-sent by the vendor.", payload.RootElement.GetProperty("reason").GetString());
     }
 
     [Theory]
-    [InlineData("order", OrderStatusConstants.PendingReview)]
-    [InlineData("invoice", OrderStatusConstants.Ready)]
-    public async Task NotAHeldInvoice_IsRefused(string documentType, string status)
+    [InlineData("order", OrderStatusConstants.PendingReview, "open")]
+    [InlineData("invoice", OrderStatusConstants.Ready, "open")]
+    [InlineData("invoice", OrderStatusConstants.PendingReview, "resolved")]
+    public async Task NotAHeldInvoice_IsRefused(string documentType, string status, string exceptionState)
     {
-        var order = await SeedAsync(documentType, status);
+        var order = await SeedAsync(documentType, status, exceptionState);
 
         var result = await Build(order).SendAnyway(order.Id, new("It is fine to send."), default);
 

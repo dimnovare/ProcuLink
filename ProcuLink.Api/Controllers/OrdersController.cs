@@ -16,6 +16,7 @@ using ProcuLink.Core.Services.Detection;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Jobs;
+using ProcuLink.Infrastructure.Services;
 using ProcuLink.Transform.Mapping;
 using ProcuLink.Transform.Output;
 using ProcuLink.Transform.Tokenizing;
@@ -700,7 +701,7 @@ public sealed class OrdersController : ControllerBase
 
         var held = invoice.DocumentType == "invoice" && invoice.Status == OrderStatusConstants.PendingReview
             && await _db.OrderExceptions.AnyAsync(e => e.OrgId == orgId && e.OrderId == id
-                   && e.Code == Infrastructure.Services.OrderExceptionService.InvoiceCheckCode && e.State == "open", ct);
+                   && e.Code == OrderExceptionService.InvoiceCheckCode && e.State == "open", ct);
         if (!held) return Conflict(new { error = "Only an invoice held by its checks can be sent anyway." });
 
         // Closes the open invoice_check rows and sets the status a clean invoice gets.
