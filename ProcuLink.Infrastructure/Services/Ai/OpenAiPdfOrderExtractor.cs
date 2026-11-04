@@ -73,6 +73,10 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             "buyer_tax_id":  { "type": "string", "description": "The BUYER's own VAT / tax / organisation number (e.g. a Norwegian org number or an EU VAT id). The buyer's identifier, NOT the supplier's. Empty if not printed." },
             "supplier_name": { "type": "string", "description": "The party the order is ADDRESSED TO that will fulfil it. On an invoice instead the issuing seller. Must differ from buyer_name." },
             "payment_terms": { "type": "string" },
+            "due_date":      { "type": "string", "description": "INVOICES ONLY: the payment due date normalised to ISO YYYY-MM-DD. Empty on anything that is not an invoice, or if not stated." },
+            "seller_tax_id": { "type": "string", "description": "INVOICES ONLY: the SELLER's (issuer's) own VAT / tax number. Empty on anything that is not an invoice, or if not printed." },
+            "iban":          { "type": "string", "description": "INVOICES ONLY: the IBAN the invoice asks to be paid to. Empty on anything that is not an invoice, or if not printed." },
+            "payment_reference": { "type": "string", "description": "INVOICES ONLY: the payment reference / remittance reference to quote when paying. Empty on anything that is not an invoice, or if not printed." },
             "incoterms":     { "type": "string", "description": "Delivery/freight terms, e.g. DDP, EXW, DAP, FCA. Empty if none stated." },
             "shipping_method": { "type": "string" },
             "buyer_order_ref": { "type": "string", "description": "The buyer's own requisition / internal order reference, distinct from po_number. Empty if none." },
@@ -150,7 +154,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
               }
             }
           },
-          "required": ["confidence", "document_type", "po_number", "order_date", "order_date_raw", "currency", "buyer_name", "buyer_tax_id", "supplier_name", "payment_terms", "incoterms", "shipping_method", "buyer_order_ref", "contact", "parties", "raw_fields", "sub_total", "tax_total", "grand_total", "lines"],
+          "required": ["confidence", "document_type", "po_number", "order_date", "order_date_raw", "currency", "buyer_name", "buyer_tax_id", "supplier_name", "payment_terms", "due_date", "seller_tax_id", "iban", "payment_reference", "incoterms", "shipping_method", "buyer_order_ref", "contact", "parties", "raw_fields", "sub_total", "tax_total", "grand_total", "lines"],
           "additionalProperties": false
         }
         """u8.ToArray());
@@ -754,6 +758,10 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
             GrandTotal: TryToDecimal(dto.GrandTotal, out var grand) ? grand : null,
             PaymentTerms: string.IsNullOrWhiteSpace(dto.PaymentTerms) ? null : dto.PaymentTerms.Trim(),
             DocumentType: NormalizeDocumentType(dto.DocumentType),
+            DueDate: ParseDateOnly(dto.DueDate),
+            SellerTaxId: NullIfBlank(dto.SellerTaxId),
+            Iban: NullIfBlank(dto.Iban)?.Replace(" ", "").ToUpperInvariant(),
+            PaymentReference: NullIfBlank(dto.PaymentReference),
             // Phase 1 lossless capture (advisory — unverifiable; rides through as-is).
             Parties: dto.Parties?.Select(p => new ExtractedParty(
                 p.Role, NullIfBlank(p.Name), NullIfBlank(p.Street), NullIfBlank(p.City),
@@ -1278,7 +1286,11 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
         [property: JsonPropertyName("raw_fields")] IReadOnlyList<RawFieldDto>? RawFields = null,
         // The order date exactly as printed (verbatim) — the authoritative source for
         // locale-aware date interpretation (F-21). Defaulted so existing construction sites compile.
-        [property: JsonPropertyName("order_date_raw")] string? OrderDateRaw = null);
+        [property: JsonPropertyName("order_date_raw")] string? OrderDateRaw = null,
+        [property: JsonPropertyName("due_date")] string? DueDate = null,
+        [property: JsonPropertyName("seller_tax_id")] string? SellerTaxId = null,
+        [property: JsonPropertyName("iban")] string? Iban = null,
+        [property: JsonPropertyName("payment_reference")] string? PaymentReference = null);
 
     internal sealed record ExtractionLineDto(
         [property: JsonPropertyName("line_number")] int LineNumber,

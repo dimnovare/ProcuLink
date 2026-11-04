@@ -80,7 +80,12 @@ public sealed record ExtractedOrder(
     string? Incoterms = null,
     string? ShippingMethod = null,
     string? BuyerOrderRef = null,
-    IReadOnlyList<ExtractedRawField>? RawFields = null
+    IReadOnlyList<ExtractedRawField>? RawFields = null,
+    // Invoice-only (empty on orders): payment due date, seller VAT id, IBAN, payment reference.
+    DateOnly? DueDate = null,
+    string? SellerTaxId = null,
+    string? Iban = null,
+    string? PaymentReference = null
 );
 
 /// <summary>

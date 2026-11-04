@@ -602,6 +602,10 @@ internal sealed class OrderIngestionService
             DocumentType  = documentType,
             // V5: header-level requested delivery date — real persisted column (requested_delivery_date).
             RequestedDeliveryDate = order.RequestedDeliveryDate,
+            DueDate          = order.DueDate,
+            SellerTaxId      = order.SellerTaxId,
+            PaymentIban      = order.Iban,
+            PaymentReference = order.PaymentReference,
             // Phase 1 lossless capture — header terms/contact, parties, and the raw bag are nav rows
             // attached inline so a single SaveChanges below persists them (no separate insert).
             ContactName    = order.ContactName,
@@ -1142,6 +1146,11 @@ internal sealed class OrderIngestionService
             var newGrandTotal = NormalizeExtractedGrandTotal(parsedOrder.GrandTotal);
             // V5: header-level requested delivery date — real persisted column (requested_delivery_date).
             var newRequestedDeliveryDate = parsedOrder.RequestedDeliveryDate;
+            // Invoice-only fields (null on orders).
+            var newDueDate          = parsedOrder.DueDate;
+            var newSellerTaxId      = parsedOrder.SellerTaxId;
+            var newPaymentIban      = parsedOrder.Iban;
+            var newPaymentReference = parsedOrder.PaymentReference;
             // Phase 1 lossless capture header fields (nullable; only the LLM/email path populates these).
             var newContactName    = parsedOrder.ContactName;
             var newContactEmail   = parsedOrder.ContactEmail;
@@ -1217,6 +1226,10 @@ internal sealed class OrderIngestionService
                     .SetProperty(o => o.PaymentTerms, newPaymentTerms)
                     .SetProperty(o => o.DocumentType, newDocumentType)
                     .SetProperty(o => o.RequestedDeliveryDate, newRequestedDeliveryDate)
+                    .SetProperty(o => o.DueDate,          newDueDate)
+                    .SetProperty(o => o.SellerTaxId,      newSellerTaxId)
+                    .SetProperty(o => o.PaymentIban,      newPaymentIban)
+                    .SetProperty(o => o.PaymentReference, newPaymentReference)
                     // Phase 1 lossless capture header columns.
                     .SetProperty(o => o.ContactName,    newContactName)
                     .SetProperty(o => o.ContactEmail,   newContactEmail)
@@ -1380,6 +1393,10 @@ internal sealed class OrderIngestionService
             entity.DocumentType          = newDocumentType;
             // V5: header-level requested delivery date — persisted via ExecuteUpdateAsync above.
             entity.RequestedDeliveryDate = newRequestedDeliveryDate;
+            entity.DueDate          = newDueDate;
+            entity.SellerTaxId      = newSellerTaxId;
+            entity.PaymentIban      = newPaymentIban;
+            entity.PaymentReference = newPaymentReference;
             // Phase 1 lossless capture header columns — reflect so an immediate transform sees them.
             entity.ContactName    = newContactName;
             entity.ContactEmail   = newContactEmail;
@@ -1850,7 +1867,11 @@ internal sealed class OrderIngestionService
             Incoterms: o.Incoterms,
             ShippingMethod: o.ShippingMethod,
             BuyerOrderRef: o.BuyerOrderRef,
-            RawFields: o.RawFields?.Select(f => new ParsedRawField(f.Label, f.Value)).ToList());
+            RawFields: o.RawFields?.Select(f => new ParsedRawField(f.Label, f.Value)).ToList(),
+            DueDate: o.DueDate,
+            SellerTaxId: o.SellerTaxId,
+            Iban: o.Iban,
+            PaymentReference: o.PaymentReference);
 
     internal async Task<List<PurchaseOrderLineEntity>> BuildLineEntitiesAsync(
         Guid organisationId,

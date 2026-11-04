@@ -18,7 +18,7 @@ namespace ProcuLink.Infrastructure.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "8.0.30")
+                .HasAnnotation("ProductVersion", "8.0.32")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -2085,6 +2085,10 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("text")
                         .HasColumnName("document_type");
 
+                    b.Property<DateOnly?>("DueDate")
+                        .HasColumnType("date")
+                        .HasColumnName("due_date");
+
                     b.Property<decimal?>("GrandTotal")
                         .HasColumnType("numeric(18,4)")
                         .HasColumnName("grand_total");
@@ -2118,6 +2122,14 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("org_id");
 
+                    b.Property<string>("PaymentIban")
+                        .HasColumnType("text")
+                        .HasColumnName("payment_iban");
+
+                    b.Property<string>("PaymentReference")
+                        .HasColumnType("text")
+                        .HasColumnName("payment_reference");
+
                     b.Property<string>("PaymentTerms")
                         .HasColumnType("text")
                         .HasColumnName("payment_terms");
@@ -2143,6 +2155,10 @@ namespace ProcuLink.Infrastructure.Migrations
 
                     b.Property<string>("SchemaFingerprintHash")
                         .HasColumnType("text");
+
+                    b.Property<string>("SellerTaxId")
+                        .HasColumnType("text")
+                        .HasColumnName("seller_tax_id");
 
                     b.Property<string>("ShipToCity")
                         .HasColumnType("text")
