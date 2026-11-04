@@ -67,7 +67,7 @@ public sealed class OrdersController : ControllerBase
 
     /// <summary>Output formats reachable via transform — each maps to a registered ITransformService.</summary>
     private static readonly HashSet<string> AllowedTransformFormats =
-        new(StringComparer.OrdinalIgnoreCase) { "xml", "csv", "cxml", "json", "ubl", "x12" };
+        new(StringComparer.OrdinalIgnoreCase) { "xml", "csv", "cxml", "json", "ubl", "x12", "pdf" };
 
     public OrdersController(
         IOrderService                orders,
@@ -1744,7 +1744,7 @@ public sealed class OrdersController : ControllerBase
             return UnprocessableEntity(new { error = InvoiceDefaultOutput.FormatError });
 
         if (!AllowedTransformFormats.Contains(formatStr))
-            return BadRequest(new { error = "Format must be one of: xml, csv, cxml, json, ubl, x12." });
+            return BadRequest(new { error = "Format must be one of: xml, csv, cxml, json, ubl, x12, pdf." });
 
         // Atomically claim ready|transform_failed → transforming BEFORE enqueueing — the same
         // transition TransformAsync enforces. A racy read-then-enqueue here let two concurrent

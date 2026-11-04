@@ -24,6 +24,11 @@ public static class InvoiceDefaultOutput
 
     public static (byte[] Content, string ContentType, string Extension) Write(PurchaseOrderEntity doc, string format)
     {
+        if (format == "pdf")
+        {
+            var pdf = DeliveryMediaTypes.For(OutputFormat.Pdf);
+            return (DocumentPdfOutput.Write(doc), pdf.ContentType, pdf.FileExtension);
+        }
         var (output, text) = format switch
         {
             "csv"  => (OutputFormat.Csv,  Csv(doc)),

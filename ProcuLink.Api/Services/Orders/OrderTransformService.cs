@@ -752,7 +752,7 @@ internal sealed class OrderTransformService
             {
                 // An invoice with no mapping of its own: the default invoice layout, not the order one.
                 // A pinned revision can set a format the controller never saw, so refuse order-only ones here too.
-                if (effectiveFormat is not (OutputFormat.Csv or OutputFormat.Json))
+                if (effectiveFormat is not (OutputFormat.Csv or OutputFormat.Json or OutputFormat.Pdf))
                     throw new TransformValidationException(InvoiceDefaultOutput.FormatError);
                 var (bytes, contentType, extension) = InvoiceDefaultOutput.Write(entity, effectiveFormat.ToString().ToLowerInvariant());
                 transformResult = new TransformResult(new MemoryStream(bytes), contentType, extension);

@@ -21,6 +21,9 @@ public enum OutputFormat
     UblOrder,
     X12_850,
     EdifactOrders,
+
+    // Rendered document (orders and invoices): PdfTransformService / DocumentPdfOutput.
+    Pdf,
 }
 
 /// <summary>
