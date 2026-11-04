@@ -748,9 +748,12 @@ internal sealed class OrderTransformService
                         $"The supplier's saved output mapping could not be applied, so the order was not delivered: {ex.Message}");
                 }
             }
-            else if (entity.DocumentType == "invoice" && effectiveFormat is OutputFormat.Csv or OutputFormat.Json)
+            else if (entity.DocumentType == "invoice")
             {
                 // An invoice with no mapping of its own: the default invoice layout, not the order one.
+                // A pinned revision can set a format the controller never saw, so refuse order-only ones here too.
+                if (effectiveFormat is not (OutputFormat.Csv or OutputFormat.Json))
+                    throw new TransformValidationException(InvoiceDefaultOutput.FormatError);
                 var (bytes, contentType, extension) = InvoiceDefaultOutput.Write(entity, effectiveFormat.ToString().ToLowerInvariant());
                 transformResult = new TransformResult(new MemoryStream(bytes), contentType, extension);
             }

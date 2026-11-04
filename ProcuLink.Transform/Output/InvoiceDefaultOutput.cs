@@ -15,6 +15,9 @@ public static class InvoiceDefaultOutput
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
+    /// <summary>The refusal for an invoice whose output format is not CSV, JSON or PDF.</summary>
+    public const string FormatError = "Invoices go out as CSV, JSON or PDF. Change the output format for where invoices go.";
+
     private const string CsvHeader =
         "InvoiceNumber,InvoiceDate,DueDate,Seller,SellerVatId,Buyer,Currency,NetTotal,VatTotal,Total,Iban,PaymentReference," +
         "LineNumber,ItemCode,Description,Quantity,Unit,UnitPrice,VatRate,LineNet";

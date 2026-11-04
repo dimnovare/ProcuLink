@@ -22,7 +22,7 @@ public class InvoiceDefaultOutputTests
     };
 
     private static string[] CsvLines(PurchaseOrderEntity d) =>
-        Encoding.UTF8.GetString(InvoiceDefaultOutput.Write(d, "csv").Content).TrimEnd().Split("\r\n", StringSplitOptions.None).SelectMany(s => s.Split('\n')).ToArray();
+        Encoding.UTF8.GetString(InvoiceDefaultOutput.Write(d, "csv").Content).Split('\n',StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 
     [Fact]
     public void Csv_HasHeaderAndOneRowPerLine()
@@ -51,6 +51,8 @@ public class InvoiceDefaultOutputTests
 
         Assert.Equal("INV-1", root.GetProperty("invoiceNumber").GetString());
         Assert.Equal("DE89370400440532013000", root.GetProperty("iban").GetString());
+        Assert.Equal("2026-12-01", root.GetProperty("dueDate").GetString());
         Assert.Equal(2, root.GetProperty("lines").GetArrayLength());
+        Assert.Equal(20m, root.GetProperty("lines")[0].GetProperty("lineNet").GetDecimal());
     }
 }
