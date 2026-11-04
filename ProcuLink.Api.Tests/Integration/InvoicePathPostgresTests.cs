@@ -132,6 +132,13 @@ public sealed class InvoicePathPostgresTests(PostgresContainerFixture postgres) 
             Assert.Equal(OrderStatusConstants.PendingReview,
                 (await check.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == orderId)).Status);
 
+        // Bulk-accepting AI suggestions is not a release either.
+        await using (var db = new ProcuLinkDbContext(_options!))
+            Assert.True((await BuildResolution(db).AcceptAiSuggestionsAsync(orgId, orderId, 0.0, CancellationToken.None)).IsSuccess);
+        await using (var check = new ProcuLinkDbContext(_options!))
+            Assert.Equal(OrderStatusConstants.PendingReview,
+                (await check.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == orderId)).Status);
+
         // Correcting the total clears the check and releases it.
         await using (var db = new ProcuLinkDbContext(_options!))
             Assert.True((await BuildResolution(db).ResolveAsync(orgId, orderId,

@@ -287,11 +287,7 @@ internal sealed class OrderResolutionService
 
         // Recompute order status (the guard above may have re-set NeedsReview → HOLD).
         entity.Status    = entity.Lines.Any(l => l.NeedsReview) ? "pending_review" : "ready";
-        // An invoice is released by its own checks, never by the line recompute above: it has no
-        // lines to review, so that would release a held invoice unchecked.
-        if (entity.DocumentType == "invoice")
-            await OrderIngestionService.ApplyInvoiceProblemsAsync(
-                _db, entity, await OrderIngestionService.CollectInvoiceProblemsAsync(_db, entity, ct), ct);
+        await SettleInvoiceAsync(entity, ct);
         entity.UpdatedAt = DateTime.UtcNow;
 
         _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "Resolved", new
@@ -324,6 +320,17 @@ internal sealed class OrderResolutionService
             orderId, resolutions.Count, saveMappings, entity.Status);
 
         return Result<PurchaseOrderEntity>.Ok(entity);
+    }
+
+    /// <summary>
+    /// An invoice is released by its own checks, never by the line-based status recompute: it has no
+    /// lines to review, so that recompute would release a held invoice unchecked.
+    /// </summary>
+    private async Task SettleInvoiceAsync(PurchaseOrderEntity entity, CancellationToken ct)
+    {
+        if (entity.DocumentType == "invoice")
+            await OrderIngestionService.ApplyInvoiceProblemsAsync(
+                _db, entity, await OrderIngestionService.CollectInvoiceProblemsAsync(_db, entity, ct), ct);
     }
 
     // ── MarkRejectedAsync ─────────────────────────────────────────────────────
@@ -488,6 +495,7 @@ internal sealed class OrderResolutionService
         entity.Status    = entity.Lines.Any(l => l.NeedsReview)
                                ? OrderStatusConstants.PendingReview
                                : OrderStatusConstants.Ready;
+        await SettleInvoiceAsync(entity, ct);
         entity.UpdatedAt = DateTime.UtcNow;
 
         _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "AiSuggestionsBulkAccepted", new

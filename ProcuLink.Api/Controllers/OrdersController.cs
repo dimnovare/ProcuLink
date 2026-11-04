@@ -766,13 +766,17 @@ public sealed class OrdersController : ControllerBase
         DateOnly? dueDate = null;
         if (!string.IsNullOrWhiteSpace(request.DueDate))
         {
-            if (!DateOnly.TryParse(request.DueDate.Trim(), System.Globalization.CultureInfo.InvariantCulture,
+            if (!DateOnly.TryParseExact(request.DueDate.Trim(), "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.None, out var parsedDue))
                 return BadRequest(new { error = $"DueDate '{request.DueDate}' is not a valid date (expected yyyy-MM-dd)." });
             dueDate = parsedDue;
         }
 
         static string? Trimmed(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
+        foreach (var (name, value) in new[]
+                 { ("SellerTaxId", request.SellerTaxId), ("PaymentIban", request.PaymentIban), ("PaymentReference", request.PaymentReference) })
+            if (Trimmed(value)?.Length > MaxHeaderTextLength)
+                return BadRequest(new { error = $"{name} must be {MaxHeaderTextLength} characters or fewer." });
         var header = new Core.Services.ResolveHeaderFields(
             orderDate, buyerName, currency, poNumber, supplierName,
             dueDate, Trimmed(request.SellerTaxId), Trimmed(request.PaymentIban), Trimmed(request.PaymentReference),
@@ -2872,7 +2876,11 @@ public sealed class OrdersController : ControllerBase
         ContactPhone:         e.ContactPhone,
         SupplierSuggestions:  supplierSuggestions,
         // WP-27: the review screen's "practice order" framing reads this, not a query parameter.
-        IsSample:             e.IsSample
+        IsSample:             e.IsSample,
+        DueDate:              e.DueDate?.ToString("yyyy-MM-dd"),
+        SellerTaxId:          e.SellerTaxId,
+        PaymentIban:          e.PaymentIban,
+        PaymentReference:     e.PaymentReference
     );
 
     // ── Supplier auto-detect: read + decision recording ───────────────────────
