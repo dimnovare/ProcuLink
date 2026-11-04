@@ -700,7 +700,12 @@ public sealed class OrdersController : ControllerBase
             || !string.IsNullOrWhiteSpace(request.BuyerName)
             || !string.IsNullOrWhiteSpace(request.Currency)
             || !string.IsNullOrWhiteSpace(request.PoNumber)
-            || !string.IsNullOrWhiteSpace(request.SupplierName);
+            || !string.IsNullOrWhiteSpace(request.SupplierName)
+            || !string.IsNullOrWhiteSpace(request.DueDate)
+            || !string.IsNullOrWhiteSpace(request.SellerTaxId)
+            || !string.IsNullOrWhiteSpace(request.PaymentIban)
+            || !string.IsNullOrWhiteSpace(request.PaymentReference)
+            || request.SubTotal.HasValue || request.TaxTotal.HasValue || request.GrandTotal.HasValue;
 
         if ((request.LineResolutions is null || request.LineResolutions.Count == 0) && !hasHeaderEdit)
             return BadRequest(new { error = "At least one line resolution or header correction is required." });
@@ -758,8 +763,20 @@ public sealed class OrdersController : ControllerBase
                 return BadRequest(new { error = $"SupplierName must be {MaxHeaderTextLength} characters or fewer." });
         }
 
+        DateOnly? dueDate = null;
+        if (!string.IsNullOrWhiteSpace(request.DueDate))
+        {
+            if (!DateOnly.TryParse(request.DueDate.Trim(), System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out var parsedDue))
+                return BadRequest(new { error = $"DueDate '{request.DueDate}' is not a valid date (expected yyyy-MM-dd)." });
+            dueDate = parsedDue;
+        }
+
+        static string? Trimmed(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
         var header = new Core.Services.ResolveHeaderFields(
-            orderDate, buyerName, currency, poNumber, supplierName);
+            orderDate, buyerName, currency, poNumber, supplierName,
+            dueDate, Trimmed(request.SellerTaxId), Trimmed(request.PaymentIban), Trimmed(request.PaymentReference),
+            request.SubTotal, request.TaxTotal, request.GrandTotal);
 
         var result = await _orders.ResolveAsync(
             _tenant.OrganisationId, id,

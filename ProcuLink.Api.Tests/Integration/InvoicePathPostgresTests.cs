@@ -98,6 +98,54 @@ public sealed class InvoicePathPostgresTests(PostgresContainerFixture postgres) 
         Assert.Equal("Line amounts do not add up to the net total.", check.Message);
     }
 
+    [DockerRequiredFact]
+    public async Task HeaderEdit_FixingTotal_ClearsCheckAndReleasesInvoice()
+    {
+        var (orgId, vendorId, _) = await SeedAsync("fix");
+
+        // Held invoice: net 100 + VAT 21 should total 121, but the document says 120.
+        var orderId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        await using (var seed = new ProcuLinkDbContext(_options!))
+        {
+            seed.PurchaseOrders.Add(new PurchaseOrderEntity
+            {
+                Id = orderId, OrgId = orgId, SupplierId = vendorId, PoNumber = "INV-2026-002", Currency = "EUR",
+                DocumentType = "invoice", Status = OrderStatusConstants.PendingReview, SupplierName = "Example Supplies GmbH",
+                SubTotal = 100m, TaxTotal = 21m, GrandTotal = 120m, OrderDate = DateOnly.FromDateTime(now),
+                CreatedAt = now, UpdatedAt = now,
+                Lines = { new PurchaseOrderLineEntity { LineNumber = 1, Quantity = 1m, UnitPrice = 100m, LineAmount = 100m } },
+            });
+            seed.OrderExceptions.Add(new OrderException
+            {
+                Id = Guid.NewGuid(), OrgId = orgId, OrderId = orderId, Stage = "Validate", Code = "invoice_check",
+                Severity = "warning", State = "open", Message = "Net plus VAT does not equal the total.", CreatedAt = now,
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        // A resolve that edits nothing about the figures leaves the invoice held.
+        await using (var db = new ProcuLinkDbContext(_options!))
+            Assert.True((await BuildResolution(db).ResolveAsync(orgId, orderId,
+                new[] { new LineResolution(1, "ITEM-A") }, false, CancellationToken.None)).IsSuccess);
+        await using (var check = new ProcuLinkDbContext(_options!))
+            Assert.Equal(OrderStatusConstants.PendingReview,
+                (await check.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == orderId)).Status);
+
+        // Correcting the total clears the check and releases it.
+        await using (var db = new ProcuLinkDbContext(_options!))
+            Assert.True((await BuildResolution(db).ResolveAsync(orgId, orderId,
+                Array.Empty<LineResolution>(), false, CancellationToken.None,
+                new ResolveHeaderFields(GrandTotal: 121m))).IsSuccess);
+
+        await using var verify = new ProcuLinkDbContext(_options!);
+        var order = await verify.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == orderId);
+        Assert.Equal(121m, order.GrandTotal);
+        Assert.NotEqual(OrderStatusConstants.PendingReview, order.Status);
+        Assert.DoesNotContain(await verify.OrderExceptions.AsNoTracking()
+            .Where(e => e.OrderId == orderId && e.Code == "invoice_check").ToListAsync(), e => e.State == "open");
+    }
+
     // ── Harness ─────────────────────────────────────────────────────────────
 
     private static ExtractedOrder Invoice(decimal line1, decimal line2, decimal net, decimal tax, decimal total) => new(
@@ -134,6 +182,11 @@ public sealed class InvoicePathPostgresTests(PostgresContainerFixture postgres) 
         await db.SaveChangesAsync();
         return (orgId, vendorId, destinationId);
     }
+
+    private static OrderResolutionService BuildResolution(ProcuLinkDbContext db) => new(
+        db, new ItemMappingService(db), NullLogger<OrderService>.Instance,
+        new OrderServiceShared(db, new OrderExceptionService(db), NullLogger<OrderService>.Instance),
+        new AiSuggestionDecisionService(db));
 
     private static OrderIngestionService BuildIngestion(ProcuLinkDbContext db, ExtractedOrder? pdf = null)
     {

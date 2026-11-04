@@ -232,6 +232,18 @@ internal sealed class OrderResolutionService
                 changedHeaderFields.Add("supplierName");
             }
 
+            // Invoice-only columns; an order has no use for them, so its resolve is unchanged.
+            if (entity.DocumentType == "invoice")
+            {
+                entity.DueDate          = header.DueDate ?? entity.DueDate;
+                entity.SellerTaxId      = header.SellerTaxId ?? entity.SellerTaxId;
+                entity.PaymentIban      = header.PaymentIban ?? entity.PaymentIban;
+                entity.PaymentReference = header.PaymentReference ?? entity.PaymentReference;
+                entity.SubTotal         = header.SubTotal ?? entity.SubTotal;
+                entity.TaxTotal         = header.TaxTotal ?? entity.TaxTotal;
+                entity.GrandTotal       = header.GrandTotal ?? entity.GrandTotal;
+            }
+
             if (canonicalUpdates.Count > 0)
                 entity.CanonicalJson = CanonicalJsonMerge.MergeStrings(entity.CanonicalJson, canonicalUpdates);
         }
@@ -275,6 +287,11 @@ internal sealed class OrderResolutionService
 
         // Recompute order status (the guard above may have re-set NeedsReview → HOLD).
         entity.Status    = entity.Lines.Any(l => l.NeedsReview) ? "pending_review" : "ready";
+        // An invoice is released by its own checks, never by the line recompute above: it has no
+        // lines to review, so that would release a held invoice unchecked.
+        if (entity.DocumentType == "invoice")
+            await OrderIngestionService.ApplyInvoiceProblemsAsync(
+                _db, entity, await OrderIngestionService.CollectInvoiceProblemsAsync(_db, entity, ct), ct);
         entity.UpdatedAt = DateTime.UtcNow;
 
         _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "Resolved", new
