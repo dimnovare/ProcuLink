@@ -399,7 +399,9 @@ public class WidenedOutputRowTests
             + "PO-4711,2026-03-04,EUR,Acme Buyer AS,S-1,Barcode scanner,2,PCS,50,100,"
             + "Acme Warehouse,Sadama tee 12,Tallinn,10111,EE,"
             + "Acme Finance,Pärnu mnt 5,Tartu,51004,EE,"
-            + "Mari Tamm,mari.tamm@acme.example,+372 555 0101\n";
+            // The one deliberate drift since WP-14: a leading + is a formula prefix (CSV injection),
+            // so the phone carries a ' — CsvTransformService.NeutraliseFormula.
+            + "Mari Tamm,mari.tamm@acme.example,'+372 555 0101\n";
 
         csv.Should().Be(golden,
             "a supplier with NO custom output must render byte-identically to before WP-14");

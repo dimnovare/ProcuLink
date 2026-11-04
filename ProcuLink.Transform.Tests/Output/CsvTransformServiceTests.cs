@@ -134,6 +134,22 @@ public class CsvTransformServiceTests
         rows[1].Should().Contain("\"12 rue des Essais, Bldg B12\"");
     }
 
+    // OWASP CSV injection: a text cell starting with = + - @ tab or CR runs as a formula when the
+    // supplier opens the file in Excel/Sheets. The leading ' makes it literal text; RFC 4180
+    // escaping still applies on top. (No numeric counterpart test: OutputFieldValidator holds any
+    // line with quantity <= 0 or unit price < 0, so a negative number cannot reach this output.)
+    [Fact]
+    public async Task TransformAsync_FormulaInTextCell_IsNeutralised()
+    {
+        var order = BuildOrder();
+        order.Lines.First().Description = "=HYPERLINK(\"x\")";
+
+        var svc  = new CsvTransformService();
+        var rows = await Rows(await svc.TransformAsync(order, OutputFormat.Csv, CancellationToken.None));
+
+        rows[1].Should().Contain(",\"'=HYPERLINK(\"\"x\"\")\",10,EA,");
+    }
+
     [Fact]
     public async Task TransformAsync_LineNeedsReview_ThrowsTransformValidationException()
     {
