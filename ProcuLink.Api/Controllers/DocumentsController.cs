@@ -23,7 +23,7 @@ namespace ProcuLink.Api.Controllers;
 public sealed class DocumentsController(
     ProcuLinkDbContext db, ICurrentTenantService tenant, DocumentEngineGate gate,
     IBillingService billing, DocumentIntakeService intake, DocumentRechecker rechecker,
-    IFileStorageService storage, IBackgroundJobClient jobs) : ControllerBase
+    IFileStorageService storage, IBackgroundJobClient jobs, ILogger<DocumentsController> logger) : ControllerBase
 {
     private IActionResult? Refuse() =>
         gate.IsEnabled(tenant.OrganisationId) ? null : StatusCode(403, new { error = "document_engine_not_enabled" });
@@ -119,7 +119,12 @@ public sealed class DocumentsController(
         if (doc is null) return NotFound(NotFoundBody);
         Stream stream;
         try { stream = await storage.DownloadAsync(doc.SourceFileKey, ct); }
-        catch (Exception e) when (e is not OperationCanceledException) { return NoContent(); }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            // The row says there is a file and storage disagrees. The storage key is not logged: it carries the uploader's file name.
+            logger.LogWarning(e, "Document source refused for {DocumentId}: {Reason}", id, "storage_object_unreadable");
+            return NoContent();
+        }
 
         var media = SourceDocumentMediaType.For(Path.GetExtension(doc.FileName).TrimStart('.'));
         var disposition = new ContentDispositionHeaderValue(media.RenderInline ? "inline" : "attachment");
@@ -147,18 +152,24 @@ public sealed class DocumentsController(
         }));
     }
 
+    /// <summary>A read that has sat in received or reading this long was lost (a dropped enqueue or a stranded job).</summary>
+    private static readonly TimeSpan StrandedAfter = TimeSpan.FromMinutes(15);
+
     [HttpPost("{id:guid}/retry-read")]
+    [EnableRateLimiting("ai")]
     public async Task<IActionResult> RetryRead(Guid id, CancellationToken ct)
     {
         if (Refuse() is { } refused) return refused;
         var doc = await FindAsync(id, ct);
         if (doc is null) return NotFound(NotFoundBody);
-        if (doc.Status != DocumentStatus.ReadFailed
+        var stranded = doc.Status is DocumentStatus.Received or DocumentStatus.Reading && doc.UpdatedAt < DateTime.UtcNow - StrandedAfter;
+        if (doc.Status != DocumentStatus.ReadFailed && !stranded
             && !(doc.Status == DocumentStatus.NeedsReview && doc.StatusReason == "duplicate_file"))
             return Conflict(new { error = "not_retryable" });
 
         doc.Status = DocumentStatus.Received;
         doc.StatusReason = null;
+        doc.ChecksJson = "[]";
         doc.UpdatedAt = DateTime.UtcNow;
         Audit(doc, "document.retry_read", new { by = tenant.ClerkUserId });
         await db.SaveChangesAsync(ct);
@@ -201,8 +212,10 @@ public sealed class DocumentsController(
                 fields.Add(new ReadField(ff.Key, ff.Label, null, ff.Type, ff.Meaning, 0, null, false, true, false));
                 i = fields.Count - 1;
             }
-            if (fields[i].Value != e.Value) changes.Add(($"field:{e.Key}", fields[i].Value, e.Value));
-            fields[i] = fields[i] with { Value = e.Value, Confidence = 1.0, Edited = true, NotOnPage = false };
+            var edited = fields[i] with { Value = e.Value, Confidence = 1.0, Edited = true, NotOnPage = false };
+            // Confirming a value as it is still changes its confidence and Edited flag, so it still leaves a history row.
+            if (edited != fields[i]) changes.Add(($"field:{e.Key}", fields[i].Value, e.Value));
+            fields[i] = edited;
         }
 
         foreach (var e in cellEdits)
@@ -211,11 +224,9 @@ public sealed class DocumentsController(
             if (!rows.TryGetValue(e.Table, out var list) || e.Row < 0 || e.Row >= list.Count
                 || tables.First(t => t.Key == e.Table).Columns.All(c => c.Key != e.Column)) return Unknown(target);
             var old = list[e.Row].Cells.GetValueOrDefault(e.Column);
-            if (old?.Value != e.Value) changes.Add((target, old?.Value, e.Value));
-            list[e.Row] = new ReadRow(new Dictionary<string, ReadCell>(list[e.Row].Cells)
-            {
-                [e.Column] = new ReadCell(e.Value, 1.0, old?.Location, false, true),
-            });
+            var cell = new ReadCell(e.Value, 1.0, old?.Location, false, true);
+            if (cell != old) changes.Add((target, old?.Value, e.Value));
+            list[e.Row] = new ReadRow(new Dictionary<string, ReadCell>(list[e.Row].Cells) { [e.Column] = cell });
         }
 
         foreach (var t in adds)
@@ -232,9 +243,9 @@ public sealed class DocumentsController(
             changes.Add(($"row:{r.Table}[{r.Row}]", "row", null));
         }
 
-        var edited = new ReadResult(read.KindLabel, fields, tables.Select(t => t with { Rows = rows[t.Key] }).ToList(), read.Truncated);
-        doc.ReadJson = DocumentJson.Serialize(edited);
-        await rechecker.ApplyAsync(doc, flow, edited, ct);
+        var result = new ReadResult(read.KindLabel, fields, tables.Select(t => t with { Rows = rows[t.Key] }).ToList(), read.Truncated);
+        doc.ReadJson = DocumentJson.Serialize(result);
+        await rechecker.ApplyAsync(doc, flow, result, ct);
         foreach (var c in changes) Audit(doc, "document.value_edited", new { by = tenant.ClerkUserId, target = c.Target, old = c.Old, @new = c.New });
         await db.SaveChangesAsync(ct);
         return Ok(ToDto(doc, flow.Name));

@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -17,8 +16,6 @@ namespace ProcuLink.Api.Controllers;
 public sealed class FlowsController(
     ProcuLinkDbContext db, ICurrentTenantService tenant, DocumentEngineGate gate, DocumentRechecker rechecker) : ControllerBase
 {
-    private static readonly Regex KeyPattern = new("^[a-z][a-z0-9_]{0,63}$", RegexOptions.Compiled);
-
     private IActionResult? Refuse() =>
         gate.IsEnabled(tenant.OrganisationId) ? null : StatusCode(403, new { error = "document_engine_not_enabled" });
 
@@ -113,15 +110,20 @@ public sealed class FlowsController(
     /// <summary>The first problem found in a field list, or null when it is valid.</summary>
     private static string? Invalid(FlowFieldList list)
     {
+        if (list.Fields.Any(f => f is null) || list.Tables.Any(t => t?.Columns is null || t.Columns.Any(c => c is null)))
+            return "Fields, tables and columns must not be null.";
+        foreach (var t in list.Tables)
+            if (t.Key is null || !FieldKey.Pattern.IsMatch(t.Key)) return $"Table key '{t.Key}' must start with a lowercase letter and use only a-z, 0-9 and _ (max 64 characters).";
         foreach (var f in list.Fields.Concat(list.Tables.SelectMany(t => t.Columns)))
         {
-            if (f.Key is null || !KeyPattern.IsMatch(f.Key))
+            if (f.Key is null || !FieldKey.Pattern.IsMatch(f.Key))
                 return $"Key '{f.Key}' must start with a lowercase letter and use only a-z, 0-9 and _ (max 64 characters).";
             if (f.Type is null || !FieldTypes.All.Contains(f.Type)) return $"Type '{f.Type}' is not supported.";
             if (f.Meaning is not null && !FieldMeanings.All.Contains(f.Meaning)) return $"Meaning '{f.Meaning}' is not supported.";
         }
         var dup = list.Fields.Select(f => f.Key).GroupBy(k => k).FirstOrDefault(g => g.Count() > 1)?.Key
             ?? list.Tables.Select(t => t.Key).GroupBy(k => k).FirstOrDefault(g => g.Count() > 1)?.Key;
+        dup ??= list.Tables.SelectMany(t => t.Columns.GroupBy(c => c.Key).Where(g => g.Count() > 1).Select(g => g.Key)).FirstOrDefault();
         return dup is null ? null : $"Key '{dup}' is used more than once.";
     }
 }
