@@ -10,10 +10,11 @@ using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure;
 using ProcuLink.Transform.Parsing;
+using UglyToad.PdfPig.Core;
 
 namespace ProcuLink.Api.Services.Documents;
 
-/// <summary>Thrown by <see cref="DocumentIntakeService.AcceptAsync"/> for a file it refuses: <c>unsupported_format</c> or <c>file_too_large</c>.</summary>
+/// <summary>Thrown by <see cref="DocumentIntakeService.AcceptAsync"/> for a file it refuses: <c>unsupported_format</c>, <c>file_too_large</c> or <c>unreadable_file</c>.</summary>
 public sealed class DocumentRejectedException(string code) : Exception(code)
 {
     public string Code { get; } = code;
@@ -34,10 +35,11 @@ public sealed class DocumentIntakeService(ProcuLinkDbContext db, IFileStorageSer
         using var buffer = new MemoryStream();
         await content.CopyToAsync(buffer, ct);
         if (buffer.Length > IngressLimits.MaxFileBytes) throw new DocumentRejectedException("file_too_large");
+        if (buffer.Length == 0) throw new DocumentRejectedException("unreadable_file");
         var bytes = buffer.ToArray();
 
         var sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-        int? pages = ext == "pdf" ? PdfWordExtractor.Extract(bytes).PageCount : null;
+        int? pages = ext == "pdf" ? CountPages(bytes) : null;
         var units = pages is { } p ? Math.Max(1, (int)Math.Ceiling(p / 10.0)) : 1;
 
         var id = Guid.NewGuid();
@@ -75,5 +77,14 @@ public sealed class DocumentIntakeService(ProcuLinkDbContext db, IFileStorageSer
 
         if (!duplicate) ReadDocumentJob.Enqueue(jobs, id, orgId);
         return doc;
+    }
+
+    private static int CountPages(byte[] pdf)
+    {
+        try { return PdfWordExtractor.Extract(pdf).PageCount; }
+        catch (Exception e) when (e is PdfDocumentFormatException or InvalidOperationException or ArgumentException)
+        {
+            throw new DocumentRejectedException("unreadable_file");
+        }
     }
 }

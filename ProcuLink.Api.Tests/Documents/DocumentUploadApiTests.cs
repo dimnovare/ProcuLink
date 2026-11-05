@@ -91,4 +91,19 @@ public class DocumentUploadApiTests : IClassFixture<DocumentEngineTestFactory>
         Assert.Equal("unsupported_format", body.RootElement.GetProperty("error").GetString());
         Assert.Equal(["pdf", "csv", "xlsx"], body.RootElement.GetProperty("accepted").EnumerateArray().Select(e => e.GetString()));
     }
+
+    [Fact]
+    public async Task Corrupt_pdf_is_422_unreadable_file()
+    {
+        var before = _factory.Enqueued<ReadDocumentJob>();
+        _factory.Storage.Invocations.Clear();
+
+        var res = await Upload(await NewFlow(), "x.pdf", "not a pdf"u8.ToArray());
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, res.StatusCode);
+        using var body = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+        Assert.Equal("unreadable_file", body.RootElement.GetProperty("error").GetString());
+        Assert.Empty(_factory.Storage.Invocations);
+        Assert.Equal(before, _factory.Enqueued<ReadDocumentJob>());
+    }
 }

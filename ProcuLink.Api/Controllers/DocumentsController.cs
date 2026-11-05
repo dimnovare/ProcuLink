@@ -29,7 +29,8 @@ public sealed class DocumentsController(
     [HttpPost("~/api/flows/{flowId:guid}/documents")]
     [Consumes("multipart/form-data")]
     [EnableRateLimiting("upload")]
-    [RequestSizeLimit(IngressLimits.MaxFileBytes)]
+    // +1 MB headroom for multipart overhead; the service enforces the file cap itself, so the client gets the JSON body.
+    [RequestSizeLimit(IngressLimits.MaxFileBytes + 1024 * 1024)]
     public async Task<IActionResult> Upload(Guid flowId, IFormFile file, CancellationToken ct)
     {
         if (Refuse() is { } refused) return refused;
@@ -51,13 +52,15 @@ public sealed class DocumentsController(
             var doc = await intake.AcceptAsync(orgId, flowId, stream, file.FileName, file.ContentType, ct);
             return Created($"/api/documents/{doc.Id}", ToSummary(doc, flow.Name));
         }
-        catch (DocumentRejectedException e) when (e.Code == "unsupported_format")
+        catch (DocumentRejectedException e)
         {
-            return StatusCode(415, new { error = "unsupported_format", accepted = DocumentIntakeService.AcceptedFormats });
-        }
-        catch (DocumentRejectedException)
-        {
-            return StatusCode(413, new { error = "file_too_large" });
+            return e.Code switch
+            {
+                "unsupported_format" => StatusCode(415, new { error = e.Code, accepted = DocumentIntakeService.AcceptedFormats }),
+                "file_too_large" => StatusCode(413, new { error = e.Code }),
+                "unreadable_file" => StatusCode(422, new { error = e.Code }),
+                _ => throw e,
+            };
         }
     }
 }
