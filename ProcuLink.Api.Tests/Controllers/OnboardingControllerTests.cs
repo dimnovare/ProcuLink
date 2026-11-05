@@ -154,6 +154,19 @@ public class OnboardingControllerTests
     }
 
     [Fact]
+    public async Task ManualConfig_IsNotADeliveryChannelToSetUp()
+    {
+        var (ctrl, orgId, db) = Build();
+        var supplier = AddSupplier(db, orgId);
+        AddDeliveryConfig(db, orgId, supplier.Id, protocol: "manual");
+        await db.SaveChangesAsync();
+
+        var dto = await GetStatusAsync(ctrl);
+
+        dto.HasDeliveryConfig.Should().BeFalse("choosing an output alone sets up no channel to test");
+    }
+
+    [Fact]
     public async Task FirstSupplierId_IsOldestNonSampleSupplier()
     {
         var (ctrl, orgId, db) = Build();
@@ -380,13 +393,13 @@ public class OnboardingControllerTests
             UpdatedAt        = DateTime.UtcNow,
         });
 
-    private static void AddDeliveryConfig(ProcuLinkDbContext db, Guid orgId, Guid supplierId) =>
+    private static void AddDeliveryConfig(ProcuLinkDbContext db, Guid orgId, Guid supplierId, string protocol = "http") =>
         db.SupplierDeliveryConfigs.Add(new SupplierDeliveryConfig
         {
             Id                   = Guid.NewGuid(),
             OrgId                = orgId,
             SupplierId           = supplierId,
-            Protocol             = "http",
+            Protocol             = protocol,
             ConfigJson           = """{"url":"https://supplier.example/orders"}""",
             EncryptedCredentials = string.Empty,
             CreatedAt            = DateTime.UtcNow,

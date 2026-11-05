@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Contracts;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
 
@@ -88,8 +89,9 @@ public class OnboardingController : ControllerBase
             .AnyAsync(m => m.OrgId == orgId
                         && m.Supplier.DeletedAt == null && !m.Supplier.IsSample, ct);
 
+        // "I'll send it myself" only picks an output; it is not a delivery channel to set up or test.
         var hasDeliveryConfig = await _db.SupplierDeliveryConfigs
-            .AnyAsync(c => c.OrgId == orgId
+            .AnyAsync(c => c.OrgId == orgId && c.Protocol != DeliveryProtocolConstants.Manual
                         && c.Supplier.DeletedAt == null && !c.Supplier.IsSample, ct);
 
         // Test-fire rows are the OrderId == null / Status == "success" convention written
