@@ -2417,6 +2417,10 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("text")
                         .HasColumnName("recipient");
 
+                    b.Property<string>("ResolvedVia")
+                        .HasColumnType("text")
+                        .HasColumnName("resolved_via");
+
                     b.Property<string>("ReviewReason")
                         .HasColumnType("text")
                         .HasColumnName("review_reason");

@@ -162,7 +162,9 @@ public record OrderLineDto(
     string?  ManufacturerPartNumber = null,
     /// <summary>The manufacturer / brand the source names (e.g. "Litware"). Advisory context
     /// so the reviewer can check a manufacturer-part match at a glance. Null when not stated.</summary>
-    string?  ManufacturerName = null
+    string?  ManufacturerName = null,
+    /// <summary>Where <c>SupplierItemCode</c> came from: "saved_mapping" | "manual" | "ai"; null when unresolved.</summary>
+    string?  ResolvedVia = null
 );
 
 /// <summary>

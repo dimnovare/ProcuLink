@@ -44,6 +44,9 @@ public class PurchaseOrderLineEntity
     /// column existed. Cleared when a human resolves the line.
     /// </summary>
     public string? ReviewReason { get; set; }
+
+    /// <summary>Origin of <see cref="SupplierItemCode"/>; see <c>LineResolvedViaConstants</c>. Null when unresolved.</summary>
+    public string? ResolvedVia { get; set; }
     public string? AiSuggestedSupplierItemCode { get; set; }
     public float? AiSuggestionConfidence { get; set; }
     public string? AiSuggestionReason { get; set; }

@@ -181,6 +181,37 @@ public class OrderServiceAcceptAiSuggestionsTests
         Assert.Equal("SUP-222", order.Lines.First(l => l.LineNumber == 2).SupplierItemCode);
     }
 
+    // ── Provenance: a person's resolve overwrites "saved_mapping" ─────────────
+
+    [Fact]
+    public async Task ResolveAsync_OverwritesResolvedVia_ManualForCorrection_AiForAcceptedSuggestion()
+    {
+        var lines = new[]
+        {
+            new PurchaseOrderLineEntity
+            {
+                Id = Guid.NewGuid(), LineNumber = 1, BuyerItemCode = "BC-001", NeedsReview = false,
+                SupplierItemCode = "SUP-OLD", ResolvedVia = "saved_mapping",
+            },
+            new PurchaseOrderLineEntity
+            {
+                Id = Guid.NewGuid(), LineNumber = 2, BuyerItemCode = "BC-002", NeedsReview = true,
+                AiSuggestedSupplierItemCode = "SUP-222", AiSuggestionConfidence = 0.9f,
+            },
+        };
+        var (db, orgId, orderId) = await SeedOrderWithLinesAsync(lines);
+
+        var result = await BuildService(db).ResolveAsync(
+            orgId, orderId,
+            new[] { new LineResolution(1, "SUP-NEW"), new LineResolution(2, "SUP-222") },
+            saveMappings: false, CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        var saved = await db.PurchaseOrderLines.AsNoTracking().Where(l => l.OrderId == orderId).ToListAsync();
+        Assert.Equal("manual", saved.Single(l => l.LineNumber == 1).ResolvedVia);
+        Assert.Equal("ai", saved.Single(l => l.LineNumber == 2).ResolvedVia);
+    }
+
     // ── Test (b): lines below threshold are left untouched and status stays
     //             pending_review ──────────────────────────────────────────────
 

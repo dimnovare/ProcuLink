@@ -152,6 +152,7 @@ internal sealed class OrderResolutionService
             var modelConfidence = acceptedModelCode ? line.AiSuggestionConfidence : null;
 
             line.SupplierItemCode = chosen;
+            line.ResolvedVia     = acceptedModelCode ? LineResolvedViaConstants.Ai : LineResolvedViaConstants.Manual;
             line.NeedsReview     = false;
             line.ReviewReason    = null; // human resolved the line — the "why flagged" no longer applies
             // Only a real model score, never a state flag. This used to be a flat `1.0f`, which the
@@ -502,6 +503,7 @@ internal sealed class OrderResolutionService
             decisionRecords.Add(BuildDecisionFromLine(line, chosen, decidedBy: "ai"));
 
             line.SupplierItemCode           = chosen;
+            line.ResolvedVia                = LineResolvedViaConstants.Ai;
             // The model's real number, promoted so it survives the clearing below. Unchanged in
             // intent — this was already the one honest write to this column, and it is now the
             // ONLY kind of write to it.

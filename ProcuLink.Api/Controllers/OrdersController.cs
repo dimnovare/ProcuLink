@@ -2944,7 +2944,8 @@ public sealed class OrdersController : ControllerBase
                 // The identifiers a punchout order actually carries — the review UI shows these
                 // beside the (meaningless) buyer item code so the operator can check a match.
                 ManufacturerPartNumber: l.ManufacturerPartNumber,
-                ManufacturerName:       l.ManufacturerName))
+                ManufacturerName:       l.ManufacturerName,
+                ResolvedVia:            l.ResolvedVia))
             .ToList(),
         Artifacts: e.OutboundArtifacts
             .OrderByDescending(a => a.CreatedAt)

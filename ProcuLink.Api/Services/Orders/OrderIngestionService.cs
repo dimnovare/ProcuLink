@@ -2253,6 +2253,8 @@ internal sealed class OrderIngestionService
                 LineNumber       = line.LineNumber,
                 BuyerItemCode    = line.BuyerItemCode,
                 SupplierItemCode = supplierCode,
+                // Only a saved-mapping hit is resolved at ingest; catalog / document / AI paths set suggestions only.
+                ResolvedVia      = string.IsNullOrWhiteSpace(supplierCode) ? null : LineResolvedViaConstants.SavedMapping,
                 Description      = line.Description,
                 Quantity         = line.Quantity,
                 Unit             = line.Unit,

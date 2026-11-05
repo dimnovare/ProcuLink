@@ -368,6 +368,36 @@ public class DeterministicSuggestionsCarryNoConfidenceTests
         return line;
     }
 
+    // ── Provenance of a resolved code ─────────────────────────────────────────
+
+    [Fact]
+    public async Task ResolvedVia_IsSavedMapping_OnlyForMappingHits()
+    {
+        var (db, orgId, supplierId) = await SeedSupplierAsync();
+        var mappings = new Mock<IItemMappingService>();
+        mappings
+            .Setup(s => s.ResolveManyAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid _, Guid _, IEnumerable<string> codes, CancellationToken _) =>
+                (IReadOnlyDictionary<string, string?>)codes
+                    .Where(c => !string.IsNullOrWhiteSpace(c))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToDictionary(c => c.Trim(), c => c == "BUY-1" ? "SUP-1" : null, StringComparer.Ordinal));
+        var svc = Build(db, mappings.Object, SilentAiMock().Object);
+
+        const string csv = "po_number,line_no,buyer_code,description,qty,unit_price\n" +
+                           "PO-1,1,BUY-1,Widget,5,10.00\nPO-1,2,BUY-2,Gadget,5,10.00\n";
+        await using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(csv));
+        var result = await svc.CreateFromFileAsync(
+            orgId, supplierId, stream, "po.csv", "text/csv", CancellationToken.None);
+        Assert.True(result.IsSuccess, $"Ingest failed: {result.Error}");
+
+        var lines = await db.PurchaseOrderLines.AsNoTracking()
+            .Where(l => l.OrderId == result.Value!.Id).OrderBy(l => l.LineNumber).ToListAsync();
+        lines[0].ResolvedVia.Should().Be("saved_mapping");
+        lines[1].ResolvedVia.Should().BeNull("an unresolved line has no origin to claim");
+    }
+
     private static async Task<PurchaseOrderLineEntity> IngestSingleLineAsync(
         OrderService svc, ProcuLinkDbContext db, Guid orgId, Guid supplierId, string fixture)
     {
