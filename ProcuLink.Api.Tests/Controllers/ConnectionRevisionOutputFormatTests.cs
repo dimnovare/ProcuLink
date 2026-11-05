@@ -100,8 +100,8 @@ public sealed class ConnectionRevisionOutputFormatTests
         var buildable = BuildableFormats();
         var unbuildable = UnbuildableFormats();
 
-        buildable.Should().HaveCount(6,
-            "six ITransformService implementations are registered (Xml, Csv, cXML, Json, UBL Order, X12) " +
+        buildable.Should().HaveCount(7,
+            "seven ITransformService implementations are registered (Xml, Csv, cXML, Json, UBL Order, X12, PDF) " +
             "and each answers CanTransform for exactly one format — a different count means a transform " +
             "was added or removed, or the derivation is broken");
         unbuildable.Should().HaveCount(3,
@@ -113,7 +113,7 @@ public sealed class ConnectionRevisionOutputFormatTests
 
         // The production allow-list must BE the derived set, not a copy that agrees today.
         OutputTransformRegistry.Catalog.Buildable.Should().Equal(buildable);
-        OutputTransformRegistry.Catalog.AllowedListForMessage.Should().Be("xml, csv, cxml, json, ubl, x12");
+        OutputTransformRegistry.Catalog.AllowedListForMessage.Should().Be("xml, csv, cxml, json, ubl, x12, pdf");
     }
 
     // ── The defect: an unbuildable format must be refused at write time ───────
@@ -133,7 +133,7 @@ public sealed class ConnectionRevisionOutputFormatTests
         var (error, message) = Assert400(result);
         error.Should().Be(UnsupportedOutputFormatException.Code);
         message.Should().Contain(format.ToString(), "the refusal must name the format the caller sent");
-        message.Should().Contain("xml, csv, cxml, json, ubl, x12", "and the set they may choose from");
+        message.Should().Contain("xml, csv, cxml, json, ubl, x12, pdf", "and the set they may choose from");
 
         h.Db.SupplierConnectionRevisions.Should().BeEmpty(
             "a refused bundle must not leave a half-applied revision behind");

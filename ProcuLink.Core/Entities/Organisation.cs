@@ -104,6 +104,13 @@ public class Organisation
     /// </summary>
     public OrderDirection OrderDirection { get; set; } = OrderDirection.Outbound;
 
+    /// <summary>
+    /// Where every invoice goes, whoever sent it (usually the accounting system, set up as a
+    /// supplier so it has a channel and a format). NULL = not set: invoices park <c>unrouted</c>.
+    /// A deleted supplier here counts as not set.
+    /// </summary>
+    public Guid? InvoiceDestinationSupplierId { get; set; }
+
     // Navigation
     public List<Membership> Memberships { get; set; } = new();
     public List<Supplier> Suppliers { get; set; } = new();

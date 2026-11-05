@@ -42,6 +42,19 @@ public sealed class RequireOrgAdminAttribute : Attribute, IAuthorizationFilter
         "This action is restricted to organisation administrators. Ask an administrator in your "
       + "organisation to make this change.";
 
+    /// <summary>
+    /// The admission test itself, for the few actions where only PART of a request is an admin's
+    /// (invoice IBAN/number/seller on resolve; the invoice destination in settings). Same fail-closed
+    /// rule: anything not provably <see cref="OrgRole.Admin"/> is false. OrgAdminGateIlScanner counts
+    /// a call to this as an in-method gate.
+    /// </summary>
+    public static bool IsAdmin(HttpContext? http) =>
+        http?.Items[ClerkOrgRole.ItemsKey] as OrgRole? == OrgRole.Admin;
+
+    /// <summary>The 403 this gate answers, for an in-method refusal to answer identically.</summary>
+    public static ObjectResult Refusal() =>
+        new(new { error = ErrorCode, message = Message }) { StatusCode = StatusCodes.Status403Forbidden };
+
     public void OnAuthorization(AuthorizationFilterContext context)
     {
         var user = context.HttpContext.User;
@@ -53,16 +66,11 @@ public sealed class RequireOrgAdminAttribute : Attribute, IAuthorizationFilter
             return;
         }
 
-        var role = context.HttpContext.Items[ClerkOrgRole.ItemsKey] as OrgRole? ?? OrgRole.Unknown;
+        if (IsAdmin(context.HttpContext)) return;
 
-        if (role == OrgRole.Admin) return;
+        LogRefusal(context, context.HttpContext.Items[ClerkOrgRole.ItemsKey] as OrgRole? ?? OrgRole.Unknown);
 
-        LogRefusal(context, role);
-
-        context.Result = new ObjectResult(new { error = ErrorCode, message = Message })
-        {
-            StatusCode = StatusCodes.Status403Forbidden,
-        };
+        context.Result = Refusal();
     }
 
     /// <summary>

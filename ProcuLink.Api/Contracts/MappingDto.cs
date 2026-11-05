@@ -48,6 +48,9 @@ public class ResolveRequest
     /// </summary>
     public string? BuyerName { get; set; }
 
+    /// <summary>Optional: hold this one order so it is never auto-delivered. Null = no change.</summary>
+    public bool? HoldForReview { get; set; }
+
     /// <summary>
     /// Optional corrected currency, a 3-letter ISO alpha code (e.g. "EUR").
     /// Null = no change. Must be exactly 3 alpha characters (else 400);
@@ -68,6 +71,15 @@ public class ResolveRequest
     /// canonical_json. Does NOT change order routing — <c>SupplierId</c> is untouched.
     /// </summary>
     public string? SupplierName { get; set; }
+
+    /// <summary>Invoice header corrections; null = not edited. DueDate is ISO <c>yyyy-MM-dd</c> (else 400).</summary>
+    public string? DueDate { get; set; }
+    public string? SellerTaxId { get; set; }
+    public string? PaymentIban { get; set; }
+    public string? PaymentReference { get; set; }
+    public decimal? SubTotal { get; set; }
+    public decimal? TaxTotal { get; set; }
+    public decimal? GrandTotal { get; set; }
 }
 
 /// <summary>

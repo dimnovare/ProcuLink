@@ -127,8 +127,9 @@ public sealed class OrderStatusTransitionObserver : SaveChangesInterceptor
             // (OrderMappingOverrideService.cs:86-87, :111) and this observer warned on every one.
             // The machine already allowed it; only this map was wrong, which is a shape the
             // machine-superset invariant cannot see.
+            // → delivered: marked as sent by hand (manual supplier only) — OrderStatusMachine.SentByHandFrom.
             [OrderStatusConstants.ReadyToDeliver] = Set(
-                OrderStatusConstants.Delivering, OrderStatusConstants.Transforming,
+                OrderStatusConstants.Delivering, OrderStatusConstants.Delivered, OrderStatusConstants.Transforming,
                 OrderStatusConstants.DeliveryFailed,
                 OrderStatusConstants.DeliveryHeld, OrderStatusConstants.RejectedBySupplier,
                 OrderStatusConstants.PendingReview, OrderStatusConstants.Ready),

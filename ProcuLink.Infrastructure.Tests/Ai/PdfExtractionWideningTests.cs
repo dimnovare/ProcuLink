@@ -76,4 +76,28 @@ public class EmailExtractorWideningTests
         Assert.Equal("ATU2", order.Parties!.Single().Vat);
         Assert.Contains(order.RawFields!, f => f.Label == "PR");
     }
+
+    [Fact]
+    public void ValidateAndMap_MapsInvoiceReadFields()
+    {
+        var lines = new[] { new OpenAiPdfOrderExtractor.ExtractionLineDto(1, "A", "Widget", 1, "PC", 10.0, 10.0) };
+        const string source = "1 A Widget 1 PC 10.0 10.0 EUR";
+
+        var filled = OpenAiPdfOrderExtractor.ValidateAndMap(new OpenAiPdfOrderExtractor.ExtractionDto(
+            0.95, "INV-1", "2026-11-01", "EUR", "Example Buyer GmbH", lines,
+            DueDate: "2026-12-01", SellerTaxId: "DE123456789",
+            Iban: "de89 3704 0044 0532 0130 00", PaymentReference: "INV-1001"), source).Order!;
+        Assert.Equal(new DateOnly(2026, 12, 1), filled.DueDate);
+        Assert.Equal("DE123456789", filled.SellerTaxId);
+        Assert.Equal("DE89370400440532013000", filled.Iban);
+        Assert.Equal("INV-1001", filled.PaymentReference);
+
+        var empty = OpenAiPdfOrderExtractor.ValidateAndMap(new OpenAiPdfOrderExtractor.ExtractionDto(
+            0.95, "INV-1", "2026-11-01", "EUR", "Example Buyer GmbH", lines,
+            DueDate: "", SellerTaxId: "", Iban: "", PaymentReference: ""), source).Order!;
+        Assert.Null(empty.DueDate);
+        Assert.Null(empty.SellerTaxId);
+        Assert.Null(empty.Iban);
+        Assert.Null(empty.PaymentReference);
+    }
 }

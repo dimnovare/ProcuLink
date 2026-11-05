@@ -44,10 +44,15 @@ public class PurchaseOrderLineEntity
     /// column existed. Cleared when a human resolves the line.
     /// </summary>
     public string? ReviewReason { get; set; }
+
+    /// <summary>Origin of <see cref="SupplierItemCode"/>; see <c>LineResolvedViaConstants</c>. Null when unresolved.</summary>
+    public string? ResolvedVia { get; set; }
     public string? AiSuggestedSupplierItemCode { get; set; }
     public float? AiSuggestionConfidence { get; set; }
     public string? AiSuggestionReason { get; set; }
     public string? AiSuggestionProvenance { get; set; }
+    /// <summary>Kind of evidence behind the suggestion (<c>AiMappingSuggestionBasis</c>: catalog | source_document | model). Cleared with the other Ai* fields.</summary>
+    public string? AiSuggestionBasis { get; set; }
 
     // ── Phase 4 enrichment (nullable; populated by the LLM PDF extractor) ──
     /// <summary>Printed extended line total (quantity × unit price), when stated.</summary>

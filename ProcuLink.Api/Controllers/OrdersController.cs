@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Api.Auth;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Helpers;
 using ProcuLink.Api.Jobs;
@@ -15,6 +16,7 @@ using ProcuLink.Core.Services.Detection;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Jobs;
+using ProcuLink.Infrastructure.Services;
 using ProcuLink.Transform.Mapping;
 using ProcuLink.Transform.Output;
 using ProcuLink.Transform.Tokenizing;
@@ -67,7 +69,7 @@ public sealed class OrdersController : ControllerBase
 
     /// <summary>Output formats reachable via transform — each maps to a registered ITransformService.</summary>
     private static readonly HashSet<string> AllowedTransformFormats =
-        new(StringComparer.OrdinalIgnoreCase) { "xml", "csv", "cxml", "json", "ubl", "x12" };
+        new(StringComparer.OrdinalIgnoreCase) { "xml", "csv", "cxml", "json", "ubl", "x12", "pdf" };
 
     public OrdersController(
         IOrderService                orders,
@@ -197,6 +199,25 @@ public sealed class OrdersController : ControllerBase
         });
     }
 
+    /// <summary>
+    /// A requested send for a supplier set to "I'll send it myself" is refused up front: the job
+    /// would no-op invisibly behind a 202. Returns null when the supplier has any other channel.
+    /// </summary>
+    private async Task<IActionResult?> RefusedIfManualSupplierAsync(Guid orgId, Guid orderId, CancellationToken ct)
+        => await IsManualSupplierAsync(orgId, orderId, ct)
+            ? Conflict(new { error = "This supplier is set to I'll send it myself. Download the file instead." })
+            : null;
+
+    /// <summary>True when the order's supplier is set to "I'll send it myself".</summary>
+    private Task<bool> IsManualSupplierAsync(Guid orgId, Guid orderId, CancellationToken ct) => (
+            from o in _db.PurchaseOrders.AsNoTracking()
+            join c in _db.SupplierDeliveryConfigs.AsNoTracking()
+                on new { o.OrgId, o.SupplierId } equals new { c.OrgId, SupplierId = (Guid?)c.SupplierId }
+            where o.Id == orderId && o.OrgId == orgId
+                && c.Protocol == ProcuLink.Core.Constants.DeliveryProtocolConstants.Manual
+            select c.Id
+        ).AnyAsync(ct);
+
     // ── WP-23 — the resolve status guard ─────────────────────────────────────
 
     /// <summary>
@@ -290,7 +311,8 @@ public sealed class OrdersController : ControllerBase
         IFormFile file,
         [FromForm] Guid supplierId,
         [FromServices] IStubOrderCreator stubOrders,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        [FromForm] bool holdForReview = false)
     {
         if (file is null || file.Length == 0)
             return BadRequest(new { error = "File is required." });
@@ -397,6 +419,14 @@ public sealed class OrdersController : ControllerBase
             return BadRequest(new { error = result.Error });
 
         var stub = result.Value!;
+
+        // Held BEFORE the parse job is enqueued, so nothing can auto-deliver it in between. Set here
+        // rather than threaded through both creators: it is one flag on the tracked entity.
+        if (holdForReview && !stub.HoldForReview)
+        {
+            stub.HoldForReview = true;
+            await _db.SaveChangesAsync(ct);
+        }
 
         // Enqueue async parse — returns before parsing completes
         ParseOrderJob.Enqueue(_jobs, stub.Id, orgId);
@@ -671,6 +701,51 @@ public sealed class OrdersController : ControllerBase
 
     // ── POST /api/orders/{id}/resolve ─────────────────────────────────────────
 
+    public sealed record SendAnywayRequest(string? Reason);
+
+    /// <summary>Audit action for an admin releasing a held invoice; the payload carries <c>by</c> and <c>reason</c>.</summary>
+    public const string InvoiceSentAnywayAction = "InvoiceSentAnyway";
+
+    /// <summary>The only statuses an invoice may be corrected in: before it is sent, or after a failed transform.</summary>
+    private static readonly HashSet<string> InvoiceEditableFrom =
+        [OrderStatusConstants.PendingReview, OrderStatusConstants.Ready, OrderStatusConstants.TransformFailed];
+
+    /// <summary>
+    /// Releases an invoice held by its checks (a false alarm such as a possible duplicate), with a
+    /// required reason kept in the order's history. It does not transform or deliver: the client
+    /// sends next through the normal calls. Administrators only — it overrules the invoice checks.
+    /// </summary>
+    [HttpPost("{id:guid}/send-anyway")]
+    [RequireOrgAdmin]
+    [ProducesResponseType(typeof(OrderDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> SendAnyway(Guid id, [FromBody] SendAnywayRequest? request, CancellationToken ct)
+    {
+        var orgId  = _tenant.OrganisationId;
+        var reason = request?.Reason?.Trim() ?? string.Empty;
+        if (reason.Length is < 3 or > 500)
+            return BadRequest(new { error = "Give a reason of 3 to 500 characters." });
+
+        var invoice = await _db.PurchaseOrders.FirstOrDefaultAsync(o => o.OrgId == orgId && o.Id == id, ct);
+        if (invoice is null) return NotFound();
+
+        // Any held invoice, even one whose check rows were all ignored on the exceptions page.
+        if (invoice.DocumentType != "invoice" || invoice.Status != OrderStatusConstants.PendingReview)
+            return Conflict(new { error = "Only an invoice held by its checks can be sent anyway." });
+
+        // Closes the open invoice_check rows as ignored (overruled, not fixed) and sets the status a
+        // clean invoice gets.
+        await OrderIngestionService.ApplyInvoiceProblemsAsync(_db, invoice, [], ct, closeAs: "ignored");
+        invoice.UpdatedAt = DateTime.UtcNow;
+        _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(orgId, id, InvoiceSentAnywayAction,
+            new { by = _tenant.ClerkUserId, reason }));
+        await _db.SaveChangesAsync(ct);
+
+        return await Get(id, ct);
+    }
+
     /// <summary>
     /// Apply user-supplied supplier item codes to unresolved lines.
     /// Optionally persists new mappings for future auto-resolution.
@@ -678,6 +753,7 @@ public sealed class OrdersController : ControllerBase
     [HttpPost("{id:guid}/resolve")]
     [ProducesResponseType(typeof(OrderDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Resolve(
@@ -700,7 +776,13 @@ public sealed class OrdersController : ControllerBase
             || !string.IsNullOrWhiteSpace(request.BuyerName)
             || !string.IsNullOrWhiteSpace(request.Currency)
             || !string.IsNullOrWhiteSpace(request.PoNumber)
-            || !string.IsNullOrWhiteSpace(request.SupplierName);
+            || !string.IsNullOrWhiteSpace(request.SupplierName)
+            || !string.IsNullOrWhiteSpace(request.DueDate)
+            || !string.IsNullOrWhiteSpace(request.SellerTaxId)
+            || !string.IsNullOrWhiteSpace(request.PaymentIban)
+            || !string.IsNullOrWhiteSpace(request.PaymentReference)
+            || request.SubTotal.HasValue || request.TaxTotal.HasValue || request.GrandTotal.HasValue
+            || request.HoldForReview.HasValue;
 
         if ((request.LineResolutions is null || request.LineResolutions.Count == 0) && !hasHeaderEdit)
             return BadRequest(new { error = "At least one line resolution or header correction is required." });
@@ -758,8 +840,41 @@ public sealed class OrdersController : ControllerBase
                 return BadRequest(new { error = $"SupplierName must be {MaxHeaderTextLength} characters or fewer." });
         }
 
+        DateOnly? dueDate = null;
+        if (!string.IsNullOrWhiteSpace(request.DueDate))
+        {
+            if (!DateOnly.TryParseExact(request.DueDate.Trim(), "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out var parsedDue))
+                return BadRequest(new { error = $"DueDate '{request.DueDate}' is not a valid date (expected yyyy-MM-dd)." });
+            dueDate = parsedDue;
+        }
+
+        static string? Trimmed(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
+        foreach (var (name, value) in new[]
+                 { ("SellerTaxId", request.SellerTaxId), ("PaymentIban", request.PaymentIban), ("PaymentReference", request.PaymentReference) })
+            if (Trimmed(value)?.Length > MaxHeaderTextLength)
+                return BadRequest(new { error = $"{name} must be {MaxHeaderTextLength} characters or fewer." });
         var header = new Core.Services.ResolveHeaderFields(
-            orderDate, buyerName, currency, poNumber, supplierName);
+            orderDate, buyerName, currency, poNumber, supplierName,
+            dueDate, Trimmed(request.SellerTaxId), Trimmed(request.PaymentIban), Trimmed(request.PaymentReference),
+            request.SubTotal, request.TaxTotal, request.GrandTotal, _tenant.ClerkUserId,
+            request.HoldForReview);
+
+        // An invoice is locked once it is on its way (a failed one keeps the terminal 400 below), and
+        // who gets paid, under which number, is an admin's change only.
+        var invoice = await _db.PurchaseOrders.AsNoTracking()
+            .FirstOrDefaultAsync(o => o.Id == id && o.OrgId == _tenant.OrganisationId && o.DocumentType == "invoice", ct);
+        if (invoice is not null)
+        {
+            if (!InvoiceEditableFrom.Contains(invoice.Status) && invoice.Status != OrderStatusConstants.Failed)
+                return Conflict(new { error = "This invoice has been sent and can't be changed." });
+            static bool Changes(string? value, string? current) => value is not null && value != current;
+            if (!RequireOrgAdminAttribute.IsAdmin(HttpContext)
+                && (Changes(header.PaymentIban, invoice.PaymentIban) || Changes(header.PoNumber, invoice.PoNumber)
+                    || Changes(header.SupplierName, invoice.SupplierName) || Changes(header.SellerTaxId, invoice.SellerTaxId)))
+                return StatusCode(StatusCodes.Status403Forbidden,
+                    new { error = "Only a workspace admin can change an invoice's IBAN, number or seller." });
+        }
 
         var result = await _orders.ResolveAsync(
             _tenant.OrganisationId, id,
@@ -805,6 +920,12 @@ public sealed class OrdersController : ControllerBase
             .AnyAsync(s => s.Id == request.SupplierId && s.OrgId == orgId && s.DeletedAt == null, ct);
         if (!supplierOk)
             return BadRequest(new { error = "Supplier not found." });
+
+        // An invoice goes to the org's invoice destination, never to a supplier picked from the list
+        // (the re-parse then keeps that choice).
+        if (await _db.PurchaseOrders.AnyAsync(o => o.Id == id && o.OrgId == orgId && o.DocumentType == "invoice", ct)
+            && !await _db.Organisations.AnyAsync(o => o.Id == orgId && o.InvoiceDestinationSupplierId == request.SupplierId, ct))
+            return Conflict(new { error = "Invoices go to your invoice destination only. Change it in Settings." });
 
         // Pin the supplier's active connection revision (mirrors ingest-time pinning); null = live config.
         var revisionId = await _db.SupplierConnections.AsNoTracking()
@@ -1716,10 +1837,14 @@ public sealed class OrdersController : ControllerBase
             formatStr = supplierFormat?.Trim().ToLowerInvariant();
         }
         if (string.IsNullOrEmpty(formatStr))
-            formatStr = "xml"; // safe default when neither the request nor the supplier specifies one
+            formatStr = order.DocumentType == "invoice" ? "csv" : "xml"; // safe default when neither the request nor the supplier specifies one
+
+        // An invoice goes out as CSV, JSON or PDF; an order-only format (cXML, EDI, UBL...) is refused here.
+        if (order.DocumentType == "invoice" && formatStr is not ("csv" or "json" or "pdf"))
+            return UnprocessableEntity(new { error = InvoiceDefaultOutput.FormatError });
 
         if (!AllowedTransformFormats.Contains(formatStr))
-            return BadRequest(new { error = "Format must be one of: xml, csv, cxml, json, ubl, x12." });
+            return BadRequest(new { error = "Format must be one of: xml, csv, cxml, json, ubl, x12, pdf." });
 
         // Atomically claim ready|transform_failed → transforming BEFORE enqueueing — the same
         // transition TransformAsync enforces. A racy read-then-enqueue here let two concurrent
@@ -1899,6 +2024,9 @@ public sealed class OrdersController : ControllerBase
         // here, where the endpoint has never validated anything at all.
         if (await RefusedByResolveHoldAsync(id, ct) is { } held)
             return held;
+        // Invoices carry no AI suggestions, and the recompute below would move a sent invoice back to ready.
+        if (await _db.PurchaseOrders.AnyAsync(o => o.Id == id && o.OrgId == _tenant.OrganisationId && o.DocumentType == "invoice", ct))
+            return Conflict(new { error = "Invoices have no AI suggestions to accept." });
 
         var result = await _orders.AcceptAiSuggestionsAsync(
             _tenant.OrganisationId, id, minConfidence, ct);
@@ -2172,6 +2300,9 @@ public sealed class OrdersController : ControllerBase
         // person deciding, now, to put this document in front of the supplier. The artifact may have
         // been produced before the rule that now refuses it existed, so the transform-time answer is
         // not this decision's answer. Checked BEFORE the enqueue, so a refusal sends nothing.
+        if (await RefusedIfManualSupplierAsync(orgId, id, ct) is { } manualRefusal)
+            return manualRefusal;
+
         if (await RefusedBySupplierRulesAsync(orgId, id, "redeliver", ct) is { } refusal)
             return refusal;
 
@@ -2197,7 +2328,9 @@ public sealed class OrdersController : ControllerBase
     /// <para>
     /// The delivery ATTEMPT row stays <c>unconfirmed</c>: its outcome was never observed and this
     /// endpoint does not change that. What is new is the operator's assertion, recorded as its own
-    /// audit event with the acting user. Only valid from <c>delivery_unconfirmed</c>.
+    /// audit event with the acting user. Valid from <c>delivery_unconfirmed</c>, and from
+    /// <c>ready_to_deliver</c> when the supplier is set to "I'll send it myself" — the user marks
+    /// an order they sent by hand as sent (same audit action, <c>fromStatus</c> tells them apart).
     /// </para>
     /// <para>
     /// Billing: metering counts <c>delivered</c>/<c>rejected_by_supplier</c> by query, so this is
@@ -2225,11 +2358,15 @@ public sealed class OrdersController : ControllerBase
         // OrderStatusMachineTests.EveryInboundDeliveredEdge_HasAProductionWriter reads to prove that
         // every X -> delivered edge in the two transition maps has a writer. Two hand-written copies
         // of one rule is the drift class that bit the delivery-claim gates four times.
-        if (!OrderStatusMachine.ManuallyDeliverableFrom.Contains(order.Status))
+        // Sent by hand: a ready_to_deliver order may be marked delivered only when its supplier is
+        // set to "I'll send it myself" — for any other supplier a channel could still send it.
+        var sentByHand = OrderStatusMachine.SentByHandFrom.Contains(order.Status)
+                         && await IsManualSupplierAsync(orgId, id, ct);
+        if (!OrderStatusMachine.ManuallyDeliverableFrom.Contains(order.Status) && !sentByHand)
             return BadRequest(new
             {
-                error = $"Only an order whose delivery is unconfirmed can be marked delivered "
-                      + $"(current: '{order.Status}')."
+                error = $"Only an order whose delivery is unconfirmed, or one for a supplier set to "
+                      + $"I'll send it myself, can be marked delivered (current: '{order.Status}')."
             });
 
         // The order above came from GetByIdAsync, which reads through AsNoTracking — mutating it
@@ -2248,11 +2385,12 @@ public sealed class OrdersController : ControllerBase
         // no concurrency token, so re-checking the TRACKED row here is what stops this endpoint from
         // silently overwriting an in-flight send back to 'delivered' — the order moved under us, so
         // the operator's assertion (made against the stale snapshot) no longer applies.
-        if (!OrderStatusMachine.ManuallyDeliverableFrom.Contains(tracked.Status))
+        if (!(sentByHand ? OrderStatusMachine.SentByHandFrom : OrderStatusMachine.ManuallyDeliverableFrom)
+                .Contains(tracked.Status))
             return BadRequest(new
             {
-                error = $"Only an order whose delivery is unconfirmed can be marked delivered "
-                      + $"(current: '{tracked.Status}')."
+                error = $"Only an order whose delivery is unconfirmed, or one for a supplier set to "
+                      + $"I'll send it myself, can be marked delivered (current: '{tracked.Status}')."
             });
 
         var now = DateTime.UtcNow;
@@ -2288,9 +2426,12 @@ public sealed class OrdersController : ControllerBase
             // a null FK meaning "FK unresolved" instead of "a human acted and we cannot say who" —
             // which is what would make this event indistinguishable from the SYSTEM-generated park.
             actorClerkUserId = _tenant.ClerkUserId,
-            detail = "Operator confirmed out-of-band that the supplier received this order. "
-                   + "The delivery attempt itself was never acknowledged; this records the "
-                   + "operator's assertion, not an observed supplier ACK.",
+            detail = sentByHand
+                ? "The user marked this order as sent: the supplier is set to I'll send it myself, "
+                  + "so the user sent the file outside ProcuLink. No delivery attempt exists."
+                : "Operator confirmed out-of-band that the supplier received this order. "
+                  + "The delivery attempt itself was never acknowledged; this records the "
+                  + "operator's assertion, not an observed supplier ACK.",
         });
 
         _db.AuditEvents.Add(new ProcuLink.Core.Entities.AuditEvent
@@ -2319,8 +2460,8 @@ public sealed class OrdersController : ControllerBase
 
         _logger.LogInformation(
             "DeliveryConfirmedManually: order {OrderId} (org {OrgId}) marked delivered by operator {UserId} "
-            + "after an unconfirmed delivery.",
-            id, orgId, _tenant.ClerkUserId);
+            + "from {FromStatus}.",
+            id, orgId, _tenant.ClerkUserId, fromStatus);
 
         return Accepted(new { status = "delivered" });
     }
@@ -2400,6 +2541,9 @@ public sealed class OrdersController : ControllerBase
         // the same answer. (The AUTOMATIC backoff queue this endpoint seeds is deliberately NOT
         // gated: it continues a dispatch that already started and may already have reached the
         // supplier — see IAcceptanceGate.)
+        if (await RefusedIfManualSupplierAsync(orgId, id, ct) is { } manualRefusal)
+            return manualRefusal;
+
         if (await RefusedBySupplierRulesAsync(orgId, id, "retry-delivery", ct) is { } refusal)
             return refusal;
 
@@ -2809,7 +2953,9 @@ public sealed class OrdersController : ControllerBase
                 // The identifiers a punchout order actually carries — the review UI shows these
                 // beside the (meaningless) buyer item code so the operator can check a match.
                 ManufacturerPartNumber: l.ManufacturerPartNumber,
-                ManufacturerName:       l.ManufacturerName))
+                ManufacturerName:       l.ManufacturerName,
+                ResolvedVia:            l.ResolvedVia,
+                AiSuggestionBasis:      l.AiSuggestionBasis))
             .ToList(),
         Artifacts: e.OutboundArtifacts
             .OrderByDescending(a => a.CreatedAt)
@@ -2851,7 +2997,12 @@ public sealed class OrdersController : ControllerBase
         ContactPhone:         e.ContactPhone,
         SupplierSuggestions:  supplierSuggestions,
         // WP-27: the review screen's "practice order" framing reads this, not a query parameter.
-        IsSample:             e.IsSample
+        IsSample:             e.IsSample,
+        DueDate:              e.DueDate?.ToString("yyyy-MM-dd"),
+        SellerTaxId:          e.SellerTaxId,
+        PaymentIban:          e.PaymentIban,
+        PaymentReference:     e.PaymentReference,
+        HoldForReview:        e.HoldForReview
     );
 
     // ── Supplier auto-detect: read + decision recording ───────────────────────

@@ -137,6 +137,21 @@ public static class CanonicalRowFields
     public static readonly IReadOnlyDictionary<string, string> ExcludedHeaderFields =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
+            ["HoldForReview"] =
+                "Internal workflow flag: stops automatic delivery of this one order. Says nothing "
+                + "about the order itself, so a supplier has no use for it.",
+            ["DueDate"] =
+                "Invoice-only field, read for invoices and written by the default invoice output ("
+                + "InvoiceDefaultOutput). Not yet bindable by a custom output.",
+            ["SellerTaxId"] =
+                "Invoice-only field, read for invoices and written by the default invoice output ("
+                + "InvoiceDefaultOutput). Not yet bindable by a custom output.",
+            ["PaymentIban"] =
+                "Invoice-only field, read for invoices and written by the default invoice output ("
+                + "InvoiceDefaultOutput). Not yet bindable by a custom output.",
+            ["PaymentReference"] =
+                "Invoice-only field, read for invoices and written by the default invoice output ("
+                + "InvoiceDefaultOutput). Not yet bindable by a custom output.",
             ["Id"] =
                 "Infrastructure: internal surrogate key. Meaningless to a counterparty and a "
                 + "tenant-correlatable identifier we do not put in outbound documents.",
@@ -230,6 +245,11 @@ public static class CanonicalRowFields
         {
             ["Id"] =
                 "Infrastructure: internal surrogate key.",
+            ["AiSuggestionBasis"] =
+                "Internal: which kind of evidence backed an unaccepted suggestion. Never part of supplier output.",
+            ["ResolvedVia"] =
+                "Internal provenance of the supplier code (saved mapping, person, accepted "
+                + "suggestion). Describes how WE found the code, not what the line says.",
             ["OrderId"] =
                 "Infrastructure: internal FK to the parent order.",
             ["Confidence"] =

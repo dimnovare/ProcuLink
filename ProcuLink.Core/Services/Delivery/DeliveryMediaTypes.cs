@@ -72,6 +72,7 @@ public static class DeliveryMediaTypes
             [OutputFormat.UblOrder]      = new("application/xml", ".xml"),
             [OutputFormat.X12_850]       = new("application/edi-x12", ".x12"),
             [OutputFormat.EdifactOrders] = new("application/edifact", ".edi"),
+            [OutputFormat.Pdf]           = new("application/pdf", ".pdf"),
         };
 
     /// <summary>

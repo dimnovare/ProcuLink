@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 
@@ -93,6 +94,17 @@ internal sealed class OrderResolutionService
         if (IsFinished(entity.Status))
             return Result<PurchaseOrderEntity>.Fail(SourceFileCannotBeFixedHere);
 
+        // Hold-only: flip the flag and nothing else. Running the rest would recompute the status
+        // (dragging a ready_to_deliver order back to 'ready') and write a Resolved audit row.
+        if (resolutions.Count == 0 && header is { HoldForReview: { } onlyHold }
+            && header with { HoldForReview = null } is { HasAnyChange: false })
+        {
+            entity.HoldForReview = onlyHold;
+            entity.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+            return Result<PurchaseOrderEntity>.Ok(entity);
+        }
+
         // Validate all resolutions before mutating anything
         foreach (var res in resolutions)
         {
@@ -141,6 +153,7 @@ internal sealed class OrderResolutionService
             var modelConfidence = acceptedModelCode ? line.AiSuggestionConfidence : null;
 
             line.SupplierItemCode = chosen;
+            line.ResolvedVia     = acceptedModelCode ? LineResolvedViaConstants.Ai : LineResolvedViaConstants.Manual;
             line.NeedsReview     = false;
             line.ReviewReason    = null; // human resolved the line — the "why flagged" no longer applies
             // Only a real model score, never a state flag. This used to be a flat `1.0f`, which the
@@ -150,6 +163,7 @@ internal sealed class OrderResolutionService
             line.Confidence      = modelConfidence;
             line.AiSuggestedSupplierItemCode = null;
             line.AiSuggestionConfidence = null;
+            line.AiSuggestionBasis = null;
             line.AiSuggestionReason = null;
             line.AiSuggestionProvenance = null;
 
@@ -184,6 +198,7 @@ internal sealed class OrderResolutionService
         // delivering to the supplier chosen via the picker — only the printed/display values
         // change.
         var changedHeaderFields = new List<string>();
+        var adminFieldsBefore = AdminOnlyInvoiceFields(entity);
         if (header is not null && header.HasAnyChange)
         {
             var canonicalUpdates = new Dictionary<string, object?>();
@@ -224,12 +239,36 @@ internal sealed class OrderResolutionService
                 changedHeaderFields.Add("poNumber");
             }
 
+            if (header.HoldForReview is { } hold)
+            {
+                entity.HoldForReview = hold;
+                changedHeaderFields.Add("holdForReview");
+            }
+
             if (!string.IsNullOrWhiteSpace(header.SupplierName))
             {
                 var trimmed = header.SupplierName.Trim();
                 entity.SupplierName = trimmed;              // supplier_name column (display only; NOT routing)
                 canonicalUpdates["supplierName"] = trimmed; // canonical_json mirror
                 changedHeaderFields.Add("supplierName");
+            }
+
+            // Invoice-only columns; an order has no use for them, so its resolve is unchanged.
+            if (entity.DocumentType == "invoice")
+            {
+                object?[] InvoiceFields() => [entity.DueDate, entity.SellerTaxId, entity.PaymentIban,
+                    entity.PaymentReference, entity.SubTotal, entity.TaxTotal, entity.GrandTotal];
+                var before = InvoiceFields();
+                entity.DueDate          = header.DueDate ?? entity.DueDate;
+                entity.SellerTaxId      = header.SellerTaxId ?? entity.SellerTaxId;
+                entity.PaymentIban      = header.PaymentIban ?? entity.PaymentIban;
+                entity.PaymentReference = header.PaymentReference ?? entity.PaymentReference;
+                entity.SubTotal         = header.SubTotal ?? entity.SubTotal;
+                entity.TaxTotal         = header.TaxTotal ?? entity.TaxTotal;
+                entity.GrandTotal       = header.GrandTotal ?? entity.GrandTotal;
+                var after = InvoiceFields();
+                changedHeaderFields.AddRange(new[] { "dueDate", "sellerTaxId", "paymentIban", "paymentReference",
+                    "subTotal", "taxTotal", "grandTotal" }.Where((_, i) => !Equals(before[i], after[i])));
             }
 
             if (canonicalUpdates.Count > 0)
@@ -275,6 +314,8 @@ internal sealed class OrderResolutionService
 
         // Recompute order status (the guard above may have re-set NeedsReview → HOLD).
         entity.Status    = entity.Lines.Any(l => l.NeedsReview) ? "pending_review" : "ready";
+        // A date typed in by a person counts as read; otherwise the checks keep an open "not found".
+        await SettleInvoiceAsync(entity, ct, header?.OrderDate is not null ? true : null);
         entity.UpdatedAt = DateTime.UtcNow;
 
         _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "Resolved", new
@@ -283,7 +324,13 @@ internal sealed class OrderResolutionService
             savedMappings = saveMappings,
             learnedMappings,
             newStatus    = entity.Status,
-            headerFieldsChanged = changedHeaderFields
+            headerFieldsChanged = changedHeaderFields,
+            by           = header?.ChangedBy,
+            // Who gets paid and what is owed under which number: old → new, invoices only.
+            changes      = entity.DocumentType == "invoice"
+                ? AdminOnlyInvoiceFields(entity).Where(f => f.Value != adminFieldsBefore[f.Key])
+                    .ToDictionary(f => f.Key, f => new { from = adminFieldsBefore[f.Key], to = f.Value })
+                : null,
         }));
 
         await _db.SaveChangesAsync(ct);
@@ -308,6 +355,27 @@ internal sealed class OrderResolutionService
 
         return Result<PurchaseOrderEntity>.Ok(entity);
     }
+
+    /// <summary>
+    /// An invoice is released by its own checks, never by the line-based status recompute: it has no
+    /// lines to review, so that recompute would release a held invoice unchecked.
+    /// </summary>
+    private async Task SettleInvoiceAsync(PurchaseOrderEntity entity, CancellationToken ct, bool? dateRead = null)
+    {
+        if (entity.DocumentType == "invoice")
+            await OrderIngestionService.ApplyInvoiceProblemsAsync(
+                _db, entity, await OrderIngestionService.CollectInvoiceProblemsAsync(_db, entity, ct, dateRead), ct);
+    }
+
+    /// <summary>
+    /// The invoice fields only an organisation admin may change (OrdersController.Resolve refuses a
+    /// member); the audit row records each as old → new.
+    /// </summary>
+    private static Dictionary<string, string?> AdminOnlyInvoiceFields(PurchaseOrderEntity o) => new()
+    {
+        ["paymentIban"] = o.PaymentIban, ["poNumber"] = o.PoNumber,
+        ["supplierName"] = o.SupplierName, ["sellerTaxId"] = o.SellerTaxId,
+    };
 
     // ── MarkRejectedAsync ─────────────────────────────────────────────────────
 
@@ -415,15 +483,12 @@ internal sealed class OrderResolutionService
         {
             if (!line.NeedsReview) continue;
             if (string.IsNullOrWhiteSpace(line.AiSuggestedSupplierItemCode)) continue;
-            // A suggestion with no confidence can never clear a confidence threshold, and the
-            // `?? 0.0` says so. This now excludes the two DETERMINISTIC producers (an exact
-            // supplier-catalog hit on a manufacturer part number, and an echo of a part number the
-            // document states) — they used to arrive stamped 0.95 and were swept up by any
-            // threshold at or below that. Excluding them is the honest reading of "accept
-            // everything the model was at least this sure about": nothing was sure of anything
-            // here, because nothing measured it. Such a line stays in review for a one-click
-            // accept, where the operator sees the catalog evidence and decides.
-            if ((line.AiSuggestionConfidence ?? 0.0) < minConfidence) continue;
+            // A suggestion with no confidence clears the threshold only when it is an EXACT hit in the
+            // supplier's own catalog: that is a fact, not a score, so it passes. A document echo
+            // (source_document) is not — the supplier may sell that part number under a different
+            // code — and stays in review for a one-click accept. Everything else keeps null-as-0.
+            if (line.AiSuggestionBasis != AiMappingSuggestionBasis.Catalog
+                && (line.AiSuggestionConfidence ?? 0.0) < minConfidence) continue;
 
             var chosen = line.AiSuggestedSupplierItemCode;
 
@@ -437,6 +502,7 @@ internal sealed class OrderResolutionService
             decisionRecords.Add(BuildDecisionFromLine(line, chosen, decidedBy: "ai"));
 
             line.SupplierItemCode           = chosen;
+            line.ResolvedVia                = LineResolvedViaConstants.Ai;
             // The model's real number, promoted so it survives the clearing below. Unchanged in
             // intent — this was already the one honest write to this column, and it is now the
             // ONLY kind of write to it.
@@ -445,6 +511,7 @@ internal sealed class OrderResolutionService
             line.ReviewReason               = null; // suggestion accepted — the "why flagged" no longer applies
             line.AiSuggestedSupplierItemCode = null;
             line.AiSuggestionConfidence     = null;
+            line.AiSuggestionBasis          = null;
             line.AiSuggestionReason         = null;
             line.AiSuggestionProvenance     = null;
 
@@ -471,6 +538,7 @@ internal sealed class OrderResolutionService
         entity.Status    = entity.Lines.Any(l => l.NeedsReview)
                                ? OrderStatusConstants.PendingReview
                                : OrderStatusConstants.Ready;
+        await SettleInvoiceAsync(entity, ct);
         entity.UpdatedAt = DateTime.UtcNow;
 
         _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "AiSuggestionsBulkAccepted", new

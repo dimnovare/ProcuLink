@@ -137,6 +137,40 @@ public class OrdersControllerRedeliverTests
         return (string)bad.Value!.GetType().GetProperty("error")!.GetValue(bad.Value)!;
     }
 
+    // "I'll send it myself": a 202 here would enqueue a job that no-ops invisibly, so it is refused.
+    [Fact]
+    public async Task Redeliver_ForManualSupplier_Is409_AndEnqueuesNothing()
+    {
+        var options = ParkedOrderTestHarness.NewOptions();
+        await using var db = new ProcuLinkDbContext(options);
+        var (ctrl, orders, jobs, orgId) = Build(db);
+
+        var order = ParkedOrderTestHarness.OrderWithArtifact(orgId, OrderStatusConstants.ReadyToDeliver);
+        await using (var seed = new ProcuLinkDbContext(options))
+        {
+            seed.PurchaseOrders.Add(order);
+            seed.SupplierDeliveryConfigs.Add(new SupplierDeliveryConfig
+            {
+                Id = Guid.NewGuid(), OrgId = orgId, SupplierId = order.SupplierId!.Value,
+                Protocol = DeliveryProtocolConstants.Manual, ConfigJson = "{}",
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            });
+            await seed.SaveChangesAsync();
+        }
+        orders.Setup(o => o.GetByIdAsync(orgId, order.Id, It.IsAny<CancellationToken>()))
+              .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(
+                  await ParkedOrderTestHarness.DetachedOrderAsync(db, orgId, order.Id)));
+
+        var result = await ctrl.Redeliver(order.Id, CancellationToken.None);
+
+        var conflict = result.Should().BeOfType<ConflictObjectResult>().Subject;
+        ((string)conflict.Value!.GetType().GetProperty("error")!.GetValue(conflict.Value)!).Should()
+            .Be("This supplier is set to I'll send it myself. Download the file instead.");
+        jobs.Verify(j => j.Create(It.IsAny<Job>(), It.IsAny<EnqueuedState>()), Times.Never);
+        (await db.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == order.Id)).Status
+            .Should().Be(OrderStatusConstants.ReadyToDeliver);
+    }
+
     // The operator's "Send again" on a parked order — the whole point of the park is that a
     // HUMAN, not the retry loop, decides to accept the duplicate risk.
     [Fact]
@@ -455,6 +489,42 @@ public class OrdersControllerMarkDeliveredTests
         var result = await ctrl.MarkDelivered(order.Id, CancellationToken.None);
 
         result.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    // "I'll send it myself": the user sent the file by hand, so a ready order can be marked sent.
+    // Any other supplier still has a channel that could send it, so the same request is refused.
+    [Theory]
+    [InlineData(DeliveryProtocolConstants.Manual, true)]
+    [InlineData(DeliveryProtocolConstants.Http, false)]
+    public async Task MarkDelivered_FromReadyToDeliver_OnlyForAManualSupplier(string protocol, bool admitted)
+    {
+        var options = ParkedOrderTestHarness.NewOptions();
+        await using var db = new ProcuLinkDbContext(options);
+        var (ctrl, orders, orgId, _) = Build(db);
+
+        var order = OrderInStatus(orgId, OrderStatusConstants.ReadyToDeliver);
+        await using (var seed = new ProcuLinkDbContext(options))
+        {
+            seed.SupplierDeliveryConfigs.Add(new SupplierDeliveryConfig
+            {
+                Id = Guid.NewGuid(), OrgId = orgId, SupplierId = order.SupplierId!.Value,
+                Protocol = protocol, ConfigJson = "{}",
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            });
+            await seed.SaveChangesAsync();
+        }
+        await SeedAndDetachAsync(options, db, orders, orgId, order, withAttempt: false);
+
+        var result = await ctrl.MarkDelivered(order.Id, CancellationToken.None);
+
+        var persisted = await db.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == order.Id);
+        var audit = await db.AuditEvents.AsNoTracking()
+            .SingleOrDefaultAsync(e => e.EntityId == order.Id && e.Action == "DeliveryConfirmedManually");
+        (result is AcceptedResult).Should().Be(admitted);
+        (result is BadRequestObjectResult).Should().Be(!admitted);
+        persisted.Status.Should().Be(admitted ? OrderStatusConstants.Delivered : OrderStatusConstants.ReadyToDeliver);
+        audit?.Payload.RootElement.GetProperty("fromStatus").GetString()
+            .Should().Be(admitted ? OrderStatusConstants.ReadyToDeliver : null);
     }
 
     [Fact]

@@ -66,6 +66,12 @@ public class PurchaseOrderEntity
     public bool IsSample { get; set; }
 
     /// <summary>
+    /// A person flagged this one order so it is never AUTO-delivered, even when its supplier uses
+    /// Automatic delivery. An explicit person-initiated send still works; the status is untouched.
+    /// </summary>
+    public bool HoldForReview { get; set; }
+
+    /// <summary>
     /// How many times the stuck-order sweep has re-enqueued this order after it stalled
     /// in a transient pipeline status ('parsing' / 'transforming'). A transient Worker
     /// restart mid-job leaves an order parked; the sweep requeues it up to a bounded cap
@@ -175,6 +181,16 @@ public class PurchaseOrderEntity
     /// Null for formats that do not carry a header-level delivery date.
     /// </summary>
     public DateOnly? RequestedDeliveryDate { get; set; }
+
+    // ── Invoice-only fields (null on orders; migration InvoiceReadFields) ───────
+    /// <summary>Payment due date printed on an invoice.</summary>
+    public DateOnly? DueDate { get; set; }
+    /// <summary>The invoice issuer's own VAT / tax number.</summary>
+    public string? SellerTaxId { get; set; }
+    /// <summary>IBAN the invoice asks to be paid to (uppercase, no spaces).</summary>
+    public string? PaymentIban { get; set; }
+    /// <summary>Payment / remittance reference to quote when paying.</summary>
+    public string? PaymentReference { get; set; }
 
     /// <summary>
     /// Group V1: the exact <see cref="SupplierConnectionRevision"/> this order was processed with,

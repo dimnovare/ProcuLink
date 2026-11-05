@@ -4,8 +4,8 @@ public interface IOrganisationSettingsService
 {
     Task<OrgSettingsResponse> GetAsync(Guid orgId, CancellationToken ct);
 
-    Task<OrgSettingsResponse> UpdateDirectionAsync(
+    Task<OrgSettingsResponse> UpdateAsync(
         Guid orgId,
-        UpdateOrderDirectionRequest req,
+        UpdateOrgSettingsRequest req,
         CancellationToken ct);
 }

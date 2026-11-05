@@ -143,7 +143,7 @@ public class DeterministicSuggestionsCarryNoConfidenceTests
     // ── Bulk accept: an unscored suggestion cannot clear a threshold ───────────
 
     [Fact]
-    public async Task UnscoredDeterministicSuggestion_IsNotSweptUpByBulkAccept()
+    public async Task ExactCatalogSuggestion_IsBulkAccepted_WithoutBeingGivenAScore()
     {
         var (db, orgId, supplierId) = await SeedSupplierAsync();
         await AddCatalogAsync(db, orgId, supplierId,
@@ -152,19 +152,18 @@ public class DeterministicSuggestionsCarryNoConfidenceTests
         var svc = Build(db, UnresolvedMappingsMock().Object, SilentAiMock().Object);
         var line = await IngestSingleLineAsync(svc, db, orgId, supplierId, PunchoutFixture);
         line.AiSuggestionConfidence.Should().BeNull("precondition");
+        line.AiSuggestionBasis.Should().Be(AiMappingSuggestionBasis.Catalog, "precondition");
 
-        // "Accept everything the model was at least 90% sure about." Nothing here was sure of
-        // anything, because nothing measured it. Before the fix this line arrived stamped 0.95 and
-        // was swept up by any threshold at or below that — auto-applied on a number no model
-        // produced. It now stays in review for a deliberate one-click accept.
+        // An exact hit in the supplier's own catalog is a fact, so it passes the threshold without
+        // a score. (A document echo does not: see the bulk-accept test beside AcceptAiSuggestionsAsync.)
         var accepted = await svc.AcceptAiSuggestionsAsync(orgId, line.OrderId, 0.90, CancellationToken.None);
 
         accepted.IsSuccess.Should().BeTrue();
-        accepted.Value.Should().Be(0, "a suggestion with no confidence cannot clear a confidence threshold");
+        accepted.Value.Should().Be(1);
 
         var after = await db.PurchaseOrderLines.AsNoTracking().SingleAsync(l => l.Id == line.Id);
-        after.SupplierItemCode.Should().BeNull();
-        after.NeedsReview.Should().BeTrue();
+        after.SupplierItemCode.Should().Be(SupplierCodeForLitwareScanner);
+        after.NeedsReview.Should().BeFalse();
         after.Confidence.Should().BeNull(
             "nothing may be promoted into the line's confidence column from an unscored suggestion");
     }
@@ -366,6 +365,36 @@ public class DeterministicSuggestionsCarryNoConfidenceTests
         var line = await db.PurchaseOrderLines.AsNoTracking().SingleAsync(l => l.OrderId == result.Value!.Id);
         Assert.Null(line.ManufacturerPartNumber);
         return line;
+    }
+
+    // ── Provenance of a resolved code ─────────────────────────────────────────
+
+    [Fact]
+    public async Task ResolvedVia_IsSavedMapping_OnlyForMappingHits()
+    {
+        var (db, orgId, supplierId) = await SeedSupplierAsync();
+        var mappings = new Mock<IItemMappingService>();
+        mappings
+            .Setup(s => s.ResolveManyAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid _, Guid _, IEnumerable<string> codes, CancellationToken _) =>
+                (IReadOnlyDictionary<string, string?>)codes
+                    .Where(c => !string.IsNullOrWhiteSpace(c))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToDictionary(c => c.Trim(), c => c == "BUY-1" ? "SUP-1" : null, StringComparer.Ordinal));
+        var svc = Build(db, mappings.Object, SilentAiMock().Object);
+
+        const string csv = "po_number,line_no,buyer_code,description,qty,unit_price\n" +
+                           "PO-1,1,BUY-1,Widget,5,10.00\nPO-1,2,BUY-2,Gadget,5,10.00\n";
+        await using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(csv));
+        var result = await svc.CreateFromFileAsync(
+            orgId, supplierId, stream, "po.csv", "text/csv", CancellationToken.None);
+        Assert.True(result.IsSuccess, $"Ingest failed: {result.Error}");
+
+        var lines = await db.PurchaseOrderLines.AsNoTracking()
+            .Where(l => l.OrderId == result.Value!.Id).OrderBy(l => l.LineNumber).ToListAsync();
+        lines[0].ResolvedVia.Should().Be("saved_mapping");
+        lines[1].ResolvedVia.Should().BeNull("an unresolved line has no origin to claim");
     }
 
     private static async Task<PurchaseOrderLineEntity> IngestSingleLineAsync(

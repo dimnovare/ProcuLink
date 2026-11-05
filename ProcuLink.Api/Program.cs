@@ -827,6 +827,8 @@ builder.Services.AddScoped<IDesadvService, ProcuLink.Infrastructure.Services.Des
 
 // GDPR per-order erasure (admin-triggered): deletes the R2 blobs + every order-tied DB row.
 builder.Services.AddScoped<IDataErasureService, ProcuLink.Infrastructure.Services.DataErasureService>();
+// Whole-organisation erase (admin endpoint + Worker DisposableOrgSweepJob); receipt in platform_audit_events.
+builder.Services.AddScoped<IOrganisationEraser, ProcuLink.Infrastructure.Services.OrganisationEraser>();
 
 // ── Phase 6: smart format auto-detect ─────────────────────────────────────
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, ProcuLink.Infrastructure.Services.Detection.FormatDetectorService>();

@@ -47,8 +47,8 @@ public class OrganisationSettingsServiceTests
         var orgId = await SeedOrgAsync(db);
         var service = new OrganisationSettingsService(db);
 
-        var updated = await service.UpdateDirectionAsync(
-            orgId, new UpdateOrderDirectionRequest(OrderDirection.Inbound), default);
+        var updated = await service.UpdateAsync(
+            orgId, new UpdateOrgSettingsRequest(OrderDirection.Inbound), default);
 
         updated.Direction.Should().Be(OrderDirection.Inbound);
 
@@ -64,8 +64,8 @@ public class OrganisationSettingsServiceTests
         var orgB = await SeedOrgAsync(db);
         var service = new OrganisationSettingsService(db);
 
-        await service.UpdateDirectionAsync(
-            orgA, new UpdateOrderDirectionRequest(OrderDirection.Inbound), default);
+        await service.UpdateAsync(
+            orgA, new UpdateOrgSettingsRequest(OrderDirection.Inbound), default);
 
         (await service.GetAsync(orgA, default)).Direction.Should().Be(OrderDirection.Inbound);
         (await service.GetAsync(orgB, default)).Direction.Should().Be(OrderDirection.Outbound);

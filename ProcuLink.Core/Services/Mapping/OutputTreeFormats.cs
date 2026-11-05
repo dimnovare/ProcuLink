@@ -46,6 +46,7 @@ public static class OutputTreeFormats
         OutputFormat.UblOrder      => false,
         OutputFormat.X12_850       => false,
         OutputFormat.EdifactOrders => false,
+        OutputFormat.Pdf           => false, // fixed layout, no node tree
     };
 
     /// <summary>
@@ -72,5 +73,6 @@ public static class OutputTreeFormats
         OutputFormat.UblOrder      => false,
         OutputFormat.X12_850       => false,
         OutputFormat.EdifactOrders => false,
+        OutputFormat.Pdf           => false, // fixed layout, no node tree
     };
 }

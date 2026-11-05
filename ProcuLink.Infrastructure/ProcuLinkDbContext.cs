@@ -193,6 +193,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
 
     // ── Operator alerting: per-condition cooldown that must outlive a restart ───
     public DbSet<WorkerHealthAlertCooldown>      WorkerHealthAlertCooldowns    { get; set; } = null!;
+    // ── Platform audit: receipts that must outlive the organisation they record ─
+    public DbSet<PlatformAuditEvent>             PlatformAuditEvents           { get; set; } = null!;
 
     // ── Org plan-history chokepoint ──────────────────────────────────────────
     // Overage metering must resolve the plan + order-limit override AS OF each
@@ -407,6 +409,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .HasMaxLength(16)
              .HasDefaultValue(OrderDirection.Outbound)
              .IsRequired();
+            b.Property(x => x.InvoiceDestinationSupplierId)
+             .HasColumnName("invoice_destination_supplier_id");
         });
 
         // ── users ──────────────────────────────────────────────────────
@@ -575,6 +579,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.CreatedAt).HasColumnName("created_at");
             b.Property(x => x.UpdatedAt).HasColumnName("updated_at");
             b.Property(x => x.IsSample).HasColumnName("is_sample").HasDefaultValue(false);
+            b.Property(x => x.HoldForReview).HasColumnName("hold_for_review").HasDefaultValue(false);
             // SLA timers (Group O reliability).
             b.Property(x => x.DeliveryDueAt).HasColumnName("delivery_due_at").HasColumnType("timestamptz");
             b.Property(x => x.SlaBreached).HasColumnName("sla_breached").HasDefaultValue(false);
@@ -602,6 +607,11 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // V5 deepen-canonical: real persisted nullable date column (mirrors per-line delivery_date).
             // Migration AddRequestedDeliveryDate. Null for formats with no header-level delivery date.
             b.Property(x => x.RequestedDeliveryDate).HasColumnName("requested_delivery_date");
+            // Invoice-only fields (migration InvoiceReadFields).
+            b.Property(x => x.DueDate).HasColumnName("due_date");
+            b.Property(x => x.SellerTaxId).HasColumnName("seller_tax_id");
+            b.Property(x => x.PaymentIban).HasColumnName("payment_iban");
+            b.Property(x => x.PaymentReference).HasColumnName("payment_reference");
             // Phase 1 lossless capture (nullable additive columns).
             b.Property(x => x.ContactName).HasColumnName("contact_name");
             b.Property(x => x.ContactEmail).HasColumnName("contact_email");
@@ -701,8 +711,10 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.NeedsReview).HasColumnName("needs_review");
             // P2 hardening: short "why was this flagged" string written at parse time (nullable; additive).
             b.Property(x => x.ReviewReason).HasColumnName("review_reason");
+            b.Property(x => x.ResolvedVia).HasColumnName("resolved_via");
             b.Property(x => x.AiSuggestedSupplierItemCode).HasColumnName("ai_suggested_supplier_item_code");
             b.Property(x => x.AiSuggestionConfidence).HasColumnName("ai_suggestion_confidence");
+            b.Property(x => x.AiSuggestionBasis).HasColumnName("ai_suggestion_basis");
             b.Property(x => x.AiSuggestionReason).HasColumnName("ai_suggestion_reason");
             b.Property(x => x.AiSuggestionProvenance).HasColumnName("ai_suggestion_provenance");
             // Phase 4 enrichment (nullable).
@@ -1116,6 +1128,24 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.CreatedAt)
              .HasColumnName("created_at")
              .HasColumnType("timestamptz");
+        });
+
+        // ── platform_audit_events ──────────────────────────────────────
+        // No org_id and no FK on purpose: an organisation-erase receipt must survive the erase.
+        modelBuilder.Entity<PlatformAuditEvent>(b =>
+        {
+            b.ToTable("platform_audit_events");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).HasColumnName("id");
+            b.Property(x => x.Action).HasColumnName("action").HasMaxLength(100).IsRequired();
+            b.Property(x => x.SubjectOrgId).HasColumnName("subject_org_id");
+            b.Property(x => x.Actor).HasColumnName("actor").HasMaxLength(200).IsRequired();
+            b.Property(x => x.Reason).HasColumnName("reason").HasMaxLength(500).IsRequired();
+            b.Property(x => x.Payload).HasColumnName("payload").HasColumnType("jsonb").IsRequired();
+            b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(x => x.SubjectClerkOrgId).HasColumnName("subject_clerk_org_id").HasMaxLength(200);
+            b.HasIndex(x => x.SubjectOrgId);
+            b.HasIndex(x => x.SubjectClerkOrgId);
         });
 
         // ── worker_health_alert_cooldowns ──────────────────────────────

@@ -18,7 +18,7 @@ namespace ProcuLink.Infrastructure.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "8.0.30")
+                .HasAnnotation("ProductVersion", "8.0.32")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -1744,6 +1744,10 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasDefaultValue(false)
                         .HasColumnName("email_polling_enabled");
 
+                    b.Property<Guid?>("InvoiceDestinationSupplierId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("invoice_destination_supplier_id");
+
                     b.Property<DateTime?>("LastStripeEventAt")
                         .HasColumnType("timestamptz")
                         .HasColumnName("last_stripe_event_at");
@@ -1941,6 +1945,58 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.ToTable("overage_billing_records", (string)null);
                 });
 
+            modelBuilder.Entity("ProcuLink.Core.Entities.PlatformAuditEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("action");
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("actor");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("payload");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("reason");
+
+                    b.Property<string>("SubjectClerkOrgId")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("subject_clerk_org_id");
+
+                    b.Property<Guid>("SubjectOrgId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("subject_org_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SubjectClerkOrgId");
+
+                    b.HasIndex("SubjectOrgId");
+
+                    b.ToTable("platform_audit_events", (string)null);
+                });
+
             modelBuilder.Entity("ProcuLink.Core.Entities.PoPassportEvent", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2085,12 +2141,22 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("text")
                         .HasColumnName("document_type");
 
+                    b.Property<DateOnly?>("DueDate")
+                        .HasColumnType("date")
+                        .HasColumnName("due_date");
+
                     b.Property<decimal?>("GrandTotal")
                         .HasColumnType("numeric(18,4)")
                         .HasColumnName("grand_total");
 
                     b.Property<string>("HeldFromStatus")
                         .HasColumnType("text");
+
+                    b.Property<bool>("HoldForReview")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("hold_for_review");
 
                     b.Property<string>("InboundSenderDomain")
                         .HasColumnType("text")
@@ -2118,6 +2184,14 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("org_id");
 
+                    b.Property<string>("PaymentIban")
+                        .HasColumnType("text")
+                        .HasColumnName("payment_iban");
+
+                    b.Property<string>("PaymentReference")
+                        .HasColumnType("text")
+                        .HasColumnName("payment_reference");
+
                     b.Property<string>("PaymentTerms")
                         .HasColumnType("text")
                         .HasColumnName("payment_terms");
@@ -2143,6 +2217,10 @@ namespace ProcuLink.Infrastructure.Migrations
 
                     b.Property<string>("SchemaFingerprintHash")
                         .HasColumnType("text");
+
+                    b.Property<string>("SellerTaxId")
+                        .HasColumnType("text")
+                        .HasColumnName("seller_tax_id");
 
                     b.Property<string>("ShipToCity")
                         .HasColumnType("text")
@@ -2262,6 +2340,10 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("text")
                         .HasColumnName("ai_suggested_supplier_item_code");
 
+                    b.Property<string>("AiSuggestionBasis")
+                        .HasColumnType("text")
+                        .HasColumnName("ai_suggestion_basis");
+
                     b.Property<float?>("AiSuggestionConfidence")
                         .HasColumnType("real")
                         .HasColumnName("ai_suggestion_confidence");
@@ -2338,6 +2420,10 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.Property<string>("Recipient")
                         .HasColumnType("text")
                         .HasColumnName("recipient");
+
+                    b.Property<string>("ResolvedVia")
+                        .HasColumnType("text")
+                        .HasColumnName("resolved_via");
 
                     b.Property<string>("ReviewReason")
                         .HasColumnType("text")

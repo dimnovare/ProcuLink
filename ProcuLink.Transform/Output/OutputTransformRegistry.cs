@@ -35,6 +35,7 @@ public static class OutputTransformRegistry
         new JsonTransformService(),
         new UblOrderTransformService(), // Group M Phase 1 — plain OASIS UBL 2.1 Order; no Peppol profile is declared
         new X12TransformService(),      // Group M — ANSI X12 850
+        new PdfTransformService(),      // orders; invoices reach DocumentPdfOutput via InvoiceDefaultOutput
     };
 
     /// <summary>
