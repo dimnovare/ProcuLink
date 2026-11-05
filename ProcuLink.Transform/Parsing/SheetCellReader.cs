@@ -1,5 +1,4 @@
 using System.Globalization;
-using ClosedXML.Excel;
 using CsvHelper;
 using CsvHelper.Configuration;
 
@@ -15,12 +14,12 @@ public static class SheetCellReader
         var cells = new List<SheetCell>();
         if (extension.TrimStart('.').Equals("xlsx", StringComparison.OrdinalIgnoreCase))
         {
-            using var workbook = new XLWorkbook(content);
+            using var workbook = XlsxCompressionFallback.OpenWorkbook(content);
             var sheet = workbook.Worksheets.FirstOrDefault();
             if (sheet is null) return cells;
             foreach (var cell in sheet.CellsUsed())
             {
-                var text = cell.GetFormattedString();
+                var text = XlsxTextExtractor.FormatCell(cell);
                 if (!string.IsNullOrWhiteSpace(text))
                     cells.Add(new SheetCell(cell.Address.RowNumber, cell.Address.ColumnNumber, text));
             }
@@ -48,5 +47,10 @@ public static class SheetCellReader
 
     public static string ToText(IReadOnlyList<SheetCell> cells) =>
         string.Join("\n", cells.GroupBy(c => c.Row).OrderBy(g => g.Key)
-            .Select(g => string.Join(" | ", g.OrderBy(c => c.Column).Select(c => c.Text))));
+            .Select(g =>
+            {
+                // A blank cell keeps its column: "Bolt | 10 |  | 2.50", not "Bolt | 10 | 2.50".
+                var byColumn = g.ToDictionary(c => c.Column, c => c.Text);
+                return string.Join(" | ", Enumerable.Range(1, byColumn.Keys.Max()).Select(i => byColumn.GetValueOrDefault(i, "")));
+            }));
 }
