@@ -6,6 +6,7 @@ using Xunit;
 
 namespace ProcuLink.Api.Tests.Documents;
 
+[Collection("postgres-container")]
 public class DocumentUsageCountTests(DocumentEngineTestFactory factory) : IClassFixture<DocumentEngineTestFactory>
 {
     [Fact]

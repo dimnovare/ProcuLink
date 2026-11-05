@@ -10,6 +10,7 @@ using Xunit;
 
 namespace ProcuLink.Api.Tests.Documents;
 
+[Collection("postgres-container")]
 public class DocumentsApiTests(DocumentEngineTestFactory factory) : IClassFixture<DocumentEngineTestFactory>
 {
     private static readonly Guid Org = DocumentEngineTestFactory.OrgA;

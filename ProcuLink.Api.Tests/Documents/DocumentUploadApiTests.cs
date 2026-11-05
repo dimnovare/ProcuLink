@@ -11,6 +11,7 @@ using Xunit;
 
 namespace ProcuLink.Api.Tests.Documents;
 
+[Collection("postgres-container")]
 public class DocumentUploadApiTests : IClassFixture<DocumentEngineTestFactory>
 {
     private readonly DocumentEngineTestFactory _factory;
