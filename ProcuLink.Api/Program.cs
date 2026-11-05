@@ -668,6 +668,8 @@ builder.Services.AddSingleton<IStarterTemplateService, StarterTemplateService>()
 
 // ── Analytics (PostHog) — no-op when key absent ──────────────────────────
 builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Analytics:PostHog"));
+builder.Services.Configure<ProcuLink.Api.Services.Documents.DocumentEngineOptions>(builder.Configuration.GetSection("DocumentEngine"));
+builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.DocumentEngineGate>();
 builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
 builder.Services.AddScoped<IEmailSettingsService, EmailSettingsService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Organisation.IOrganisationSettingsService, ProcuLink.Infrastructure.Services.OrganisationSettingsService>();

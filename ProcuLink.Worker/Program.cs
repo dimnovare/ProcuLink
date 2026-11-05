@@ -179,6 +179,8 @@ builder.Services.AddScoped<IIntegrationTriggerService, IntegrationTriggerService
 // in EmailPollingJob) and ParseOrderJob. No-op when Analytics:PostHog:ApiKey is absent.
 // Mirrors API/Program.cs lines 189-190.
 builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Analytics:PostHog"));
+builder.Services.Configure<ProcuLink.Api.Services.Documents.DocumentEngineOptions>(builder.Configuration.GetSection("DocumentEngine"));
+builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.DocumentEngineGate>();
 builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 // Same scoped OrderService also serves the pull-ingress stub-creation seam (explicit order id).

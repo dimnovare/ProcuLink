@@ -739,6 +739,145 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.ToTable("email_import_records", (string)null);
                 });
 
+            modelBuilder.Entity("ProcuLink.Core.Entities.Flow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("created_at");
+
+                    b.Property<bool>("FieldsConfirmed")
+                        .HasColumnType("boolean")
+                        .HasColumnName("fields_confirmed");
+
+                    b.Property<string>("FieldsJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasDefaultValue("{}")
+                        .HasColumnName("fields_json");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("name");
+
+                    b.Property<Guid>("OrgId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("org_id");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrgId");
+
+                    b.ToTable("flows", (string)null);
+                });
+
+            modelBuilder.Entity("ProcuLink.Core.Entities.FlowDocument", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("BillingUnits")
+                        .HasColumnType("integer")
+                        .HasColumnName("billing_units");
+
+                    b.Property<string>("ChecksJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasDefaultValue("[]")
+                        .HasColumnName("checks_json");
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("content_type");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("DedupKey")
+                        .HasColumnType("text")
+                        .HasColumnName("dedup_key");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("file_name");
+
+                    b.Property<Guid>("FlowId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("flow_id");
+
+                    b.Property<bool>("IsSample")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_sample");
+
+                    b.Property<Guid>("OrgId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("org_id");
+
+                    b.Property<int?>("PageCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("page_count");
+
+                    b.Property<DateTime?>("ReadAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("read_at");
+
+                    b.Property<string>("ReadJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasDefaultValue("{}")
+                        .HasColumnName("read_json");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("sha256");
+
+                    b.Property<string>("SourceFileKey")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("source_file_key");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<string>("StatusReason")
+                        .HasColumnType("text")
+                        .HasColumnName("status_reason");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FlowId");
+
+                    b.HasIndex("OrgId", "FlowId", "DedupKey");
+
+                    b.HasIndex("OrgId", "FlowId", "Sha256");
+
+                    b.ToTable("flow_documents", (string)null);
+                });
+
             modelBuilder.Entity("ProcuLink.Core.Entities.IdempotencyKey", b =>
                 {
                     b.Property<Guid>("OrgId")
@@ -3822,6 +3961,17 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasForeignKey("OrgId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("ProcuLink.Core.Entities.FlowDocument", b =>
+                {
+                    b.HasOne("ProcuLink.Core.Entities.Flow", "Flow")
+                        .WithMany()
+                        .HasForeignKey("FlowId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Flow");
                 });
 
             modelBuilder.Entity("ProcuLink.Core.Entities.IdempotencyKey", b =>
