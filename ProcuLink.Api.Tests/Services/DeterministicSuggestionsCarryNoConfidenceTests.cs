@@ -143,7 +143,7 @@ public class DeterministicSuggestionsCarryNoConfidenceTests
     // ── Bulk accept: an unscored suggestion cannot clear a threshold ───────────
 
     [Fact]
-    public async Task UnscoredDeterministicSuggestion_IsNotSweptUpByBulkAccept()
+    public async Task ExactCatalogSuggestion_IsBulkAccepted_WithoutBeingGivenAScore()
     {
         var (db, orgId, supplierId) = await SeedSupplierAsync();
         await AddCatalogAsync(db, orgId, supplierId,
@@ -152,19 +152,18 @@ public class DeterministicSuggestionsCarryNoConfidenceTests
         var svc = Build(db, UnresolvedMappingsMock().Object, SilentAiMock().Object);
         var line = await IngestSingleLineAsync(svc, db, orgId, supplierId, PunchoutFixture);
         line.AiSuggestionConfidence.Should().BeNull("precondition");
+        line.AiSuggestionBasis.Should().Be(AiMappingSuggestionBasis.Catalog, "precondition");
 
-        // "Accept everything the model was at least 90% sure about." Nothing here was sure of
-        // anything, because nothing measured it. Before the fix this line arrived stamped 0.95 and
-        // was swept up by any threshold at or below that — auto-applied on a number no model
-        // produced. It now stays in review for a deliberate one-click accept.
+        // An exact hit in the supplier's own catalog is a fact, so it passes the threshold without
+        // a score. (A document echo does not: see the bulk-accept test beside AcceptAiSuggestionsAsync.)
         var accepted = await svc.AcceptAiSuggestionsAsync(orgId, line.OrderId, 0.90, CancellationToken.None);
 
         accepted.IsSuccess.Should().BeTrue();
-        accepted.Value.Should().Be(0, "a suggestion with no confidence cannot clear a confidence threshold");
+        accepted.Value.Should().Be(1);
 
         var after = await db.PurchaseOrderLines.AsNoTracking().SingleAsync(l => l.Id == line.Id);
-        after.SupplierItemCode.Should().BeNull();
-        after.NeedsReview.Should().BeTrue();
+        after.SupplierItemCode.Should().Be(SupplierCodeForLitwareScanner);
+        after.NeedsReview.Should().BeFalse();
         after.Confidence.Should().BeNull(
             "nothing may be promoted into the line's confidence column from an unscored suggestion");
     }

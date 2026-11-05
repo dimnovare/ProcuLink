@@ -714,6 +714,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.ResolvedVia).HasColumnName("resolved_via");
             b.Property(x => x.AiSuggestedSupplierItemCode).HasColumnName("ai_suggested_supplier_item_code");
             b.Property(x => x.AiSuggestionConfidence).HasColumnName("ai_suggestion_confidence");
+            b.Property(x => x.AiSuggestionBasis).HasColumnName("ai_suggestion_basis");
             b.Property(x => x.AiSuggestionReason).HasColumnName("ai_suggestion_reason");
             b.Property(x => x.AiSuggestionProvenance).HasColumnName("ai_suggestion_provenance");
             // Phase 4 enrichment (nullable).

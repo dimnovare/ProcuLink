@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 
@@ -162,6 +163,7 @@ internal sealed class OrderResolutionService
             line.Confidence      = modelConfidence;
             line.AiSuggestedSupplierItemCode = null;
             line.AiSuggestionConfidence = null;
+            line.AiSuggestionBasis = null;
             line.AiSuggestionReason = null;
             line.AiSuggestionProvenance = null;
 
@@ -481,15 +483,12 @@ internal sealed class OrderResolutionService
         {
             if (!line.NeedsReview) continue;
             if (string.IsNullOrWhiteSpace(line.AiSuggestedSupplierItemCode)) continue;
-            // A suggestion with no confidence can never clear a confidence threshold, and the
-            // `?? 0.0` says so. This now excludes the two DETERMINISTIC producers (an exact
-            // supplier-catalog hit on a manufacturer part number, and an echo of a part number the
-            // document states) — they used to arrive stamped 0.95 and were swept up by any
-            // threshold at or below that. Excluding them is the honest reading of "accept
-            // everything the model was at least this sure about": nothing was sure of anything
-            // here, because nothing measured it. Such a line stays in review for a one-click
-            // accept, where the operator sees the catalog evidence and decides.
-            if ((line.AiSuggestionConfidence ?? 0.0) < minConfidence) continue;
+            // A suggestion with no confidence clears the threshold only when it is an EXACT hit in the
+            // supplier's own catalog: that is a fact, not a score, so it passes. A document echo
+            // (source_document) is not — the supplier may sell that part number under a different
+            // code — and stays in review for a one-click accept. Everything else keeps null-as-0.
+            if (line.AiSuggestionBasis != AiMappingSuggestionBasis.Catalog
+                && (line.AiSuggestionConfidence ?? 0.0) < minConfidence) continue;
 
             var chosen = line.AiSuggestedSupplierItemCode;
 
@@ -512,6 +511,7 @@ internal sealed class OrderResolutionService
             line.ReviewReason               = null; // suggestion accepted — the "why flagged" no longer applies
             line.AiSuggestedSupplierItemCode = null;
             line.AiSuggestionConfidence     = null;
+            line.AiSuggestionBasis          = null;
             line.AiSuggestionReason         = null;
             line.AiSuggestionProvenance     = null;
 

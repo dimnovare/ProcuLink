@@ -212,6 +212,30 @@ public class OrderServiceAcceptAiSuggestionsTests
         Assert.Equal("ai", saved.Single(l => l.LineNumber == 2).ResolvedVia);
     }
 
+    [Fact]
+    public async Task AcceptAiSuggestionsAsync_ExactCatalogMatchPasses_DocumentEchoAndWeakModelDoNot()
+    {
+        PurchaseOrderLineEntity L(int n, float? conf, string basis) => new()
+        {
+            Id = Guid.NewGuid(), LineNumber = n, BuyerItemCode = $"BC-{n}", NeedsReview = true,
+            AiSuggestedSupplierItemCode = $"SUP-{n}", AiSuggestionConfidence = conf, AiSuggestionBasis = basis,
+        };
+        var (db, orgId, orderId) = await SeedOrderWithLinesAsync(new[]
+        {
+            L(1, null, AiMappingSuggestionBasis.Catalog),
+            L(2, null, AiMappingSuggestionBasis.SourceDocument),
+            L(3, 0.84f, AiMappingSuggestionBasis.Model),
+            L(4, 0.85f, AiMappingSuggestionBasis.Model),
+        });
+
+        var result = await BuildService(db).AcceptAiSuggestionsAsync(orgId, orderId, 0.85, CancellationToken.None);
+
+        Assert.Equal(2, result.Value);
+        var saved = await db.PurchaseOrderLines.AsNoTracking().Where(l => l.OrderId == orderId).ToListAsync();
+        Assert.Equal(new[] { 1, 4 }, saved.Where(l => !l.NeedsReview).Select(l => l.LineNumber).OrderBy(n => n));
+        Assert.All(saved.Where(l => !l.NeedsReview), l => Assert.Null(l.AiSuggestionBasis));
+    }
+
     // ── Test (b): lines below threshold are left untouched and status stays
     //             pending_review ──────────────────────────────────────────────
 

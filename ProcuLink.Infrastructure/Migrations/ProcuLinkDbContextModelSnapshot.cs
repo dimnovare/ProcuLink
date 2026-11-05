@@ -2340,6 +2340,10 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("text")
                         .HasColumnName("ai_suggested_supplier_item_code");
 
+                    b.Property<string>("AiSuggestionBasis")
+                        .HasColumnType("text")
+                        .HasColumnName("ai_suggestion_basis");
+
                     b.Property<float?>("AiSuggestionConfidence")
                         .HasColumnType("real")
                         .HasColumnName("ai_suggestion_confidence");

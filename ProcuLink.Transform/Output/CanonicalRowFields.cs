@@ -245,6 +245,8 @@ public static class CanonicalRowFields
         {
             ["Id"] =
                 "Infrastructure: internal surrogate key.",
+            ["AiSuggestionBasis"] =
+                "Internal: which kind of evidence backed an unaccepted suggestion. Never part of supplier output.",
             ["ResolvedVia"] =
                 "Internal provenance of the supplier code (saved mapping, person, accepted "
                 + "suggestion). Describes how WE found the code, not what the line says.",

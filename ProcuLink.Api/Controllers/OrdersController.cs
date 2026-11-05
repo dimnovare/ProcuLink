@@ -2945,7 +2945,8 @@ public sealed class OrdersController : ControllerBase
                 // beside the (meaningless) buyer item code so the operator can check a match.
                 ManufacturerPartNumber: l.ManufacturerPartNumber,
                 ManufacturerName:       l.ManufacturerName,
-                ResolvedVia:            l.ResolvedVia))
+                ResolvedVia:            l.ResolvedVia,
+                AiSuggestionBasis:      l.AiSuggestionBasis))
             .ToList(),
         Artifacts: e.OutboundArtifacts
             .OrderByDescending(a => a.CreatedAt)

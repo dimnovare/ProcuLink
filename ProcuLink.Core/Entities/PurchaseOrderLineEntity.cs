@@ -51,6 +51,8 @@ public class PurchaseOrderLineEntity
     public float? AiSuggestionConfidence { get; set; }
     public string? AiSuggestionReason { get; set; }
     public string? AiSuggestionProvenance { get; set; }
+    /// <summary>Kind of evidence behind the suggestion (<c>AiMappingSuggestionBasis</c>: catalog | source_document | model). Cleared with the other Ai* fields.</summary>
+    public string? AiSuggestionBasis { get; set; }
 
     // ── Phase 4 enrichment (nullable; populated by the LLM PDF extractor) ──
     /// <summary>Printed extended line total (quantity × unit price), when stated.</summary>
