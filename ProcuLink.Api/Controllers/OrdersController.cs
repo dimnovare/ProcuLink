@@ -199,6 +199,26 @@ public sealed class OrdersController : ControllerBase
         });
     }
 
+    /// <summary>
+    /// A requested send for a supplier set to "I'll send it myself" is refused up front: the job
+    /// would no-op invisibly behind a 202. Returns null when the supplier has any other channel.
+    /// </summary>
+    private async Task<IActionResult?> RefusedIfManualSupplierAsync(Guid orgId, Guid orderId, CancellationToken ct)
+    {
+        var manual = await (
+            from o in _db.PurchaseOrders.AsNoTracking()
+            join c in _db.SupplierDeliveryConfigs.AsNoTracking()
+                on new { o.OrgId, o.SupplierId } equals new { c.OrgId, SupplierId = (Guid?)c.SupplierId }
+            where o.Id == orderId && o.OrgId == orgId
+                && c.Protocol == ProcuLink.Core.Constants.DeliveryProtocolConstants.Manual
+            select c.Id
+        ).AnyAsync(ct);
+
+        return manual
+            ? Conflict(new { error = "This supplier is set to I'll send it myself. Download the file instead." })
+            : null;
+    }
+
     // ── WP-23 — the resolve status guard ─────────────────────────────────────
 
     /// <summary>
@@ -292,7 +312,8 @@ public sealed class OrdersController : ControllerBase
         IFormFile file,
         [FromForm] Guid supplierId,
         [FromServices] IStubOrderCreator stubOrders,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        [FromForm] bool holdForReview = false)
     {
         if (file is null || file.Length == 0)
             return BadRequest(new { error = "File is required." });
@@ -399,6 +420,14 @@ public sealed class OrdersController : ControllerBase
             return BadRequest(new { error = result.Error });
 
         var stub = result.Value!;
+
+        // Held BEFORE the parse job is enqueued, so nothing can auto-deliver it in between. Set here
+        // rather than threaded through both creators: it is one flag on the tracked entity.
+        if (holdForReview && !stub.HoldForReview)
+        {
+            stub.HoldForReview = true;
+            await _db.SaveChangesAsync(ct);
+        }
 
         // Enqueue async parse — returns before parsing completes
         ParseOrderJob.Enqueue(_jobs, stub.Id, orgId);
@@ -753,7 +782,8 @@ public sealed class OrdersController : ControllerBase
             || !string.IsNullOrWhiteSpace(request.SellerTaxId)
             || !string.IsNullOrWhiteSpace(request.PaymentIban)
             || !string.IsNullOrWhiteSpace(request.PaymentReference)
-            || request.SubTotal.HasValue || request.TaxTotal.HasValue || request.GrandTotal.HasValue;
+            || request.SubTotal.HasValue || request.TaxTotal.HasValue || request.GrandTotal.HasValue
+            || request.HoldForReview.HasValue;
 
         if ((request.LineResolutions is null || request.LineResolutions.Count == 0) && !hasHeaderEdit)
             return BadRequest(new { error = "At least one line resolution or header correction is required." });
@@ -828,7 +858,8 @@ public sealed class OrdersController : ControllerBase
         var header = new Core.Services.ResolveHeaderFields(
             orderDate, buyerName, currency, poNumber, supplierName,
             dueDate, Trimmed(request.SellerTaxId), Trimmed(request.PaymentIban), Trimmed(request.PaymentReference),
-            request.SubTotal, request.TaxTotal, request.GrandTotal, _tenant.ClerkUserId);
+            request.SubTotal, request.TaxTotal, request.GrandTotal, _tenant.ClerkUserId,
+            request.HoldForReview);
 
         // An invoice is locked once it is on its way (a failed one keeps the terminal 400 below), and
         // who gets paid, under which number, is an admin's change only.
@@ -2270,6 +2301,9 @@ public sealed class OrdersController : ControllerBase
         // person deciding, now, to put this document in front of the supplier. The artifact may have
         // been produced before the rule that now refuses it existed, so the transform-time answer is
         // not this decision's answer. Checked BEFORE the enqueue, so a refusal sends nothing.
+        if (await RefusedIfManualSupplierAsync(orgId, id, ct) is { } manualRefusal)
+            return manualRefusal;
+
         if (await RefusedBySupplierRulesAsync(orgId, id, "redeliver", ct) is { } refusal)
             return refusal;
 
@@ -2498,6 +2532,9 @@ public sealed class OrdersController : ControllerBase
         // the same answer. (The AUTOMATIC backoff queue this endpoint seeds is deliberately NOT
         // gated: it continues a dispatch that already started and may already have reached the
         // supplier — see IAcceptanceGate.)
+        if (await RefusedIfManualSupplierAsync(orgId, id, ct) is { } manualRefusal)
+            return manualRefusal;
+
         if (await RefusedBySupplierRulesAsync(orgId, id, "retry-delivery", ct) is { } refusal)
             return refusal;
 
@@ -2907,7 +2944,9 @@ public sealed class OrdersController : ControllerBase
                 // The identifiers a punchout order actually carries — the review UI shows these
                 // beside the (meaningless) buyer item code so the operator can check a match.
                 ManufacturerPartNumber: l.ManufacturerPartNumber,
-                ManufacturerName:       l.ManufacturerName))
+                ManufacturerName:       l.ManufacturerName,
+                ResolvedVia:            l.ResolvedVia,
+                AiSuggestionBasis:      l.AiSuggestionBasis))
             .ToList(),
         Artifacts: e.OutboundArtifacts
             .OrderByDescending(a => a.CreatedAt)
@@ -2953,7 +2992,8 @@ public sealed class OrdersController : ControllerBase
         DueDate:              e.DueDate?.ToString("yyyy-MM-dd"),
         SellerTaxId:          e.SellerTaxId,
         PaymentIban:          e.PaymentIban,
-        PaymentReference:     e.PaymentReference
+        PaymentReference:     e.PaymentReference,
+        HoldForReview:        e.HoldForReview
     );
 
     // ── Supplier auto-detect: read + decision recording ───────────────────────

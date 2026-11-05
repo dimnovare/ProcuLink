@@ -111,7 +111,7 @@ public sealed class StrandedReadyOrderDetectionService : IStrandedReadyOrderDete
         // the remainder is picked up by the next run.
         var candidates = await _db.PurchaseOrders
             .Where(o => o.Status == OrderStatusConstants.ReadyToDeliver && o.UpdatedAt < cutoff)
-            .Where(o => o.SupplierId != null)
+            .Where(o => o.SupplierId != null && !o.HoldForReview)
             .Where(o => _db.SupplierDeliveryConfigs.Any(c =>
                 c.OrgId == o.OrgId && c.SupplierId == o.SupplierId && c.AutoDeliver))
             // WP-35: the cutoff is the newest DELIVERABLE artifact. A re-processed preview is newer

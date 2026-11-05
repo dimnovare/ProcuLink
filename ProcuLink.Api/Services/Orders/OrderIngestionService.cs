@@ -2253,6 +2253,8 @@ internal sealed class OrderIngestionService
                 LineNumber       = line.LineNumber,
                 BuyerItemCode    = line.BuyerItemCode,
                 SupplierItemCode = supplierCode,
+                // Only a saved-mapping hit is resolved at ingest; catalog / document / AI paths set suggestions only.
+                ResolvedVia      = string.IsNullOrWhiteSpace(supplierCode) ? null : LineResolvedViaConstants.SavedMapping,
                 Description      = line.Description,
                 Quantity         = line.Quantity,
                 Unit             = line.Unit,
@@ -2268,6 +2270,7 @@ internal sealed class OrderIngestionService
                 ReviewReason     = ComposeReviewReason(resolved, parserFlagged, line),
                 AiSuggestedSupplierItemCode = suggestion?.SupplierItemCode,
                 AiSuggestionConfidence = suggestion?.Confidence,
+                AiSuggestionBasis = suggestion?.Basis,
                 AiSuggestionReason = suggestion?.Reason,
                 AiSuggestionProvenance = suggestion?.Provenance,
                 // Phase 4 enrichment (carried from the parsed line; null for parsers that don't emit it).

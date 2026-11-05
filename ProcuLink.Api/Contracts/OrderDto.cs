@@ -99,7 +99,9 @@ public record OrderDto(
     string? DueDate = null,
     string? SellerTaxId = null,
     string? PaymentIban = null,
-    string? PaymentReference = null
+    string? PaymentReference = null,
+    /// <summary>A person held this order so it is never auto-delivered; an explicit send still works.</summary>
+    bool HoldForReview = false
 );
 
 /// <summary>
@@ -160,7 +162,11 @@ public record OrderLineDto(
     string?  ManufacturerPartNumber = null,
     /// <summary>The manufacturer / brand the source names (e.g. "Litware"). Advisory context
     /// so the reviewer can check a manufacturer-part match at a glance. Null when not stated.</summary>
-    string?  ManufacturerName = null
+    string?  ManufacturerName = null,
+    /// <summary>Where <c>SupplierItemCode</c> came from: "saved_mapping" | "manual" | "ai"; null when unresolved.</summary>
+    string?  ResolvedVia = null,
+    /// <summary>Kind of evidence behind <c>AiSuggestedSupplierItemCode</c>: "catalog" | "source_document" | "model"; null when none.</summary>
+    string?  AiSuggestionBasis = null
 );
 
 /// <summary>

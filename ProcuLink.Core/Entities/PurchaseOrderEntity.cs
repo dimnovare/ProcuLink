@@ -66,6 +66,12 @@ public class PurchaseOrderEntity
     public bool IsSample { get; set; }
 
     /// <summary>
+    /// A person flagged this one order so it is never AUTO-delivered, even when its supplier uses
+    /// Automatic delivery. An explicit person-initiated send still works; the status is untouched.
+    /// </summary>
+    public bool HoldForReview { get; set; }
+
+    /// <summary>
     /// How many times the stuck-order sweep has re-enqueued this order after it stalled
     /// in a transient pipeline status ('parsing' / 'transforming'). A transient Worker
     /// restart mid-job leaves an order parked; the sweep requeues it up to a bounded cap

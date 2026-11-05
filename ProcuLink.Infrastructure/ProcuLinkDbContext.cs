@@ -579,6 +579,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.CreatedAt).HasColumnName("created_at");
             b.Property(x => x.UpdatedAt).HasColumnName("updated_at");
             b.Property(x => x.IsSample).HasColumnName("is_sample").HasDefaultValue(false);
+            b.Property(x => x.HoldForReview).HasColumnName("hold_for_review").HasDefaultValue(false);
             // SLA timers (Group O reliability).
             b.Property(x => x.DeliveryDueAt).HasColumnName("delivery_due_at").HasColumnType("timestamptz");
             b.Property(x => x.SlaBreached).HasColumnName("sla_breached").HasDefaultValue(false);
@@ -710,8 +711,10 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.NeedsReview).HasColumnName("needs_review");
             // P2 hardening: short "why was this flagged" string written at parse time (nullable; additive).
             b.Property(x => x.ReviewReason).HasColumnName("review_reason");
+            b.Property(x => x.ResolvedVia).HasColumnName("resolved_via");
             b.Property(x => x.AiSuggestedSupplierItemCode).HasColumnName("ai_suggested_supplier_item_code");
             b.Property(x => x.AiSuggestionConfidence).HasColumnName("ai_suggestion_confidence");
+            b.Property(x => x.AiSuggestionBasis).HasColumnName("ai_suggestion_basis");
             b.Property(x => x.AiSuggestionReason).HasColumnName("ai_suggestion_reason");
             b.Property(x => x.AiSuggestionProvenance).HasColumnName("ai_suggestion_provenance");
             // Phase 4 enrichment (nullable).

@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Security;
@@ -295,7 +296,7 @@ public class DeliveryConfigServiceTests
             default);
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("Delivery protocol must be http, sftp, ftp, ftps, email, erp_erply, or erp_directo.*");
+            .WithMessage("Delivery protocol must be http, sftp, ftp, ftps, email, erp_erply, erp_directo, or manual.*");
     }
 
     [Fact]
@@ -509,6 +510,34 @@ public class DeliveryConfigServiceTests
 
         var fetched = await service.GetAsync(orgId, supplierId, default);
         fetched!.CxmlCredentials.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ManualToHttp_HoldsOnlyThatSuppliersReadyToDeliverOrders()
+    {
+        var options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var db = new ProcuLinkDbContext(options);
+        var service = new DeliveryConfigService(db, CreateEncryption());
+        var orgId = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
+        var otherSupplierId = Guid.NewGuid();
+        PurchaseOrderEntity Order(Guid supplier, string status) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplier, Status = status,
+        };
+        var handSent = Order(supplierId, OrderStatusConstants.ReadyToDeliver);
+        var delivered = Order(supplierId, OrderStatusConstants.Delivered);
+        var otherSupplier = Order(otherSupplierId, OrderStatusConstants.ReadyToDeliver);
+        db.PurchaseOrders.AddRange(handSent, delivered, otherSupplier);
+        await service.UpsertAsync(orgId, supplierId, new UpsertDeliveryConfigRequest("manual", false, "{}", null), default);
+
+        await service.UpsertAsync(orgId, supplierId,
+            new UpsertDeliveryConfigRequest("http", true, "{\"url\":\"https://a.example\"}", null), default);
+
+        handSent.HoldForReview.Should().BeTrue();
+        delivered.HoldForReview.Should().BeFalse();
+        otherSupplier.HoldForReview.Should().BeFalse();
     }
 
     // internal, not private: DeliveryConfigTransportSecurityTests needs the same trimmed model,

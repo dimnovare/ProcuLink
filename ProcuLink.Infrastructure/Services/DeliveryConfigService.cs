@@ -88,8 +88,20 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
             _db.SupplierDeliveryConfigs.Add(existing);
         }
 
+        // Leaving "I'll send it myself": those orders were already sent by hand and still sit in
+        // ready_to_deliver. Hold them so the stranded-order sweep cannot send them a second time.
+        if (existing.Protocol == DeliveryProtocolConstants.Manual && protocol != DeliveryProtocolConstants.Manual)
+        {
+            var handSent = await _db.PurchaseOrders
+                .Where(o => o.OrgId == orgId && o.SupplierId == supplierId
+                    && o.Status == OrderStatusConstants.ReadyToDeliver)
+                .ToListAsync(ct);
+            foreach (var order in handSent) order.HoldForReview = true;
+        }
+
         existing.Protocol = protocol;
-        existing.AutoDeliver = request.AutoDeliver;
+        // A manual supplier is never sent to, so auto-deliver can never be on.
+        existing.AutoDeliver = request.AutoDeliver && protocol != DeliveryProtocolConstants.Manual;
         // Null = keep. Same argument as the host-key comment directly below, and as
         // CredentialsJson further down: a client that has never heard of a property must not be
         // able to clear it by omission. AutoTransform arrived as a non-nullable bool defaulting to
