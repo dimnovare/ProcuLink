@@ -60,6 +60,25 @@ public class OpenAiDocumentReaderTests
     }
 
     [Fact]
+    public void Map_normalises_and_dedupes_keys()
+    {
+        var dto = new OpenAiDocumentReader.ReadDto(null,
+            [new("Total", "Total", "1", "money", null, 1), new("total", "Total again", "2", "money", null, 1), new("2nd-Ref", "Ref", "x", "text", null, 1)],
+            [new("line-items", "Lines", [new("Qty", "Qty", "number", null), new("qty", "Qty again", "number", null)],
+                [new([new("Qty", "5", 1)])]),
+             new("line items", "More", [], [])]);
+
+        var result = OpenAiDocumentReader.Map(dto, null);
+
+        result.Fields.Select(f => f.Key).Should().Equal("total", "total_2", "f_2nd_ref");
+        result.Tables.Select(t => t.Key).Should().Equal("line_items", "line_items_2");
+        result.Tables[0].Columns.Select(c => c.Key).Should().Equal("qty", "qty_2");
+        result.Tables[0].Rows[0].Cells.Keys.Should().Equal("qty");
+        result.Fields.Select(f => f.Key).Concat(result.Tables.Select(t => t.Key))
+            .Should().OnlyContain(k => FieldKey.Pattern.IsMatch(k));
+    }
+
+    [Fact]
     public async Task Returns_usage_cap_without_calling_model()
     {
         var tracker = new Mock<IAiUsageTracker>();
