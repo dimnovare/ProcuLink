@@ -1744,6 +1744,10 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasDefaultValue(false)
                         .HasColumnName("email_polling_enabled");
 
+                    b.Property<Guid?>("InvoiceDestinationSupplierId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("invoice_destination_supplier_id");
+
                     b.Property<DateTime?>("LastStripeEventAt")
                         .HasColumnType("timestamptz")
                         .HasColumnName("last_stripe_event_at");
@@ -2137,6 +2141,10 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("text")
                         .HasColumnName("document_type");
 
+                    b.Property<DateOnly?>("DueDate")
+                        .HasColumnType("date")
+                        .HasColumnName("due_date");
+
                     b.Property<decimal?>("GrandTotal")
                         .HasColumnType("numeric(18,4)")
                         .HasColumnName("grand_total");
@@ -2170,6 +2178,14 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("org_id");
 
+                    b.Property<string>("PaymentIban")
+                        .HasColumnType("text")
+                        .HasColumnName("payment_iban");
+
+                    b.Property<string>("PaymentReference")
+                        .HasColumnType("text")
+                        .HasColumnName("payment_reference");
+
                     b.Property<string>("PaymentTerms")
                         .HasColumnType("text")
                         .HasColumnName("payment_terms");
@@ -2195,6 +2211,10 @@ namespace ProcuLink.Infrastructure.Migrations
 
                     b.Property<string>("SchemaFingerprintHash")
                         .HasColumnType("text");
+
+                    b.Property<string>("SellerTaxId")
+                        .HasColumnType("text")
+                        .HasColumnName("seller_tax_id");
 
                     b.Property<string>("ShipToCity")
                         .HasColumnType("text")

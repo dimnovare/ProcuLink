@@ -4,13 +4,26 @@ using ProcuLink.Core.Entities;
 namespace ProcuLink.Core.Services.Organisation;
 
 /// <summary>
-/// Request to change the org's order-direction presentation flag. The enum is
-/// exchanged as its string name ("Outbound"/"Inbound", case-insensitive on input)
-/// so the frontend works with readable values rather than magic integers.
+/// Partial update of the org settings: a field left out of the body is left unchanged. The enum is
+/// exchanged as its string name ("Outbound"/"Inbound", case-insensitive on input) so the frontend
+/// works with readable values rather than magic integers.
+/// <para>The invoice destination can be CLEARED, so JSON <c>null</c> and "absent" mean different
+/// things; <see cref="InvoiceDestinationSet"/> records that the field was sent at all.</para>
 /// </summary>
-public sealed record UpdateOrderDirectionRequest(
+public sealed record UpdateOrgSettingsRequest(
     [property: JsonConverter(typeof(JsonStringEnumConverter<OrderDirection>))]
-    OrderDirection Direction);
+    OrderDirection? Direction = null)
+{
+    private readonly Guid? _invoiceDestinationSupplierId;
+
+    public Guid? InvoiceDestinationSupplierId
+    {
+        get => _invoiceDestinationSupplierId;
+        init { _invoiceDestinationSupplierId = value; InvoiceDestinationSet = true; }
+    }
+
+    [JsonIgnore] public bool InvoiceDestinationSet { get; private init; }
+}
 
 /// <summary>
 /// Org-level settings response. New free org-wide flags accrete here as additional
@@ -23,4 +36,5 @@ public sealed record UpdateOrderDirectionRequest(
 public sealed record OrgSettingsResponse(
     [property: JsonConverter(typeof(JsonStringEnumConverter<OrderDirection>))]
     OrderDirection Direction,
-    string Slug);
+    string Slug,
+    Guid? InvoiceDestinationSupplierId);

@@ -173,4 +173,35 @@ public sealed class TransformFailedRecoveryPostgresTests(PostgresContainerFixtur
         Assert.Equal(OrderStatusConstants.Delivered, status); // untouched
         jobs.Verify(j => j.Create(It.IsAny<Hangfire.Common.Job>(), It.IsAny<Hangfire.States.IState>()), Times.Never);
     }
+
+    [DockerRequiredFact]
+    public async Task Transform_InvoiceWithOrderOnlyFormat_Returns422()
+    {
+        var (orgId, orderId, order) = await SeedOrderAsync(OrderStatusConstants.Ready);
+        order.DocumentType = "invoice";
+
+        await using var db = NewContext();
+        var (ctrl, jobs) = BuildController(db, orgId, order);
+
+        var response = await ctrl.Transform(orderId, new TransformRequest("cxml"), CancellationToken.None);
+
+        var body = Assert.IsType<UnprocessableEntityObjectResult>(response);
+        Assert.Contains("Invoices go out as CSV, JSON or PDF", body.Value!.ToString());
+        jobs.Verify(j => j.Create(It.IsAny<Hangfire.Common.Job>(), It.IsAny<Hangfire.States.IState>()), Times.Never);
+    }
+
+    [DockerRequiredFact]
+    public async Task Transform_InvoiceWithNoFormatAnywhere_DefaultsToCsv()
+    {
+        var (orgId, orderId, order) = await SeedOrderAsync(OrderStatusConstants.Ready);
+        order.DocumentType = "invoice";
+
+        await using var db = NewContext();
+        var (ctrl, jobs) = BuildController(db, orgId, order);
+
+        var response = await ctrl.Transform(orderId, new TransformRequest(null), CancellationToken.None);
+
+        Assert.IsType<AcceptedResult>(response);
+        jobs.Verify(j => j.Create(It.Is<Hangfire.Common.Job>(x => x.Args.Contains("csv")), It.IsAny<Hangfire.States.IState>()), Times.Once);
+    }
 }

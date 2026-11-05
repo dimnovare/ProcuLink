@@ -409,6 +409,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .HasMaxLength(16)
              .HasDefaultValue(OrderDirection.Outbound)
              .IsRequired();
+            b.Property(x => x.InvoiceDestinationSupplierId)
+             .HasColumnName("invoice_destination_supplier_id");
         });
 
         // ── users ──────────────────────────────────────────────────────
@@ -604,6 +606,11 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // V5 deepen-canonical: real persisted nullable date column (mirrors per-line delivery_date).
             // Migration AddRequestedDeliveryDate. Null for formats with no header-level delivery date.
             b.Property(x => x.RequestedDeliveryDate).HasColumnName("requested_delivery_date");
+            // Invoice-only fields (migration InvoiceReadFields).
+            b.Property(x => x.DueDate).HasColumnName("due_date");
+            b.Property(x => x.SellerTaxId).HasColumnName("seller_tax_id");
+            b.Property(x => x.PaymentIban).HasColumnName("payment_iban");
+            b.Property(x => x.PaymentReference).HasColumnName("payment_reference");
             // Phase 1 lossless capture (nullable additive columns).
             b.Property(x => x.ContactName).HasColumnName("contact_name");
             b.Property(x => x.ContactEmail).HasColumnName("contact_email");

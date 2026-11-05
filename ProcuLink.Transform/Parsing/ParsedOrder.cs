@@ -50,5 +50,10 @@ public record ParsedOrder(
     bool NeedsReview = false,
     // Short human-readable "why was this flagged" for the review UI; set alongside
     // NeedsReview = true, null otherwise.
-    string? ReviewReason = null
+    string? ReviewReason = null,
+    // Invoice-only (empty on orders): payment due date, seller VAT id, IBAN, payment reference.
+    DateOnly? DueDate = null,
+    string? SellerTaxId = null,
+    string? Iban = null,
+    string? PaymentReference = null
 );

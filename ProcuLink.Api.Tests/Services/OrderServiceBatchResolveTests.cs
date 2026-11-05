@@ -256,10 +256,10 @@ public class OrderServiceBatchResolveTests
     }
 
     // Phase 4: the email/REST ingress path (CreateStubFromParsedOrderAsync) must carry
-    // enrichment through AND apply the invoice-classification safety force — consistent
-    // with the PDF path. (Persists via the change tracker → InMemory-OK.)
+    // enrichment through AND send an invoice down the invoice path — consistent with the PDF
+    // path. (Persists via the change tracker → InMemory-OK.)
     [Fact]
-    public async Task CreateStubFromParsedOrderAsync_CarriesEnrichment_AndFlagsInvoiceForReview()
+    public async Task CreateStubFromParsedOrderAsync_CarriesEnrichment_AndParksInvoiceWithNoDestination()
     {
         var (db, orgId, supplierId) = await SeedSupplierAsync();
 
@@ -292,14 +292,14 @@ public class OrderServiceBatchResolveTests
 
         var order = await db.PurchaseOrders.AsNoTracking().FirstAsync(o => o.Id == orderId);
         Assert.Equal("invoice", order.DocumentType);        // normalized from "Invoice"
-        Assert.Equal("pending_review", order.Status);       // invoice forces review even though the line resolved
+        Assert.Equal("unrouted", order.Status);             // invoice ignores the channel's supplier; no destination set
         Assert.Equal("Supplier Co", order.SupplierName);
         Assert.Equal(48m, order.GrandTotal);
         Assert.Equal(8m, order.TaxTotal);
         Assert.Equal("Net 30", order.PaymentTerms);
 
         var line = await db.PurchaseOrderLines.AsNoTracking().FirstAsync(l => l.OrderId == orderId);
-        Assert.Equal("SUP-1", line.SupplierItemCode);        // resolved deterministically
+        Assert.Equal("ABC", line.SupplierItemCode);          // an invoice's codes go through as printed
         Assert.Equal(40m, line.LineAmount);
         Assert.Equal(0.2m, line.TaxRate);
         Assert.Equal(new DateOnly(2026, 6, 30), line.DeliveryDate);

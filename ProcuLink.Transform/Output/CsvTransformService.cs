@@ -123,7 +123,7 @@ public sealed class CsvTransformService : ITransformService
     }
 
     /// <summary>RFC 4180: wrap in double-quotes if the value contains comma, quote, or newline.</summary>
-    private static string Escape(string value)
+    internal static string Escape(string value)
     {
         if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
             return $"\"{value.Replace("\"", "\"\"")}\"";

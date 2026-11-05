@@ -19,7 +19,8 @@ public class OrderException
     /// <summary>
     /// Every code this build produces, all from <c>OrderExceptionService</c>:
     /// unrouted_order | unresolved_mapping | duplicate_po_number | parse_failed | transform_failed |
-    /// delivery_failed | delivery_unconfirmed | supplier_rejected | dead_letter.
+    /// delivery_failed | delivery_unconfirmed | supplier_rejected | dead_letter — plus invoice_check,
+    /// written by the invoice path in <c>OrderIngestionService</c>.
     /// <para>This list was stale before 2026-08-15: it advertised <c>validation_error</c>, which
     /// nothing has ever emitted, and omitted <c>unrouted_order</c>, <c>parse_failed</c> and
     /// <c>delivery_unconfirmed</c>, which are emitted. There is no enum and no DB CHECK constraint

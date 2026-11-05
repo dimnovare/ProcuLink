@@ -94,7 +94,12 @@ public record OrderDto(
     /// not remove this field without giving the frontend another server-side signal.
     /// </para>
     /// </summary>
-    bool IsSample = false
+    bool IsSample = false,
+    /// <summary>Invoice fields as extracted or corrected; null when not captured (and for orders).</summary>
+    string? DueDate = null,
+    string? SellerTaxId = null,
+    string? PaymentIban = null,
+    string? PaymentReference = null
 );
 
 /// <summary>

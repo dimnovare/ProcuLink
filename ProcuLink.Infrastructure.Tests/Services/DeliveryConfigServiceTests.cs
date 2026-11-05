@@ -331,7 +331,7 @@ public class DeliveryConfigServiceTests
             default);
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("Output format must be one of: xml, csv, cxml, json, ubl, x12.*");
+            .WithMessage("Output format must be one of: xml, csv, cxml, json, ubl, x12, pdf.*");
     }
 
     // ── cXML network credentials ───────────────────────────────────────────────

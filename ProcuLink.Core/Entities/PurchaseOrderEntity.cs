@@ -176,6 +176,16 @@ public class PurchaseOrderEntity
     /// </summary>
     public DateOnly? RequestedDeliveryDate { get; set; }
 
+    // ── Invoice-only fields (null on orders; migration InvoiceReadFields) ───────
+    /// <summary>Payment due date printed on an invoice.</summary>
+    public DateOnly? DueDate { get; set; }
+    /// <summary>The invoice issuer's own VAT / tax number.</summary>
+    public string? SellerTaxId { get; set; }
+    /// <summary>IBAN the invoice asks to be paid to (uppercase, no spaces).</summary>
+    public string? PaymentIban { get; set; }
+    /// <summary>Payment / remittance reference to quote when paying.</summary>
+    public string? PaymentReference { get; set; }
+
     /// <summary>
     /// Group V1: the exact <see cref="SupplierConnectionRevision"/> this order was processed with,
     /// pinned ONCE at ingest (never re-pinned). This is the reproducibility invariant — the order

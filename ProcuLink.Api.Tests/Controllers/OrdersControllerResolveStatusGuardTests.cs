@@ -1,8 +1,10 @@
 using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using ProcuLink.Api.Auth;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Controllers;
 using ProcuLink.Core.Constants;
@@ -139,6 +141,34 @@ public class OrdersControllerResolveStatusGuardTests
             It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<ResolveHeaderFields?>()), Times.Once);
     }
 
+    /// <summary>Who gets paid is an admin's change: a member's new IBAN is refused, an admin's goes through.</summary>
+    [Fact]
+    public async Task Resolve_InvoiceIban_IsRefusedForAMember_AndAdmittedForAnAdmin()
+    {
+        var (ctrl, orders, _, orgId) = Build(out var db, out _);
+        var invoice = NewOrder(Guid.NewGuid(), orgId, OrderStatusConstants.PendingReview);
+        invoice.DocumentType = "invoice";
+        db.PurchaseOrders.Add(invoice);
+        await db.SaveChangesAsync();
+        Task<IActionResult> ResolveAs(OrgRole role)
+        {
+            ctrl.ControllerContext = new() { HttpContext = new DefaultHttpContext { Items = { [ClerkOrgRole.ItemsKey] = role } } };
+            return ctrl.Resolve(invoice.Id, new ResolveRequest { PaymentIban = "DE89370400440532013000" }, CancellationToken.None);
+        }
+
+        var refused = Assert.IsType<ObjectResult>(await ResolveAs(OrgRole.Member));
+        Assert.Equal(StatusCodes.Status403Forbidden, refused.StatusCode);
+        Assert.Contains("Only a workspace admin can change an invoice's IBAN, number or seller.", refused.Value!.ToString());
+        orders.Verify(o => o.ResolveAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<IReadOnlyList<Core.Services.LineResolution>>(),
+            It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<ResolveHeaderFields?>()), Times.Never);
+
+        Assert.IsType<OkObjectResult>(await ResolveAs(OrgRole.Admin));
+        orders.Verify(o => o.ResolveAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<IReadOnlyList<Core.Services.LineResolution>>(),
+            It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<ResolveHeaderFields?>()), Times.Once);
+    }
+
     // ── POST /api/orders/{id}/accept-ai-suggestions ───────────────────────────
     //
     // The same writer, reached by a different door. AcceptAiSuggestionsAsync's recompute runs even
@@ -172,6 +202,22 @@ public class OrdersControllerResolveStatusGuardTests
         orders.Verify(o => o.AcceptAiSuggestionsAsync(
             It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<double>(), It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    /// <summary>The recompute would move a sent invoice back to ready, so invoices are refused outright.</summary>
+    [Fact]
+    public async Task AcceptAiSuggestions_OnASentInvoice_Returns409_AndNeverReachesTheRecompute()
+    {
+        var (ctrl, orders, _, orgId) = Build(out var db, out _);
+        var invoice = NewOrder(Guid.NewGuid(), orgId, OrderStatusConstants.Delivered);
+        invoice.DocumentType = "invoice";
+        db.PurchaseOrders.Add(invoice);
+        await db.SaveChangesAsync();
+
+        Assert.IsType<ConflictObjectResult>(await ctrl.AcceptAiSuggestions(invoice.Id, 0.85, CancellationToken.None));
+        orders.Verify(o => o.AcceptAiSuggestionsAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<double>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     // ── WP-23a — the two machine-owned steps ──────────────────────────────────
