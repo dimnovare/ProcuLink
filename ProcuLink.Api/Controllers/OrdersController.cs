@@ -1994,6 +1994,9 @@ public sealed class OrdersController : ControllerBase
         // here, where the endpoint has never validated anything at all.
         if (await RefusedByResolveHoldAsync(id, ct) is { } held)
             return held;
+        // Invoices carry no AI suggestions, and the recompute below would move a sent invoice back to ready.
+        if (await _db.PurchaseOrders.AnyAsync(o => o.Id == id && o.OrgId == _tenant.OrganisationId && o.DocumentType == "invoice", ct))
+            return Conflict(new { error = "Invoices have no AI suggestions to accept." });
 
         var result = await _orders.AcceptAiSuggestionsAsync(
             _tenant.OrganisationId, id, minConfidence, ct);

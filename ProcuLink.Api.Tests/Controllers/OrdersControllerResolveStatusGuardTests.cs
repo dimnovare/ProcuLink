@@ -204,6 +204,22 @@ public class OrdersControllerResolveStatusGuardTests
             Times.Once);
     }
 
+    /// <summary>The recompute would move a sent invoice back to ready, so invoices are refused outright.</summary>
+    [Fact]
+    public async Task AcceptAiSuggestions_OnASentInvoice_Returns409_AndNeverReachesTheRecompute()
+    {
+        var (ctrl, orders, _, orgId) = Build(out var db, out _);
+        var invoice = NewOrder(Guid.NewGuid(), orgId, OrderStatusConstants.Delivered);
+        invoice.DocumentType = "invoice";
+        db.PurchaseOrders.Add(invoice);
+        await db.SaveChangesAsync();
+
+        Assert.IsType<ConflictObjectResult>(await ctrl.AcceptAiSuggestions(invoice.Id, 0.85, CancellationToken.None));
+        orders.Verify(o => o.AcceptAiSuggestionsAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<double>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
     // ── WP-23a — the two machine-owned steps ──────────────────────────────────
 
     /// <summary>
