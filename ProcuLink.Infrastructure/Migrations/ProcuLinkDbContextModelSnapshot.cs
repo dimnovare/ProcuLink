@@ -3963,11 +3963,26 @@ namespace ProcuLink.Infrastructure.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("ProcuLink.Core.Entities.Flow", b =>
+                {
+                    b.HasOne("ProcuLink.Core.Entities.Organisation", null)
+                        .WithMany()
+                        .HasForeignKey("OrgId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("ProcuLink.Core.Entities.FlowDocument", b =>
                 {
                     b.HasOne("ProcuLink.Core.Entities.Flow", "Flow")
                         .WithMany()
                         .HasForeignKey("FlowId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("ProcuLink.Core.Entities.Organisation", null)
+                        .WithMany()
+                        .HasForeignKey("OrgId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 

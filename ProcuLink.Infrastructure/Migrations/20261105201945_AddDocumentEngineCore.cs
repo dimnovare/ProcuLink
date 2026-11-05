@@ -26,6 +26,12 @@ namespace ProcuLink.Infrastructure.Migrations
                 constraints: table =>
                 {
                     table.PrimaryKey("PK_flows", x => x.id);
+                    table.ForeignKey(
+                        name: "FK_flows_organisations_org_id",
+                        column: x => x.org_id,
+                        principalTable: "organisations",
+                        principalColumn: "id",
+                        onDelete: ReferentialAction.Cascade);
                 });
 
             migrationBuilder.CreateTable(
@@ -58,6 +64,12 @@ namespace ProcuLink.Infrastructure.Migrations
                         name: "FK_flow_documents_flows_flow_id",
                         column: x => x.flow_id,
                         principalTable: "flows",
+                        principalColumn: "id",
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_flow_documents_organisations_org_id",
+                        column: x => x.org_id,
+                        principalTable: "organisations",
                         principalColumn: "id",
                         onDelete: ReferentialAction.Cascade);
                 });

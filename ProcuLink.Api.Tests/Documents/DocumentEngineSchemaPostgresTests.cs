@@ -24,6 +24,7 @@ public sealed class DocumentEngineSchemaPostgresTests(PostgresContainerFixture p
 
         await using (var db = new ProcuLinkDbContext(options))
         {
+            db.Organisations.Add(new Organisation { Id = orgId, Name = "Acme Components Ltd", Slug = "acme-" + orgId.ToString("N") });
             db.Flows.Add(new Flow { Id = flowId, OrgId = orgId, Name = "Invoices", FieldsJson = "{\"fields\":[]}", CreatedAt = now, UpdatedAt = now });
             db.FlowDocuments.Add(new FlowDocument
             {

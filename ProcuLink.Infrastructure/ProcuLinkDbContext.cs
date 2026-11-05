@@ -2137,6 +2137,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(f => f.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             b.Property(f => f.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             b.HasIndex(f => f.OrgId);
+            b.HasOne<Organisation>().WithMany().HasForeignKey(f => f.OrgId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<FlowDocument>(b =>
@@ -2163,6 +2164,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(d => d.ReadAt).HasColumnName("read_at").HasColumnType("timestamptz");
             b.HasIndex(d => new { d.OrgId, d.FlowId, d.Sha256 });
             b.HasIndex(d => new { d.OrgId, d.FlowId, d.DedupKey });
+            b.HasOne<Organisation>().WithMany().HasForeignKey(d => d.OrgId).OnDelete(DeleteBehavior.Cascade);
             b.HasOne(d => d.Flow).WithMany().HasForeignKey(d => d.FlowId).OnDelete(DeleteBehavior.Cascade);
         });
 
