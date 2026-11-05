@@ -14,7 +14,7 @@ public class DocumentsApiTests(DocumentEngineTestFactory factory) : IClassFixtur
 {
     private static readonly Guid Org = DocumentEngineTestFactory.OrgA;
 
-    private async Task<Guid> SeedDocument(string status)
+    private async Task<Guid> SeedDocument(string status, string? reason = null)
     {
         factory.ClientFor(Org);
         using var scope = factory.Services.CreateScope();
@@ -29,7 +29,7 @@ public class DocumentsApiTests(DocumentEngineTestFactory factory) : IClassFixtur
         var doc = new FlowDocument
         {
             Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, FileName = "synthetic.pdf", ContentType = "application/pdf",
-            Status = status, ReadJson = DocumentJson.Serialize(new ReadResult("Synthetic invoice")),
+            Status = status, StatusReason = reason, ReadJson = DocumentJson.Serialize(new ReadResult("Synthetic invoice")),
             CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
         };
         db.Flows.Add(flow);
@@ -66,14 +66,19 @@ public class DocumentsApiTests(DocumentEngineTestFactory factory) : IClassFixtur
         var http = factory.ClientFor(Org);
         var review = await SeedDocument(DocumentStatus.NeedsReview);
         var reading = await SeedDocument(DocumentStatus.Reading);
+        var held = await SeedDocument(DocumentStatus.NeedsReview, "duplicate_file");
 
         var unknown = await http.PatchAsJsonAsync($"/api/documents/{review}/values",
             new EditValuesRequest([new FieldEdit("no_such_field", "x")], null, null, null));
         var locked = await http.PatchAsJsonAsync($"/api/documents/{reading}/values",
             new EditValuesRequest([new FieldEdit("total_gross", "1")], null, null, null));
 
+        var heldRes = await http.PatchAsJsonAsync($"/api/documents/{held}/values",
+            new EditValuesRequest([new FieldEdit("total_gross", "1")], null, null, null));
+
         Assert.Equal(HttpStatusCode.BadRequest, unknown.StatusCode);
         Assert.Contains("unknown_target", await unknown.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.Conflict, heldRes.StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, locked.StatusCode);
         Assert.Contains("not_editable", await locked.Content.ReadAsStringAsync());
     }

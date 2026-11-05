@@ -172,11 +172,11 @@ public sealed class DocumentsController(
         if (Refuse() is { } refused) return refused;
         var doc = await FindAsync(id, ct);
         if (doc is null) return NotFound(NotFoundBody);
-        if (doc.Status is not (DocumentStatus.NeedsReview or DocumentStatus.Ready)) return Conflict(new { error = "not_editable" });
+        if (doc.Status is not (DocumentStatus.NeedsReview or DocumentStatus.Ready) || doc.StatusReason == "duplicate_file") return Conflict(new { error = "not_editable" });
 
         var (fieldEdits, cellEdits, adds, removes) = (req.Fields ?? [], req.Cells ?? [], req.AddRowToTables ?? [], req.RemoveRows ?? []);
         if (fieldEdits.Count + cellEdits.Count + adds.Count + removes.Count == 0) return BadRequest(new { error = "no_changes" });
-        if (fieldEdits.Any(x => x is null) || cellEdits.Any(x => x is null) || adds.Any(x => x is null) || removes.Any(x => x is null))
+        if (fieldEdits.Any(x => x?.Key is null) || cellEdits.Any(x => x?.Table is null || x.Column is null) || adds.Any(x => x is null) || removes.Any(x => x?.Table is null))
             return BadRequest(new { error = "unknown_target", target = (string?)null });
 
         var flow = await db.Flows.FirstAsync(f => f.OrgId == doc.OrgId && f.Id == doc.FlowId, ct);
