@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using CsvHelper;
 using CsvHelper.Configuration;
 
@@ -45,12 +46,20 @@ public static class SheetCellReader
         return cells;
     }
 
-    public static string ToText(IReadOnlyList<SheetCell> cells) =>
-        string.Join("\n", cells.GroupBy(c => c.Row).OrderBy(g => g.Key)
-            .Select(g =>
-            {
-                // A blank cell keeps its column: "Bolt | 10 |  | 2.50", not "Bolt | 10 | 2.50".
-                var byColumn = g.ToDictionary(c => c.Column, c => c.Text);
-                return string.Join(" | ", Enumerable.Range(1, byColumn.Keys.Max()).Select(i => byColumn.GetValueOrDefault(i, "")));
-            }));
+    /// <summary>
+    /// One line per row, a blank cell keeping its column ("Bolt | 10 |  | 2.50"). Stops after the row that takes the
+    /// text past <paramref name="maxChars"/>, so a far-right cell on many rows cannot balloon memory.
+    /// </summary>
+    public static string ToText(IReadOnlyList<SheetCell> cells, int maxChars = int.MaxValue)
+    {
+        var sb = new StringBuilder();
+        foreach (var row in cells.GroupBy(c => c.Row).OrderBy(g => g.Key))
+        {
+            var byColumn = row.ToDictionary(c => c.Column, c => c.Text);
+            if (sb.Length > 0) sb.Append('\n');
+            sb.AppendJoin(" | ", Enumerable.Range(1, byColumn.Keys.Max()).Select(i => byColumn.GetValueOrDefault(i, "")));
+            if (sb.Length > maxChars) break;
+        }
+        return sb.ToString();
+    }
 }

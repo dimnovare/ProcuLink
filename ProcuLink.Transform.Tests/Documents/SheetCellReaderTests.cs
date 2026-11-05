@@ -29,5 +29,9 @@ public class SheetCellReaderTests
         var csv = SheetCellReader.Read(new MemoryStream(Encoding.UTF8.GetBytes("Item;Qty;Discount;Price\nBolt;10;;2,50\n")), ".csv");
         SheetCellReader.ToText(csv).Should().Be("Item | Qty | Discount | Price\nBolt | 10 |  | 2,50");
         ValueLocator.LocateInCells("2,50", csv)!.Address.Should().Be("cell:r2c4");
+
+        // A far-right cell on many rows stops at the cap plus one row instead of building every row.
+        var far = Enumerable.Range(1, 200).Select(r => new SheetCell(r, 16384, "x")).ToList();
+        SheetCellReader.ToText(far, 1000).Length.Should().BeLessThan(1000 + 16384 * 3 + 2);
     }
 }
