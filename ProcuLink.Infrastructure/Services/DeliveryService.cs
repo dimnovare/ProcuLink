@@ -172,6 +172,11 @@ public sealed class DeliveryService : IDeliveryService
         if (config is null)
             return await FailMissingConfigAsync(order, artifact, reconcileFailedAttempt, ct);
 
+        // "I'll send it myself": keyed on the protocol, not AutoDeliver (a revision snapshot copies
+        // AutoDeliver unforced). Nothing dispatches, no attempt is written, status is untouched.
+        if (config.Protocol == DeliveryProtocolConstants.Manual)
+            return new DeliveryResult(true, null, Outcome: DeliveryOutcome.NotRetryable);
+
         // Auto-deliver is off: a deliberate no-op, never a send.
         if (requireAutoDeliver && !config.AutoDeliver)
             return new DeliveryResult(true, null, Outcome: DeliveryOutcome.NotRetryable);

@@ -26,6 +26,13 @@ public static class DeliveryProtocolConstants
     public const string ErpErply = "erp_erply";
     public const string ErpDirecto = "erp_directo";
 
+    /// <summary>
+    /// "I'll send it myself": the supplier gets an output file the customer downloads and sends by
+    /// hand. Deliberately has NO dispatcher — nothing is ever dispatched, and no credentials or
+    /// endpoint config are stored.
+    /// </summary>
+    public const string Manual = "manual";
+
     public static readonly string[] All =
     [
         Http,
@@ -35,7 +42,8 @@ public static class DeliveryProtocolConstants
         Smtp,   // accepted for legacy/self-host configs; not offered (see Email)
         Email,
         ErpErply,
-        ErpDirecto
+        ErpDirecto,
+        Manual
     ];
 
     /// <summary>
@@ -57,5 +65,5 @@ public static class DeliveryProtocolConstants
 
     // Human-facing allowed list for validation messages: lists OFFERED protocols (smtp omitted —
     // it is accepted for legacy/self-host but no longer advertised).
-    public static string AllowedListForMessage => "http, sftp, ftp, ftps, email, erp_erply, or erp_directo";
+    public static string AllowedListForMessage => "http, sftp, ftp, ftps, email, erp_erply, erp_directo, or manual";
 }

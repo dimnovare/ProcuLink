@@ -89,7 +89,8 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
         }
 
         existing.Protocol = protocol;
-        existing.AutoDeliver = request.AutoDeliver;
+        // A manual supplier is never sent to, so auto-deliver can never be on.
+        existing.AutoDeliver = request.AutoDeliver && protocol != DeliveryProtocolConstants.Manual;
         // Null = keep. Same argument as the host-key comment directly below, and as
         // CredentialsJson further down: a client that has never heard of a property must not be
         // able to clear it by omission. AutoTransform arrived as a non-nullable bool defaulting to

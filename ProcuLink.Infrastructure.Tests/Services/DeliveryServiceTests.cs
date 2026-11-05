@@ -107,6 +107,30 @@ public class DeliveryServiceTests
     }
 
     [Fact]
+    public async Task Manual_AutoDeliver_IsANoOp_AndOrderStaysReadyToDeliver()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        // AutoDeliver = true on purpose: a revision snapshot can carry it unforced, so the no-op
+        // must key on the protocol.
+        var manual = MakeConfig(ids.OrgId, ids.SupplierId, encryption, autoDeliver: true);
+        manual.Protocol = DeliveryProtocolConstants.Manual;
+        manual.OutputFormat = "csv";
+        db.SupplierDeliveryConfigs.Add(manual);
+        await db.SaveChangesAsync();
+        var dispatcher = new FakeDispatcher(new DeliveryResult(true, null, 200));
+        var service = CreateService(db, dispatcher, encryption);
+
+        var result = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
+
+        result.Success.Should().BeTrue();
+        dispatcher.Calls.Should().Be(0);
+        (await db.DeliveryAttempts.CountAsync()).Should().Be(0);
+        (await db.PurchaseOrders.SingleAsync()).Status.Should().Be(OrderStatusConstants.ReadyToDeliver);
+    }
+
+    [Fact]
     public async Task DispatchArtifactAsync_Success_WritesAttemptAndMarksDelivered()
     {
         await using var db = CreateDb();

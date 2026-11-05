@@ -295,7 +295,7 @@ public class DeliveryConfigServiceTests
             default);
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("Delivery protocol must be http, sftp, ftp, ftps, email, erp_erply, or erp_directo.*");
+            .WithMessage("Delivery protocol must be http, sftp, ftp, ftps, email, erp_erply, erp_directo, or manual.*");
     }
 
     [Fact]

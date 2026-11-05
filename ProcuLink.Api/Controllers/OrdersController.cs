@@ -199,6 +199,26 @@ public sealed class OrdersController : ControllerBase
         });
     }
 
+    /// <summary>
+    /// A requested send for a supplier set to "I'll send it myself" is refused up front: the job
+    /// would no-op invisibly behind a 202. Returns null when the supplier has any other channel.
+    /// </summary>
+    private async Task<IActionResult?> RefusedIfManualSupplierAsync(Guid orgId, Guid orderId, CancellationToken ct)
+    {
+        var manual = await (
+            from o in _db.PurchaseOrders.AsNoTracking()
+            join c in _db.SupplierDeliveryConfigs.AsNoTracking()
+                on new { o.OrgId, o.SupplierId } equals new { c.OrgId, SupplierId = (Guid?)c.SupplierId }
+            where o.Id == orderId && o.OrgId == orgId
+                && c.Protocol == ProcuLink.Core.Constants.DeliveryProtocolConstants.Manual
+            select c.Id
+        ).AnyAsync(ct);
+
+        return manual
+            ? Conflict(new { error = "This supplier is set to I'll send it myself. Download the file instead." })
+            : null;
+    }
+
     // ── WP-23 — the resolve status guard ─────────────────────────────────────
 
     /// <summary>
@@ -2270,6 +2290,9 @@ public sealed class OrdersController : ControllerBase
         // person deciding, now, to put this document in front of the supplier. The artifact may have
         // been produced before the rule that now refuses it existed, so the transform-time answer is
         // not this decision's answer. Checked BEFORE the enqueue, so a refusal sends nothing.
+        if (await RefusedIfManualSupplierAsync(orgId, id, ct) is { } manualRefusal)
+            return manualRefusal;
+
         if (await RefusedBySupplierRulesAsync(orgId, id, "redeliver", ct) is { } refusal)
             return refusal;
 
@@ -2498,6 +2521,9 @@ public sealed class OrdersController : ControllerBase
         // the same answer. (The AUTOMATIC backoff queue this endpoint seeds is deliberately NOT
         // gated: it continues a dispatch that already started and may already have reached the
         // supplier — see IAcceptanceGate.)
+        if (await RefusedIfManualSupplierAsync(orgId, id, ct) is { } manualRefusal)
+            return manualRefusal;
+
         if (await RefusedBySupplierRulesAsync(orgId, id, "retry-delivery", ct) is { } refusal)
             return refusal;
 
