@@ -3,6 +3,9 @@ namespace ProcuLink.Core.Documents;
 /// <summary>Normalised 0..1 rectangle, origin top-left.</summary>
 public sealed record Box(double X, double Y, double Width, double Height);
 
+/// <summary>One word of a PDF page with its box. Page is 1-based.</summary>
+public sealed record PageWord(string Text, int Page, Box Box);
+
 /// <summary>Where a value was read. Page is 1-based; Address is <c>cell:r{row}c{col}</c> for sheets.</summary>
 public sealed record SourceLocation(int? Page, Box? Box, string? Address);
 
