@@ -63,12 +63,8 @@ public static class InvoiceDefaultOutput
         return sb.ToString();
     }
 
-    /// <summary>A text cell: RFC 4180 escaped, with a leading formula character defused so a spreadsheet cannot execute it.</summary>
-    private static string Cell(string? v)
-    {
-        v ??= string.Empty;
-        return CsvTransformService.Escape(v.Length > 0 && "=+-@\t\r".Contains(v[0]) ? "'" + v : v);
-    }
+    /// <summary>A text cell: formula-neutralised and RFC 4180 escaped by the one shared escaper.</summary>
+    private static string Cell(string? v) => CsvTransformService.Cell(v);
 
     private static string Json(PurchaseOrderEntity d) => JsonSerializer.Serialize(new
     {

@@ -52,26 +52,26 @@ public sealed class CsvTransformService : ITransformService
             "BillToName,BillToStreet,BillToCity,BillToPostalCode,BillToCountry," +
             "ContactName,ContactEmail,ContactPhone");
 
-        var poNumber  = Escape(order.PoNumber ?? string.Empty);
+        var poNumber  = Cell(order.PoNumber);
         var orderDate = order.OrderDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        var currency  = Escape(order.Currency ?? string.Empty);
-        var buyerName = Escape(OrderHeaderReader.ExtractBuyerName(order));
+        var currency  = Cell(order.Currency);
+        var buyerName = Cell(OrderHeaderReader.ExtractBuyerName(order));
 
         // Address / contact columns are order-level: hoist once, repeated on every row (like the PO
         // header fields above), keeping the CSV self-contained. Empty when the order carries none.
-        var shipToName       = Escape(order.ShipToName       ?? string.Empty);
-        var shipToStreet     = Escape(order.ShipToStreet     ?? string.Empty);
-        var shipToCity       = Escape(order.ShipToCity       ?? string.Empty);
-        var shipToPostalCode = Escape(order.ShipToPostalCode ?? string.Empty);
-        var shipToCountry    = Escape(order.ShipToCountry    ?? string.Empty);
-        var billToName       = Escape(order.BillToName       ?? string.Empty);
-        var billToStreet     = Escape(order.BillToStreet     ?? string.Empty);
-        var billToCity       = Escape(order.BillToCity       ?? string.Empty);
-        var billToPostalCode = Escape(order.BillToPostalCode ?? string.Empty);
-        var billToCountry    = Escape(order.BillToCountry    ?? string.Empty);
-        var contactName      = Escape(order.ContactName      ?? string.Empty);
-        var contactEmail     = Escape(order.ContactEmail     ?? string.Empty);
-        var contactPhone     = Escape(order.ContactPhone     ?? string.Empty);
+        var shipToName       = Cell(order.ShipToName);
+        var shipToStreet     = Cell(order.ShipToStreet);
+        var shipToCity       = Cell(order.ShipToCity);
+        var shipToPostalCode = Cell(order.ShipToPostalCode);
+        var shipToCountry    = Cell(order.ShipToCountry);
+        var billToName       = Cell(order.BillToName);
+        var billToStreet     = Cell(order.BillToStreet);
+        var billToCity       = Cell(order.BillToCity);
+        var billToPostalCode = Cell(order.BillToPostalCode);
+        var billToCountry    = Cell(order.BillToCountry);
+        var contactName      = Cell(order.ContactName);
+        var contactEmail     = Cell(order.ContactEmail);
+        var contactPhone     = Cell(order.ContactPhone);
 
         foreach (var l in order.Lines.OrderBy(x => x.LineNumber))
         {
@@ -82,10 +82,10 @@ public sealed class CsvTransformService : ITransformService
                 orderDate,
                 currency,
                 buyerName,
-                Escape(l.SupplierItemCode ?? string.Empty),
-                Escape(l.Description      ?? string.Empty),
+                Cell(l.SupplierItemCode),
+                Cell(l.Description),
                 l.Quantity.ToString(CultureInfo.InvariantCulture),
-                Escape(l.Unit             ?? string.Empty),
+                Cell(l.Unit),
                 l.UnitPrice.ToString(CultureInfo.InvariantCulture),
                 lineTotal.ToString(CultureInfo.InvariantCulture),
                 shipToName,
@@ -122,11 +122,26 @@ public sealed class CsvTransformService : ITransformService
             throw new TransformValidationException(unresolved);
     }
 
-    /// <summary>RFC 4180: wrap in double-quotes if the value contains comma, quote, or newline.</summary>
-    internal static string Escape(string value)
-    {
-        if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
-            return $"\"{value.Replace("\"", "\"\"")}\"";
-        return value;
-    }
+    /// <summary>A text cell: null-safe <see cref="Escape"/>.</summary>
+    internal static string Cell(string? value) => Escape(value ?? string.Empty);
+
+    /// <summary>
+    /// OWASP CSV injection: Excel/Sheets run a cell starting with = + - @ tab or CR as a formula; a
+    /// leading ' makes it literal text. A plain signed number — digits with '.' or ',' separators, in
+    /// any culture's format (-5, +3.20, -1,234.50, -5,50) — is left alone: it cannot be a formula, and
+    /// the untyped mapped/designer CSV emitters cannot otherwise tell it from text.
+    /// </summary>
+    internal static string NeutraliseFormula(string value) =>
+        value.Length > 0 && "=+-@\t\r".Contains(value[0]) && !IsPlainSignedNumber(value) ? "'" + value : value;
+
+    private static bool IsPlainSignedNumber(string v) =>
+        v.Length > 1 && v[0] is '+' or '-'
+        && v.Skip(1).Any(char.IsAsciiDigit) && v.Skip(1).All(c => char.IsAsciiDigit(c) || c is '.' or ',');
+
+    /// <summary>
+    /// Formula-neutralised, RFC 4180-escaped comma CSV cell. The one implementation lives in
+    /// <see cref="MappedTransformService.Escape(string, string, bool)"/>, so the fixed, invoice, mapped
+    /// and designer CSV cannot drift apart again.
+    /// </summary>
+    internal static string Escape(string value) => MappedTransformService.Escape(value, ",", quoteAlways: false);
 }

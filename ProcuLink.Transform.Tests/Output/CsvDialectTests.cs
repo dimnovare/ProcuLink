@@ -144,17 +144,18 @@ public class CsvDialectTests
     }
 
     /// <summary>
-    /// Quoting follows the ACTIVE delimiter, not the comma. Under a semicolon dialect a value holding
-    /// a comma needs no quotes, and one holding a semicolon does — the opposite of the hardcoded rule.
-    /// Getting this backwards splits a supplier's column in half without any error.
+    /// Quoting covers the ACTIVE delimiter — a value holding a semicolon under a semicolon dialect is
+    /// quoted; missing that splits a supplier's column in half without any error. A comma is quoted
+    /// too (since the CSV-injection fix): a ';' file opened in a comma-locale spreadsheet splits on
+    /// ',', and an unquoted "Acme,=cmd…" would start a formula cell. Over-quoting is valid CSV.
     /// </summary>
     [Fact]
-    public void QuotingFollowsTheActiveDelimiter_NotTheComma()
+    public void QuotingCoversTheActiveDelimiter_AndTheComma()
     {
         var withComma = Encoding.UTF8.GetString(EmitBytes(
             Tree(new CsvDialect { Delimiter = ";", LineEnding = "\n" }, headerField: "BuyerName"),
             Order("Acme, Inc")));
-        Assert.Contains("Acme, Inc;S-1;3", withComma);
+        Assert.Contains("\"Acme, Inc\";S-1;3", withComma);
 
         var withSemicolon = Encoding.UTF8.GetString(EmitBytes(
             Tree(new CsvDialect { Delimiter = ";", LineEnding = "\n" }, headerField: "BuyerName"),
