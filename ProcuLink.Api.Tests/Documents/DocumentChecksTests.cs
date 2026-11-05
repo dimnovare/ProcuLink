@@ -24,9 +24,14 @@ public sealed class DocumentChecksTests
             n.Should().Be(expected, text);
         }
         FieldValueParser.TryNumber("12abc", out _).Should().BeFalse();
+        FieldValueParser.NumberCandidates("1,500").Should().Equal(1.5m, 1500m);
+        FieldValueParser.NumberCandidates("1.234,56").Should().Equal(1234.56m);
 
-        foreach (var text in new[] { "03/04/2026", "03.04.2026", "2026-04-03" })
-            FieldValueParser.TryDate(text, out _).Should().BeTrue(text);
+        foreach (var text in new[] { "03/04/2026", "03.04.2026", "2026-04-03", "3.4.26", "3/4/26", "3-4-2026", "3-4-26", "2026/4/3", "3. April 2026" })
+        {
+            FieldValueParser.TryDate(text, out var d).Should().BeTrue(text);
+            d.Should().Be(new DateOnly(2026, 4, 3), text);
+        }
         FieldValueParser.TryDate("03/04/2026", out var ambiguous);
         ambiguous.Should().Be(new DateOnly(2026, 4, 3)); // day first wins
         FieldValueParser.TryDate("3 Apr 2026", out _).Should().BeTrue();
@@ -53,9 +58,12 @@ public sealed class DocumentChecksTests
         DocumentChecks.StatusFor(failed).Should().Be(DocumentStatus.NeedsReview);
 
         var badDate = new ReadResult("Invoice", [F("issue_date", "Invoice date", "soon", FieldTypes.Date)]);
-        DocumentChecks.Run(badDate, FlowFieldList.Empty, true, false).Single()
+        var listed = new FlowFieldList([new FlowField("issue_date", "Invoice date", FieldTypes.Date, null, false)]);
+        DocumentChecks.Run(badDate, listed, true, false).Single()
             .Should().Match<DocumentCheck>(c => c.Code == DocumentChecks.TypeInvalid
                 && c.Message == "Invoice date is not a date we can read.");
+        // A field the flow does not list is never held up by the AI's guessed type.
+        DocumentChecks.Run(badDate, FlowFieldList.Empty, true, false).Should().BeEmpty();
     }
 
     [Fact]

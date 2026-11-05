@@ -11,7 +11,7 @@ public static class ValueLocator
     {
         var tokens = Tokens(value);
         if (tokens.Length == 0) return null;
-        var hasNumber = FieldValueParser.TryNumber(value, out var number);
+        var numbers = FieldValueParser.NumberCandidates(value);
 
         for (var i = 0; i + tokens.Length <= words.Count; i++)
         {
@@ -21,7 +21,7 @@ public static class ValueLocator
             {
                 var w = words[i + k];
                 run = w.Page == page && (Norm(w.Text) == tokens[k]
-                    || (tokens.Length == 1 && hasNumber && FieldValueParser.TryNumber(w.Text, out var n) && n == number));
+                    || (tokens.Length == 1 && numbers.Intersect(FieldValueParser.NumberCandidates(w.Text)).Any()));
             }
             if (!run) continue;
 
@@ -45,5 +45,5 @@ public static class ValueLocator
     private static string[] Tokens(string? s) =>
         string.IsNullOrWhiteSpace(s) ? [] : Regex.Split(s.Trim(), @"\s+").Select(Norm).ToArray();
 
-    private static string Norm(string s) => s.Trim().ToLowerInvariant();
+    private static string Norm(string s) => s.Trim().Trim('.', ',', ';', ':', '(', ')', '"', '\'').ToLowerInvariant();
 }

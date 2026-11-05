@@ -16,16 +16,35 @@ public static class FieldValueParser
     private static readonly string[] DateFormats =
     [
         "yyyy-MM-dd", "d.M.yyyy", "d/M/yyyy", "M/d/yyyy", "d MMM yyyy", "d MMMM yyyy", "MMM d, yyyy", "MMMM d, yyyy",
+        "d.M.yy", "d/M/yy", "d-M-yyyy", "d-M-yy", "yyyy/M/d", "d. MMMM yyyy",
     ];
+
+    private static string? NumberBody(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return null;
+        var m = NumberShape.Match(s.Trim().Replace(' ', ' ').Replace(" ", ""));
+        return m.Success ? m.Groups[1].Value : null;
+    }
+
+    /// <summary>
+    /// Every reading of a number. A lone separator followed by exactly three digits ("1,500", "1.500") is
+    /// either a decimal or a thousands mark, so both readings come back; <see cref="TryNumber"/> keeps the decimal one.
+    /// </summary>
+    public static IReadOnlyList<decimal> NumberCandidates(string? s)
+    {
+        if (!TryNumber(s, out var first)) return [];
+        var body = NumberBody(s)!;
+        return Regex.IsMatch(body, @"^-?\d{1,3}[.,]\d{3}$") && decimal.TryParse(body.Replace(",", "").Replace(".", ""),
+            NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var thousands)
+            ? [first, thousands]
+            : [first];
+    }
 
     public static bool TryNumber(string? s, out decimal value)
     {
         value = 0;
-        if (string.IsNullOrWhiteSpace(s)) return false;
-        var m = NumberShape.Match(s.Trim().Replace(' ', ' ').Replace(" ", ""));
-        if (!m.Success) return false;
+        if (NumberBody(s) is not { } body) return false;
 
-        var body = m.Groups[1].Value;
         // The right-most separator is the decimal one; a separator that repeats can only be a thousands mark.
         var decimalAt = Math.Max(body.LastIndexOf(','), body.LastIndexOf('.'));
         if (decimalAt >= 0 && body.Count(c => c == body[decimalAt]) > 1) decimalAt = -1;

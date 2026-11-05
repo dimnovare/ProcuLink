@@ -35,8 +35,13 @@ public static class DocumentChecks
                 Fail(LowConfidence, flowField.Key, $"{flowField.Label} was hard to read. Please check it.");
         }
 
-        foreach (var field in read.Fields.Where(f => !string.IsNullOrWhiteSpace(f.Value) && !ValueIsValid(f.Type, f.Value)))
-            Fail(TypeInvalid, field.Key, $"{field.Label} is not {Describe(field.Type)} we can read.");
+        // The flow's type decides, and only for fields the flow lists: the AI's guess about a new field holds nothing up.
+        foreach (var field in read.Fields.Where(f => !string.IsNullOrWhiteSpace(f.Value)))
+        {
+            var type = fields.Fields.FirstOrDefault(f => f.Key == field.Key)?.Type;
+            if (type is not null && !ValueIsValid(type, field.Value!))
+                Fail(TypeInvalid, field.Key, $"{field.Label} is not {Describe(type)} we can read.");
+        }
 
         if (duplicate) Fail(Duplicate, null, "A document with this number was already received.");
         if (read.Truncated) Fail(TextTruncated, null, "The document was too long to read in full.");

@@ -25,4 +25,17 @@ public class ValueLocatorTests
         ValueLocator.Locate("2380.00", words)!.Box!.Y.Should().BeApproximately(0.50, 1e-9);
         ValueLocator.Locate("Nowhere Inc", words).Should().BeNull();
     }
+
+    [Fact]
+    public void Locates_thousands_and_trailing_punctuation()
+    {
+        var words = new List<PageWord>
+        {
+            new("1,500", 1, new Box(0.1, 0.1, 0.1, 0.02)),
+            new("4471,", 1, new Box(0.1, 0.3, 0.1, 0.02)),
+        };
+
+        ValueLocator.Locate("1500", words)!.Box!.Y.Should().BeApproximately(0.1, 1e-9);
+        ValueLocator.Locate("4471", words)!.Box!.Y.Should().BeApproximately(0.3, 1e-9);
+    }
 }
