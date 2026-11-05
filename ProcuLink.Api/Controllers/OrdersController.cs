@@ -204,8 +204,12 @@ public sealed class OrdersController : ControllerBase
     /// would no-op invisibly behind a 202. Returns null when the supplier has any other channel.
     /// </summary>
     private async Task<IActionResult?> RefusedIfManualSupplierAsync(Guid orgId, Guid orderId, CancellationToken ct)
-    {
-        var manual = await (
+        => await IsManualSupplierAsync(orgId, orderId, ct)
+            ? Conflict(new { error = "This supplier is set to I'll send it myself. Download the file instead." })
+            : null;
+
+    /// <summary>True when the order's supplier is set to "I'll send it myself".</summary>
+    private Task<bool> IsManualSupplierAsync(Guid orgId, Guid orderId, CancellationToken ct) => (
             from o in _db.PurchaseOrders.AsNoTracking()
             join c in _db.SupplierDeliveryConfigs.AsNoTracking()
                 on new { o.OrgId, o.SupplierId } equals new { c.OrgId, SupplierId = (Guid?)c.SupplierId }
@@ -213,11 +217,6 @@ public sealed class OrdersController : ControllerBase
                 && c.Protocol == ProcuLink.Core.Constants.DeliveryProtocolConstants.Manual
             select c.Id
         ).AnyAsync(ct);
-
-        return manual
-            ? Conflict(new { error = "This supplier is set to I'll send it myself. Download the file instead." })
-            : null;
-    }
 
     // ── WP-23 — the resolve status guard ─────────────────────────────────────
 
@@ -2329,7 +2328,9 @@ public sealed class OrdersController : ControllerBase
     /// <para>
     /// The delivery ATTEMPT row stays <c>unconfirmed</c>: its outcome was never observed and this
     /// endpoint does not change that. What is new is the operator's assertion, recorded as its own
-    /// audit event with the acting user. Only valid from <c>delivery_unconfirmed</c>.
+    /// audit event with the acting user. Valid from <c>delivery_unconfirmed</c>, and from
+    /// <c>ready_to_deliver</c> when the supplier is set to "I'll send it myself" — the user marks
+    /// an order they sent by hand as sent (same audit action, <c>fromStatus</c> tells them apart).
     /// </para>
     /// <para>
     /// Billing: metering counts <c>delivered</c>/<c>rejected_by_supplier</c> by query, so this is
@@ -2357,11 +2358,15 @@ public sealed class OrdersController : ControllerBase
         // OrderStatusMachineTests.EveryInboundDeliveredEdge_HasAProductionWriter reads to prove that
         // every X -> delivered edge in the two transition maps has a writer. Two hand-written copies
         // of one rule is the drift class that bit the delivery-claim gates four times.
-        if (!OrderStatusMachine.ManuallyDeliverableFrom.Contains(order.Status))
+        // Sent by hand: a ready_to_deliver order may be marked delivered only when its supplier is
+        // set to "I'll send it myself" — for any other supplier a channel could still send it.
+        var sentByHand = OrderStatusMachine.SentByHandFrom.Contains(order.Status)
+                         && await IsManualSupplierAsync(orgId, id, ct);
+        if (!OrderStatusMachine.ManuallyDeliverableFrom.Contains(order.Status) && !sentByHand)
             return BadRequest(new
             {
-                error = $"Only an order whose delivery is unconfirmed can be marked delivered "
-                      + $"(current: '{order.Status}')."
+                error = $"Only an order whose delivery is unconfirmed, or one for a supplier set to "
+                      + $"I'll send it myself, can be marked delivered (current: '{order.Status}')."
             });
 
         // The order above came from GetByIdAsync, which reads through AsNoTracking — mutating it
@@ -2380,11 +2385,12 @@ public sealed class OrdersController : ControllerBase
         // no concurrency token, so re-checking the TRACKED row here is what stops this endpoint from
         // silently overwriting an in-flight send back to 'delivered' — the order moved under us, so
         // the operator's assertion (made against the stale snapshot) no longer applies.
-        if (!OrderStatusMachine.ManuallyDeliverableFrom.Contains(tracked.Status))
+        if (!(sentByHand ? OrderStatusMachine.SentByHandFrom : OrderStatusMachine.ManuallyDeliverableFrom)
+                .Contains(tracked.Status))
             return BadRequest(new
             {
-                error = $"Only an order whose delivery is unconfirmed can be marked delivered "
-                      + $"(current: '{tracked.Status}')."
+                error = $"Only an order whose delivery is unconfirmed, or one for a supplier set to "
+                      + $"I'll send it myself, can be marked delivered (current: '{tracked.Status}')."
             });
 
         var now = DateTime.UtcNow;
@@ -2420,9 +2426,12 @@ public sealed class OrdersController : ControllerBase
             // a null FK meaning "FK unresolved" instead of "a human acted and we cannot say who" —
             // which is what would make this event indistinguishable from the SYSTEM-generated park.
             actorClerkUserId = _tenant.ClerkUserId,
-            detail = "Operator confirmed out-of-band that the supplier received this order. "
-                   + "The delivery attempt itself was never acknowledged; this records the "
-                   + "operator's assertion, not an observed supplier ACK.",
+            detail = sentByHand
+                ? "The user marked this order as sent: the supplier is set to I'll send it myself, "
+                  + "so the user sent the file outside ProcuLink. No delivery attempt exists."
+                : "Operator confirmed out-of-band that the supplier received this order. "
+                  + "The delivery attempt itself was never acknowledged; this records the "
+                  + "operator's assertion, not an observed supplier ACK.",
         });
 
         _db.AuditEvents.Add(new ProcuLink.Core.Entities.AuditEvent
@@ -2451,8 +2460,8 @@ public sealed class OrdersController : ControllerBase
 
         _logger.LogInformation(
             "DeliveryConfirmedManually: order {OrderId} (org {OrgId}) marked delivered by operator {UserId} "
-            + "after an unconfirmed delivery.",
-            id, orgId, _tenant.ClerkUserId);
+            + "from {FromStatus}.",
+            id, orgId, _tenant.ClerkUserId, fromStatus);
 
         return Accepted(new { status = "delivered" });
     }

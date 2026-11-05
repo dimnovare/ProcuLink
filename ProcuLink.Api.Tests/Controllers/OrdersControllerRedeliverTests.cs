@@ -491,6 +491,42 @@ public class OrdersControllerMarkDeliveredTests
         result.Should().BeOfType<BadRequestObjectResult>();
     }
 
+    // "I'll send it myself": the user sent the file by hand, so a ready order can be marked sent.
+    // Any other supplier still has a channel that could send it, so the same request is refused.
+    [Theory]
+    [InlineData(DeliveryProtocolConstants.Manual, true)]
+    [InlineData(DeliveryProtocolConstants.Http, false)]
+    public async Task MarkDelivered_FromReadyToDeliver_OnlyForAManualSupplier(string protocol, bool admitted)
+    {
+        var options = ParkedOrderTestHarness.NewOptions();
+        await using var db = new ProcuLinkDbContext(options);
+        var (ctrl, orders, orgId, _) = Build(db);
+
+        var order = OrderInStatus(orgId, OrderStatusConstants.ReadyToDeliver);
+        await using (var seed = new ProcuLinkDbContext(options))
+        {
+            seed.SupplierDeliveryConfigs.Add(new SupplierDeliveryConfig
+            {
+                Id = Guid.NewGuid(), OrgId = orgId, SupplierId = order.SupplierId!.Value,
+                Protocol = protocol, ConfigJson = "{}",
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            });
+            await seed.SaveChangesAsync();
+        }
+        await SeedAndDetachAsync(options, db, orders, orgId, order, withAttempt: false);
+
+        var result = await ctrl.MarkDelivered(order.Id, CancellationToken.None);
+
+        var persisted = await db.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == order.Id);
+        var audit = await db.AuditEvents.AsNoTracking()
+            .SingleOrDefaultAsync(e => e.EntityId == order.Id && e.Action == "DeliveryConfirmedManually");
+        (result is AcceptedResult).Should().Be(admitted);
+        (result is BadRequestObjectResult).Should().Be(!admitted);
+        persisted.Status.Should().Be(admitted ? OrderStatusConstants.Delivered : OrderStatusConstants.ReadyToDeliver);
+        audit?.Payload.RootElement.GetProperty("fromStatus").GetString()
+            .Should().Be(admitted ? OrderStatusConstants.ReadyToDeliver : null);
+    }
+
     [Fact]
     public async Task MarkDelivered_ForAnotherOrgsOrder_Is404()
     {

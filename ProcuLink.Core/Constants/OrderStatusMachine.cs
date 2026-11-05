@@ -98,13 +98,13 @@ public static class OrderStatusMachine
             // the artifact and resets the order so the next Send re-transforms.
             // ready_to_deliver → delivery_held: a billing flip pauses (not fails) delivery. This fires
             // BEFORE the 'delivering' claim, so it moves a still-idle, NEVER-dispatched order.
-            // → delivered is GONE (WP-09). It was listed for the retired inbound supplier-status
-            // webhook, and no other writer can perform it: OrdersController.MarkDelivered is gated on
-            // ManuallyDeliverableFrom (delivery_unconfirmed only, checked twice), and DeliveryService
-            // only writes 'delivered' AFTER its claim has moved the row to 'delivering'. Pinned by
+            // ready_to_deliver → delivered: the user marks an order as sent after sending the file
+            // themselves — OrdersController.MarkDelivered, gated on SentByHandFrom AND the supplier
+            // being set to "I'll send it myself" (no channel exists that could have sent it). The
+            // webhook-era edge WP-09 removed is not back for any other supplier. Pinned by
             // OrderStatusMachineTests.EveryInboundDeliveredEdge_HasAProductionWriter.
             // + RR (→ ready was already here as the MV-1 edge; → pending_review is new).
-            [ReadyToDeliver]     = Set(Delivering, DeliveryFailed, DeliveryHeld, Ready, RejectedBySupplier, PendingReview),
+            [ReadyToDeliver]     = Set(Delivering, Delivered, DeliveryFailed, DeliveryHeld, Ready, RejectedBySupplier, PendingReview),
             // Billing hold → released back to ready_to_deliver when the org returns to good standing.
             // delivery_held → delivery_unconfirmed: the release RESTORES a held PARK instead of
             // re-driving it — HoldForBillingAsync records the origin (HeldFromStatus) and
@@ -951,6 +951,15 @@ public static class OrderStatusMachine
     /// </summary>
     public static readonly IReadOnlySet<string> ManuallyDeliverableFrom =
         Set(DeliveryUnconfirmed);
+
+    /// <summary>
+    /// The second half of <c>OrdersController.MarkDelivered</c>'s admission: statuses from which a
+    /// user may mark an order as SENT BY HAND. Admitted only when the order's supplier is set to
+    /// "I'll send it myself" — the endpoint checks that, this set cannot. Kept apart from
+    /// <see cref="ManuallyDeliverableFrom"/> because that set is unconditional.
+    /// </summary>
+    public static readonly IReadOnlySet<string> SentByHandFrom =
+        Set(ReadyToDeliver);
 
     private static readonly IReadOnlySet<string> EmptySet =
         new HashSet<string>(StringComparer.Ordinal);
