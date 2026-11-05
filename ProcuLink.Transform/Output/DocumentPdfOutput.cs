@@ -85,16 +85,3 @@ public static class DocumentPdfOutput
 
     private static string Money(decimal? v) => v?.ToString("0.00", CultureInfo.InvariantCulture) ?? "";
 }
-
-/// <summary>Registers PDF as an order output format: the same writer as invoices, behind the usual guard.</summary>
-public sealed class PdfTransformService : ITransformService
-{
-    public bool CanTransform(OutputFormat format) => format == OutputFormat.Pdf;
-
-    public Task<TransformResult> TransformAsync(
-        PurchaseOrderEntity order, OutputFormat format, CancellationToken ct, CxmlCredentialConfig? cxmlCredentials = null)
-    {
-        OutputFieldValidator.ValidateEntity(order, format);
-        return Task.FromResult(TransformResult.For(OutputFormat.Pdf, new MemoryStream(DocumentPdfOutput.Write(order))));
-    }
-}
