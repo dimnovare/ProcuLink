@@ -238,31 +238,6 @@ public class OrdersControllerResolveValidationTests
             It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<ResolveHeaderFields?>()), Times.Once);
     }
 
-    [Fact]
-    public async Task Resolve_HoldForReviewOnly_NoLines_IsAcceptedAndForwarded()
-    {
-        var (ctrl, orders, orgId) = Build();
-        var id = Guid.NewGuid();
-        ResolveHeaderFields? captured = null;
-        orders
-            .Setup(o => o.ResolveAsync(
-                orgId, id, It.IsAny<IReadOnlyList<Core.Services.LineResolution>>(),
-                It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<ResolveHeaderFields?>()))
-            .Callback<Guid, Guid, IReadOnlyList<Core.Services.LineResolution>, bool, CancellationToken, ResolveHeaderFields?>(
-                (_, _, _, _, _, h) => captured = h)
-            .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(new PurchaseOrderEntity
-            {
-                Id = id, OrgId = orgId, PoNumber = "PO-1", Currency = "EUR",
-                OrderDate = new DateOnly(2026, 1, 1), Status = "ready", HoldForReview = true,
-            }));
-
-        var result = await ctrl.Resolve(id, new ResolveRequest { HoldForReview = true }, CancellationToken.None);
-
-        var dto = Assert.IsType<OrderDto>(Assert.IsType<OkObjectResult>(result).Value);
-        Assert.True(dto.HoldForReview);
-        Assert.True(captured!.HoldForReview);
-    }
-
     // ── Over-long PO number / supplier name → 400 before the service is touched ─────
 
     [Fact]

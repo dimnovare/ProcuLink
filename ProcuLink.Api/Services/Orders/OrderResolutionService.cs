@@ -93,6 +93,17 @@ internal sealed class OrderResolutionService
         if (IsFinished(entity.Status))
             return Result<PurchaseOrderEntity>.Fail(SourceFileCannotBeFixedHere);
 
+        // Hold-only: flip the flag and nothing else. Running the rest would recompute the status
+        // (dragging a ready_to_deliver order back to 'ready') and write a Resolved audit row.
+        if (resolutions.Count == 0 && header is { HoldForReview: { } onlyHold }
+            && header with { HoldForReview = null } is { HasAnyChange: false })
+        {
+            entity.HoldForReview = onlyHold;
+            entity.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+            return Result<PurchaseOrderEntity>.Ok(entity);
+        }
+
         // Validate all resolutions before mutating anything
         foreach (var res in resolutions)
         {

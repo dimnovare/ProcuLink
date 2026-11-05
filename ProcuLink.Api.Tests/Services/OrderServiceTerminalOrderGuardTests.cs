@@ -113,6 +113,24 @@ public class OrderServiceTerminalOrderGuardTests
     private static ResolveHeaderFields HeaderOnlyEdit() =>
         new(OrderDate: null, BuyerName: null, Currency: null, PoNumber: "PO-EDITED", SupplierName: null);
 
+    [Fact]
+    public async Task ResolveAsync_HoldOnly_PersistsTheFlag_AndNeverChangesTheStatus()
+    {
+        var (db, orgId, orderId) = await SeedLinelessOrderAsync(OrderStatusConstants.ReadyToDeliver);
+        var svc = BuildService(db);
+
+        var result = await svc.ResolveAsync(
+            orgId, orderId, Array.Empty<LineResolution>(), saveMappings: false,
+            CancellationToken.None, new ResolveHeaderFields(HoldForReview: true));
+
+        result.IsSuccess.Should().BeTrue();
+        var stored = await db.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == orderId);
+        stored.HoldForReview.Should().BeTrue();
+        stored.Status.Should().Be(OrderStatusConstants.ReadyToDeliver,
+            "holding an order must not recompute its status back to 'ready'");
+        (await db.AuditEvents.CountAsync()).Should().Be(0);
+    }
+
     // ── The three writers ─────────────────────────────────────────────────────────────────────
 
     [Fact]
