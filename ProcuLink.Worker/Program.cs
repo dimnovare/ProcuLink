@@ -432,6 +432,7 @@ builder.Services.AddSingleton<IInvoiceTransformService, JsonInvoiceTransformServ
 builder.Services.AddScoped<IInvoiceService, InvoiceService>();
 // ParseInvoiceJob lives in ProcuLink.Api, enqueued on "critical" — Worker executes it.
 builder.Services.AddScoped<ParseInvoiceJob>();
+builder.Services.AddScoped<ReadDocumentJob>();
 
 builder.Services.AddHostedService<Worker>();
 // Warm the self-hosted OCR models at startup (no-op unless NoEgressOcr:Enabled) so the
