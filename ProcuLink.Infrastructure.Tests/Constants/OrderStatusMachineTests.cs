@@ -32,6 +32,7 @@ public class OrderStatusMachineTests
     [InlineData(ReadyToDeliver, Delivering)]
     [InlineData(ReadyToDeliver, DeliveryFailed)] // missing config
     [InlineData(ReadyToDeliver, DeliveryHeld)]   // mid-pipeline billing flip pauses delivery
+    [InlineData(ReadyToDeliver, Delivered)]      // marked as sent by hand (manual supplier only)
     [InlineData(DeliveryHeld, ReadyToDeliver)]   // reactivation releases the hold and re-drives
     [InlineData(Delivering, Delivered)]
     [InlineData(Delivering, DeliveryFailed)]
@@ -121,10 +122,10 @@ public class OrderStatusMachineTests
     [InlineData(Delivered, Transforming)]
     [InlineData(Parsing, Delivered)]
     [InlineData(RejectedBySupplier, Delivered)]  // no silent un-rejection: nothing writes it
-    // WP-09: the retired inbound supplier-status webhook was the ONLY writer of these four. An
-    // operator settlement (OrdersController.MarkDelivered) admits delivery_unconfirmed alone, and
-    // DeliveryService writes 'delivered' only after its claim has moved the row to 'delivering'.
-    [InlineData(ReadyToDeliver, Delivered)]
+    // WP-09: the retired inbound supplier-status webhook was the ONLY writer of these three. An
+    // operator settlement (OrdersController.MarkDelivered) admits delivery_unconfirmed, plus
+    // ready_to_deliver for a manual supplier only (SentByHandFrom), and DeliveryService writes
+    // 'delivered' only after its claim has moved the row to 'delivering'.
     [InlineData(DeliveryFailed, Delivered)]
     [InlineData(DeliveryDeadLetter, Delivered)]
     [InlineData(DeliveryHeld, Delivered)]
@@ -386,6 +387,7 @@ public class OrderStatusMachineTests
         {
             Delivering,
         };
+        writable.UnionWith(OrderStatusMachine.SentByHandFrom);
 
         var machineInbound = OrderStatusMachine.Transitions
             .Where(kv => kv.Value.Contains(Delivered))
