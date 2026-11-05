@@ -28,12 +28,11 @@ public class ReadDocumentJob(
         var doc = await db.FlowDocuments.FirstOrDefaultAsync(d => d.Id == documentId && d.OrgId == organisationId, ct);
         if (doc is null || (doc.Status != DocumentStatus.Received && doc.Status != DocumentStatus.Reading)) return;
 
-        doc.Status = DocumentStatus.Reading;
-        doc.UpdatedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync(ct);
-
         try
         {
+            doc.Status = DocumentStatus.Reading;
+            doc.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(ct);
             await ReadAsync(doc, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -44,7 +43,12 @@ public class ReadDocumentJob(
         {
             logger.LogError(ex, "ReadDocumentJob failed for document {DocumentId}", documentId);
             if (context is null || context.GetJobParameter<int>("RetryCount") >= LastRetry)
-                await FailAsync(doc, "ai_error", ct);
+            {
+                // Drop whatever the failed attempt tracked (ReadAt, ReadJson, the read audit row): an unread document is not billed.
+                db.ChangeTracker.Clear();
+                var failed = await db.FlowDocuments.FirstAsync(d => d.Id == documentId && d.OrgId == organisationId, ct);
+                await FailAsync(failed, "ai_error", ct);
+            }
             throw;
         }
     }
@@ -55,27 +59,41 @@ public class ReadDocumentJob(
         var isPdf = Path.GetExtension(doc.FileName).Equals(".pdf", StringComparison.OrdinalIgnoreCase);
         IReadOnlyList<PageWord> words = [];
         IReadOnlyList<SheetCell> cells = [];
-        string text;
+        var text = "";
 
+        byte[] bytes;
         await using (var stream = await storage.DownloadAsync(doc.SourceFileKey, ct))
+        {
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer, ct);
+            bytes = buffer.ToArray();
+        }
+
+        try
         {
             if (isPdf)
             {
-                using var buffer = new MemoryStream();
-                await stream.CopyToAsync(buffer, ct);
-                var pdf = PdfWordExtractor.Extract(buffer.ToArray());
-                if (!pdf.Words.GroupBy(w => w.Page).Any(g => g.Count() >= MinWordsPerTextPage))
-                {
-                    await FailAsync(doc, "scanned_not_supported", ct);
-                    return;
-                }
+                var pdf = PdfWordExtractor.Extract(bytes);
                 (words, text) = (pdf.Words, pdf.Text);
             }
             else
             {
-                cells = SheetCellReader.Read(stream, Path.GetExtension(doc.FileName));
-                text = SheetCellReader.ToText(cells);
+                cells = SheetCellReader.Read(new MemoryStream(bytes), Path.GetExtension(doc.FileName));
+                text = SheetCellReader.ToText(cells, MaxChars);
             }
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            // A file we cannot open will not open on a retry either.
+            logger.LogWarning(e, "Document {DocumentId} could not be opened for reading.", doc.Id);
+            await FailAsync(doc, "unreadable_file", ct);
+            return;
+        }
+
+        if (isPdf && !words.GroupBy(w => w.Page).Any(g => g.Count() >= MinWordsPerTextPage))
+        {
+            await FailAsync(doc, "scanned_not_supported", ct);
+            return;
         }
 
         var truncated = text.Length > MaxChars;
@@ -85,14 +103,17 @@ public class ReadDocumentJob(
         var outcome = await reader.ReadAsync(new DocumentReadInput(doc.FileName, doc.ContentType, text, expected), doc.OrgId, ct);
         if (!outcome.Success || outcome.Result is null)
         {
-            await FailAsync(doc, outcome.FailureReason ?? "ai_error", ct);
+            var reason = outcome.FailureReason ?? "ai_error";
+            // ai_error may be a blip: throw so Hangfire retries. The other reasons repeat for this document, so they are final.
+            if (reason == "ai_error") throw new InvalidOperationException("The document reader failed (ai_error).");
+            await FailAsync(doc, reason, ct);
             return;
         }
 
         (SourceLocation? Location, bool NotOnPage) Locate(string? value)
         {
             var loc = isPdf ? ValueLocator.Locate(value, words) : ValueLocator.LocateInCells(value, cells);
-            return (loc, isPdf && value is not null && loc is null);
+            return (loc, isPdf && !string.IsNullOrWhiteSpace(value) && loc is null);
         }
 
         var first = outcome.Result;

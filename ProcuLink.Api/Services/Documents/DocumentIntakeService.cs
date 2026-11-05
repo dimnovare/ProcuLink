@@ -82,7 +82,7 @@ public sealed class DocumentIntakeService(ProcuLinkDbContext db, IFileStorageSer
     private static int CountPages(byte[] pdf)
     {
         try { return PdfWordExtractor.Extract(pdf).PageCount; }
-        catch (Exception e) when (e is PdfDocumentFormatException or InvalidOperationException or ArgumentException)
+        catch (Exception e) when (e is not OperationCanceledException)
         {
             throw new DocumentRejectedException("unreadable_file");
         }

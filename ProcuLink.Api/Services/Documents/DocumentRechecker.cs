@@ -13,7 +13,8 @@ public sealed class DocumentRechecker(ProcuLinkDbContext db)
 {
     public async Task ApplyAsync(FlowDocument doc, Flow flow, ReadResult read, CancellationToken ct)
     {
-        doc.DedupKey = DocumentChecks.DedupKeyOf(read);
+        // Spec section 6: the document number, else the file hash.
+        doc.DedupKey = DocumentChecks.DedupKeyOf(read) ?? (string.IsNullOrEmpty(doc.Sha256) ? null : $"sha256:{doc.Sha256}");
 
         var duplicate = false;
         if (doc.DedupKey is { } key)
