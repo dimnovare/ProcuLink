@@ -1,0 +1,188 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using OpenAI.Chat;
+using ProcuLink.Core.Documents;
+using ProcuLink.Core.Services.Ai;
+
+namespace ProcuLink.Infrastructure.Services.Ai;
+
+/// <summary>
+/// Reads every field and table of a document's text with one OpenAI strict-JSON call.
+/// Singleton-safe: the scoped <see cref="IAiUsageTracker"/> is resolved per call. Never throws;
+/// every failure is a <see cref="DocumentReadOutcome"/> with a reason, and the job decides retries.
+/// </summary>
+public sealed class OpenAiDocumentReader : IDocumentReader
+{
+    private const string DefaultModel = "gpt-5-mini";
+    private const int MaxOutputTokens = 16000;
+    private static readonly TimeSpan CallTimeout = TimeSpan.FromSeconds(60);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    private static readonly string SystemPrompt =
+        "You read business documents. Read every field and every table in the document text. " +
+        "Keys are stable snake_case identifiers. " +
+        "When an expected list is given, use exactly those keys for them, return a null value for an expected key " +
+        "that is not present in the document, and report all other fields and tables you find too. " +
+        $"Each field and column 'type' is one of: {string.Join(", ", FieldTypes.All)}. " +
+        $"Each 'meaning' is one of: {string.Join(", ", FieldMeanings.All)}, or null when none fits. " +
+        "Copy values verbatim, exactly as printed. Never invent a value. " +
+        "Confidence is your honest 0 to 1 estimate that the value is read correctly.";
+
+    private static readonly BinaryData Schema = BuildSchema();
+
+    private readonly ChatClient? _client;
+    private readonly ILogger<OpenAiDocumentReader> _logger;
+    private readonly IServiceScopeFactory? _scopeFactory;
+    private readonly IAiUsageTracker? _tracker;
+
+    public OpenAiDocumentReader(
+        IConfiguration configuration, ILogger<OpenAiDocumentReader> logger, IServiceScopeFactory? scopeFactory = null)
+        : this(configuration, logger, null, null)
+    {
+        _scopeFactory = scopeFactory;
+    }
+
+    internal OpenAiDocumentReader(
+        IConfiguration configuration, ILogger<OpenAiDocumentReader> logger, IAiUsageTracker? tracker, ChatClient? overrideClient)
+    {
+        _logger = logger;
+        _tracker = tracker;
+        var model = configuration["Ai:OpenAI:ExtractionModel"] ?? configuration["Ai:OpenAI:MappingModel"] ?? DefaultModel;
+        var apiKey = configuration["Ai:OpenAI:ApiKey"];
+        if (overrideClient is not null)
+            _client = overrideClient;
+        else if (string.Equals(configuration["Ai:Provider"], "openai", StringComparison.OrdinalIgnoreCase)
+                 && !string.IsNullOrWhiteSpace(apiKey))
+            _client = new ChatClient(model, apiKey);
+    }
+
+    public bool IsAvailable => _client is not null;
+
+    public async Task<DocumentReadOutcome> ReadAsync(DocumentReadInput input, Guid organisationId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(input.Text)) return Fail("empty_document");
+        if (_client is null) return Fail("ai_unavailable");
+
+        using var scope = _scopeFactory?.CreateScope();
+        var tracker = _tracker ?? scope?.ServiceProvider.GetService<IAiUsageTracker>();
+
+        if (tracker is not null)
+        {
+            try
+            {
+                if (await tracker.IsAtOrOverLimitAsync(organisationId, ct)) return Fail("usage_cap");
+            }
+            catch (Exception ex)
+            {
+                // A failed cap check must not bypass the cap.
+                _logger.LogWarning(ex, "Document read cap check failed for org {OrgId}; skipping to be safe.", organisationId);
+                return Fail("usage_cap");
+            }
+        }
+
+        try
+        {
+            var messages = new List<ChatMessage>
+            {
+                new SystemChatMessage(SystemPrompt),
+                new UserChatMessage(BuildUserMessage(input)),
+            };
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(CallTimeout);
+            var completion = (await _client.CompleteChatAsync(messages, new ChatCompletionOptions
+            {
+                MaxOutputTokenCount = MaxOutputTokens,
+                ResponseFormat = ChatResponseFormat.CreateJsonSchemaFormat(
+                    jsonSchemaFormatName: "document_read", jsonSchema: Schema, jsonSchemaIsStrict: true),
+            }, cts.Token)).Value;
+
+            var tokens = completion.Usage?.TotalTokenCount ?? 0;
+            if (tracker is not null && tokens > 0)
+            {
+                try { await tracker.IncrementAsync(organisationId, tokens, ct); }
+                catch (Exception ex) { _logger.LogWarning(ex, "Failed to record AI token usage for org {OrgId}.", organisationId); }
+            }
+
+            var dto = JsonSerializer.Deserialize<ReadDto>(completion.Content.FirstOrDefault()?.Text ?? "", JsonOptions)
+                      ?? throw new JsonException("Empty AI response.");
+            return new DocumentReadOutcome(true, Map(dto, input.Expected), null);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "Document read failed (org {OrgId}).", organisationId);
+            return Fail("ai_error");
+        }
+    }
+
+    private static DocumentReadOutcome Fail(string reason) => new(false, null, reason);
+
+    private static string BuildUserMessage(DocumentReadInput input)
+    {
+        var expected = input.Expected is { } e && (e.Fields.Count > 0 || e.Tables.Count > 0)
+            ? "Expected fields and tables (use exactly these keys):\n" + DocumentJson.Serialize(e) + "\n\n"
+            : "";
+        return $"{expected}File: {input.FileName} ({input.ContentType})\n\nDocument text:\n{input.Text}";
+    }
+
+    private static ReadResult Map(ReadDto dto, FlowFieldList? expected)
+    {
+        var fieldKeys = expected?.Fields.Select(f => f.Key).ToHashSet();
+        var tableKeys = expected?.Tables.Select(t => t.Key).ToHashSet();
+        static string Type(string? t) => t is not null && FieldTypes.All.Contains(t) ? t : FieldTypes.Text;
+        static string? Meaning(string? m) => m is not null && FieldMeanings.All.Contains(m) ? m : null;
+        static double Clamp(double c) => double.IsNaN(c) ? 0 : Math.Clamp(c, 0, 1);
+
+        var fields = (dto.Fields ?? []).Select(f => new ReadField(
+            f.Key, f.Label, f.Value, Type(f.Type), Meaning(f.Meaning), Clamp(f.Confidence),
+            Location: null, NotOnPage: false, Listed: fieldKeys?.Contains(f.Key) ?? true, Edited: false)).ToList();
+
+        var tables = (dto.Tables ?? []).Select(t => new ReadTable(
+            t.Key, t.Label,
+            (t.Columns ?? []).Select(c => new ReadColumn(c.Key, c.Label, Type(c.Type), Meaning(c.Meaning))).ToList(),
+            (t.Rows ?? []).Select(r => new ReadRow((r.Cells ?? [])
+                .GroupBy(c => c.Column).ToDictionary(
+                    g => g.Key,
+                    g => new ReadCell(g.First().Value, Clamp(g.First().Confidence), null, false, false)))).ToList(),
+            Listed: tableKeys?.Contains(t.Key) ?? true)).ToList();
+
+        return new ReadResult(dto.KindLabel, fields, tables);
+    }
+
+    private static BinaryData BuildSchema()
+    {
+        static object Str(bool nullable = false) => new { type = nullable ? new[] { "string", "null" } : (object)"string" };
+        static object Obj(object props) => new
+        {
+            type = "object", properties = props,
+            required = props.GetType().GetProperties().Select(p => p.Name).ToArray(),
+            additionalProperties = false,
+        };
+        static object Arr(object item) => new { type = "array", items = item };
+        var num = new { type = "number" };
+
+        var schema = Obj(new
+        {
+            kind_label = Str(true),
+            fields = Arr(Obj(new { key = Str(), label = Str(), value = Str(true), type = Str(), meaning = Str(true), confidence = num })),
+            tables = Arr(Obj(new
+            {
+                key = Str(), label = Str(),
+                columns = Arr(Obj(new { key = Str(), label = Str(), type = Str(), meaning = Str(true) })),
+                rows = Arr(Obj(new { cells = Arr(Obj(new { column = Str(), value = Str(true), confidence = num })) })),
+            })),
+        });
+        return BinaryData.FromString(JsonSerializer.Serialize(schema));
+    }
+
+    internal sealed record ReadDto(
+        [property: JsonPropertyName("kind_label")] string? KindLabel,
+        List<FieldDto>? Fields, List<TableDto>? Tables);
+    internal sealed record FieldDto(string Key, string Label, string? Value, string? Type, string? Meaning, double Confidence);
+    internal sealed record ColumnDto(string Key, string Label, string? Type, string? Meaning);
+    internal sealed record CellDto(string Column, string? Value, double Confidence);
+    internal sealed record RowDto(List<CellDto>? Cells);
+    internal sealed record TableDto(string Key, string Label, List<ColumnDto>? Columns, List<RowDto>? Rows);
+}

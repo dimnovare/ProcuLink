@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Jobs;
 using ProcuLink.Api.Services;
 using ProcuLink.Api.Telemetry;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Alerting;
@@ -351,6 +352,7 @@ builder.Services.AddSingleton<IPdfRasterizer, SkiaPdfRasterizer>();
 // so it must register the same singleton extractor as the API (orgId is a method
 // param + tracker resolved via IServiceScopeFactory — no ICurrentTenantService).
 builder.Services.AddSingleton<IStructuredOrderExtractor, OpenAiPdfOrderExtractor>();
+builder.Services.AddSingleton<IDocumentReader, OpenAiDocumentReader>();
 // OCR seam. The Worker runs ParseOrderJob, so this is where self-hosted OCR executes.
 // Opt-in (RapidOcrNet) only when enabled — otherwise a no-op (no models loaded).
 if (builder.Configuration.GetValue<bool>("NoEgressOcr:Enabled"))
