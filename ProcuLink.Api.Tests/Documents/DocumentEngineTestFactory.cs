@@ -1,4 +1,6 @@
 using Hangfire;
+using Hangfire.Common;
+using Hangfire.States;
 using Hangfire.InMemory;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Hosting;
@@ -7,7 +9,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using ProcuLink.Api.Tests.Integration;
+using Moq;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
 
 namespace ProcuLink.Api.Tests.Documents;
@@ -26,6 +30,16 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
     private static string ClerkId(Guid org) => $"org_DOC_{org.ToString("N")[..4]}";
 
     private readonly string _dbName = Guid.NewGuid().ToString("N");
+
+    /// <summary>Replaces <see cref="IFileStorageService"/>; tests inspect the uploads.</summary>
+    public Mock<IFileStorageService> Storage { get; } = new();
+
+    /// <summary>Replaces <see cref="IBackgroundJobClient"/>; tests count the jobs created.</summary>
+    public Mock<IBackgroundJobClient> Jobs { get; } = new();
+
+    public int Enqueued<T>() =>
+        Jobs.Invocations.Count(i => i.Method.Name == nameof(IBackgroundJobClient.Create)
+                                    && ((Job)i.Arguments[0]).Type == typeof(T));
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -58,6 +72,12 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
                 .UseSimpleAssemblyNameTypeSerializer()
                 .UseRecommendedSerializerSettings()
                 .UseInMemoryStorage());
+
+            Storage.Setup(s => s.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((Stream _, string key, string _, CancellationToken _) => key);
+            Jobs.Setup(j => j.Create(It.IsAny<Job>(), It.IsAny<IState>())).Returns("job-1");
+            services.AddSingleton(Storage.Object);
+            services.AddSingleton(Jobs.Object);
 
             foreach (var d in services.Where(d => d.ServiceType.FullName?.Contains("Authentication") == true
                                                || d.ServiceType.FullName?.Contains("JwtBearer") == true).ToList())

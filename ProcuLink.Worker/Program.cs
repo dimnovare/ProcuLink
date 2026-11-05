@@ -183,6 +183,7 @@ builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Ana
 builder.Services.Configure<ProcuLink.Api.Services.Documents.DocumentEngineOptions>(builder.Configuration.GetSection("DocumentEngine"));
 builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.DocumentEngineGate>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentRechecker>();
+builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentIntakeService>();
 builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 // Same scoped OrderService also serves the pull-ingress stub-creation seam (explicit order id).

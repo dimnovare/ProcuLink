@@ -672,6 +672,7 @@ builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Ana
 builder.Services.Configure<ProcuLink.Api.Services.Documents.DocumentEngineOptions>(builder.Configuration.GetSection("DocumentEngine"));
 builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.DocumentEngineGate>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentRechecker>();
+builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentIntakeService>();
 builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
 builder.Services.AddScoped<IEmailSettingsService, EmailSettingsService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Organisation.IOrganisationSettingsService, ProcuLink.Infrastructure.Services.OrganisationSettingsService>();
