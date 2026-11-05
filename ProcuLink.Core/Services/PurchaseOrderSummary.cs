@@ -29,5 +29,8 @@ public record PurchaseOrderSummary(
     bool IsSample = false,
 
     /// <summary>"purchase_order" | "invoice" | "other" — null when the document was never classified.</summary>
-    string? DocumentType = null
+    string? DocumentType = null,
+
+    /// <summary>A person held this order so it is never auto-delivered.</summary>
+    bool HoldForReview = false
 );

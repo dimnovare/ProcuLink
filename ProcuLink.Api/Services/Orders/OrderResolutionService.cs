@@ -225,6 +225,12 @@ internal sealed class OrderResolutionService
                 changedHeaderFields.Add("poNumber");
             }
 
+            if (header.HoldForReview is { } hold)
+            {
+                entity.HoldForReview = hold;
+                changedHeaderFields.Add("holdForReview");
+            }
+
             if (!string.IsNullOrWhiteSpace(header.SupplierName))
             {
                 var trimmed = header.SupplierName.Trim();

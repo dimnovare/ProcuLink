@@ -579,6 +579,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(x => x.CreatedAt).HasColumnName("created_at");
             b.Property(x => x.UpdatedAt).HasColumnName("updated_at");
             b.Property(x => x.IsSample).HasColumnName("is_sample").HasDefaultValue(false);
+            b.Property(x => x.HoldForReview).HasColumnName("hold_for_review").HasDefaultValue(false);
             // SLA timers (Group O reliability).
             b.Property(x => x.DeliveryDueAt).HasColumnName("delivery_due_at").HasColumnType("timestamptz");
             b.Property(x => x.SlaBreached).HasColumnName("sla_breached").HasDefaultValue(false);

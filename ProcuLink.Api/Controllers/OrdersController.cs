@@ -312,7 +312,8 @@ public sealed class OrdersController : ControllerBase
         IFormFile file,
         [FromForm] Guid supplierId,
         [FromServices] IStubOrderCreator stubOrders,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        [FromForm] bool holdForReview = false)
     {
         if (file is null || file.Length == 0)
             return BadRequest(new { error = "File is required." });
@@ -419,6 +420,14 @@ public sealed class OrdersController : ControllerBase
             return BadRequest(new { error = result.Error });
 
         var stub = result.Value!;
+
+        // Held BEFORE the parse job is enqueued, so nothing can auto-deliver it in between. Set here
+        // rather than threaded through both creators: it is one flag on the tracked entity.
+        if (holdForReview && !stub.HoldForReview)
+        {
+            stub.HoldForReview = true;
+            await _db.SaveChangesAsync(ct);
+        }
 
         // Enqueue async parse — returns before parsing completes
         ParseOrderJob.Enqueue(_jobs, stub.Id, orgId);
@@ -773,7 +782,8 @@ public sealed class OrdersController : ControllerBase
             || !string.IsNullOrWhiteSpace(request.SellerTaxId)
             || !string.IsNullOrWhiteSpace(request.PaymentIban)
             || !string.IsNullOrWhiteSpace(request.PaymentReference)
-            || request.SubTotal.HasValue || request.TaxTotal.HasValue || request.GrandTotal.HasValue;
+            || request.SubTotal.HasValue || request.TaxTotal.HasValue || request.GrandTotal.HasValue
+            || request.HoldForReview.HasValue;
 
         if ((request.LineResolutions is null || request.LineResolutions.Count == 0) && !hasHeaderEdit)
             return BadRequest(new { error = "At least one line resolution or header correction is required." });
@@ -848,7 +858,8 @@ public sealed class OrdersController : ControllerBase
         var header = new Core.Services.ResolveHeaderFields(
             orderDate, buyerName, currency, poNumber, supplierName,
             dueDate, Trimmed(request.SellerTaxId), Trimmed(request.PaymentIban), Trimmed(request.PaymentReference),
-            request.SubTotal, request.TaxTotal, request.GrandTotal, _tenant.ClerkUserId);
+            request.SubTotal, request.TaxTotal, request.GrandTotal, _tenant.ClerkUserId,
+            request.HoldForReview);
 
         // An invoice is locked once it is on its way (a failed one keeps the terminal 400 below), and
         // who gets paid, under which number, is an admin's change only.
@@ -2979,7 +2990,8 @@ public sealed class OrdersController : ControllerBase
         DueDate:              e.DueDate?.ToString("yyyy-MM-dd"),
         SellerTaxId:          e.SellerTaxId,
         PaymentIban:          e.PaymentIban,
-        PaymentReference:     e.PaymentReference
+        PaymentReference:     e.PaymentReference,
+        HoldForReview:        e.HoldForReview
     );
 
     // ── Supplier auto-detect: read + decision recording ───────────────────────

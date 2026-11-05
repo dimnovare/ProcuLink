@@ -99,7 +99,9 @@ public record OrderDto(
     string? DueDate = null,
     string? SellerTaxId = null,
     string? PaymentIban = null,
-    string? PaymentReference = null
+    string? PaymentReference = null,
+    /// <summary>A person held this order so it is never auto-delivered; an explicit send still works.</summary>
+    bool HoldForReview = false
 );
 
 /// <summary>

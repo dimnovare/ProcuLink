@@ -2152,6 +2152,12 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.Property<string>("HeldFromStatus")
                         .HasColumnType("text");
 
+                    b.Property<bool>("HoldForReview")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("hold_for_review");
+
                     b.Property<string>("InboundSenderDomain")
                         .HasColumnType("text")
                         .HasColumnName("inbound_sender_domain");

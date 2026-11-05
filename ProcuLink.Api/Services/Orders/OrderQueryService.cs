@@ -189,6 +189,7 @@ internal sealed class OrderQueryService
                 o.SourceFileKey,
                 o.IsSample,
                 o.DocumentType,
+                o.HoldForReview,
             })
             .ToListAsync(ct);
 
@@ -242,7 +243,8 @@ internal sealed class OrderQueryService
                 sourceFormat,
                 o.CreatedAt,
                 o.IsSample,
-                o.DocumentType);
+                o.DocumentType,
+                o.HoldForReview);
         }).ToList();
 
         return Result<(IReadOnlyList<PurchaseOrderSummary>, int, int)>.Ok(

@@ -48,6 +48,9 @@ public class ResolveRequest
     /// </summary>
     public string? BuyerName { get; set; }
 
+    /// <summary>Optional: hold this one order so it is never auto-delivered. Null = no change.</summary>
+    public bool? HoldForReview { get; set; }
+
     /// <summary>
     /// Optional corrected currency, a 3-letter ISO alpha code (e.g. "EUR").
     /// Null = no change. Must be exactly 3 alpha characters (else 400);

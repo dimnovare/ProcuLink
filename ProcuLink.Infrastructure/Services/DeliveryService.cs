@@ -177,8 +177,8 @@ public sealed class DeliveryService : IDeliveryService
         if (config.Protocol == DeliveryProtocolConstants.Manual)
             return new DeliveryResult(true, null, Outcome: DeliveryOutcome.NotRetryable);
 
-        // Auto-deliver is off: a deliberate no-op, never a send.
-        if (requireAutoDeliver && !config.AutoDeliver)
+        // Auto-deliver is off, or a person held this one order: a deliberate no-op, never a send.
+        if (requireAutoDeliver && (!config.AutoDeliver || order.HoldForReview))
             return new DeliveryResult(true, null, Outcome: DeliveryOutcome.NotRetryable);
 
         if (!_dispatchers.TryGetValue(config.Protocol, out var dispatcher))

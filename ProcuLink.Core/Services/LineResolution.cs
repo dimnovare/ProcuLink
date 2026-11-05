@@ -63,7 +63,8 @@ public record ResolveHeaderFields(
     decimal?  SubTotal         = null,
     decimal?  TaxTotal         = null,
     decimal?  GrandTotal       = null,
-    string?   ChangedBy        = null)
+    string?   ChangedBy        = null,
+    bool?     HoldForReview    = null)
 {
     /// <summary>True when at least one header field carries a change.</summary>
     public bool HasAnyChange => OrderDate.HasValue
@@ -73,5 +74,5 @@ public record ResolveHeaderFields(
         || !string.IsNullOrWhiteSpace(SupplierName)
         || DueDate.HasValue || SubTotal.HasValue || TaxTotal.HasValue || GrandTotal.HasValue
         || !string.IsNullOrWhiteSpace(SellerTaxId) || !string.IsNullOrWhiteSpace(PaymentIban)
-        || !string.IsNullOrWhiteSpace(PaymentReference);
+        || !string.IsNullOrWhiteSpace(PaymentReference) || HoldForReview.HasValue;
 }

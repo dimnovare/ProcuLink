@@ -131,6 +131,29 @@ public class DeliveryServiceTests
     }
 
     [Fact]
+    public async Task HeldOrder_IsNotAutoDelivered_ButManualSendWorks()
+    {
+        await using var db = CreateDb();
+        var encryption = CreateEncryption();
+        var ids = await SeedOrderAsync(db);
+        db.SupplierDeliveryConfigs.Add(MakeConfig(ids.OrgId, ids.SupplierId, encryption, autoDeliver: true));
+        (await db.PurchaseOrders.SingleAsync()).HoldForReview = true;
+        await db.SaveChangesAsync();
+        var dispatcher = new FakeDispatcher(new DeliveryResult(true, null, 202));
+        var service = CreateService(db, dispatcher, encryption);
+
+        var auto = await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, true, default);
+
+        auto.Success.Should().BeTrue();
+        dispatcher.Calls.Should().Be(0);
+        (await db.PurchaseOrders.SingleAsync()).Status.Should().Be(OrderStatusConstants.ReadyToDeliver);
+
+        await service.DispatchArtifactAsync(ids.OrgId, ids.OrderId, ids.ArtifactId, false, default);
+
+        dispatcher.Calls.Should().Be(1);
+    }
+
+    [Fact]
     public async Task DispatchArtifactAsync_Success_WritesAttemptAndMarksDelivered()
     {
         await using var db = CreateDb();
