@@ -42,7 +42,7 @@ public sealed class OrganisationEraserPostgresTests(PostgresContainerFixture pos
     /// CUSTOMER's S3 bucket). A new *Key column fails the blob assertion until the eraser deletes
     /// its files or it is listed here — the definition is this file's, not the eraser's.
     /// </summary>
-    private static readonly string[] NotFileKeys = ["Key", "IdempotencyKey", "ObjectKey", "BillingKey", "EncryptedSecretKey"];
+    private static readonly string[] NotFileKeys = ["Key", "IdempotencyKey", "ObjectKey", "BillingKey", "EncryptedSecretKey", "DedupKey"];
 
     private DbContextOptions<ProcuLinkDbContext>? _options;
     private string? _connectionString;
