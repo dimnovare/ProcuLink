@@ -1,8 +1,10 @@
 using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using ProcuLink.Api.Auth;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Controllers;
 using ProcuLink.Core.Constants;
@@ -134,6 +136,34 @@ public class OrdersControllerResolveStatusGuardTests
         var result = await ctrl.Resolve(orderId, WithLine(), CancellationToken.None);
 
         Assert.IsNotType<ConflictObjectResult>(result);
+        orders.Verify(o => o.ResolveAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<IReadOnlyList<Core.Services.LineResolution>>(),
+            It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<ResolveHeaderFields?>()), Times.Once);
+    }
+
+    /// <summary>Who gets paid is an admin's change: a member's new IBAN is refused, an admin's goes through.</summary>
+    [Fact]
+    public async Task Resolve_InvoiceIban_IsRefusedForAMember_AndAdmittedForAnAdmin()
+    {
+        var (ctrl, orders, _, orgId) = Build(out var db, out _);
+        var invoice = NewOrder(Guid.NewGuid(), orgId, OrderStatusConstants.PendingReview);
+        invoice.DocumentType = "invoice";
+        db.PurchaseOrders.Add(invoice);
+        await db.SaveChangesAsync();
+        Task<IActionResult> ResolveAs(OrgRole role)
+        {
+            ctrl.ControllerContext = new() { HttpContext = new DefaultHttpContext { Items = { [ClerkOrgRole.ItemsKey] = role } } };
+            return ctrl.Resolve(invoice.Id, new ResolveRequest { PaymentIban = "DE89370400440532013000" }, CancellationToken.None);
+        }
+
+        var refused = Assert.IsType<ObjectResult>(await ResolveAs(OrgRole.Member));
+        Assert.Equal(StatusCodes.Status403Forbidden, refused.StatusCode);
+        Assert.Contains("Only a workspace admin can change an invoice's IBAN, number or seller.", refused.Value!.ToString());
+        orders.Verify(o => o.ResolveAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<IReadOnlyList<Core.Services.LineResolution>>(),
+            It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<ResolveHeaderFields?>()), Times.Never);
+
+        Assert.IsType<OkObjectResult>(await ResolveAs(OrgRole.Admin));
         orders.Verify(o => o.ResolveAsync(
             It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<IReadOnlyList<Core.Services.LineResolution>>(),
             It.IsAny<bool>(), It.IsAny<CancellationToken>(), It.IsAny<ResolveHeaderFields?>()), Times.Once);

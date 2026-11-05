@@ -9,6 +9,7 @@ public sealed class InvoiceChecksTests
 {
     private static PurchaseOrderEntity Invoice(decimal line1, decimal line2, decimal? net, decimal? tax, decimal? total) => new()
     {
+        PoNumberNormalized = "INV-1", SupplierName = "Example Supplies GmbH",
         SubTotal = net, TaxTotal = tax, GrandTotal = total, PaymentIban = "DE89370400440532013000",
         Lines =
         {
@@ -17,20 +18,28 @@ public sealed class InvoiceChecksTests
         },
     };
 
+    /// <summary>A balanced credit note at zero VAT: signs are not checked, and 0 VAT is a value read.</summary>
     [Fact]
-    public void BalancedInvoice_HasNoProblems() =>
-        InvoiceChecks.Run(Invoice(60m, 40m, 100m, 21m, 121m)).Should().BeEmpty();
+    public void BalancedCreditNote_AtZeroVat_HasNoProblems() =>
+        InvoiceChecks.Run(Invoice(-60m, -40m, -100m, 0m, -100m)).Should().BeEmpty();
 
-    [Fact]
-    public void NetMismatch_ReportsIt() =>
-        InvoiceChecks.Run(Invoice(50m, 40m, 100m, 21m, 121m))
-            .Should().Equal("Line amounts do not add up to the net total.");
+    [Theory]
+    [InlineData("lines", "Line amounts do not add up to the net total.")]
+    [InlineData("iban", "The bank account (IBAN) is not valid.")]
+    [InlineData("number", "Invoice number not found on the invoice.")]
+    [InlineData("date", "Invoice date not found on the invoice.")]
+    [InlineData("seller", "Seller not found on the invoice.")]
+    [InlineData("net", "Net amount not found on the invoice.")]
+    [InlineData("vat", "VAT amount not found on the invoice.")]
+    public void OneFault_ReportsExactlyIt(string fault, string problem)
+    {
+        var doc = Invoice(fault == "lines" ? 50m : 60m, 40m, 100m, 21m, 121m);
+        if (fault == "iban") doc.PaymentIban = "DE89370400440532013001";
+        if (fault == "number") doc.PoNumberNormalized = null;
+        if (fault == "seller") doc.SupplierName = " ";
+        if (fault == "net") doc.SubTotal = null;
+        if (fault == "vat") doc.TaxTotal = null;
 
-    [Fact]
-    public void BalancedCreditNote_HasNoProblems() =>
-        InvoiceChecks.Run(Invoice(-60m, -40m, -100m, -21m, -121m)).Should().BeEmpty();
-
-    [Fact]
-    public void ZeroVat_HasNoProblems() =>
-        InvoiceChecks.Run(Invoice(60m, 40m, 100m, 0m, 100m)).Should().BeEmpty();
+        InvoiceChecks.Run(doc, dateRead: fault != "date").Should().Equal(problem);
+    }
 }

@@ -1,12 +1,17 @@
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using ProcuLink.Api.Auth;
+using ProcuLink.Api.Controllers;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Mapping;
+using ProcuLink.Core.Services.Organisation;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Infrastructure.Services.Detection;
@@ -110,7 +115,8 @@ public sealed class InvoicePathPostgresTests(PostgresContainerFixture postgres) 
         {
             seed.PurchaseOrders.Add(new PurchaseOrderEntity
             {
-                Id = orderId, OrgId = orgId, SupplierId = vendorId, PoNumber = "INV-2026-002", Currency = "EUR",
+                Id = orderId, OrgId = orgId, SupplierId = vendorId, PoNumber = "INV-2026-002",
+                PoNumberNormalized = "INV-2026-002", Currency = "EUR",
                 DocumentType = "invoice", Status = OrderStatusConstants.PendingReview, SupplierName = "Example Supplies GmbH",
                 SubTotal = 100m, TaxTotal = 21m, GrandTotal = 120m, OrderDate = DateOnly.FromDateTime(now),
                 CreatedAt = now, UpdatedAt = now,
@@ -151,6 +157,51 @@ public sealed class InvoicePathPostgresTests(PostgresContainerFixture postgres) 
         Assert.NotEqual(OrderStatusConstants.PendingReview, order.Status);
         Assert.DoesNotContain(await verify.OrderExceptions.AsNoTracking()
             .Where(e => e.OrderId == orderId && e.Code == "invoice_check").ToListAsync(), e => e.State == "open");
+    }
+
+    [DockerRequiredFact]
+    public async Task SettingTheDestination_MovesAndSettlesParkedInvoices_AndLeavesParkedOrdersAlone()
+    {
+        var (orgId, _, destinationId) = await SeedAsync("park");
+        var now = DateTime.UtcNow;
+        PurchaseOrderEntity Parked(string type, decimal total) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = orgId, PoNumber = $"INV-{total}", PoNumberNormalized = $"INV-{total}",
+            Currency = "EUR", DocumentType = type, Status = OrderStatusConstants.Unrouted, SupplierName = "Example Supplies GmbH",
+            SubTotal = 100m, TaxTotal = 21m, GrandTotal = total, OrderDate = DateOnly.FromDateTime(now), CreatedAt = now, UpdatedAt = now,
+        };
+        var (clean, held, order) = (Parked("invoice", 121m), Parked("invoice", 120m), Parked("purchase_order", 121m));
+        await using (var seed = new ProcuLinkDbContext(_options!))
+        {
+            (await seed.Organisations.SingleAsync(o => o.Id == orgId)).InvoiceDestinationSupplierId = null;
+            seed.PurchaseOrders.AddRange(clean, held, order);
+            await seed.SaveChangesAsync();
+        }
+
+        async Task<IActionResult> SaveAs(OrgRole role)
+        {
+            await using var db = new ProcuLinkDbContext(_options!);
+            var tenant = new Mock<ICurrentTenantService>();
+            tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
+            tenant.SetupGet(t => t.ClerkUserId).Returns("user_admin");
+            var settings = new SettingsController(tenant.Object, null!, null!, new OrganisationSettingsService(db), null!, null!, db, null!, null!)
+            {
+                ControllerContext = new() { HttpContext = new DefaultHttpContext { Items = { [ClerkOrgRole.ItemsKey] = role } } },
+            };
+            return await settings.UpdateOrganisation(new UpdateOrgSettingsRequest { InvoiceDestinationSupplierId = destinationId }, CancellationToken.None);
+        }
+
+        Assert.Equal(StatusCodes.Status403Forbidden, Assert.IsType<ObjectResult>(await SaveAs(OrgRole.Member)).StatusCode);
+        Assert.IsType<OkObjectResult>(await SaveAs(OrgRole.Admin));
+
+        await using var verify = new ProcuLinkDbContext(_options!);
+        var rows = await verify.PurchaseOrders.AsNoTracking().Where(o => o.OrgId == orgId).ToDictionaryAsync(o => o.Id);
+        Assert.Equal((destinationId, OrderStatusConstants.Ready), (rows[clean.Id].SupplierId, rows[clean.Id].Status));
+        Assert.Equal((destinationId, OrderStatusConstants.PendingReview), (rows[held.Id].SupplierId, rows[held.Id].Status));
+        Assert.Equal(((Guid?)null, OrderStatusConstants.Unrouted), (rows[order.Id].SupplierId, rows[order.Id].Status));
+        var audit = await verify.AuditEvents.AsNoTracking().SingleAsync(a => a.OrgId == orgId && a.Action == "InvoiceDestinationChanged");
+        Assert.Equal(2, audit.Payload!.RootElement.GetProperty("moved").GetInt32());
+        Assert.Equal("user_admin", audit.Payload.RootElement.GetProperty("by").GetString());
     }
 
     // ── Harness ─────────────────────────────────────────────────────────────

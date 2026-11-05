@@ -648,7 +648,8 @@ internal sealed class OrderIngestionService
         };
 
         if (isInvoice)
-            await ApplyInvoiceProblemsAsync(_db, entity, await ApplyInvoicePathAsync(entity, supplierChosenByPerson: false, ct), ct);
+            await ApplyInvoiceProblemsAsync(_db, entity,
+                await ApplyInvoicePathAsync(entity, supplierChosenByPerson: false, ct, dateRead: order.OrderDate.HasValue), ct);
 
         // ── Supplier auto-detect, sync path ───────────────────────────────────
         // This order is persisted whole and NEVER enqueues ParseOrderJob, so the hook in
@@ -1207,10 +1208,10 @@ internal sealed class OrderIngestionService
                 {
                     Id = orderId, OrgId = organisationId, SupplierId = entity.SupplierId,
                     ConnectionRevisionId = entity.ConnectionRevisionId, PoNumber = newPoNumber,
-                    SupplierName = newSupplierName, SubTotal = newSubTotal, TaxTotal = newTaxTotal,
+                    PoNumberNormalized = newPoNumberNormalized, SupplierName = newSupplierName, SubTotal = newSubTotal, TaxTotal = newTaxTotal,
                     GrandTotal = newGrandTotal, PaymentIban = newPaymentIban, Lines = lineEntities,
                 };
-                invoiceProblems = await ApplyInvoicePathAsync(invoice, supplierChosenByPerson, ct);
+                invoiceProblems = await ApplyInvoicePathAsync(invoice, supplierChosenByPerson, ct, parsedOrder.OrderDate.HasValue);
                 (newStatus, newSupplierId, newConnectionRevisionId) =
                     (InvoiceStatus(invoice, invoiceProblems), invoice.SupplierId, invoice.ConnectionRevisionId);
             }
@@ -1548,7 +1549,7 @@ internal sealed class OrderIngestionService
             invoice = new PurchaseOrderEntity
             {
                 Id = orderId, OrgId = organisationId, SupplierId = entity.SupplierId, PoNumber = entity.PoNumber,
-                SupplierName = entity.SupplierName, SubTotal = entity.SubTotal, TaxTotal = entity.TaxTotal,
+                PoNumberNormalized = entity.PoNumberNormalized, SupplierName = entity.SupplierName, SubTotal = entity.SubTotal, TaxTotal = entity.TaxTotal,
                 GrandTotal = entity.GrandTotal, PaymentIban = entity.PaymentIban, Lines = lineEntities,
             };
             invoiceProblems = await ApplyInvoicePathAsync(invoice, supplierChosenByPerson: true, ct);
@@ -1651,9 +1652,10 @@ internal sealed class OrderIngestionService
     /// destination was set). Its codes go through as printed. Mutates <paramref name="invoice"/>
     /// (supplier, revision, lines) and returns its problems; the caller settles them with
     /// <see cref="ApplyInvoiceProblemsAsync"/> (or <see cref="InvoiceStatus"/> ahead of a claim).
+    /// <paramref name="dateRead"/> as in <see cref="CollectInvoiceProblemsAsync"/>.
     /// </summary>
     private async Task<IReadOnlyList<string>> ApplyInvoicePathAsync(
-        PurchaseOrderEntity invoice, bool supplierChosenByPerson, CancellationToken ct)
+        PurchaseOrderEntity invoice, bool supplierChosenByPerson, CancellationToken ct, bool? dateRead = null)
     {
         if (!supplierChosenByPerson)
         {
@@ -1674,7 +1676,7 @@ internal sealed class OrderIngestionService
             line.NeedsReview = false;
         }
 
-        return await CollectInvoiceProblemsAsync(_db, invoice, ct);
+        return await CollectInvoiceProblemsAsync(_db, invoice, ct, dateRead);
     }
 
     /// <summary>
@@ -1689,10 +1691,12 @@ internal sealed class OrderIngestionService
     /// <summary>
     /// Settles an invoice's checks: sets its status and replaces its open <c>invoice_check</c> rows
     /// with one per current problem. Re-runnable (assign-supplier re-parse, header edit). Stages
-    /// only; the caller saves. Reconcile closes these rows once the invoice leaves the hold.
+    /// only; the caller saves. Reconcile closes these rows once the invoice leaves the hold. Send
+    /// anyway closes them <paramref name="closeAs"/> <c>ignored</c>: overruled, not fixed.
     /// </summary>
     internal static async Task ApplyInvoiceProblemsAsync(
-        ProcuLinkDbContext db, PurchaseOrderEntity invoice, IReadOnlyList<string> problems, CancellationToken ct)
+        ProcuLinkDbContext db, PurchaseOrderEntity invoice, IReadOnlyList<string> problems, CancellationToken ct,
+        string closeAs = "resolved")
     {
         invoice.Status = InvoiceStatus(invoice, problems);
 
@@ -1703,8 +1707,8 @@ internal sealed class OrderIngestionService
             .ToListAsync(ct);
         foreach (var row in stale)
         {
-            row.State = "resolved";
-            row.ResolvedAt = now;
+            row.State = closeAs;
+            row.ResolvedAt = closeAs == "resolved" ? now : null;
         }
         db.OrderExceptions.AddRange(problems.Select(p => new OrderException
         {
@@ -1718,11 +1722,15 @@ internal sealed class OrderIngestionService
     /// Every problem an invoice has: <see cref="InvoiceChecks.Run"/> plus the one check that needs
     /// the database, another live invoice from the same vendor under the same number. Static over
     /// the context so the header-edit path re-runs exactly these checks, duplicate included.
+    /// <paramref name="dateRead"/> is known only where the document is read; a re-check (null) keeps
+    /// an open "date not found" row standing rather than passing a date nobody read.
     /// </summary>
     internal static async Task<IReadOnlyList<string>> CollectInvoiceProblemsAsync(
-        ProcuLinkDbContext db, PurchaseOrderEntity invoice, CancellationToken ct)
+        ProcuLinkDbContext db, PurchaseOrderEntity invoice, CancellationToken ct, bool? dateRead = null)
     {
-        var problems = InvoiceChecks.Run(invoice).ToList();
+        dateRead ??= !await db.OrderExceptions.AnyAsync(e => e.OrgId == invoice.OrgId && e.OrderId == invoice.Id
+            && e.Code == OrderExceptionService.InvoiceCheckCode && e.State == "open" && e.Message == InvoiceChecks.DateNotFound, ct);
+        var problems = InvoiceChecks.Run(invoice, dateRead.Value).ToList();
 
         if (invoice.SupplierName?.Trim().ToLowerInvariant() is { Length: > 0 } vendor)
         {
@@ -1738,6 +1746,26 @@ internal sealed class OrderIngestionService
         }
 
         return problems;
+    }
+
+    /// <summary>
+    /// Moves every invoice parked <c>unrouted</c> to a newly set invoice destination and settles its
+    /// checks, so each becomes ready or held. Nothing is transformed or sent. Org-scoped; stages only,
+    /// the caller saves. Returns how many moved.
+    /// </summary>
+    internal static async Task<int> RouteParkedInvoicesAsync(
+        ProcuLinkDbContext db, Guid orgId, Guid destinationId, CancellationToken ct)
+    {
+        var parked = await db.PurchaseOrders.Include(o => o.Lines)
+            .Where(o => o.OrgId == orgId && o.DocumentType == "invoice" && o.Status == OrderStatusConstants.Unrouted)
+            .ToListAsync(ct);
+        var revisionId = await new ConnectionResolver(db).ResolveActiveRevisionAsync(orgId, destinationId, ct);
+        foreach (var invoice in parked)
+        {
+            (invoice.SupplierId, invoice.ConnectionRevisionId, invoice.UpdatedAt) = (destinationId, revisionId, DateTime.UtcNow);
+            await ApplyInvoiceProblemsAsync(db, invoice, await CollectInvoiceProblemsAsync(db, invoice, ct), ct);
+        }
+        return parked.Count;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

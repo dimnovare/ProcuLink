@@ -55,17 +55,20 @@ public class OrdersSendAnywayTests
             Array.Empty<ITransformService>());
     }
 
-    [Fact]
-    public async Task HeldInvoice_WithReason_IsReleasedClosedAndAudited()
+    /// <summary>"ignored": a held invoice whose check rows were all ignored on the exceptions page.</summary>
+    [Theory]
+    [InlineData("open")]
+    [InlineData("ignored")]
+    public async Task HeldInvoice_WithReason_IsReleasedClosedAsIgnoredAndAudited(string exceptionState)
     {
-        var invoice = await SeedAsync("invoice", OrderStatusConstants.PendingReview);
+        var invoice = await SeedAsync("invoice", OrderStatusConstants.PendingReview, exceptionState);
         var other   = await SeedAsync("invoice", OrderStatusConstants.PendingReview);
 
         var result = await Build(invoice).SendAnyway(invoice.Id, new(" Same bill, re-sent by the vendor. "), default);
 
         Assert.IsType<OkObjectResult>(result);
         Assert.Equal(OrderStatusConstants.Ready, invoice.Status);
-        Assert.DoesNotContain(_db.OrderExceptions, e => e.OrderId == invoice.Id && e.State == "open");
+        Assert.Single(_db.OrderExceptions, e => e.OrderId == invoice.Id && e.State == "ignored");
         Assert.Single(_db.OrderExceptions, e => e.OrderId == other.Id && e.State == "open");
         var audit = Assert.Single(_db.AuditEvents, a => a.Action == OrdersController.InvoiceSentAnywayAction);
         using var payload = System.Text.Json.JsonDocument.Parse(audit.Payload!.RootElement.GetRawText());
@@ -76,7 +79,6 @@ public class OrdersSendAnywayTests
     [Theory]
     [InlineData("order", OrderStatusConstants.PendingReview, "open")]
     [InlineData("invoice", OrderStatusConstants.Ready, "open")]
-    [InlineData("invoice", OrderStatusConstants.PendingReview, "resolved")]
     public async Task NotAHeldInvoice_IsRefused(string documentType, string status, string exceptionState)
     {
         var order = await SeedAsync(documentType, status, exceptionState);

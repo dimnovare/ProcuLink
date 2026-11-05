@@ -43,11 +43,20 @@ public sealed class OrgAdminGateIsRealTests
     private const int ExpectedGatedEndpointCount = 15;
 
     /// <summary>
-    /// How many operations are declared destructive. Fifteen endpoints reach sixteen primitives,
+    /// How many operations are declared destructive. Seventeen endpoints reach eighteen primitives,
     /// because <c>UpsertDeliveryConfig</c> both writes the delivery row and republishes the live
     /// connection revision.
     /// </summary>
-    private const int ExpectedDestructivePrimitiveCount = 16;
+    private const int ExpectedDestructivePrimitiveCount = 18;
+
+    /// <summary>
+    /// Endpoints that gate only PART of a request, in-method: resolve (an invoice's IBAN, number and
+    /// seller) and the organisation settings PUT (where invoices go; the order direction stays open).
+    /// </summary>
+    private const int ExpectedInMethodGatedCount = 2;
+
+    private static HashSet<string> AllGated() =>
+        GatedActions().Concat(InMethodGatedActions()).Select(a => a.Display).ToHashSet(StringComparer.Ordinal);
 
     // ── Controls: the scanner must be able to fail ────────────────────────────
 
@@ -143,6 +152,11 @@ public sealed class OrgAdminGateIsRealTests
           + $"{nameof(ExpectedGatedEndpointCount)} in the same commit.\nCurrently gated:\n"
           + string.Join("\n", gated.Select(a => "  • " + a.Display)));
 
+        InMethodGatedActions().Should().HaveCount(ExpectedInMethodGatedCount,
+            "an in-method admin check was added or removed. Move "
+          + $"{nameof(ExpectedInMethodGatedCount)} deliberately.\nCurrently gated in-method:\n"
+          + string.Join("\n", InMethodGatedActions().Select(a => "  • " + a.Display)));
+
         AllActions().Count.Should().BeGreaterThan(ExpectedGatedEndpointCount * 5,
             "the gate is meant to be narrow — if it ever covers a large share of the API, the "
           + "founder's 'gate the destructive few, leave the rest open' decision has been reversed "
@@ -158,7 +172,7 @@ public sealed class OrgAdminGateIsRealTests
     [Fact]
     public void EveryDestructiveAction_CarriesTheGate()
     {
-        var gated = GatedActions().Select(a => a.Display).ToHashSet(StringComparer.Ordinal);
+        var gated = AllGated();
 
         var ungated = DestructiveActions()
             .Where(x => !gated.Contains(x.Action.Display))
@@ -187,8 +201,7 @@ public sealed class OrgAdminGateIsRealTests
     {
         var destructive = DestructiveActions().Select(x => x.Action.Display).ToHashSet(StringComparer.Ordinal);
 
-        var unexplained = GatedActions()
-            .Select(a => a.Display)
+        var unexplained = AllGated()
             .Where(d => !destructive.Contains(d))
             .ToList();
 

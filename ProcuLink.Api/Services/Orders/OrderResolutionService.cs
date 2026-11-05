@@ -184,6 +184,7 @@ internal sealed class OrderResolutionService
         // delivering to the supplier chosen via the picker — only the printed/display values
         // change.
         var changedHeaderFields = new List<string>();
+        var adminFieldsBefore = AdminOnlyInvoiceFields(entity);
         if (header is not null && header.HasAnyChange)
         {
             var canonicalUpdates = new Dictionary<string, object?>();
@@ -235,6 +236,9 @@ internal sealed class OrderResolutionService
             // Invoice-only columns; an order has no use for them, so its resolve is unchanged.
             if (entity.DocumentType == "invoice")
             {
+                object?[] InvoiceFields() => [entity.DueDate, entity.SellerTaxId, entity.PaymentIban,
+                    entity.PaymentReference, entity.SubTotal, entity.TaxTotal, entity.GrandTotal];
+                var before = InvoiceFields();
                 entity.DueDate          = header.DueDate ?? entity.DueDate;
                 entity.SellerTaxId      = header.SellerTaxId ?? entity.SellerTaxId;
                 entity.PaymentIban      = header.PaymentIban ?? entity.PaymentIban;
@@ -242,6 +246,9 @@ internal sealed class OrderResolutionService
                 entity.SubTotal         = header.SubTotal ?? entity.SubTotal;
                 entity.TaxTotal         = header.TaxTotal ?? entity.TaxTotal;
                 entity.GrandTotal       = header.GrandTotal ?? entity.GrandTotal;
+                var after = InvoiceFields();
+                changedHeaderFields.AddRange(new[] { "dueDate", "sellerTaxId", "paymentIban", "paymentReference",
+                    "subTotal", "taxTotal", "grandTotal" }.Where((_, i) => !Equals(before[i], after[i])));
             }
 
             if (canonicalUpdates.Count > 0)
@@ -287,7 +294,8 @@ internal sealed class OrderResolutionService
 
         // Recompute order status (the guard above may have re-set NeedsReview → HOLD).
         entity.Status    = entity.Lines.Any(l => l.NeedsReview) ? "pending_review" : "ready";
-        await SettleInvoiceAsync(entity, ct);
+        // A date typed in by a person counts as read; otherwise the checks keep an open "not found".
+        await SettleInvoiceAsync(entity, ct, header?.OrderDate is not null ? true : null);
         entity.UpdatedAt = DateTime.UtcNow;
 
         _db.AuditEvents.Add(OrderServiceShared.BuildAuditEvent(organisationId, orderId, "Resolved", new
@@ -296,7 +304,13 @@ internal sealed class OrderResolutionService
             savedMappings = saveMappings,
             learnedMappings,
             newStatus    = entity.Status,
-            headerFieldsChanged = changedHeaderFields
+            headerFieldsChanged = changedHeaderFields,
+            by           = header?.ChangedBy,
+            // Who gets paid and what is owed under which number: old → new, invoices only.
+            changes      = entity.DocumentType == "invoice"
+                ? AdminOnlyInvoiceFields(entity).Where(f => f.Value != adminFieldsBefore[f.Key])
+                    .ToDictionary(f => f.Key, f => new { from = adminFieldsBefore[f.Key], to = f.Value })
+                : null,
         }));
 
         await _db.SaveChangesAsync(ct);
@@ -326,12 +340,22 @@ internal sealed class OrderResolutionService
     /// An invoice is released by its own checks, never by the line-based status recompute: it has no
     /// lines to review, so that recompute would release a held invoice unchecked.
     /// </summary>
-    private async Task SettleInvoiceAsync(PurchaseOrderEntity entity, CancellationToken ct)
+    private async Task SettleInvoiceAsync(PurchaseOrderEntity entity, CancellationToken ct, bool? dateRead = null)
     {
         if (entity.DocumentType == "invoice")
             await OrderIngestionService.ApplyInvoiceProblemsAsync(
-                _db, entity, await OrderIngestionService.CollectInvoiceProblemsAsync(_db, entity, ct), ct);
+                _db, entity, await OrderIngestionService.CollectInvoiceProblemsAsync(_db, entity, ct, dateRead), ct);
     }
+
+    /// <summary>
+    /// The invoice fields only an organisation admin may change (OrdersController.Resolve refuses a
+    /// member); the audit row records each as old → new.
+    /// </summary>
+    private static Dictionary<string, string?> AdminOnlyInvoiceFields(PurchaseOrderEntity o) => new()
+    {
+        ["paymentIban"] = o.PaymentIban, ["poNumber"] = o.PoNumber,
+        ["supplierName"] = o.SupplierName, ["sellerTaxId"] = o.SellerTaxId,
+    };
 
     // ── MarkRejectedAsync ─────────────────────────────────────────────────────
 

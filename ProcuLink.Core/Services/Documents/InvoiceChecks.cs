@@ -5,17 +5,27 @@ namespace ProcuLink.Core.Services.Documents;
 /// <summary>
 /// What an invoice must pass to go out without a person looking at it. Pure: reads the document,
 /// returns plain-language problems, empty when clean. Signs are not checked, so a credit note
-/// (every amount negative) balances exactly like an invoice. The duplicate check needs the
-/// database and sits beside the one caller that combines both
-/// (<c>OrderIngestionService.CollectInvoiceProblemsAsync</c>).
+/// (every amount negative) balances exactly like an invoice. A value that was not read is a
+/// problem, not a pass. The date column is always filled (today when the document had none), so
+/// whether it was read is an input. The duplicate check needs the database and sits beside the one
+/// caller that combines both (<c>OrderIngestionService.CollectInvoiceProblemsAsync</c>).
 /// </summary>
 public static class InvoiceChecks
 {
     private const decimal Tolerance = 0.02m;
 
-    public static IReadOnlyList<string> Run(PurchaseOrderEntity doc)
+    public const string DateNotFound = "Invoice date not found on the invoice.";
+
+    public static IReadOnlyList<string> Run(PurchaseOrderEntity doc, bool dateRead = true)
     {
         var problems = new List<string>();
+
+        // A placeholder number has no comparison key (PoNumberIdentity), so a null key is "not read".
+        if (doc.PoNumberNormalized is null) problems.Add("Invoice number not found on the invoice.");
+        if (!dateRead) problems.Add(DateNotFound);
+        if (string.IsNullOrWhiteSpace(doc.SupplierName)) problems.Add("Seller not found on the invoice.");
+        if (doc.SubTotal is null) problems.Add("Net amount not found on the invoice.");
+        if (doc.TaxTotal is null) problems.Add("VAT amount not found on the invoice.");
 
         if (doc.GrandTotal is not { } total)
             problems.Add("Total not found on the invoice.");

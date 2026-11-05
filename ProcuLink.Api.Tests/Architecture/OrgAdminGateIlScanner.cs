@@ -9,6 +9,7 @@ using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
+using ProcuLink.Core.Services.Organisation;
 
 namespace ProcuLink.Api.Tests.Architecture;
 
@@ -147,6 +148,18 @@ internal static class OrgAdminGateIlScanner
             "Releases an invoice held by its checks into the send flow, closing the checks that held it "
           + "(\"send anyway\"); once it is released a document can reach the vendor's destination."),
 
+        new("IOrganisationSettingsService.UpdateAsync",
+            OnInterface<IOrganisationSettingsService>(nameof(IOrganisationSettingsService.UpdateAsync)),
+            "Names the supplier every invoice is sent to, and its caller moves the parked invoices there: "
+          + "a silent redirection of where invoices go. The order direction it also writes is open to "
+          + "every member, so its caller gates in-method."),
+
+        new("IOrderService.ResolveAsync",
+            OnInterface<IOrderService>(nameof(IOrderService.ResolveAsync)),
+            "Can rewrite an invoice's IBAN, number and seller: who gets paid, under which number. Every "
+          + "member still resolves lines and edits the other fields, so its caller gates in-method on "
+          + "those four."),
+
         new("new IntegrationSubscription / DbSet<IntegrationSubscription>.Add",
             CreatesIntegrationSubscription,
             "Stands up an outbound subscription that ships the payload of every matching order to "
@@ -231,6 +244,18 @@ internal static class OrgAdminGateIlScanner
         AllActions()
             .Where(a => a.Method.GetCustomAttribute<RequireOrgAdminAttribute>(inherit: true) is not null
                      || a.Method.DeclaringType?.GetCustomAttribute<RequireOrgAdminAttribute>(inherit: true) is not null)
+            .ToList();
+
+    /// <summary>
+    /// Actions that gate PART of a request in-method because the rest is open to every member: their
+    /// own IL calls <see cref="RequireOrgAdminAttribute.IsAdmin"/>. That proves the check is there,
+    /// not which branch it guards; each such endpoint's own test is the behavioural half (the
+    /// attribute-driven HTTP sweep cannot see them).
+    /// </summary>
+    public static IReadOnlyList<ActionSite> InMethodGatedActions() =>
+        AllActions()
+            .Where(a => DirectCallTargets(a.Method).Any(m => m is MethodInfo { Name: nameof(RequireOrgAdminAttribute.IsAdmin) } mi
+                                                          && mi.DeclaringType == typeof(RequireOrgAdminAttribute)))
             .ToList();
 
     /// <summary>

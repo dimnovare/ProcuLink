@@ -37,7 +37,7 @@ public static class DocumentPdfOutput
             p.Size(PageSizes.A4);
             p.Margin(36);
             p.DefaultTextStyle(t => t.FontSize(9));
-            p.Header().PaddingBottom(8).Text(invoice ? "Invoice" : "Purchase order").FontSize(20).SemiBold();
+            p.Header().PaddingBottom(8).Text(!invoice ? "Purchase order" : doc.GrandTotal < 0 ? "Credit note" : "Invoice").FontSize(20).SemiBold();
             p.Content().Column(col =>
             {
                 col.Spacing(10);
@@ -63,7 +63,7 @@ public static class DocumentPdfOutput
                         {
                             l.LineNumber.ToString(CultureInfo.InvariantCulture), (invoice ? l.BuyerItemCode : l.SupplierItemCode) ?? "",
                             l.Description ?? "", l.Quantity.ToString(CultureInfo.InvariantCulture), l.Unit ?? "",
-                            Money(l.UnitPrice), l.TaxRate?.ToString(CultureInfo.InvariantCulture) ?? "",
+                            l.UnitPrice.ToString("0.00##", CultureInfo.InvariantCulture), l.TaxRate?.ToString(CultureInfo.InvariantCulture) ?? "",
                             Money(l.NetAmount ?? l.LineAmount ?? l.Quantity * l.UnitPrice),
                         })
                             t.Cell().BorderBottom(0.5f).BorderColor(Colors.Grey.Lighten2).PaddingVertical(3).Text(cell);

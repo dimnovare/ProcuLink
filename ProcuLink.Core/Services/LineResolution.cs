@@ -49,6 +49,7 @@ public record LineResolution(int LineNumber, string SupplierItemCode);
 /// <param name="SubTotal">Invoice only: corrected net total, or null for no change.</param>
 /// <param name="TaxTotal">Invoice only: corrected VAT total, or null for no change.</param>
 /// <param name="GrandTotal">Invoice only: corrected gross total, or null for no change.</param>
+/// <param name="ChangedBy">Who made the correction (Clerk user id), for the audit row. Not a field.</param>
 public record ResolveHeaderFields(
     DateOnly? OrderDate    = null,
     string?   BuyerName    = null,
@@ -61,7 +62,8 @@ public record ResolveHeaderFields(
     string?   PaymentReference = null,
     decimal?  SubTotal         = null,
     decimal?  TaxTotal         = null,
-    decimal?  GrandTotal       = null)
+    decimal?  GrandTotal       = null,
+    string?   ChangedBy        = null)
 {
     /// <summary>True when at least one header field carries a change.</summary>
     public bool HasAnyChange => OrderDate.HasValue
