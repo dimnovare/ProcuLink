@@ -131,10 +131,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Checkout frontend (dimnovare/project-proculink, default branch)
+      # A change that spans both repositories uses the same branch name in each. On a pull
+      # request, check out that partner branch when it exists, so the two halves are tested
+      # together instead of each failing against the other's main until both merge. Pushes to
+      # main, and pull requests with no partner, still follow the default branch.
+      - name: Find a paired frontend branch
+        id: pair
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          TOKEN: ${{ secrets.CROSS_REPO_READ_TOKEN }}
+        run: |
+          url="https://github.com/dimnovare/project-proculink.git"
+          [ -n "$TOKEN" ] && url="https://x-access-token:${TOKEN}@github.com/dimnovare/project-proculink.git"
+          ref=""
+          if [ -n "$HEAD_REF" ] && git ls-remote --exit-code --heads "$url" "refs/heads/$HEAD_REF" >/dev/null 2>&1; then
+            ref="$HEAD_REF"
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "Frontend branch: ${ref:-default}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout frontend (dimnovare/project-proculink, paired branch or default)
         uses: actions/checkout@v5
         with:
           repository: dimnovare/project-proculink
+          ref: ${{ steps.pair.outputs.ref }}
           path: .claude/frontend-checkout
           fetch-depth: 1
           # Both repos went PRIVATE on 2026-08-13, and the default GITHUB_TOKEN is scoped
