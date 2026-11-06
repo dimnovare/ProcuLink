@@ -1205,7 +1205,7 @@ public sealed class DeliveryService : IDeliveryService
     /// "delivered" nor "failed" is a claim this process can make, so it parks for a human.
     /// </para>
     /// </summary>
-    private static bool CannotRepairItsOwnFile(SupplierDeliveryConfig config) =>
+    public static bool CannotRepairItsOwnFile(SupplierDeliveryConfig config) =>
         IsFileDropProtocol(config.Protocol)
         && !Dispatchers.SftpDeliveryDispatcher.OverwriteExistingFromConfig(config.ConfigJson);
 

@@ -27,6 +27,7 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
     private sealed class FakeDispatcher : IDeliveryDispatcher
     {
         public string Protocol => "http";
+        public ResendSafety ResendSafety { get; set; } = ResendSafety.Safe;
         public List<Call> Calls { get; } = [];
         public DeliveryResult Result { get; set; } = new(true, null, 200);
 
@@ -160,5 +161,21 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
         var refused = await h.DeliveryAsync();
         refused.Status.Should().Be(FlowDeliveryStatus.DeadLetter);
         refused.Attempts.Should().Be(1);
+    }
+
+    [DockerRequiredFact]
+    public async Task A_reclaimed_delivery_on_a_channel_that_cannot_deduplicate_is_not_sent_again()
+    {
+        var h = await SeedAsync();
+        h.Dispatcher.ResendSafety = ResendSafety.Unsafe;
+        await h.SetAsync(FlowDeliveryStatus.Delivering, DateTime.UtcNow.AddMinutes(-3), 1);
+
+        await h.RunAsync();
+
+        h.Dispatcher.Calls.Should().BeEmpty();
+        var delivery = await h.DeliveryAsync();
+        delivery.Status.Should().Be(FlowDeliveryStatus.DeadLetter);
+        delivery.LastError.Should().Be("This may already have been sent. Check with the recipient before sending again.");
+        (await h.DocStatusAsync()).Should().Be(DocumentStatus.SendFailed);
     }
 }
