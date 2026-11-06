@@ -92,6 +92,6 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         p.Should().Contain("1.234,50");
 
         using var scope = factory.Services.CreateScope();
-        (await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowDelivery>().CountAsync()).Should().Be(0);
+        (await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowDelivery>().CountAsync(d => d.DocumentId == docId)).Should().Be(0);
     }
 }
