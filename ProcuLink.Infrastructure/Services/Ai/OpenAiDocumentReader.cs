@@ -16,9 +16,9 @@ namespace ProcuLink.Infrastructure.Services.Ai;
 /// </summary>
 public sealed class OpenAiDocumentReader : IDocumentReader
 {
-    private const string DefaultModel = "gpt-5-mini";
+    private const string DefaultModel = OpenAiModels.Default;
     private const int MaxOutputTokens = 16000;
-    // A 40-page document with a 100-line table took longer than 60s on gpt-5-mini in production.
+    // A 40-page document with a 100-line table took longer than 60s on gpt-4o-mini in production.
     private static readonly TimeSpan CallTimeout = TimeSpan.FromSeconds(240);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -39,7 +39,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
     private readonly ILogger<OpenAiDocumentReader> _logger;
     private readonly IServiceScopeFactory? _scopeFactory;
     private readonly IAiUsageTracker? _tracker;
-    private readonly bool _reasoningModel;
+    private readonly string _model;
 
     public OpenAiDocumentReader(
         IConfiguration configuration, ILogger<OpenAiDocumentReader> logger, IServiceScopeFactory? scopeFactory = null)
@@ -54,7 +54,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
         _logger = logger;
         _tracker = tracker;
         var model = configuration["Ai:OpenAI:ExtractionModel"] ?? configuration["Ai:OpenAI:MappingModel"] ?? DefaultModel;
-        _reasoningModel = OpenAiModels.IsReasoningModel(model);
+        _model = model;
         var apiKey = configuration["Ai:OpenAI:ApiKey"];
         if (overrideClient is not null)
             _client = overrideClient;
@@ -102,12 +102,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
                 ResponseFormat = ChatResponseFormat.CreateJsonSchemaFormat(
                     jsonSchemaFormatName: "document_read", jsonSchema: Schema, jsonSchemaIsStrict: true),
             };
-#pragma warning disable OPENAI001 // reasoning effort is marked evaluation-only in the SDK
-            // Reading is transcription, not reasoning: low effort is faster and leaves the output
-            // budget for the values, since reasoning tokens count against MaxOutputTokenCount.
-            // Never assign null here: the SDK setter throws on it.
-            if (_reasoningModel) options.ReasoningEffortLevel = ChatReasoningEffortLevel.Low;
-#pragma warning restore OPENAI001
+            OpenAiModels.UseLeastReasoning(options, _model);
             var completion = (await _client.CompleteChatAsync(messages, options, cts.Token)).Value;
 
             var tokens = completion.Usage?.TotalTokenCount ?? 0;

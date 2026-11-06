@@ -30,7 +30,7 @@ namespace ProcuLink.Infrastructure.Services;
 /// </summary>
 public sealed class OpenAiProductCodeSearch : IProductCodeSearch
 {
-    private const string DefaultModel = "gpt-5-mini";
+    private const string DefaultModel = Ai.OpenAiModels.Default;
 
     // Bound the model's output: we only need a tiny JSON object back. Web-search reasoning
     // happens server-side and is billed separately; this caps the completion tokens.

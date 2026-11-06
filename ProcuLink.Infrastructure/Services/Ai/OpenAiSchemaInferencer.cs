@@ -31,7 +31,7 @@ namespace ProcuLink.Infrastructure.Services.Ai;
 /// </summary>
 public sealed class OpenAiSchemaInferencer : ISchemaInferencer
 {
-    private const string DefaultModel = "gpt-5-mini";
+    private const string DefaultModel = OpenAiModels.Default;
     private const int    SampleRowLimit       = 5;
     private const int    SampleValueLimit     = 5;
     private const int    MaxFieldsForAi       = 200;
@@ -482,6 +482,7 @@ public sealed class OpenAiSchemaInferencer : ISchemaInferencer
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(OpenAiCallTimeout);
+        OpenAiModels.UseLeastReasoning(options, _model);
         return await _client!.CompleteChatAsync(messages, options, cts.Token);
     }
 

@@ -111,10 +111,10 @@ public class OpenAiDocumentReaderTests
     }
 
     [Theory]
-    [InlineData(null, true)]            // default gpt-5-mini
-    [InlineData("gpt-6-luna", true)]
-    [InlineData("gpt-4o-mini", false)]  // the Worker's production model rejects reasoning_effort (HTTP 400)
-    public async Task Our_timeout_is_retryable_and_only_reasoning_models_get_low_reasoning(string? model, bool reasoning)
+    [InlineData(null, "none")]          // default gpt-6-luna
+    [InlineData("gpt-5-mini", "low")]   // gpt-5 stops at low
+    [InlineData("gpt-4o-mini", null)]   // rejects reasoning_effort with HTTP 400
+    public async Task Our_timeout_is_retryable_and_reads_use_the_least_reasoning_the_model_takes(string? model, string? effort)
     {
         var (reader, client) = Create(model: model);
         ChatCompletionOptions? sent = null;
@@ -127,7 +127,6 @@ public class OpenAiDocumentReaderTests
 
         outcome.Success.Should().BeFalse();
         outcome.FailureReason.Should().Be("ai_error");
-        (sent!.ReasoningEffortLevel == ChatReasoningEffortLevel.Low).Should().Be(reasoning);
-        sent.ReasoningEffortLevel.HasValue.Should().Be(reasoning);
+        (sent!.ReasoningEffortLevel?.ToString()).Should().Be(effort);
     }
 }
