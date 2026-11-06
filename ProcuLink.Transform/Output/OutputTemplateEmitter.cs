@@ -9,6 +9,9 @@ using ProcuLink.Transform.Tokenizing;
 
 namespace ProcuLink.Transform.Output;
 
+/// <summary>A CSV as raw, unescaped values: the header row (null when suppressed) and the data rows.</summary>
+public sealed record CsvGrid(IReadOnlyList<string>? Header, IReadOnlyList<IReadOnlyList<string>> Rows);
+
 /// <summary>
 /// Phase B — the format-aware emitter that renders an <see cref="OutputNodeTemplate"/> (a recursive
 /// <see cref="OutputNode"/> tree) to bytes. Unlike <see cref="MappedTransformService"/> (which emits
@@ -63,26 +66,61 @@ public sealed class OutputTemplateEmitter
         // UBLVersionID/CustomizationID/ProfileID, X12's ISA/GS, EDIFACT's UNB/UNH), none of which a
         // generic node tree carries. Emitting one anyway would deliver a well-formed document the
         // receiver REJECTS (offer ⇔ works). Those formats deliver through their dedicated transform.
+        RequireRenderable(template);
+
+        return Render(template, headerRow, LineRowFor, orderedLines);
+    }
+
+    /// <summary>
+    /// Render already-built value bags (a document read has no order entity): one bag for the header,
+    /// one per line. No unresolved-lines guard — there are no order lines to resolve.
+    /// </summary>
+    public TransformResult EmitRows(
+        OutputNodeTemplate template,
+        IReadOnlyDictionary<string, string> headerRow,
+        IReadOnlyList<IReadOnlyDictionary<string, string>> lineRows)
+    {
+        RequireRenderable(template);
+        return Render(template, headerRow, r => r, lineRows);
+    }
+
+    /// <summary>The raw CSV grid for <see cref="EmitRows"/>' inputs, before delimiter escaping.</summary>
+    public CsvGrid GridRows(
+        OutputNodeTemplate template,
+        IReadOnlyDictionary<string, string> headerRow,
+        IReadOnlyList<IReadOnlyDictionary<string, string>> lineRows)
+    {
+        RequireRenderable(template);
+        return Grid(template, headerRow, r => r, lineRows);
+    }
+
+    private static void RequireRenderable(OutputNodeTemplate template)
+    {
         if (!OutputTreeFormats.IsRenderable(template.Format))
             throw new ArgumentException(
                 $"The output-structure editor cannot produce valid {template.Format} (it needs the format's " +
                 "envelope/DOCTYPE, not a generic element tree). This supplier delivers via the dedicated " +
                 $"{template.Format} transform — design the output as generic XML/JSON/CSV, or remove the output tree.",
                 nameof(template));
+    }
 
-        return template.Format switch
+    private static TransformResult Render<TLine>(
+        OutputNodeTemplate template,
+        IReadOnlyDictionary<string, string> headerRow,
+        Func<TLine, IReadOnlyDictionary<string, string>> lineRowFor,
+        IReadOnlyList<TLine> orderedLines) =>
+        template.Format switch
         {
             OutputFormat.Json =>
-                Result(EmitJson(template, headerRow, LineRowFor, orderedLines), "application/json", ".json"),
+                Result(EmitJson(template, headerRow, lineRowFor, orderedLines), "application/json", ".json"),
             OutputFormat.Xml =>
-                Result(EmitXml(template, headerRow, LineRowFor, orderedLines), "application/xml", ".xml"),
+                Result(EmitXml(template, headerRow, lineRowFor, orderedLines), "application/xml", ".xml"),
             OutputFormat.Csv =>
-                Result(EmitCsv(template, headerRow, LineRowFor, orderedLines), "text/csv", ".csv"),
+                Result(EmitCsv(template, headerRow, lineRowFor, orderedLines), "text/csv", ".csv"),
             _ => throw new InvalidOperationException(
                      $"OutputTreeFormats.IsRenderable admitted '{template.Format}' but OutputTemplateEmitter has " +
                      "no arm for it. The predicate and the emitter are one decision — change them together."),
         };
-    }
 
     // ── JSON ─────────────────────────────────────────────────────────────────────
 
@@ -98,11 +136,11 @@ public sealed class OutputTemplateEmitter
     private static IEnumerable<OutputNode> RealChildren(OutputNode node) =>
         node.Children?.Where(c => c is not null) ?? Enumerable.Empty<OutputNode>();
 
-    private static byte[] EmitJson(
+    private static byte[] EmitJson<TLine>(
         OutputNodeTemplate template,
         IReadOnlyDictionary<string, string> headerRow,
-        Func<PurchaseOrderLineEntity, IReadOnlyDictionary<string, string>> lineRowFor,
-        IReadOnlyList<PurchaseOrderLineEntity> orderedLines)
+        Func<TLine, IReadOnlyDictionary<string, string>> lineRowFor,
+        IReadOnlyList<TLine> orderedLines)
     {
         using var buffer = new MemoryStream();
         using (var w = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true }))
@@ -112,11 +150,11 @@ public sealed class OutputTemplateEmitter
         return buffer.ToArray();
     }
 
-    private static void WriteJsonValue(
+    private static void WriteJsonValue<TLine>(
         Utf8JsonWriter w, OutputNode node,
         IReadOnlyDictionary<string, string> row, bool lineScope,
-        Func<PurchaseOrderLineEntity, IReadOnlyDictionary<string, string>> lineRowFor,
-        IReadOnlyList<PurchaseOrderLineEntity> orderedLines)
+        Func<TLine, IReadOnlyDictionary<string, string>> lineRowFor,
+        IReadOnlyList<TLine> orderedLines)
     {
         switch (node.NodeType)
         {
@@ -240,11 +278,11 @@ public sealed class OutputTemplateEmitter
 
     // ── XML (base for cXML / UBL) ──────────────────────────────────────────────────
 
-    private static byte[] EmitXml(
+    private static byte[] EmitXml<TLine>(
         OutputNodeTemplate template,
         IReadOnlyDictionary<string, string> headerRow,
-        Func<PurchaseOrderLineEntity, IReadOnlyDictionary<string, string>> lineRowFor,
-        IReadOnlyList<PurchaseOrderLineEntity> orderedLines)
+        Func<TLine, IReadOnlyDictionary<string, string>> lineRowFor,
+        IReadOnlyList<TLine> orderedLines)
     {
         // Two MUTUALLY-EXCLUSIVE namespace modes (mixing them double-declares / corrupts scope):
         //  • LEGACY root-map: template.Namespaces declares xmlns:* on the root; nodes are unprefixed.
@@ -315,11 +353,11 @@ public sealed class OutputTemplateEmitter
         return map;
     }
 
-    private static void WriteXmlNode(
+    private static void WriteXmlNode<TLine>(
         XmlWriter w, OutputNode node,
         IReadOnlyDictionary<string, string> row, bool lineScope,
-        Func<PurchaseOrderLineEntity, IReadOnlyDictionary<string, string>> lineRowFor,
-        IReadOnlyList<PurchaseOrderLineEntity> orderedLines,
+        Func<TLine, IReadOnlyDictionary<string, string>> lineRowFor,
+        IReadOnlyList<TLine> orderedLines,
         IReadOnlyDictionary<string, string>? rootNamespaces = null)
     {
         switch (node.NodeType)
@@ -383,11 +421,41 @@ public sealed class OutputTemplateEmitter
     /// repeated on every row; the first Array child's item Object's Field children are the per-line
     /// columns. Column header = the node's Name; values resolve through the same machinery.
     /// </summary>
-    private static byte[] EmitCsv(
+    private static byte[] EmitCsv<TLine>(
         OutputNodeTemplate template,
         IReadOnlyDictionary<string, string> headerRow,
-        Func<PurchaseOrderLineEntity, IReadOnlyDictionary<string, string>> lineRowFor,
-        IReadOnlyList<PurchaseOrderLineEntity> orderedLines)
+        Func<TLine, IReadOnlyDictionary<string, string>> lineRowFor,
+        IReadOnlyList<TLine> orderedLines)
+    {
+        var grid = Grid(template, headerRow, lineRowFor, orderedLines);
+
+        // The authored dialect, or the defaults that reproduce the pre-dialect bytes exactly.
+        var dialect     = template.CsvDialect;
+        var delimiter   = string.IsNullOrEmpty(dialect?.Delimiter) ? "," : dialect!.Delimiter!;
+        var quoteAlways = string.Equals(dialect?.QuotePolicy, "always", StringComparison.OrdinalIgnoreCase);
+        // Null keeps Environment.NewLine — platform-dependent, and deliberately so: it is what every
+        // existing supplier already receives, and pinning it here would change their bytes.
+        var lineEnding  = string.IsNullOrEmpty(dialect?.LineEnding) ? Environment.NewLine : dialect!.LineEnding!;
+
+        string Field(string v) => MappedTransformService.Escape(v, delimiter, quoteAlways);
+
+        var sb = new StringBuilder();
+        // Append + explicit terminator rather than AppendLine, which hardcodes Environment.NewLine.
+        foreach (var row in grid.Header is null ? grid.Rows : grid.Rows.Prepend(grid.Header))
+            sb.Append(string.Join(delimiter, row.Select(Field))).Append(lineEnding);
+
+        return CsvEncoding(dialect?.Encoding).GetBytes(sb.ToString());
+    }
+
+    /// <summary>
+    /// The CSV grid with RAW, unescaped values (header null when the dialect suppresses it). CSV
+    /// escapes it; xlsx writes it as text cells.
+    /// </summary>
+    private static CsvGrid Grid<TLine>(
+        OutputNodeTemplate template,
+        IReadOnlyDictionary<string, string> headerRow,
+        Func<TLine, IReadOnlyDictionary<string, string>> lineRowFor,
+        IReadOnlyList<TLine> orderedLines)
     {
         var root = template.Root;
         var headerFields = RealChildren(root).Where(c => c.NodeType == OutputNodeType.Field).ToList();
@@ -400,30 +468,15 @@ public sealed class OutputTemplateEmitter
                                ? new List<OutputNode>()
                                : RealChildren(lineItem).Where(c => c.NodeType == OutputNodeType.Field).ToList();
 
-        // The authored dialect, or the defaults that reproduce the pre-dialect bytes exactly.
-        var dialect     = template.CsvDialect;
-        var delimiter   = string.IsNullOrEmpty(dialect?.Delimiter) ? "," : dialect!.Delimiter!;
-        var quoteAlways = string.Equals(dialect?.QuotePolicy, "always", StringComparison.OrdinalIgnoreCase);
-        // Null keeps Environment.NewLine — platform-dependent, and deliberately so: it is what every
-        // existing supplier already receives, and pinning it here would change their bytes.
-        var lineEnding  = string.IsNullOrEmpty(dialect?.LineEnding) ? Environment.NewLine : dialect!.LineEnding!;
-        var writeHeader = dialect?.WriteHeaderRow ?? true;
-
-        string Field(string v) => MappedTransformService.Escape(v, delimiter, quoteAlways);
-
-        var sb = new StringBuilder();
-
-        if (writeHeader)
-        {
-            var headerNames = headerFields.Select(f => f.Name).Concat(lineFields.Select(f => f.Name));
-            // Append + explicit terminator rather than AppendLine, which hardcodes Environment.NewLine.
-            sb.Append(string.Join(delimiter, headerNames.Select(Field))).Append(lineEnding);
-        }
+        var header = (template.CsvDialect?.WriteHeaderRow ?? true)
+            ? headerFields.Select(f => f.Name).Concat(lineFields.Select(f => f.Name)).ToList()
+            : null;
 
         var headerValues = headerFields
             .Select(f => MappedTransformService.ResolveRule(f.Rule ?? Empty, headerRow, lineScope: false) ?? string.Empty)
             .ToList();
 
+        var rows = new List<IReadOnlyList<string>>();
         foreach (var line in orderedLines)
         {
             var lineRow = lineRowFor(line);
@@ -432,10 +485,9 @@ public sealed class OutputTemplateEmitter
             if (lineItem is not null && !ShouldEmit(lineItem, lineRow, lineScope: true)) continue;
             var lineValues = lineFields
                 .Select(f => MappedTransformService.ResolveRule(f.Rule ?? Empty, lineRow, lineScope: true) ?? string.Empty);
-            sb.Append(string.Join(delimiter, headerValues.Concat(lineValues).Select(Field))).Append(lineEnding);
+            rows.Add(headerValues.Concat(lineValues).ToList());
         }
-
-        return CsvEncoding(dialect?.Encoding).GetBytes(sb.ToString());
+        return new CsvGrid(header, rows);
     }
 
     /// <summary>
