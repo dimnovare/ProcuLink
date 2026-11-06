@@ -30,7 +30,7 @@ public sealed class FlowDeliveryModelTests(PostgresContainerFixture postgres)
             Id = Guid.NewGuid(), OrgId = orgId, FlowId = flow.Id, Name = "Accounting CSV", Format = FlowOutputFormats.Csv,
             CreatedAt = Now, UpdatedAt = Now,
         };
-        db.Organisations.Add(new Organisation { Id = orgId, Name = "Acme Components Ltd", Slug = "acme-" + orgId.ToString("N") });
+        db.Organisations.Add(new Organisation { Id = orgId, Name = "Test Org A", Slug = "acme-" + orgId.ToString("N") });
         db.Flows.Add(flow);
         db.FlowDocuments.Add(doc);
         db.Set<FlowOutput>().Add(output);
@@ -79,6 +79,7 @@ public sealed class FlowDeliveryModelTests(PostgresContainerFixture postgres)
     [InlineData(new[] { "delivered", "dead_letter" }, "send_failed")]
     [InlineData(new[] { "dead_letter", "failed" }, "sending")]
     [InlineData(new[] { "queued" }, "sending")]
+    [InlineData(new string[0], "send_failed")]
     public void Document_status_rolls_up(string[] d, string expected) =>
         FlowDeliveryStatus.DocumentStatusFor(d).Should().Be(expected);
 }

@@ -14,6 +14,7 @@ public static class FlowDeliveryStatus
     public static string DocumentStatusFor(IEnumerable<string> deliveryStatuses)
     {
         var s = deliveryStatuses.ToList();
+        if (s.Count == 0) return DocumentStatus.SendFailed;
         if (s.All(x => x is Delivered or Stored)) return DocumentStatus.Sent;
         return s.Any(x => x is Queued or Delivering or Failed) ? DocumentStatus.Sending : DocumentStatus.SendFailed;
     }
