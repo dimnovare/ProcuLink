@@ -11,7 +11,7 @@ namespace ProcuLink.Infrastructure.Services;
 
 public sealed class OpenAiMappingService : IAiMappingService
 {
-    private const string DefaultModel = "gpt-5-mini";
+    private const string DefaultModel = Ai.OpenAiModels.Default;
 
     // A single batch request packs at most this many lines so a large PO (500–1000
     // lines) never truncates the model's JSON output against the per-call token ceiling
@@ -306,6 +306,8 @@ public sealed class OpenAiMappingService : IAiMappingService
                     jsonSchemaIsStrict: true)
             };
 
+            Ai.OpenAiModels.UseLeastReasoning(options, _model);
+
             ChatCompletion completion = await _client.CompleteChatAsync(messages, options, ct);
 
             // Record token usage regardless of whether the structured output
@@ -512,6 +514,8 @@ public sealed class OpenAiMappingService : IAiMappingService
                 jsonSchemaIsStrict: true)
         };
 
+        Ai.OpenAiModels.UseLeastReasoning(options, _model);
+
         ChatCompletion completion = await _client!.CompleteChatAsync(messages, options, ct);
 
         // Record token usage regardless of whether the structured output produced a
@@ -651,6 +655,8 @@ public sealed class OpenAiMappingService : IAiMappingService
                     jsonSchema: FieldMappingSchema,
                     jsonSchemaIsStrict: true)
             };
+
+            Ai.OpenAiModels.UseLeastReasoning(options, _model);
 
             ChatCompletion completion = await _client.CompleteChatAsync(messages, options, ct);
 

@@ -20,7 +20,7 @@ namespace ProcuLink.Infrastructure.Services.Ai;
 /// </summary>
 public sealed class OpenAiEmailBodyOrderExtractor : IEmailBodyOrderExtractor
 {
-    private const string DefaultModel = "gpt-5-mini";
+    private const string DefaultModel = OpenAiModels.Default;
     private const double ConfidenceThreshold = 0.6;
     private const int ExtractionMaxTokens = 1500;
     private static readonly TimeSpan OpenAiCallTimeout = TimeSpan.FromSeconds(30);
@@ -326,6 +326,7 @@ public sealed class OpenAiEmailBodyOrderExtractor : IEmailBodyOrderExtractor
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(OpenAiCallTimeout);
+        OpenAiModels.UseLeastReasoning(options, _model);
         return await _client!.CompleteChatAsync(messages, options, cts.Token);
     }
 

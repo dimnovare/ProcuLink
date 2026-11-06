@@ -43,7 +43,7 @@ namespace ProcuLink.Infrastructure.Services.Ai;
 /// </summary>
 public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
 {
-    private const string DefaultModel = "gpt-5-mini";
+    private const string DefaultModel = OpenAiModels.Default;
     internal const double ConfidenceThreshold = 0.6;
     private const int ExtractionMaxTokens = 4000;
     // Cap the text we send so a pathological multi-hundred-page PDF can't blow the
@@ -1238,6 +1238,7 @@ public sealed class OpenAiPdfOrderExtractor : IStructuredOrderExtractor
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(OpenAiCallTimeout);
+        OpenAiModels.UseLeastReasoning(options, _model);
         return await _client!.CompleteChatAsync(messages, options, cts.Token);
     }
 
