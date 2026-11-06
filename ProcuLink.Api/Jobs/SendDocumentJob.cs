@@ -8,7 +8,8 @@ using ProcuLink.Infrastructure;
 namespace ProcuLink.Api.Jobs;
 
 /// <summary>
-/// Hangfire job: sends a freshly read document when its flow is set to <c>auto</c>. A failed check never blocks it.
+/// Hangfire job: sends a freshly read document when its flow is set to <c>auto</c>. A failed check never blocks it, with one
+/// exception: a repeated document number waits for a person, because on an unattended flow it would be a second posting.
 /// It loads the document itself so the sender's claim sees the row as it is now. Paused processing or any other refusal
 /// leaves the document as it was, for a person to send.
 /// </summary>
@@ -26,7 +27,8 @@ public class SendDocumentJob(ProcuLinkDbContext db, DocumentSender sender)
     }
 
     private static bool ShouldSend(FlowDocument doc, Flow flow) =>
-        flow.Automation == FlowAutomation.Auto && doc.Status is DocumentStatus.NeedsReview or DocumentStatus.Ready && DocumentStatus.IsEditable(doc.Status, doc.StatusReason);
+        flow.Automation == FlowAutomation.Auto && doc.Status is DocumentStatus.NeedsReview or DocumentStatus.Ready && DocumentStatus.IsEditable(doc.Status, doc.StatusReason)
+        && !DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).Any(c => c.Code == DocumentChecks.Duplicate && !c.Passed);
 
     public static void EnqueueIfAutomatic(IBackgroundJobClient jobs, FlowDocument doc, Flow flow)
     {

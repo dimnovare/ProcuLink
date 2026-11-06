@@ -79,6 +79,26 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
         (await invalid.Content.ReadAsStringAsync()).Should().Contain("invalid_automation");
     }
 
+    [Fact]
+    public void An_automatic_flow_holds_a_repeated_document_number_for_a_person()
+    {
+        var flow = new Flow { Automation = FlowAutomation.Auto };
+        var doc = new FlowDocument
+        {
+            Status = DocumentStatus.NeedsReview,
+            ChecksJson = DocumentJson.Serialize(new[] { new DocumentCheck(DocumentChecks.Duplicate, false, null, "A document with this number was already received.") }),
+        };
+        var jobs = new Mock<IBackgroundJobClient>();
+
+        SendDocumentJob.EnqueueIfAutomatic(jobs.Object, doc, flow);
+        jobs.Invocations.Should().BeEmpty();
+
+        // Control: any other failed check still sends.
+        doc.ChecksJson = DocumentJson.Serialize(new[] { new DocumentCheck(DocumentChecks.RequiredMissing, false, "invoice_no", "Missing.") });
+        SendDocumentJob.EnqueueIfAutomatic(jobs.Object, doc, flow);
+        jobs.Invocations.Should().ContainSingle(i => i.Method.Name == nameof(IBackgroundJobClient.Create));
+    }
+
     [DockerRequiredFact]
     public async Task The_sweep_requeues_stranded_deliveries_only()
     {
