@@ -108,6 +108,14 @@ public sealed class FlowDestinationService(
         };
     }
 
+    /// <summary>Pins the host key a dispatcher learned on first contact into the destination's config. Does not save.</summary>
+    public static void RecordLearnedHostKey(FlowDestination d, DeliveryResult result)
+    {
+        if (result.LearnedHostKeyFingerprint is not { } fingerprint) return;
+        d.ConfigJson = DeliveryHostKeyConfig.Write(d.ConfigJson, [fingerprint]);
+        d.UpdatedAt = DateTime.UtcNow;
+    }
+
     public string DecryptCredentials(FlowDestination d) =>
         string.IsNullOrEmpty(d.EncryptedCredentials)
             ? ""
@@ -135,11 +143,7 @@ public sealed class FlowDestinationService(
                 result = new DeliveryResult(false, "Destination credentials could not be decrypted.");
             }
 
-        if (result.LearnedHostKeyFingerprint is { } fingerprint)
-        {
-            d.ConfigJson = DeliveryHostKeyConfig.Write(d.ConfigJson, [fingerprint]);
-            d.UpdatedAt = DateTime.UtcNow;
-        }
+        RecordLearnedHostKey(d, result);
 
         db.AuditEvents.Add(new AuditEvent
         {
