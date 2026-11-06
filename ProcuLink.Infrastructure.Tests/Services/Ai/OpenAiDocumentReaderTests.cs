@@ -108,4 +108,21 @@ public class OpenAiDocumentReaderTests
 
         captured.SelectMany(m => m.Content).Select(p => p.Text).Should().Contain(t => t.Contains("total_gross"));
     }
+
+    [Fact]
+    public async Task Our_timeout_is_retryable_and_reads_ask_for_low_reasoning()
+    {
+        var (reader, client) = Create();
+        ChatCompletionOptions? sent = null;
+        client.Setup(c => c.CompleteChatAsync(
+                It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatCompletionOptions>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<ChatMessage>, ChatCompletionOptions, CancellationToken>((_, o, _) => sent = o)
+            .ThrowsAsync(new OperationCanceledException());
+
+        var outcome = await reader.ReadAsync(Input(), Org, CancellationToken.None);
+
+        outcome.Success.Should().BeFalse();
+        outcome.FailureReason.Should().Be("ai_error");
+        sent!.ReasoningEffortLevel.Should().Be(ChatReasoningEffortLevel.Low);
+    }
 }
