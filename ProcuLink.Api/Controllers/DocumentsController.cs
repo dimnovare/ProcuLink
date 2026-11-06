@@ -23,7 +23,7 @@ namespace ProcuLink.Api.Controllers;
 public sealed class DocumentsController(
     ProcuLinkDbContext db, ICurrentTenantService tenant, DocumentEngineGate gate,
     IBillingService billing, DocumentIntakeService intake, DocumentRechecker rechecker,
-    IFileStorageService storage, IBackgroundJobClient jobs, ILogger<DocumentsController> logger) : ControllerBase
+    DocumentSender sender, IFileStorageService storage, IBackgroundJobClient jobs, ILogger<DocumentsController> logger) : ControllerBase
 {
     private IActionResult? Refuse() =>
         gate.IsEnabled(tenant.OrganisationId) ? null : StatusCode(403, new { error = "document_engine_not_enabled" });
@@ -81,13 +81,6 @@ public sealed class DocumentsController(
         (await db.Flows.FirstAsync(f => f.OrgId == d.OrgId && f.Id == d.FlowId, ct)).Name;
 
     private static readonly object NotFoundBody = new { error = "document_not_found" };
-
-    private void Audit(FlowDocument d, string action, object payload) =>
-        db.AuditEvents.Add(new AuditEvent
-        {
-            Id = Guid.NewGuid(), OrgId = d.OrgId, EntityType = "FlowDocument", EntityId = d.Id, Action = action,
-            CreatedAt = DateTime.UtcNow, Payload = JsonSerializer.SerializeToDocument(payload),
-        });
 
     [HttpGet]
     public async Task<IActionResult> List(Guid? flowId, string? status, int? take, CancellationToken ct)
@@ -171,7 +164,7 @@ public sealed class DocumentsController(
         doc.StatusReason = null;
         doc.ChecksJson = "[]";
         doc.UpdatedAt = DateTime.UtcNow;
-        Audit(doc, "document.retry_read", new { by = tenant.ClerkUserId });
+        DocumentAudit.Add(db, doc, "document.retry_read", new { }, tenant.ClerkUserId);
         await db.SaveChangesAsync(ct);
         ReadDocumentJob.Enqueue(jobs, doc.Id, doc.OrgId);
         return Ok(ToSummary(doc, await FlowNameAsync(doc, ct)));
@@ -183,7 +176,8 @@ public sealed class DocumentsController(
         if (Refuse() is { } refused) return refused;
         var doc = await FindAsync(id, ct);
         if (doc is null) return NotFound(NotFoundBody);
-        if (doc.Status is not (DocumentStatus.NeedsReview or DocumentStatus.Ready) || doc.StatusReason == "duplicate_file") return Conflict(new { error = "not_editable" });
+        if (doc.Status is DocumentStatus.Sending or DocumentStatus.Sent) return Conflict(new { error = "document_sent" });
+        if (doc.Status is not (DocumentStatus.NeedsReview or DocumentStatus.Ready or DocumentStatus.SendFailed) || doc.StatusReason == "duplicate_file") return Conflict(new { error = "not_editable" });
 
         var (fieldEdits, cellEdits, adds, removes) = (req.Fields ?? [], req.Cells ?? [], req.AddRowToTables ?? [], req.RemoveRows ?? []);
         if (fieldEdits.Count + cellEdits.Count + adds.Count + removes.Count == 0) return BadRequest(new { error = "no_changes" });
@@ -245,9 +239,54 @@ public sealed class DocumentsController(
 
         var result = new ReadResult(read.KindLabel, fields, tables.Select(t => t with { Rows = rows[t.Key] }).ToList(), read.Truncated);
         doc.ReadJson = DocumentJson.Serialize(result);
+        var wasSendFailed = doc.Status == DocumentStatus.SendFailed;
         await rechecker.ApplyAsync(doc, flow, result, ct);
-        foreach (var c in changes) Audit(doc, "document.value_edited", new { by = tenant.ClerkUserId, target = c.Target, old = c.Old, @new = c.New });
+        // The undelivered outputs still need sending; an edit does not make the document unsent-ready again.
+        if (wasSendFailed) doc.Status = DocumentStatus.SendFailed;
+        foreach (var c in changes) DocumentAudit.Add(db, doc, "document.value_edited", new { target = c.Target, old = c.Old, @new = c.New }, tenant.ClerkUserId);
         await db.SaveChangesAsync(ct);
         return Ok(ToDto(doc, flow.Name));
+    }
+
+    [HttpPost("{id:guid}/send")]
+    public async Task<IActionResult> Send(Guid id, CancellationToken ct)
+    {
+        if (Refuse() is { } refused) return refused;
+        var doc = await FindAsync(id, ct);
+        if (doc is null) return NotFound(NotFoundBody);
+        var outcome = await sender.SendAsync(doc, SendMode.Person, tenant.ClerkUserId, ct);
+        if (outcome.Ok) return Ok(outcome.Deliveries.OrderBy(d => d.CreatedAt).Select(ToDeliveryDto));
+        return outcome.Error switch
+        {
+            "output_invalid" when outcome.Detail is OutputFailure f => UnprocessableEntity(new { error = outcome.Error, output = f.Output, detail = f.Detail }),
+            "output_invalid" => UnprocessableEntity(new { error = outcome.Error }),
+            _ => Conflict(new { error = outcome.Error }),
+        };
+    }
+
+    private static object ToDeliveryDto(FlowDelivery d) =>
+        new { d.Id, d.OutputName, d.Protocol, d.Status, d.Attempts, d.LastError, d.FileName, d.DeliveredAt };
+
+    [HttpGet("{id:guid}/deliveries")]
+    public async Task<IActionResult> Deliveries(Guid id, CancellationToken ct)
+    {
+        if (Refuse() is { } refused) return refused;
+        if (await FindAsync(id, ct) is null) return NotFound(NotFoundBody);
+        var rows = await db.Set<FlowDelivery>().AsNoTracking()
+            .Where(d => d.OrgId == tenant.OrganisationId && d.DocumentId == id).OrderBy(d => d.CreatedAt).ToListAsync(ct);
+        return Ok(rows.Select(ToDeliveryDto));
+    }
+
+    [HttpGet("{id:guid}/deliveries/{deliveryId:guid}/file")]
+    [EnableRateLimiting("signed-url")]
+    public async Task<IActionResult> DeliveryFile(Guid id, Guid deliveryId, CancellationToken ct)
+    {
+        if (Refuse() is { } refused) return refused;
+        var delivery = await db.Set<FlowDelivery>().AsNoTracking()
+            .FirstOrDefaultAsync(d => d.OrgId == tenant.OrganisationId && d.DocumentId == id && d.Id == deliveryId, ct);
+        if (delivery?.ArtifactKey is null) return NotFound(new { error = "delivery_not_found" });
+        Response.Headers[HeaderNames.CacheControl] = "no-store";
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        return File(await storage.DownloadAsync(delivery.ArtifactKey, ct), delivery.ContentType, delivery.FileName);
     }
 }
