@@ -18,7 +18,8 @@ public sealed class OpenAiDocumentReader : IDocumentReader
 {
     private const string DefaultModel = "gpt-5-mini";
     private const int MaxOutputTokens = 16000;
-    private static readonly TimeSpan CallTimeout = TimeSpan.FromSeconds(60);
+    // A 40-page document with a 100-line table took longer than 60s on gpt-5-mini in production.
+    private static readonly TimeSpan CallTimeout = TimeSpan.FromSeconds(240);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private static readonly string SystemPrompt =
@@ -96,6 +97,11 @@ public sealed class OpenAiDocumentReader : IDocumentReader
             var completion = (await _client.CompleteChatAsync(messages, new ChatCompletionOptions
             {
                 MaxOutputTokenCount = MaxOutputTokens,
+#pragma warning disable OPENAI001 // reasoning effort is marked evaluation-only in the SDK
+                // Reading is transcription, not reasoning: low effort is faster and leaves the output
+                // budget for the values, since reasoning tokens count against MaxOutputTokenCount.
+                ReasoningEffortLevel = ChatReasoningEffortLevel.Low,
+#pragma warning restore OPENAI001
                 ResponseFormat = ChatResponseFormat.CreateJsonSchemaFormat(
                     jsonSchemaFormatName: "document_read", jsonSchema: Schema, jsonSchemaIsStrict: true),
             }, cts.Token)).Value;
@@ -115,9 +121,10 @@ public sealed class OpenAiDocumentReader : IDocumentReader
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            // Our own deadline fired, not the caller's: the document is too big to read in one call.
+            // Our own deadline fired, not the caller's. A slow provider is not proof the document is
+            // too big, so this is retryable: the job retries ai_error.
             _logger.LogWarning("Document read timed out (org {OrgId}).", organisationId);
-            return Fail("document_too_large");
+            return Fail("ai_error");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
