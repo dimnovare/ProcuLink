@@ -15,7 +15,7 @@ namespace ProcuLink.Api.Jobs;
 /// <summary>Hangfire job: reads a received flow document. Idempotent — a document past <c>reading</c> is skipped.</summary>
 public class ReadDocumentJob(
     ProcuLinkDbContext db, IFileStorageService storage, IDocumentReader reader,
-    DocumentRechecker rechecker, ILogger<ReadDocumentJob> logger)
+    DocumentRechecker rechecker, IBackgroundJobClient jobs, ILogger<ReadDocumentJob> logger)
 {
     private const int MaxChars = 60_000;
     private const int MinWordsPerTextPage = 5;
@@ -142,6 +142,7 @@ public class ReadDocumentJob(
             failedChecks = DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).Select(c => c.Code).ToList(),
         });
         await db.SaveChangesAsync(ct);
+        SendDocumentJob.EnqueueIfAutomatic(jobs, doc, flow);
     }
 
     private async Task FailAsync(FlowDocument doc, string reason, CancellationToken ct)

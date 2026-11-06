@@ -22,7 +22,7 @@ public sealed class FlowsController(
     private static IActionResult FlowNotFound() => new NotFoundObjectResult(new { error = "flow_not_found" });
 
     private static FlowDto ToDto(Flow f, int documentCount) =>
-        new(f.Id, f.Name, f.FieldsConfirmed, DocumentJson.Deserialize<FlowFieldList>(f.FieldsJson), documentCount, f.CreatedAt);
+        new(f.Id, f.Name, f.FieldsConfirmed, DocumentJson.Deserialize<FlowFieldList>(f.FieldsJson), documentCount, f.CreatedAt, f.Automation);
 
     private static bool TryName(string? raw, out string name)
     {
@@ -77,8 +77,17 @@ public sealed class FlowsController(
         var orgId = tenant.OrganisationId;
         var flow = await db.Flows.FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == id, ct);
         if (flow is null) return FlowNotFound();
-        if (!TryName(request.Name, out var name)) return BadRequest(new { error = "invalid_name" });
-        flow.Name = name;
+        if (request.Name is null && request.Automation is null) return BadRequest(new { error = "invalid_name" });
+        if (request.Name is not null)
+        {
+            if (!TryName(request.Name, out var name)) return BadRequest(new { error = "invalid_name" });
+            flow.Name = name;
+        }
+        if (request.Automation is not null)
+        {
+            if (!FlowAutomation.All.Contains(request.Automation)) return UnprocessableEntity(new { error = "invalid_automation" });
+            flow.Automation = request.Automation;
+        }
         flow.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
         return Ok(ToDto(flow, await CountDocs(orgId, id, ct)));

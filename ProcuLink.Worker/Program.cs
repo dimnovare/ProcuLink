@@ -436,6 +436,8 @@ builder.Services.AddScoped<IInvoiceService, InvoiceService>();
 builder.Services.AddScoped<ParseInvoiceJob>();
 builder.Services.AddScoped<ReadDocumentJob>();
 builder.Services.AddScoped<DeliverDocumentJob>();
+builder.Services.AddScoped<SendDocumentJob>();
+builder.Services.AddScoped<DocumentDeliverySweepJob>();
 
 builder.Services.AddHostedService<Worker>();
 // Warm the self-hosted OCR models at startup (no-op unless NoEgressOcr:Enabled) so the
