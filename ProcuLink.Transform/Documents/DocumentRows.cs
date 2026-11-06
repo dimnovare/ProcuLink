@@ -16,9 +16,10 @@ public static class DocumentRows
     /// </summary>
     public static DocumentRowSet Build(ReadResult read, string? tableKey)
     {
-        var header = read.Fields
-            .Where(f => !string.IsNullOrWhiteSpace(f.Value))
-            .ToDictionary(f => f.Key, f => f.Value!);
+        // A repeated key keeps its first non-blank value; ReadResult does not guarantee unique keys.
+        var header = new Dictionary<string, string>();
+        foreach (var f in read.Fields.Where(f => !string.IsNullOrWhiteSpace(f.Value)))
+            header.TryAdd(f.Key, f.Value!);
 
         var table = tableKey is null ? read.Tables.FirstOrDefault() : read.Tables.FirstOrDefault(t => t.Key == tableKey);
         var lines = (table?.Rows ?? [])
