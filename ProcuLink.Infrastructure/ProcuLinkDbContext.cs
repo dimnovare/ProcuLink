@@ -196,6 +196,10 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     // ── Platform audit: receipts that must outlive the organisation they record ─
     public DbSet<PlatformAuditEvent>             PlatformAuditEvents           { get; set; } = null!;
 
+    // ── Document engine ──────────────────────────────────────────────────────
+    public DbSet<Flow>                           Flows                         { get; set; } = null!;
+    public DbSet<FlowDocument>                   FlowDocuments                 { get; set; } = null!;
+
     // ── Org plan-history chokepoint ──────────────────────────────────────────
     // Overage metering must resolve the plan + order-limit override AS OF each
     // billed window (a yearly renewal invoice decomposes into ~12 PAST months;
@@ -2119,6 +2123,49 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
              .WithMany(o => o.InboundAddresses)
              .HasForeignKey(a => a.OrganisationId)
              .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Flow>(b =>
+        {
+            b.ToTable("flows");
+            b.HasKey(f => f.Id);
+            b.Property(f => f.Id).HasColumnName("id");
+            b.Property(f => f.OrgId).HasColumnName("org_id");
+            b.Property(f => f.Name).HasColumnName("name");
+            b.Property(f => f.FieldsJson).HasColumnName("fields_json").HasColumnType("jsonb").HasDefaultValue("{}");
+            b.Property(f => f.FieldsConfirmed).HasColumnName("fields_confirmed");
+            b.Property(f => f.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(f => f.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            b.HasIndex(f => f.OrgId);
+            b.HasOne<Organisation>().WithMany().HasForeignKey(f => f.OrgId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<FlowDocument>(b =>
+        {
+            b.ToTable("flow_documents");
+            b.HasKey(d => d.Id);
+            b.Property(d => d.Id).HasColumnName("id");
+            b.Property(d => d.OrgId).HasColumnName("org_id");
+            b.Property(d => d.FlowId).HasColumnName("flow_id");
+            b.Property(d => d.FileName).HasColumnName("file_name");
+            b.Property(d => d.ContentType).HasColumnName("content_type");
+            b.Property(d => d.SourceFileKey).HasColumnName("source_file_key");
+            b.Property(d => d.Sha256).HasColumnName("sha256");
+            b.Property(d => d.PageCount).HasColumnName("page_count");
+            b.Property(d => d.BillingUnits).HasColumnName("billing_units");
+            b.Property(d => d.Status).HasColumnName("status");
+            b.Property(d => d.StatusReason).HasColumnName("status_reason");
+            b.Property(d => d.ReadJson).HasColumnName("read_json").HasColumnType("jsonb").HasDefaultValue("{}");
+            b.Property(d => d.ChecksJson).HasColumnName("checks_json").HasColumnType("jsonb").HasDefaultValue("[]");
+            b.Property(d => d.DedupKey).HasColumnName("dedup_key");
+            b.Property(d => d.IsSample).HasColumnName("is_sample");
+            b.Property(d => d.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(d => d.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            b.Property(d => d.ReadAt).HasColumnName("read_at").HasColumnType("timestamptz");
+            b.HasIndex(d => new { d.OrgId, d.FlowId, d.Sha256 });
+            b.HasIndex(d => new { d.OrgId, d.FlowId, d.DedupKey });
+            b.HasOne<Organisation>().WithMany().HasForeignKey(d => d.OrgId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne(d => d.Flow).WithMany().HasForeignKey(d => d.FlowId).OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── Organisation query filters ───────────────────────────────────────

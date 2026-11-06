@@ -98,7 +98,7 @@ public static class XlsxTextExtractor
     /// silently 10×/100× a value before the LLM ever sees it). Dates render ISO; all
     /// other types fall back to the trimmed display string.
     /// </summary>
-    private static string FormatCell(IXLCell cell)
+    internal static string FormatCell(IXLCell cell)
     {
         switch (cell.DataType)
         {

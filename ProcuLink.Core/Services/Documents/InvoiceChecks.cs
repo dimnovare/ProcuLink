@@ -1,3 +1,4 @@
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 
 namespace ProcuLink.Core.Services.Documents;
@@ -39,25 +40,9 @@ public static class InvoiceChecks
         foreach (var line in doc.Lines.Where(l => !string.IsNullOrWhiteSpace(l.ReviewReason)).OrderBy(l => l.LineNumber))
             problems.Add($"Line {line.LineNumber}: {line.ReviewReason}");
 
-        if (!string.IsNullOrEmpty(doc.PaymentIban) && !IsValidIban(doc.PaymentIban))
+        if (!string.IsNullOrEmpty(doc.PaymentIban) && !FieldValueParser.IsIban(doc.PaymentIban))
             problems.Add("The bank account (IBAN) is not valid.");
 
         return problems;
-    }
-
-    /// <summary>ISO 13616: country letters, check digits, then mod-97 of the rearranged digits is 1.</summary>
-    private static bool IsValidIban(string iban)
-    {
-        if (iban.Length is < 15 or > 34 || !char.IsAsciiLetter(iban[0]) || !char.IsAsciiLetter(iban[1])
-            || !char.IsAsciiDigit(iban[2]) || !char.IsAsciiDigit(iban[3]) || !iban.All(char.IsAsciiLetterOrDigit))
-            return false;
-
-        var remainder = 0;
-        foreach (var c in iban[4..] + iban[..4])
-        {
-            var value = char.IsAsciiDigit(c) ? c - '0' : char.ToUpperInvariant(c) - 'A' + 10;
-            remainder = (remainder * (value > 9 ? 100 : 10) + value) % 97;
-        }
-        return remainder == 1;
     }
 }

@@ -17,6 +17,7 @@ using ProcuLink.Api.Services;
 using ProcuLink.Api.Startup;
 using ProcuLink.Api.Telemetry;
 using ProcuLink.Api.Services.StarterTemplates;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Delivery;
@@ -668,6 +669,10 @@ builder.Services.AddSingleton<IStarterTemplateService, StarterTemplateService>()
 
 // ── Analytics (PostHog) — no-op when key absent ──────────────────────────
 builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Analytics:PostHog"));
+builder.Services.Configure<ProcuLink.Api.Services.Documents.DocumentEngineOptions>(builder.Configuration.GetSection("DocumentEngine"));
+builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.DocumentEngineGate>();
+builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentRechecker>();
+builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentIntakeService>();
 builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
 builder.Services.AddScoped<IEmailSettingsService, EmailSettingsService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Organisation.IOrganisationSettingsService, ProcuLink.Infrastructure.Services.OrganisationSettingsService>();
@@ -713,6 +718,7 @@ builder.Services.AddSingleton<IPdfRasterizer, SkiaPdfRasterizer>();
 // so the deterministic PdfOrderParser stays the fallback). Singleton + per-call
 // IServiceScopeFactory tracker resolution so the same instance is valid in the Worker.
 builder.Services.AddSingleton<IStructuredOrderExtractor, OpenAiPdfOrderExtractor>();
+builder.Services.AddSingleton<IDocumentReader, OpenAiDocumentReader>();
 // OCR seam. Opt-in self-hosted no-egress engine (RapidOcrNet) only when enabled —
 // otherwise a no-op, so the ~12MB models + ONNX session are never loaded.
 if (builder.Configuration.GetValue<bool>("NoEgressOcr:Enabled"))

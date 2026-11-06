@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Jobs;
 using ProcuLink.Api.Services;
 using ProcuLink.Api.Telemetry;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Alerting;
@@ -179,6 +180,10 @@ builder.Services.AddScoped<IIntegrationTriggerService, IntegrationTriggerService
 // in EmailPollingJob) and ParseOrderJob. No-op when Analytics:PostHog:ApiKey is absent.
 // Mirrors API/Program.cs lines 189-190.
 builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Analytics:PostHog"));
+builder.Services.Configure<ProcuLink.Api.Services.Documents.DocumentEngineOptions>(builder.Configuration.GetSection("DocumentEngine"));
+builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.DocumentEngineGate>();
+builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentRechecker>();
+builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentIntakeService>();
 builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 // Same scoped OrderService also serves the pull-ingress stub-creation seam (explicit order id).
@@ -349,6 +354,7 @@ builder.Services.AddSingleton<IPdfRasterizer, SkiaPdfRasterizer>();
 // so it must register the same singleton extractor as the API (orgId is a method
 // param + tracker resolved via IServiceScopeFactory — no ICurrentTenantService).
 builder.Services.AddSingleton<IStructuredOrderExtractor, OpenAiPdfOrderExtractor>();
+builder.Services.AddSingleton<IDocumentReader, OpenAiDocumentReader>();
 // OCR seam. The Worker runs ParseOrderJob, so this is where self-hosted OCR executes.
 // Opt-in (RapidOcrNet) only when enabled — otherwise a no-op (no models loaded).
 if (builder.Configuration.GetValue<bool>("NoEgressOcr:Enabled"))
@@ -426,6 +432,7 @@ builder.Services.AddSingleton<IInvoiceTransformService, JsonInvoiceTransformServ
 builder.Services.AddScoped<IInvoiceService, InvoiceService>();
 // ParseInvoiceJob lives in ProcuLink.Api, enqueued on "critical" — Worker executes it.
 builder.Services.AddScoped<ParseInvoiceJob>();
+builder.Services.AddScoped<ReadDocumentJob>();
 
 builder.Services.AddHostedService<Worker>();
 // Warm the self-hosted OCR models at startup (no-op unless NoEgressOcr:Enabled) so the

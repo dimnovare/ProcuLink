@@ -895,14 +895,20 @@ public sealed class StripeBillingService : IBillingService
                 .Where(o => o.OrgId == org.Id && !o.IsSample && o.CreatedAt >= org.TrialStartedAt)
                 // Hard-cap forgiveness — Pilot only. See the remarks above.
                 .Where(o => !PilotForgivenFailureStatuses.Contains(o.Status));
-            return await ApplyMeterStatusFilter(pilotOrders).CountAsync(ct);
+            return await ApplyMeterStatusFilter(pilotOrders).CountAsync(ct) + await CountDocumentUnitsAsync(org.Id, org.TrialStartedAt, ct);
         }
 
         var monthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc);
         var monthOrders = _db.PurchaseOrders
             .Where(o => o.OrgId == org.Id && !o.IsSample && o.CreatedAt >= monthStart);
-        return await ApplyMeterStatusFilter(monthOrders).CountAsync(ct);
+        return await ApplyMeterStatusFilter(monthOrders).CountAsync(ct) + await CountDocumentUnitsAsync(org.Id, monthStart, ct);
     }
+
+    /// <summary>Flow documents count their billing units once read (<c>ReadAt</c>); the delivered-only flag does not apply.</summary>
+    private async Task<int> CountDocumentUnitsAsync(Guid orgId, DateTime since, CancellationToken ct) =>
+        await _db.FlowDocuments
+            .Where(d => d.OrgId == orgId && !d.IsSample && d.ReadAt != null && d.ReadAt >= since)
+            .SumAsync(d => d.BillingUnits, ct);
 
     /// <summary>
     /// Applies the delivered-only status filter when <see cref="CountDeliveredOnlyFlagKey"/>
