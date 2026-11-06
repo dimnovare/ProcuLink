@@ -33,7 +33,7 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
 
     public async Task<SendOutcome> SendAsync(FlowDocument doc, SendMode mode, string? userId, CancellationToken ct)
     {
-        var (observed, observedAt) = (doc.Status, doc.UpdatedAt);
+        var (observed, observedAt) = (doc.Status, Micros(doc.UpdatedAt));
         if (!DocumentStatus.IsEditable(observed, doc.StatusReason)) return Refuse("not_ready");
         if (!await billing.CanProcessOrdersAsync(doc.OrgId, ct)) return Refuse("processing_paused");
 
@@ -136,6 +136,9 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
         return (new SendOutcome(null, null, existing), sent.Where(d => d.Status == FlowDeliveryStatus.Queued).ToList());
     }
 
+    /// <summary>Postgres stores microseconds; a just-saved tracked entity still holds 100ns ticks. Compare at the stored precision.</summary>
+    private static DateTime Micros(DateTime t) => t.AddTicks(-(t.Ticks % 10));
+
     /// <summary>Moves the document between statuses only if it is still in <paramref name="from"/>.</summary>
     private async Task<bool> ClaimAsync(FlowDocument doc, string from, DateTime? fromUpdatedAt, string to, CancellationToken ct)
     {
@@ -149,7 +152,7 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
         {
             // EF InMemory cannot translate ExecuteUpdateAsync: same transition through the change tracker (single-threaded there).
             var row = await db.FlowDocuments.FirstAsync(d => d.Id == doc.Id && d.OrgId == doc.OrgId, ct);
-            claimed = row.Status == from && (fromUpdatedAt == null || row.UpdatedAt == fromUpdatedAt) ? 1 : 0;
+            claimed = row.Status == from && (fromUpdatedAt == null || Micros(row.UpdatedAt) == fromUpdatedAt) ? 1 : 0;
             if (claimed == 1)
             {
                 row.Status = to;
