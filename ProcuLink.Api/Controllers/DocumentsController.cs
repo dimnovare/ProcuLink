@@ -177,7 +177,7 @@ public sealed class DocumentsController(
         var doc = await FindAsync(id, ct);
         if (doc is null) return NotFound(NotFoundBody);
         if (doc.Status is DocumentStatus.Sending or DocumentStatus.Sent) return Conflict(new { error = "document_sent" });
-        if (doc.Status is not (DocumentStatus.NeedsReview or DocumentStatus.Ready or DocumentStatus.SendFailed) || doc.StatusReason == "duplicate_file") return Conflict(new { error = "not_editable" });
+        if (!DocumentStatus.IsEditable(doc.Status, doc.StatusReason)) return Conflict(new { error = "not_editable" });
 
         var (fieldEdits, cellEdits, adds, removes) = (req.Fields ?? [], req.Cells ?? [], req.AddRowToTables ?? [], req.RemoveRows ?? []);
         if (fieldEdits.Count + cellEdits.Count + adds.Count + removes.Count == 0) return BadRequest(new { error = "no_changes" });
