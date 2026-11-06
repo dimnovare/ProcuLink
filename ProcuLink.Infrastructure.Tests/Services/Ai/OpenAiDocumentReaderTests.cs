@@ -47,8 +47,10 @@ public class OpenAiDocumentReaderTests
     public async Task Maps_completion_to_read_result_and_coerces_unknown_type()
     {
         var (reader, _) = Create();
+        // "ref" has a null value, so it is kept only because the flow lists it.
+        var expected = new FlowFieldList([new FlowField("ref", "Reference", FieldTypes.Text, null, false)]);
 
-        var outcome = await reader.ReadAsync(Input(), Org, CancellationToken.None);
+        var outcome = await reader.ReadAsync(Input(expected), Org, CancellationToken.None);
 
         outcome.Success.Should().BeTrue();
         var result = outcome.Result!;
@@ -77,6 +79,21 @@ public class OpenAiDocumentReaderTests
         result.Tables[0].Rows[0].Cells.Keys.Should().Equal("qty");
         result.Fields.Select(f => f.Key).Concat(result.Tables.Select(t => t.Key))
             .Should().OnlyContain(k => FieldKey.Pattern.IsMatch(k));
+    }
+
+    [Fact]
+    public void Absent_fields_are_dropped_unless_the_flow_lists_them()
+    {
+        var dto = new OpenAiDocumentReader.ReadDto("Invoice",
+            [new("invoice_no", "Invoice no", "7", "text", null, 1), new("iban", "IBAN", null, "text", null, 1)],
+            []);
+
+        OpenAiDocumentReader.Map(dto, null).Fields.Select(f => f.Key).Should().Equal("invoice_no");
+
+        var listed = new FlowFieldList([new FlowField("iban", "IBAN", FieldTypes.Text, null, true)]);
+        var result = OpenAiDocumentReader.Map(dto, listed);
+        result.Fields.Select(f => f.Key).Should().Equal("invoice_no", "iban");
+        result.Fields[1].Value.Should().BeNull();
     }
 
     [Fact]
