@@ -39,6 +39,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
     private readonly ILogger<OpenAiDocumentReader> _logger;
     private readonly IServiceScopeFactory? _scopeFactory;
     private readonly IAiUsageTracker? _tracker;
+    private readonly bool _reasoningModel;
 
     public OpenAiDocumentReader(
         IConfiguration configuration, ILogger<OpenAiDocumentReader> logger, IServiceScopeFactory? scopeFactory = null)
@@ -53,6 +54,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
         _logger = logger;
         _tracker = tracker;
         var model = configuration["Ai:OpenAI:ExtractionModel"] ?? configuration["Ai:OpenAI:MappingModel"] ?? DefaultModel;
+        _reasoningModel = OpenAiModels.IsReasoningModel(model);
         var apiKey = configuration["Ai:OpenAI:ApiKey"];
         if (overrideClient is not null)
             _client = overrideClient;
@@ -94,17 +96,19 @@ public sealed class OpenAiDocumentReader : IDocumentReader
             };
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(CallTimeout);
-            var completion = (await _client.CompleteChatAsync(messages, new ChatCompletionOptions
+            var options = new ChatCompletionOptions
             {
                 MaxOutputTokenCount = MaxOutputTokens,
-#pragma warning disable OPENAI001 // reasoning effort is marked evaluation-only in the SDK
-                // Reading is transcription, not reasoning: low effort is faster and leaves the output
-                // budget for the values, since reasoning tokens count against MaxOutputTokenCount.
-                ReasoningEffortLevel = ChatReasoningEffortLevel.Low,
-#pragma warning restore OPENAI001
                 ResponseFormat = ChatResponseFormat.CreateJsonSchemaFormat(
                     jsonSchemaFormatName: "document_read", jsonSchema: Schema, jsonSchemaIsStrict: true),
-            }, cts.Token)).Value;
+            };
+#pragma warning disable OPENAI001 // reasoning effort is marked evaluation-only in the SDK
+            // Reading is transcription, not reasoning: low effort is faster and leaves the output
+            // budget for the values, since reasoning tokens count against MaxOutputTokenCount.
+            // Never assign null here: the SDK setter throws on it.
+            if (_reasoningModel) options.ReasoningEffortLevel = ChatReasoningEffortLevel.Low;
+#pragma warning restore OPENAI001
+            var completion = (await _client.CompleteChatAsync(messages, options, cts.Token)).Value;
 
             var tokens = completion.Usage?.TotalTokenCount ?? 0;
             if (tracker is not null && tokens > 0)

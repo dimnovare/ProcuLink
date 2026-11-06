@@ -27,7 +27,7 @@ public class OpenAiDocumentReaderTests
                    {"cells":[{"column":"desc","value":"Gadget","confidence":0.8}]}]}]}
         """;
 
-    private static (OpenAiDocumentReader Reader, Mock<ChatClient> Client) Create(IAiUsageTracker? tracker = null)
+    private static (OpenAiDocumentReader Reader, Mock<ChatClient> Client) Create(IAiUsageTracker? tracker = null, string? model = null)
     {
         var client = new Mock<ChatClient>();
         var completion = OpenAIChatModelFactory.ChatCompletion(content: new ChatMessageContent(CannedJson));
@@ -35,7 +35,8 @@ public class OpenAiDocumentReaderTests
                 It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatCompletionOptions>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(ClientResult.FromValue(completion, Mock.Of<PipelineResponse>()));
         var reader = new OpenAiDocumentReader(
-            new ConfigurationBuilder().Build(), NullLogger<OpenAiDocumentReader>.Instance, tracker, client.Object);
+            new ConfigurationBuilder().AddInMemoryCollection(
+                new Dictionary<string, string?> { ["Ai:OpenAI:ExtractionModel"] = model }).Build(), NullLogger<OpenAiDocumentReader>.Instance, tracker, client.Object);
         return (reader, client);
     }
 
@@ -109,10 +110,13 @@ public class OpenAiDocumentReaderTests
         captured.SelectMany(m => m.Content).Select(p => p.Text).Should().Contain(t => t.Contains("total_gross"));
     }
 
-    [Fact]
-    public async Task Our_timeout_is_retryable_and_reads_ask_for_low_reasoning()
+    [Theory]
+    [InlineData(null, true)]            // default gpt-5-mini
+    [InlineData("gpt-6-luna", true)]
+    [InlineData("gpt-4o-mini", false)]  // the Worker's production model rejects reasoning_effort (HTTP 400)
+    public async Task Our_timeout_is_retryable_and_only_reasoning_models_get_low_reasoning(string? model, bool reasoning)
     {
-        var (reader, client) = Create();
+        var (reader, client) = Create(model: model);
         ChatCompletionOptions? sent = null;
         client.Setup(c => c.CompleteChatAsync(
                 It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatCompletionOptions>(), It.IsAny<CancellationToken>()))
@@ -123,6 +127,7 @@ public class OpenAiDocumentReaderTests
 
         outcome.Success.Should().BeFalse();
         outcome.FailureReason.Should().Be("ai_error");
-        sent!.ReasoningEffortLevel.Should().Be(ChatReasoningEffortLevel.Low);
+        (sent!.ReasoningEffortLevel == ChatReasoningEffortLevel.Low).Should().Be(reasoning);
+        sent.ReasoningEffortLevel.HasValue.Should().Be(reasoning);
     }
 }
