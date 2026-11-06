@@ -46,6 +46,9 @@ public static class CredentialPurpose
     /// </summary>
     public const string OrgInboundEmailAddress = "org.inbound.email_address";
 
+    /// <summary>Scope id: FlowDestination.Id. Credentials for a document-flow destination.</summary>
+    public const string FlowDestinationCredentials = "flow.destination.credentials";
+
     /// <summary>
     /// The purposes for which a version-1 (unbound, scope-inert) envelope may STILL be read.
     ///

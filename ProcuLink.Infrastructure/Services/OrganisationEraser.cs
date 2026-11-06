@@ -131,7 +131,7 @@ public sealed class OrganisationEraser(
         foreach (var (type, orgProperty) in tables)
         {
             string[] keyProperties = withKeys
-                ? type.GetProperties().Where(p => p.ClrType == typeof(string) && p.Name.EndsWith("FileKey")).Select(p => p.Name).ToArray()
+                ? type.GetProperties().Where(p => p.ClrType == typeof(string) && (p.Name.EndsWith("FileKey") || p.Name == "ArtifactKey")).Select(p => p.Name).ToArray()
                 : [];
             var (count, found) = await (Task<(int, List<string>)>)Generic(nameof(InspectTableAsync), type)
                 .Invoke(null, [db, orgId, orgProperty, keyProperties, ct])!;

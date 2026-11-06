@@ -2134,6 +2134,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(f => f.Name).HasColumnName("name");
             b.Property(f => f.FieldsJson).HasColumnName("fields_json").HasColumnType("jsonb").HasDefaultValue("{}");
             b.Property(f => f.FieldsConfirmed).HasColumnName("fields_confirmed");
+            b.Property(f => f.Automation).HasColumnName("automation").HasDefaultValue("review");
             b.Property(f => f.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             b.Property(f => f.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             b.HasIndex(f => f.OrgId);
@@ -2166,6 +2167,72 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasIndex(d => new { d.OrgId, d.FlowId, d.DedupKey });
             b.HasOne<Organisation>().WithMany().HasForeignKey(d => d.OrgId).OnDelete(DeleteBehavior.Cascade);
             b.HasOne(d => d.Flow).WithMany().HasForeignKey(d => d.FlowId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<FlowDestination>(b =>
+        {
+            b.ToTable("flow_destinations");
+            b.HasKey(d => d.Id);
+            b.Property(d => d.Id).HasColumnName("id");
+            b.Property(d => d.OrgId).HasColumnName("org_id");
+            b.Property(d => d.Name).HasColumnName("name");
+            b.Property(d => d.Protocol).HasColumnName("protocol");
+            b.Property(d => d.ConfigJson).HasColumnName("config_json").HasColumnType("jsonb").HasDefaultValue("{}");
+            b.Property(d => d.EncryptedCredentials).HasColumnName("encrypted_credentials");
+            b.Property(d => d.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(d => d.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            b.HasIndex(d => d.OrgId);
+            b.HasOne<Organisation>().WithMany().HasForeignKey(d => d.OrgId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<FlowOutput>(b =>
+        {
+            b.ToTable("flow_outputs");
+            b.HasKey(o => o.Id);
+            b.Property(o => o.Id).HasColumnName("id");
+            b.Property(o => o.OrgId).HasColumnName("org_id");
+            b.Property(o => o.FlowId).HasColumnName("flow_id");
+            b.Property(o => o.Name).HasColumnName("name");
+            b.Property(o => o.Format).HasColumnName("format");
+            b.Property(o => o.TemplateJson).HasColumnName("template_json").HasColumnType("jsonb").HasDefaultValue("{}");
+            b.Property(o => o.TableKey).HasColumnName("table_key");
+            b.Property(o => o.DestinationId).HasColumnName("destination_id");
+            b.Property(o => o.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(o => o.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            b.HasIndex(o => o.FlowId);
+            b.HasOne<Organisation>().WithMany().HasForeignKey(o => o.OrgId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne<Flow>().WithMany().HasForeignKey(o => o.FlowId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne<FlowDestination>().WithMany().HasForeignKey(o => o.DestinationId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<FlowDelivery>(b =>
+        {
+            b.ToTable("flow_deliveries");
+            b.HasKey(d => d.Id);
+            b.Property(d => d.Id).HasColumnName("id");
+            b.Property(d => d.OrgId).HasColumnName("org_id");
+            b.Property(d => d.DocumentId).HasColumnName("document_id");
+            b.Property(d => d.OutputId).HasColumnName("output_id");
+            b.Property(d => d.OutputName).HasColumnName("output_name");
+            b.Property(d => d.DestinationId).HasColumnName("destination_id");
+            b.Property(d => d.Protocol).HasColumnName("protocol");
+            b.Property(d => d.Status).HasColumnName("status");
+            b.Property(d => d.Attempts).HasColumnName("attempts");
+            b.Property(d => d.ArtifactKey).HasColumnName("artifact_key");
+            b.Property(d => d.ContentType).HasColumnName("content_type");
+            b.Property(d => d.FileName).HasColumnName("file_name");
+            b.Property(d => d.LastError).HasColumnName("last_error");
+            b.Property(d => d.ResponseCode).HasColumnName("response_code");
+            b.Property(d => d.ClaimedAt).HasColumnName("claimed_at").HasColumnType("timestamptz");
+            b.Property(d => d.NextAttemptAt).HasColumnName("next_attempt_at").HasColumnType("timestamptz");
+            b.Property(d => d.DeliveredAt).HasColumnName("delivered_at").HasColumnType("timestamptz");
+            b.Property(d => d.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(d => d.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            b.HasIndex(d => new { d.DocumentId, d.OutputId }).IsUnique();
+            b.HasOne<Organisation>().WithMany().HasForeignKey(d => d.OrgId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne<FlowDocument>().WithMany().HasForeignKey(d => d.DocumentId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne<FlowOutput>().WithMany().HasForeignKey(d => d.OutputId).OnDelete(DeleteBehavior.SetNull);
+            b.HasOne<FlowDestination>().WithMany().HasForeignKey(d => d.DestinationId).OnDelete(DeleteBehavior.SetNull);
         });
 
         // ── Organisation query filters ───────────────────────────────────────

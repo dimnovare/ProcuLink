@@ -746,6 +746,13 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<string>("Automation")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("review")
+                        .HasColumnName("automation");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamptz")
                         .HasColumnName("created_at");
@@ -779,6 +786,151 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.HasIndex("OrgId");
 
                     b.ToTable("flows", (string)null);
+                });
+
+            modelBuilder.Entity("ProcuLink.Core.Entities.FlowDelivery", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ArtifactKey")
+                        .HasColumnType("text")
+                        .HasColumnName("artifact_key");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempts");
+
+                    b.Property<DateTime?>("ClaimedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("claimed_at");
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("content_type");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTime?>("DeliveredAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("delivered_at");
+
+                    b.Property<Guid?>("DestinationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("destination_id");
+
+                    b.Property<Guid>("DocumentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("document_id");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("file_name");
+
+                    b.Property<string>("LastError")
+                        .HasColumnType("text")
+                        .HasColumnName("last_error");
+
+                    b.Property<DateTime?>("NextAttemptAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("next_attempt_at");
+
+                    b.Property<Guid>("OrgId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("org_id");
+
+                    b.Property<Guid?>("OutputId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("output_id");
+
+                    b.Property<string>("OutputName")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("output_name");
+
+                    b.Property<string>("Protocol")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("protocol");
+
+                    b.Property<int?>("ResponseCode")
+                        .HasColumnType("integer")
+                        .HasColumnName("response_code");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DestinationId");
+
+                    b.HasIndex("OrgId");
+
+                    b.HasIndex("OutputId");
+
+                    b.HasIndex("DocumentId", "OutputId")
+                        .IsUnique();
+
+                    b.ToTable("flow_deliveries", (string)null);
+                });
+
+            modelBuilder.Entity("ProcuLink.Core.Entities.FlowDestination", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ConfigJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasDefaultValue("{}")
+                        .HasColumnName("config_json");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("EncryptedCredentials")
+                        .HasColumnType("text")
+                        .HasColumnName("encrypted_credentials");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("name");
+
+                    b.Property<Guid>("OrgId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("org_id");
+
+                    b.Property<string>("Protocol")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("protocol");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrgId");
+
+                    b.ToTable("flow_destinations", (string)null);
                 });
 
             modelBuilder.Entity("ProcuLink.Core.Entities.FlowDocument", b =>
@@ -876,6 +1028,65 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.HasIndex("OrgId", "FlowId", "Sha256");
 
                     b.ToTable("flow_documents", (string)null);
+                });
+
+            modelBuilder.Entity("ProcuLink.Core.Entities.FlowOutput", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("DestinationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("destination_id");
+
+                    b.Property<Guid>("FlowId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("flow_id");
+
+                    b.Property<string>("Format")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("format");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("name");
+
+                    b.Property<Guid>("OrgId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("org_id");
+
+                    b.Property<string>("TableKey")
+                        .HasColumnType("text")
+                        .HasColumnName("table_key");
+
+                    b.Property<string>("TemplateJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasDefaultValue("{}")
+                        .HasColumnName("template_json");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DestinationId");
+
+                    b.HasIndex("FlowId");
+
+                    b.HasIndex("OrgId");
+
+                    b.ToTable("flow_outputs", (string)null);
                 });
 
             modelBuilder.Entity("ProcuLink.Core.Entities.IdempotencyKey", b =>
@@ -3972,6 +4183,40 @@ namespace ProcuLink.Infrastructure.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("ProcuLink.Core.Entities.FlowDelivery", b =>
+                {
+                    b.HasOne("ProcuLink.Core.Entities.FlowDestination", null)
+                        .WithMany()
+                        .HasForeignKey("DestinationId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("ProcuLink.Core.Entities.FlowDocument", null)
+                        .WithMany()
+                        .HasForeignKey("DocumentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("ProcuLink.Core.Entities.Organisation", null)
+                        .WithMany()
+                        .HasForeignKey("OrgId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("ProcuLink.Core.Entities.FlowOutput", null)
+                        .WithMany()
+                        .HasForeignKey("OutputId")
+                        .OnDelete(DeleteBehavior.SetNull);
+                });
+
+            modelBuilder.Entity("ProcuLink.Core.Entities.FlowDestination", b =>
+                {
+                    b.HasOne("ProcuLink.Core.Entities.Organisation", null)
+                        .WithMany()
+                        .HasForeignKey("OrgId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("ProcuLink.Core.Entities.FlowDocument", b =>
                 {
                     b.HasOne("ProcuLink.Core.Entities.Flow", "Flow")
@@ -3987,6 +4232,26 @@ namespace ProcuLink.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("Flow");
+                });
+
+            modelBuilder.Entity("ProcuLink.Core.Entities.FlowOutput", b =>
+                {
+                    b.HasOne("ProcuLink.Core.Entities.FlowDestination", null)
+                        .WithMany()
+                        .HasForeignKey("DestinationId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("ProcuLink.Core.Entities.Flow", null)
+                        .WithMany()
+                        .HasForeignKey("FlowId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("ProcuLink.Core.Entities.Organisation", null)
+                        .WithMany()
+                        .HasForeignKey("OrgId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("ProcuLink.Core.Entities.IdempotencyKey", b =>
