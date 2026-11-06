@@ -75,7 +75,7 @@ public sealed class ReadDocumentJobTests
                 new ReadField("sender_name", "Sender", "Imaginary Supplier Oy", FieldTypes.Text, null, 0.95, null, false, false, false),
             ]), null));
 
-        var job = new ReadDocumentJob(db, storage.Object, reader.Object, new DocumentRechecker(db), NullLogger<ReadDocumentJob>.Instance);
+        var job = new ReadDocumentJob(db, storage.Object, reader.Object, new DocumentRechecker(db), Mock.Of<Hangfire.IBackgroundJobClient>(), NullLogger<ReadDocumentJob>.Instance);
         return (job, db, reader, doc.Id);
     }
 

@@ -183,7 +183,9 @@ builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Ana
 builder.Services.Configure<ProcuLink.Api.Services.Documents.DocumentEngineOptions>(builder.Configuration.GetSection("DocumentEngine"));
 builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.DocumentEngineGate>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentRechecker>();
+builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentSender>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentIntakeService>();
+builder.Services.AddScoped<ProcuLink.Api.Services.Documents.FlowDestinationService>();
 builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 // Same scoped OrderService also serves the pull-ingress stub-creation seam (explicit order id).
@@ -433,6 +435,9 @@ builder.Services.AddScoped<IInvoiceService, InvoiceService>();
 // ParseInvoiceJob lives in ProcuLink.Api, enqueued on "critical" — Worker executes it.
 builder.Services.AddScoped<ParseInvoiceJob>();
 builder.Services.AddScoped<ReadDocumentJob>();
+builder.Services.AddScoped<DeliverDocumentJob>();
+builder.Services.AddScoped<SendDocumentJob>();
+builder.Services.AddScoped<DocumentDeliverySweepJob>();
 
 builder.Services.AddHostedService<Worker>();
 // Warm the self-hosted OCR models at startup (no-op unless NoEgressOcr:Enabled) so the

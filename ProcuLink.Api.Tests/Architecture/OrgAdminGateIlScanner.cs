@@ -160,6 +160,20 @@ internal static class OrgAdminGateIlScanner
           + "member still resolves lines and edits the other fields, so its caller gates in-method on "
           + "those four."),
 
+        new("FlowDestinationService.SaveAsync",
+            OnInterface<ProcuLink.Api.Services.Documents.FlowDestinationService>(nameof(ProcuLink.Api.Services.Documents.FlowDestinationService.SaveAsync)),
+            "Writes where a flow's documents are sent, and the credentials used: a redirection of where "
+          + "an organisation's documents go."),
+
+        new("FlowDestinationService.DeleteAsync",
+            OnInterface<ProcuLink.Api.Services.Documents.FlowDestinationService>(nameof(ProcuLink.Api.Services.Documents.FlowDestinationService.DeleteAsync)),
+            "Destroys a destination and its credentials; outputs cannot be sent to it afterwards."),
+
+        new("FlowDestinationService.TestAsync",
+            OnInterface<ProcuLink.Api.Services.Documents.FlowDestinationService>(nameof(ProcuLink.Api.Services.Documents.FlowDestinationService.TestAsync)),
+            "Sends a real message through the organisation's own channel to an external recipient, and "
+          + "can record the host key that channel will trust from then on."),
+
         new("new IntegrationSubscription / DbSet<IntegrationSubscription>.Add",
             CreatesIntegrationSubscription,
             "Stands up an outbound subscription that ships the payload of every matching order to "

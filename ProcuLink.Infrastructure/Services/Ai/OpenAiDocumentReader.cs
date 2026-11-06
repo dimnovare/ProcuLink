@@ -154,7 +154,8 @@ public sealed class OpenAiDocumentReader : IDocumentReader
         static double Clamp(double c) => double.IsNaN(c) ? 0 : Math.Clamp(c, 0, 1);
 
         var seenFields = new HashSet<string>();
-        var fields = (dto.Fields ?? []).Select(f =>
+        // Filtered before the key dedupe so a dropped blank field can't reserve a key.
+        var fields = (dto.Fields ?? []).Where(f => !string.IsNullOrWhiteSpace(f.Value) || fieldKeys?.Contains(FieldKey.Normalise(f.Key)) == true).Select(f =>
         {
             var key = FieldKey.Unique(seenFields, f.Key);
             return new ReadField(key, f.Label, f.Value, Type(f.Type), Meaning(f.Meaning), Clamp(f.Confidence),

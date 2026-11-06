@@ -127,7 +127,7 @@ public sealed class CsvTransformService : ITransformService
 
     /// <summary>
     /// OWASP CSV injection: Excel/Sheets run a cell starting with = + - @ tab or CR as a formula; a
-    /// leading ' makes it literal text. A plain signed number — digits with '.' or ',' separators, in
+    /// leading ' makes it literal text. A plain signed number — digits with '.' or ',' separators (plus space group separators after a '-', as in -1 234,50; not after '+', where "+372 555 0101" is a phone and a space is an Excel operator), in
     /// any culture's format (-5, +3.20, -1,234.50, -5,50) — is left alone: it cannot be a formula, and
     /// the untyped mapped/designer CSV emitters cannot otherwise tell it from text.
     /// </summary>
@@ -136,7 +136,7 @@ public sealed class CsvTransformService : ITransformService
 
     private static bool IsPlainSignedNumber(string v) =>
         v.Length > 1 && v[0] is '+' or '-'
-        && v.Skip(1).Any(char.IsAsciiDigit) && v.Skip(1).All(c => char.IsAsciiDigit(c) || c is '.' or ',');
+        && v.Skip(1).Any(char.IsAsciiDigit) && v.Skip(1).All(c => char.IsAsciiDigit(c) || c is '.' or ',' || (v[0] == '-' && c is ' ' or '\u00A0' or '\u202F'));
 
     /// <summary>
     /// Formula-neutralised, RFC 4180-escaped comma CSV cell. The one implementation lives in

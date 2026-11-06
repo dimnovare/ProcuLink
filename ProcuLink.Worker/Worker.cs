@@ -125,7 +125,13 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "0 5 * * *");
 
-        _logger.LogInformation("Registered recurring jobs: worker-heartbeat (every 2 min), email-polling, sftp-polling, s3-polling, worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep + stuck-delivery-detection + stranded-ready-delivery-detection (every 15 min), catalog-sync + stranded-failed-delivery-detection (hourly), billing-reconciliation (daily 02:00 UTC), data-retention-sweep (daily 03:30 UTC), blob-retention-sweep (daily 04:15 UTC), disposable-org-sweep (daily 05:00 UTC).");
+        // Document engine: re-enqueue stranded flow deliveries and repair documents stuck in "sending" (every 5 min).
+        _recurringJobs.AddOrUpdate<ProcuLink.Api.Jobs.DocumentDeliverySweepJob>(
+            "document-delivery-sweep",
+            job => job.ExecuteAsync(CancellationToken.None),
+            "*/5 * * * *");
+
+        _logger.LogInformation("Registered recurring jobs: document-delivery-sweep (every 5 min), worker-heartbeat (every 2 min), email-polling, sftp-polling, s3-polling, worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep + stuck-delivery-detection + stranded-ready-delivery-detection (every 15 min), catalog-sync + stranded-failed-delivery-detection (hourly), billing-reconciliation (daily 02:00 UTC), data-retention-sweep (daily 03:30 UTC), blob-retention-sweep (daily 04:15 UTC), disposable-org-sweep (daily 05:00 UTC).");
         return base.StartAsync(cancellationToken);
     }
 
