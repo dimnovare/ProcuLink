@@ -34,17 +34,22 @@ public class DocumentOutputRendererTests
     public void Csv_renders_fields_then_one_line_per_table_row()
     {
         var read = new ReadResult("Invoice",
-            [Field("invoice_no", "INV-7")],
+            [Field("invoice_no", "INV-7"), Field("sku", "HEADER-SKU")],
             [new ReadTable("items", "Items",
                 [new ReadColumn("sku", "SKU", "text", null), new ReadColumn("qty", "Qty", "number", null)],
                 [new ReadRow(new Dictionary<string, ReadCell> { ["sku"] = Cell("A1"), ["qty"] = Cell("2") }),
-                 new ReadRow(new Dictionary<string, ReadCell> { ["sku"] = Cell("B2"), ["qty"] = Cell("5") })],
+                 new ReadRow(new Dictionary<string, ReadCell> { ["sku"] = Cell("B2"), ["qty"] = Cell("5") }),
+                 new ReadRow(new Dictionary<string, ReadCell> { ["sku"] = Cell(""), ["qty"] = Cell("7") })],
                 true)]);
         var t = Csv(Lf, Rule("No", "invoice_no"),
             OutputNode.Arr("Lines", OutputNode.Obj("Line", Rule("SKU", "sku"), Rule("Qty", "qty"))));
 
         Text(DocumentOutputRenderer.Render("csv", t, read, "items"))
-            .Should().Be("No,SKU,Qty\nINV-7,A1,2\nINV-7,B2,5\n");
+            .Should().Be("No,SKU,Qty\nINV-7,A1,2\nINV-7,B2,5\nINV-7,,7\n");
+
+        // An emitter InvalidOperationException (unknown text encoding) is a refusal, not a crash.
+        var bad = DocumentOutputRenderer.Render("csv", Csv(new CsvDialect { Encoding = "no-such-encoding" }, Rule("No", "invoice_no")), read, null);
+        (bad.Ok, bad.Error).Should().Be((false, "output_invalid"));
     }
 
     [Fact]

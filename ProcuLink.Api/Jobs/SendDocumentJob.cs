@@ -15,7 +15,7 @@ namespace ProcuLink.Api.Jobs;
 public class SendDocumentJob(ProcuLinkDbContext db, DocumentSender sender)
 {
     [Queue("critical")]
-    [AutomaticRetry(Attempts = 0)]
+    [AutomaticRetry(Attempts = 3)]
     public async Task ExecuteAsync(Guid documentId, Guid organisationId, CancellationToken ct)
     {
         var doc = await db.FlowDocuments.FirstOrDefaultAsync(d => d.Id == documentId && d.OrgId == organisationId, ct);

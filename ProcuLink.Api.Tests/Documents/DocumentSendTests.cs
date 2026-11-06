@@ -78,11 +78,13 @@ public class DocumentSendTests(DocumentEngineTestFactory factory) : IClassFixtur
         d.Should().HaveCount(2);
         d.Single(x => x.OutputName == "JSON").Status.Should().Be("stored");
         d.Single(x => x.OutputName == "CSV").Status.Should().Be("queued");
-        d.Single(x => x.OutputName == "CSV").ArtifactKey.Should().Be($"{Org}/documents/{doc}/outputs/{d.Single(x => x.OutputName == "CSV").Id}.csv");
+        d.Single(x => x.OutputName == "CSV").ArtifactKey.Should().Be($"{Org}/documents/{doc}/outputs/{d.Single(x => x.OutputName == "CSV").DispatchKey}.csv");
         factory.Enqueued<DeliverDocumentJob>().Should().Be(queuedBefore + 1);
         var list = await factory.ClientFor(Org).GetFromJsonAsync<List<DeliveryRow>>($"/api/documents/{doc}/deliveries", DocumentJson.Options);
         list.Should().HaveCount(2);
     }
+
+    private static readonly Guid OldKey = Guid.NewGuid();
 
     [Fact]
     public async Task Resending_after_a_failure_requeues_only_what_was_not_accepted()
@@ -94,7 +96,7 @@ public class DocumentSendTests(DocumentEngineTestFactory factory) : IClassFixtur
             FlowDelivery Row(Guid output, string name, string status, string? key) => new()
             {
                 Id = Guid.NewGuid(), OrgId = Org, DocumentId = doc, OutputId = output, OutputName = name, Protocol = "http",
-                Status = status, Attempts = 5, LastError = "rejected", ArtifactKey = key, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+                Status = status, Attempts = 5, LastError = "rejected", ArtifactKey = key, DispatchKey = OldKey, FileName = "old-name.csv", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
             };
             db.Set<FlowDelivery>().AddRange(Row(json, "JSON", FlowDeliveryStatus.Delivered, "kept-key"), Row(csv, "CSV", FlowDeliveryStatus.DeadLetter, "old-key"));
             await db.SaveChangesAsync();
@@ -111,7 +113,9 @@ public class DocumentSendTests(DocumentEngineTestFactory factory) : IClassFixtur
         b.Status.Should().Be("queued");
         b.Attempts.Should().Be(0);
         b.LastError.Should().BeNull();
-        b.ArtifactKey.Should().Be($"{Org}/documents/{doc}/outputs/{b.Id}.csv");
+        b.DispatchKey.Should().NotBe(OldKey);
+        b.ArtifactKey.Should().Be($"{Org}/documents/{doc}/outputs/{b.DispatchKey}.csv");
+        b.FileName.Should().NotBe("old-name.csv").And.Contain(b.DispatchKey.ToString("N")[..8]);
     }
 
     [Fact]

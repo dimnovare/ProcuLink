@@ -93,6 +93,7 @@ namespace ProcuLink.Infrastructure.Migrations
                     protocol = table.Column<string>(type: "text", nullable: false),
                     status = table.Column<string>(type: "text", nullable: false),
                     attempts = table.Column<int>(type: "integer", nullable: false),
+                    dispatch_key = table.Column<Guid>(type: "uuid", nullable: false),
                     artifact_key = table.Column<string>(type: "text", nullable: true),
                     content_type = table.Column<string>(type: "text", nullable: false),
                     file_name = table.Column<string>(type: "text", nullable: false),

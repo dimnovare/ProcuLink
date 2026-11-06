@@ -93,6 +93,7 @@ public sealed class FlowDestinationService(
         {
             json["subjectTemplate"] = (test ? "[TEST] " : "") + $"{flowName} — {{fileName}}";
             json["bodyTemplate"] = "Attached: {fileName}. Sent by ProcuLink.";
+            json.Remove("attachmentFileName"); // the delivery's own file name (or the TEST_ name) wins
         }
         else if (test && d.Protocol == DeliveryProtocolConstants.Http)
         {

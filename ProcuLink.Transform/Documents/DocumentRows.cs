@@ -11,7 +11,7 @@ public static class DocumentRows
 {
     /// <summary>
     /// Fields with a value become the header bag; each row of the chosen table (the first when
-    /// <paramref name="tableKey"/> is null) is that bag overlaid by its own cells. Values are placed
+    /// <paramref name="tableKey"/> is null) is that bag overlaid by its own cells (a present-but-blank cell blanks the key rather than inheriting the header). Values are placed
     /// verbatim: <c>1.500</c> and <c>1.234,50</c> go out exactly as read.
     /// </summary>
     public static DocumentRowSet Build(ReadResult read, string? tableKey)
@@ -27,7 +27,7 @@ public static class DocumentRows
             {
                 var bag = new Dictionary<string, string>(header);
                 foreach (var (key, cell) in row.Cells)
-                    if (!string.IsNullOrWhiteSpace(cell.Value)) bag[key] = cell.Value!;
+                    bag[key] = cell.Value ?? "";
                 return (IReadOnlyDictionary<string, string>)bag;
             })
             .ToList();

@@ -32,7 +32,7 @@ public class DeliverDocumentJob(
         var now = DateTime.UtcNow;
         var stale = now - ReclaimAfter;
         // A fresh claim (queued or failed) differs from a reclaim (a delivering row whose owner went quiet): a reclaim's outcome is unknown.
-        var claimed = await ClaimAsync(deliveryId, organisationId, d => d.Status == FlowDeliveryStatus.Queued || d.Status == FlowDeliveryStatus.Failed, now, ct);
+        var claimed = await ClaimAsync(deliveryId, organisationId, d => d.Status == FlowDeliveryStatus.Queued || (d.Status == FlowDeliveryStatus.Failed && (d.NextAttemptAt == null || d.NextAttemptAt <= now)), now, ct);
         var reclaimed = false;
         if (claimed == 0)
         {
@@ -72,7 +72,7 @@ public class DeliverDocumentJob(
                 await using (var artifact = await storage.DownloadAsync(delivery.ArtifactKey!, ct)) await artifact.CopyToAsync(buffer, ct);
                 result = await dispatcher!.DispatchAsync(
                     buffer.ToArray(), delivery.FileName, delivery.ContentType, config!, credentials, ct,
-                    idempotencyKey: delivery.Id.ToString("N"), isTestFire: false);
+                    idempotencyKey: delivery.DispatchKey.ToString("N"), isTestFire: false);
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
@@ -84,10 +84,12 @@ public class DeliverDocumentJob(
         if (destination is not null) FlowDestinationService.RecordLearnedHostKey(destination, result);
 
         // Sibling deliveries finish concurrently: take the document row's lock first so each roll-up sees the others' committed result.
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        // The dispatch is done and its result known: a shutdown must not roll that back.
+        var save = CancellationToken.None;
+        await using var tx = await db.Database.BeginTransactionAsync(save);
         var finishedAt = DateTime.UtcNow;
         await db.FlowDocuments.Where(d => d.Id == doc.Id && d.OrgId == organisationId)
-            .ExecuteUpdateAsync(s => s.SetProperty(d => d.UpdatedAt, finishedAt), ct);
+            .ExecuteUpdateAsync(s => s.SetProperty(d => d.UpdatedAt, finishedAt), save);
 
         delivery.UpdatedAt = finishedAt;
         delivery.ResponseCode = result.ResponseCode;
@@ -112,15 +114,15 @@ public class DeliverDocumentJob(
             }
         }
 
-        var siblings = await db.Set<FlowDelivery>().Where(d => d.OrgId == organisationId && d.DocumentId == doc.Id && d.Id != delivery.Id).ToListAsync(ct);
+        var siblings = await db.Set<FlowDelivery>().Where(d => d.OrgId == organisationId && d.DocumentId == doc.Id && d.Id != delivery.Id).ToListAsync(save);
         doc.Status = FlowDeliveryStatus.DocumentStatusFor(
             siblings.Append(delivery).Where(d => FlowDeliveryStatus.CountsTowardDocument(d.OutputId, d.Status)).Select(d => d.Status));
         doc.UpdatedAt = finishedAt;
         if (retryIn is null)
             DocumentAudit.Add(db, doc, result.Success ? "document.delivered" : "document.delivery_failed",
                 new { output = delivery.OutputName, protocol = delivery.Protocol, responseCode = delivery.ResponseCode, error = delivery.LastError }, null);
-        await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
+        await db.SaveChangesAsync(save);
+        await tx.CommitAsync(save);
 
         if (retryIn is { } delay) Schedule(jobs, deliveryId, organisationId, delay);
     }

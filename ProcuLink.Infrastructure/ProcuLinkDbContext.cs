@@ -2218,6 +2218,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(d => d.Protocol).HasColumnName("protocol");
             b.Property(d => d.Status).HasColumnName("status");
             b.Property(d => d.Attempts).HasColumnName("attempts");
+            b.Property(d => d.DispatchKey).HasColumnName("dispatch_key");
             b.Property(d => d.ArtifactKey).HasColumnName("artifact_key");
             b.Property(d => d.ContentType).HasColumnName("content_type");
             b.Property(d => d.FileName).HasColumnName("file_name");

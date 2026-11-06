@@ -827,6 +827,10 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("destination_id");
 
+                    b.Property<Guid>("DispatchKey")
+                        .HasColumnType("uuid")
+                        .HasColumnName("dispatch_key");
+
                     b.Property<Guid>("DocumentId")
                         .HasColumnType("uuid")
                         .HasColumnName("document_id");

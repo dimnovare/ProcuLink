@@ -15,6 +15,8 @@ public class FlowDelivery
     public string Protocol { get; set; } = "";
     public string Status { get; set; } = FlowDeliveryStatus.Queued;
     public int Attempts { get; set; }
+    /// <summary>Fresh on every (re)queue: names the artifact, the file name, and the dispatch idempotency key, so a re-send is never mistaken for the failed attempt.</summary>
+    public Guid DispatchKey { get; set; }
     public string? ArtifactKey { get; set; }
     public string ContentType { get; set; } = "";
     public string FileName { get; set; } = "";

@@ -73,6 +73,9 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
         public async Task<FlowDelivery> DeliveryAsync() { await using var db = NewDb(); return await db.Set<FlowDelivery>().AsNoTracking().SingleAsync(d => d.Id == DeliveryId); }
         public async Task<string> DocStatusAsync() { await using var db = NewDb(); return await db.FlowDocuments.Where(d => d.Id == DocumentId).Select(d => d.Status).SingleAsync(); }
 
+        /// <summary>Makes a failed delivery's backoff elapse.</summary>
+        public async Task DueAsync() { await using var db = NewDb(); await db.Set<FlowDelivery>().Where(d => d.Id == DeliveryId).ExecuteUpdateAsync(s => s.SetProperty(d => d.NextAttemptAt, DateTime.UtcNow.AddSeconds(-1))); }
+
         public async Task SetAsync(string status, DateTime? claimedAt, int attempts)
         {
             await using var db = NewDb();
@@ -97,7 +100,7 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
         var delivery = new FlowDelivery
         {
             Id = Guid.NewGuid(), OrgId = org, DocumentId = doc.Id, OutputId = output.Id, OutputName = output.Name, DestinationId = destination.Id,
-            Protocol = "http", ArtifactKey = "key.csv", ContentType = "text/csv", FileName = "a.csv", CreatedAt = now, UpdatedAt = now,
+            Protocol = "http", DispatchKey = Guid.NewGuid(), ArtifactKey = "key.csv", ContentType = "text/csv", FileName = "a.csv", CreatedAt = now, UpdatedAt = now,
         };
         await using var db = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>().UseNpgsql(cs, n => n.CommandTimeout(180)).Options);
         db.Organisations.Add(new Organisation { Id = org, Name = "Test Org A", Slug = "acme-" + org.ToString("N") });
@@ -119,8 +122,8 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
         await h.RunAsync();
 
         h.Dispatcher.Calls.Should().HaveCount(1);
-        h.Dispatcher.Calls[0].IdempotencyKey.Should().Be(h.DeliveryId.ToString("N"));
         var delivery = await h.DeliveryAsync();
+        h.Dispatcher.Calls[0].IdempotencyKey.Should().Be(delivery.DispatchKey.ToString("N"));
         delivery.Status.Should().Be(FlowDeliveryStatus.Delivered);
         delivery.DeliveredAt.Should().NotBeNull();
         delivery.ResponseCode.Should().Be(200);
@@ -145,7 +148,11 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
         await h.RunAsync();
         (await h.DeliveryAsync()).Status.Should().Be(FlowDeliveryStatus.Failed);
         (await h.DeliveryAsync()).NextAttemptAt.Should().NotBeNull();
+        await h.RunAsync(); // not due yet: left alone
+        h.Dispatcher.Calls.Should().HaveCount(1);
+        await h.DueAsync();
         await h.RunAsync();
+        await h.DueAsync();
         await h.RunAsync();
 
         var delivery = await h.DeliveryAsync();

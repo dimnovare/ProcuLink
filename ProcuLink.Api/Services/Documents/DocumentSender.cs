@@ -111,9 +111,10 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
             delivery.OutputName = r.Output.Name;
             delivery.DestinationId = destination?.Id;
             delivery.Protocol = destination?.Protocol ?? "";
-            delivery.ArtifactKey = $"{doc.OrgId}/documents/{doc.Id}/outputs/{delivery.Id}{r.Extension}";
+            delivery.DispatchKey = Guid.NewGuid();
+            delivery.ArtifactKey = $"{doc.OrgId}/documents/{doc.Id}/outputs/{delivery.DispatchKey}{r.Extension}";
             delivery.ContentType = r.ContentType;
-            delivery.FileName = $"{stem}-{delivery.Id.ToString("N")[..8]}{r.Extension}";
+            delivery.FileName = $"{stem}-{delivery.DispatchKey.ToString("N")[..8]}{r.Extension}";
             delivery.Attempts = 0;
             delivery.LastError = null;
             delivery.ResponseCode = null;

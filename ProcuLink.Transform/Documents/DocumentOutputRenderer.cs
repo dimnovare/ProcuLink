@@ -32,7 +32,7 @@ public static class DocumentOutputRenderer
             var bytes = XlsxGridWriter.Write(emitter.GridRows(template, rows.Header, lines));
             return new(new TransformResult(new MemoryStream(bytes, writable: false), XlsxContentType, ".xlsx"), null, null);
         }
-        catch (Exception ex) when (ex is ArgumentException or TransformValidationException or XmlException)
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or TransformValidationException or XmlException)
         {
             return new(null, "output_invalid", ex.Message);
         }
