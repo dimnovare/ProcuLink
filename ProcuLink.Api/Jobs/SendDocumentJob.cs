@@ -26,7 +26,7 @@ public class SendDocumentJob(ProcuLinkDbContext db, DocumentSender sender)
     }
 
     private static bool ShouldSend(FlowDocument doc, Flow flow) =>
-        flow.Automation == FlowAutomation.Auto && DocumentStatus.IsEditable(doc.Status, doc.StatusReason);
+        flow.Automation == FlowAutomation.Auto && doc.Status is DocumentStatus.NeedsReview or DocumentStatus.Ready && DocumentStatus.IsEditable(doc.Status, doc.StatusReason);
 
     public static void EnqueueIfAutomatic(IBackgroundJobClient jobs, FlowDocument doc, Flow flow)
     {
