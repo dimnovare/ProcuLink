@@ -4,6 +4,7 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using ProcuLink.Api.Services.Documents;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
@@ -19,7 +20,7 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
     private static FlowDestination Dest(string protocol) => new()
     {
         Id = Guid.NewGuid(), OrgId = Guid.NewGuid(), Name = "d", Protocol = protocol,
-        ConfigJson = protocol == "email" ? """{"toAddresses":["a@example.com"]}""" : """{"url":"https://example.com/in"}""",
+        ConfigJson = protocol == DeliveryProtocolConstants.Email ? """{"toAddresses":["a@example.com"]}""" : """{"url":"https://example.com/in"}""",
     };
 
     private static JsonElement Json(SupplierDeliveryConfig c) => JsonDocument.Parse(c.ConfigJson).RootElement;
