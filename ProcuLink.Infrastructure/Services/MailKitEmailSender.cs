@@ -51,8 +51,11 @@ public sealed class MailKitEmailSender : IEmailSender
             message.Body    = new TextPart("plain") { Text = body };
 
             using var client = new SmtpClient();
-            await client.ConnectAsync(host, port, SecureSocketOptions.StartTlsWhenAvailable, ct);
-            if (!string.IsNullOrWhiteSpace(username))
+            var authenticate = !string.IsNullOrWhiteSpace(username);
+            // Only a no-auth relay may fall back to cleartext; a credential never leaves without TLS.
+            await client.ConnectAsync(host, port,
+                authenticate ? SecureSocketOptions.StartTls : SecureSocketOptions.StartTlsWhenAvailable, ct);
+            if (authenticate)
                 await client.AuthenticateAsync(username, password ?? string.Empty, ct);
             await client.SendAsync(message, ct);
             await client.DisconnectAsync(quit: true, ct);

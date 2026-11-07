@@ -181,7 +181,7 @@ public sealed class EmailPollOrgJob
         await client.ConnectAsync(
             config.Host,
             config.Port,
-            config.UseSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTlsWhenAvailable,
+            config.UseSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls,
             ct);
         await client.AuthenticateAsync(config.Username, password, ct);
 
