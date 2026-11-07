@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using ProcuLink.Api.Controllers;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using Xunit;
@@ -115,5 +116,41 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
 
         using var scope = factory.Services.CreateScope();
         (await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowDelivery>().CountAsync(d => d.DocumentId == docId)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task LookupStep_IsCheckedOnSave_AndPreviewListsMisses()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, docId) = await Seed(confirmed: true);
+        var output = (await (await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "CSV", format = "csv" }))
+            .Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+        OutputNode Leaf(string name, string field, Guid lookupId) => OutputNode.FieldOf(name, new OutputFieldRule
+        {
+            OutputPath = name, CanonicalField = field,
+            FieldManipulators = [new ManipulatorEntry { Type = "Lookup", Params = [lookupId.ToString()] }],
+        });
+        object Body(Guid lookupId) => new
+        {
+            name = "CSV", format = "csv",
+            template = new OutputNodeTemplate
+            {
+                Format = OutputFormat.Csv,
+                Root = OutputNode.Obj("root", Leaf("No", "invoice_no", lookupId), OutputNode.Arr("Lines", OutputNode.Obj("Line", Leaf("SKU", "sku", lookupId)))),
+            },
+        };
+
+        var refused = await http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{output.Id}", Body(Guid.NewGuid()));
+        refused.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await refused.Content.ReadAsStringAsync()).Should().Contain("output_invalid");
+
+        var lookup = (await (await http.PostAsJsonAsync("/api/lookups", new { name = "Item codes", entries = new[] { new { from = "a1", to = "A-7" } } }))
+            .Content.ReadFromJsonAsync<LookupDto>(DocumentJson.Options))!;
+        (await http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{output.Id}", Body(lookup.Id))).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var p = await (await http.PostAsync($"/api/documents/{docId}/outputs/{output.Id}/preview", null)).Content.ReadFromJsonAsync<JsonElement>();
+        p.GetProperty("content").GetString().Should().Contain("INV-7,A-7");
+        var miss = p.GetProperty("lookupMisses").EnumerateArray().Single();
+        (miss.GetProperty("lookupId").GetGuid(), miss.GetProperty("value").GetString()).Should().Be((lookup.Id, "INV-7"));
     }
 }

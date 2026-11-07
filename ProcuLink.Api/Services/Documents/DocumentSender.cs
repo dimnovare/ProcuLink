@@ -61,10 +61,12 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
             return Refuse(NoOutputMatches);
         }
 
+        var templates = outputs.Select(o => DocumentJson.Deserialize<OutputNodeTemplate>(o.TemplateJson)).ToList();
+        var lookups = await DocumentLookups.LoadAsync(db, doc.OrgId, templates, ct);
         var rendered = new List<Rendered>();
-        foreach (var o in outputs)
+        foreach (var (o, template) in outputs.Zip(templates))
         {
-            var render = DocumentOutputRenderer.Render(o.Format, DocumentJson.Deserialize<OutputNodeTemplate>(o.TemplateJson), read, o.TableKey);
+            var render = DocumentOutputRenderer.Render(o.Format, template, read, o.TableKey, lookups);
             if (!render.Ok)
             {
                 if (mode == SendMode.Automatic) await HoldAsync(doc, render.Error!, ct);

@@ -55,6 +55,9 @@ public class ManipulatorContractTests
             // Catalog enrichment, wired by the catalog pipeline — deliberately NOT offered in the
             // designer's formatting menu, so the frontend table does not carry it.
             ["LoadCatalogProduct"] = (1, 1),
+            // Document outputs only: [lookupId, ifMissing]. The ctor takes any count; the output save checks the
+            // params and the step refuses a bad id when it runs. Not in the order designer's menu either.
+            ["Lookup"] = (0, int.MaxValue),
         };
 
     /// <summary>Types an author may choose in the output designer — the set the frontend mirrors.</summary>
@@ -192,7 +195,8 @@ public class ManipulatorContractTests
     {
         Assert.True(Arity.ContainsKey("LoadCatalogProduct"));
         Assert.DoesNotContain("LoadCatalogProduct", AuthorFacing);
-        Assert.Equal(Arity.Count - 1, AuthorFacing.Count);
+        Assert.DoesNotContain("Lookup", AuthorFacing);
+        Assert.Equal(Arity.Count - 2, AuthorFacing.Count);
     }
 
     // ── Arity ────────────────────────────────────────────────────────────────

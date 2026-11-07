@@ -94,7 +94,8 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         var template = DocumentJson.Deserialize<OutputNodeTemplate>(output.TemplateJson);
         // A workbook is binary; its preview is the CSV text of the same grid (xlsx renders from the csv template).
         var format = output.Format == FlowOutputFormats.Xlsx ? FlowOutputFormats.Csv : output.Format;
-        var render = DocumentOutputRenderer.Render(format, template, DocumentJson.Deserialize<ReadResult>(doc.ReadJson), output.TableKey);
+        var lookups = await DocumentLookups.LoadAsync(db, orgId, [template], ct);
+        var render = DocumentOutputRenderer.Render(format, template, DocumentJson.Deserialize<ReadResult>(doc.ReadJson), output.TableKey, lookups);
         if (!render.Ok) return UnprocessableEntity(new { error = render.Error, detail = render.Detail });
 
         using var reader = new StreamReader(render.Result!.Content, Encoding.UTF8);
@@ -104,6 +105,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
             contentType = render.Result.ContentType,
             fileName = Path.GetFileNameWithoutExtension(doc.FileName) + render.Result.FileExtension,
             content,
+            lookupMisses = render.Misses ?? [],
         });
     }
 
@@ -133,6 +135,11 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         var template = request.Template ?? DefaultOutputTemplate.For(fields, request.Format, request.TableKey);
         if (template.Format != FlowOutputFormats.TemplateFormat(request.Format) || !OutputTreeFormats.IsRenderable(template.Format))
             return Invalid($"The template must be a {FlowOutputFormats.TemplateFormat(request.Format)} template.");
+
+        var lookups = await DocumentLookups.LoadAsync(db, orgId, [template], ct);
+        if (DocumentLookups.Steps(template).Any(s => !Guid.TryParse(s.Params.ElementAtOrDefault(0), out var id) || !lookups.Has(id)
+                || s.Params.ElementAtOrDefault(1) is not (null or "keep" or "blank")))
+            return Invalid("lookup");
 
         output.Name = name;
         output.Format = request.Format;
