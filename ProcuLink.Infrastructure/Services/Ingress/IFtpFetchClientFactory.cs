@@ -28,4 +28,7 @@ public interface IFtpFetchSession : IDisposable
     /// on overflow (H2). No SIZE pre-probe — the server could lie about it.
     /// </summary>
     Task<MemoryStream> DownloadAsync(string remotePath, long maxBytes, CancellationToken ct);
+
+    /// <summary>Full paths of the plain files in <paramref name="directory"/>; no recursion.</summary>
+    Task<IReadOnlyList<string>> ListFileNamesAsync(string directory, CancellationToken ct);
 }

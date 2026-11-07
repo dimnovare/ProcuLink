@@ -648,9 +648,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         async Task<InboundEmailResult> PausedAsync(LimitCheckResult limit)
         {
             intake.LastStatus = "paused";
-            intake.LastMessage = limit.PilotExpired
-                ? "Paused: your trial has ended, so new documents aren't being accepted."
-                : "Paused: you've reached your plan's document limit for this month.";
+            intake.LastMessage = limit.FlowPausedMessage;
             intake.LastRunAt = DateTime.UtcNow;
             await _db.SaveChangesAsync(ct);
             return Ignored(intake.LastMessage);

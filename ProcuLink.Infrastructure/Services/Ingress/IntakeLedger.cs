@@ -42,4 +42,8 @@ public static class IntakeLedger
         return await db.FlowIntakeItems.AsNoTracking()
             .FirstAsync(i => i.OrgId == orgId && i.ScopeId == scopeId && i.ItemKey == itemKey, ct);
     }
+
+    /// <summary>Gives a claim back, so the item is taken again by the next run.</summary>
+    public static Task ReleaseAsync(ProcuLinkDbContext db, Guid orgId, Guid claimId, CancellationToken ct) =>
+        db.FlowIntakeItems.Where(i => i.OrgId == orgId && i.Id == claimId).ExecuteDeleteAsync(ct);
 }
