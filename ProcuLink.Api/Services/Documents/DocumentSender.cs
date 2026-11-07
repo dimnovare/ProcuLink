@@ -108,6 +108,11 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
         var now = DateTime.UtcNow;
         var sent = new List<FlowDelivery>();
 
+        // A dead letter from an output this send no longer routes to is history, not a failure: detach it like a deleted output.
+        var routed = rendered.Select(r => r.Output.Id).ToHashSet();
+        foreach (var stale in existing.Where(d => d.Status == FlowDeliveryStatus.DeadLetter && d.OutputId is { } id && !routed.Contains(id)))
+            stale.OutputId = null;
+
         foreach (var r in rendered)
         {
             var delivery = existing.FirstOrDefault(d => d.OutputId == r.Output.Id);

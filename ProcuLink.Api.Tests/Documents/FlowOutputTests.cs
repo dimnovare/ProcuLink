@@ -95,7 +95,7 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         {
             var res = await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "x", format = "csv", sendWhen = bad });
             res.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
-            (await res.Content.ReadAsStringAsync()).Should().Contain("output_invalid");
+            (await res.Content.ReadAsStringAsync()).Should().Contain("output_invalid").And.Contain("\"detail\":\"send_when\"");
         }
     }
 
@@ -142,7 +142,7 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
 
         var refused = await http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{output.Id}", Body(Guid.NewGuid()));
         refused.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
-        (await refused.Content.ReadAsStringAsync()).Should().Contain("output_invalid");
+        (await refused.Content.ReadAsStringAsync()).Should().Contain("output_invalid").And.Contain("\"detail\":\"lookup\"");
 
         var lookup = (await (await http.PostAsJsonAsync("/api/lookups", new { name = "Item codes", entries = new[] { new { from = "a1", to = "A-7" } } }))
             .Content.ReadFromJsonAsync<LookupDto>(DocumentJson.Options))!;

@@ -186,6 +186,49 @@ public class DocumentSendTests(DocumentEngineTestFactory factory) : IClassFixtur
         (await Deliveries(gamma.Id)).Should().ContainSingle().Which.OutputId.Should().Be(outputs["B"]);
     }
 
+    [Fact]
+    public async Task ReRouting_a_failed_document_lets_it_finish_sending()
+    {
+        var http = factory.ClientFor(Org);
+        var flow = new Flow
+        {
+            Id = Guid.NewGuid(), OrgId = Org, Name = "Synthetic flow", FieldsConfirmed = true,
+            FieldsJson = DocumentJson.Serialize(new FlowFieldList([new FlowField("supplier", "Supplier", FieldTypes.Text, null, Required: false)])),
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        };
+        var doc = new FlowDocument
+        {
+            Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, FileName = "synthetic.pdf", ContentType = "application/pdf", Status = DocumentStatus.SendFailed,
+            ReadJson = DocumentJson.Serialize(new ReadResult("Invoice", [new ReadField("supplier", "Supplier", "Beta", FieldTypes.Text, null, 1, null, false, true, false)], [])),
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        };
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.Flows.Add(flow);
+            db.FlowDocuments.Add(doc);
+            await db.SaveChangesAsync();
+        }
+        var outputs = new Dictionary<string, Guid>();
+        foreach (var (name, value) in new[] { ("A", "Acme"), ("B", "Beta") })
+            outputs[name] = (await (await http.PostAsJsonAsync($"/api/flows/{flow.Id}/outputs",
+                new { name, format = "json", sendWhen = new { field = "supplier", op = "is", value } })).Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!.Id;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.Set<FlowDelivery>().Add(new FlowDelivery
+            {
+                Id = Guid.NewGuid(), OrgId = Org, DocumentId = doc.Id, OutputId = outputs["A"], OutputName = "A", Protocol = "http",
+                Status = FlowDeliveryStatus.DeadLetter, Attempts = 5, LastError = "rejected", DispatchKey = OldKey, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        (await Send(doc.Id)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        (await Reload(doc.Id)).Status.Should().Be(DocumentStatus.Sent);
+    }
+
     private async Task<FlowDocument> Reload(Guid id)
     {
         using var scope = factory.Services.CreateScope();
