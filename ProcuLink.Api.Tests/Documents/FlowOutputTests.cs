@@ -77,6 +77,28 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
     }
 
     [Fact]
+    public async Task SendWhen_RoundTrips_AndMustNameAHeaderField()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, _) = await Seed(confirmed: true);
+        var rule = new SendWhen("invoice_no", "is", "Acme");
+
+        var created = (await (await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "CSV", format = "csv", sendWhen = rule }))
+            .Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+        created.SendWhen.Should().Be(rule);
+        var changed = rule with { Op = "contains", Value = "Beta" };
+        (await http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{created.Id}", new { name = "CSV", format = "csv", sendWhen = changed })).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await http.GetFromJsonAsync<List<OutputDto>>($"/api/flows/{flowId}/outputs", DocumentJson.Options))!.Single().SendWhen.Should().Be(changed);
+
+        foreach (var bad in new[] { rule with { Field = "sku" }, rule with { Field = "nope" }, rule with { Op = "nope" }, rule with { Value = "  " } })
+        {
+            var res = await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "x", format = "csv", sendWhen = bad });
+            res.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+            (await res.Content.ReadAsStringAsync()).Should().Contain("output_invalid");
+        }
+    }
+
+    [Fact]
     public async Task Preview_renders_the_document_without_sending()
     {
         var http = factory.ClientFor(Org);

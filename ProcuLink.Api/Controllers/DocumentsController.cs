@@ -216,6 +216,7 @@ public sealed class DocumentsController(
         doc.ReadJson = DocumentJson.Serialize(result);
         var wasSendFailed = doc.Status == DocumentStatus.SendFailed;
         await rechecker.ApplyAsync(doc, flow, result, ct);
+        if (doc.StatusReason == "no_output_matches") doc.StatusReason = null; // the edit may have fixed the field that routed it
         // The undelivered outputs still need sending; an edit does not make the document unsent-ready again.
         if (wasSendFailed) doc.Status = DocumentStatus.SendFailed;
         foreach (var c in changes) DocumentAudit.Add(db, doc, "document.value_edited", new { target = c.Target, old = c.Old, @new = c.New }, tenant.ClerkUserId);

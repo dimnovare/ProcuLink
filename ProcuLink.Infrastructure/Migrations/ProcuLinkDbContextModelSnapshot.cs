@@ -1187,6 +1187,10 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("org_id");
 
+                    b.Property<string>("SendWhenJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("send_when_json");
+
                     b.Property<string>("TableKey")
                         .HasColumnType("text")
                         .HasColumnName("table_key");

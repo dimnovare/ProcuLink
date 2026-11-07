@@ -29,6 +29,16 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
 {
     private sealed record Rendered(FlowOutput Output, byte[] Bytes, string ContentType, string Extension);
 
+    private const string NoOutputMatches = "no_output_matches";
+
+    private async Task HoldAsync(FlowDocument doc, string reason, CancellationToken ct)
+    {
+        doc.Status = DocumentStatus.NeedsReview;
+        doc.StatusReason = reason;
+        doc.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+    }
+
     private static SendOutcome Refuse(string error, object? detail = null) => new(error, detail, []);
 
     public async Task<SendOutcome> SendAsync(FlowDocument doc, SendMode mode, string? userId, CancellationToken ct)
@@ -43,19 +53,21 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
 
         // Render everything first: one bad output means nothing is stored or sent.
         var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
+        var header = DocumentRows.Build(read, null).Header;
+        outputs = outputs.Where(o => SendWhenOps.Matches(o.SendWhenJson is null ? null : DocumentJson.Deserialize<SendWhen>(o.SendWhenJson), header)).ToList();
+        if (outputs.Count == 0)
+        {
+            if (mode == SendMode.Automatic) await HoldAsync(doc, NoOutputMatches, ct);
+            return Refuse(NoOutputMatches);
+        }
+
         var rendered = new List<Rendered>();
         foreach (var o in outputs)
         {
             var render = DocumentOutputRenderer.Render(o.Format, DocumentJson.Deserialize<OutputNodeTemplate>(o.TemplateJson), read, o.TableKey);
             if (!render.Ok)
             {
-                if (mode == SendMode.Automatic)
-                {
-                    doc.Status = DocumentStatus.NeedsReview;
-                    doc.StatusReason = render.Error;
-                    doc.UpdatedAt = DateTime.UtcNow;
-                    await db.SaveChangesAsync(ct);
-                }
+                if (mode == SendMode.Automatic) await HoldAsync(doc, render.Error!, ct);
                 return Refuse(render.Error!, new OutputFailure(o.Name, render.Detail));
             }
             using var buffer = new MemoryStream();
