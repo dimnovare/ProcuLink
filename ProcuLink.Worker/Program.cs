@@ -201,7 +201,6 @@ builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowPickupJob>();
 builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowWebhookJob>();
 builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowPickupDispatchJob>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.FlowDestinationService>();
-builder.Services.AddScoped<ProcuLink.Api.Services.Documents.FlowIntakeService>();
 builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 // Same scoped OrderService also serves the pull-ingress stub-creation seam (explicit order id).
