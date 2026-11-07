@@ -114,16 +114,21 @@ public sealed class InboundAddressService : IInboundAddressService
                         && a.IsActive
                         && a.RevokedAt == null
                         && (a.ExpiresAt == null || a.ExpiresAt > now))
-            .Select(a => new { a.Id, a.OrganisationId, a.LastUsedAt })
+            .Select(a => new { a.Id, a.OrganisationId, a.LastUsedAt, a.Kind, a.FlowId })
             .FirstOrDefaultAsync(ct);
 
         if (match is null)
             return InboundAddressLookup.NotFound();
 
+        // A flow address that names no flow must never resolve: the caller would take it for an
+        // organisation address and send the mail down the purchase-order path.
+        if (match.Kind == InboundAddressKind.Flow && match.FlowId is null)
+            return InboundAddressLookup.NotFound();
+
         if (match.LastUsedAt is null || now - match.LastUsedAt.Value >= LastUsedThrottle)
             await TouchLastUsedAsync(match.Id, now, ct);
 
-        return InboundAddressLookup.Found(match.OrganisationId, match.Id);
+        return InboundAddressLookup.Found(match.OrganisationId, match.Id) with { FlowId = match.FlowId };
     }
 
     /// <summary>

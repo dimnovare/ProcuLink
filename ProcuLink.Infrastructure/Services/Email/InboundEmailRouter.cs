@@ -1,8 +1,10 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
@@ -120,6 +122,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
     private readonly IInboundAddressService _addresses;
     private readonly IBillingService _billing;
     private readonly IConfiguration _config;
+    private readonly IFlowDocumentSubmitter? _flows;
     private readonly ILogger<InboundEmailRouter> _logger;
 
     public InboundEmailRouter(
@@ -133,8 +136,12 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         // shipped in for months.
         IBillingService billing,
         IConfiguration config,
-        ILogger<InboundEmailRouter> logger)
+        ILogger<InboundEmailRouter> logger,
+        // Registered in both hosts that run the router. Optional only so non-flow callers need not
+        // supply it; a flow address with none defers (Transient) rather than dropping the mail.
+        IFlowDocumentSubmitter? flows = null)
     {
+        _flows = flows;
         _db = db;
         _orders = orders;
         _enqueuer = enqueuer;
@@ -195,6 +202,10 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                     "Recipient is not a recognised inbound address.",
                     InboundEmailRejectionKind.Permanent);
         }
+
+        // A flow's own address never reaches the purchase-order path below, whatever else is true.
+        if (lookup.FlowId is { } flowId)
+            return await RouteToFlowAsync(payload, lookup.OrgId!.Value, flowId, ct);
 
         var orgId = lookup.OrgId;
 
@@ -613,6 +624,71 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
             _db.Entry(record).State = EntityState.Detached;
             return null;
         }
+    }
+
+    private static readonly string[] FlowExtensions = [".pdf", ".csv", ".xlsx"];
+
+    /// <summary>Mail sent to one flow's own address: each PDF, CSV or Excel attachment becomes a document in that flow.</summary>
+    private async Task<InboundEmailResult> RouteToFlowAsync(
+        InboundEmailPayload payload, Guid orgId, Guid flowId, CancellationToken ct)
+    {
+        InboundEmailResult Ignored(string why) =>
+            new(false, orgId, Array.Empty<Guid>(), why, InboundEmailRejectionKind.Permanent);
+
+        if (_flows is null)
+            return new InboundEmailResult(false, orgId, Array.Empty<Guid>(),
+                "Flow intake is not available on this host.", InboundEmailRejectionKind.Transient);
+
+        var intake = await _db.FlowIntakes
+            .Where(i => i.OrgId == orgId && i.FlowId == flowId && i.Kind == IntakeKind.Email)
+            .FirstOrDefaultAsync(ct);
+        if (intake is not { IsEnabled: true })
+            return Ignored("This flow's email intake is off.");
+
+        async Task<InboundEmailResult> PausedAsync(LimitCheckResult limit)
+        {
+            intake.LastStatus = "paused";
+            intake.LastMessage = limit.PilotExpired
+                ? "Paused: your trial has ended, so new documents aren't being accepted."
+                : "Paused: you've reached your plan's document limit for this month.";
+            intake.LastRunAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+            return Ignored(intake.LastMessage);
+        }
+
+        var limit = await _billing.CheckOrderLimitAsync(orgId, ct);
+        if (!limit.Allowed) return await PausedAsync(limit);
+
+        var usable = 0;
+        foreach (var att in payload.Attachments.Where(a =>
+                     FlowExtensions.Contains(Path.GetExtension(a.FileName), StringComparer.OrdinalIgnoreCase)))
+        {
+            usable++;
+            var hash = Convert.ToHexString(SHA256.HashData(att.Content)).ToLowerInvariant();
+            var key = $"postmark:{payload.ProviderMessageId ?? Guid.NewGuid().ToString("N")}#{hash}";
+            var claim = await IntakeLedger.ClaimAsync(_db, orgId, intake.Id, key, ct);
+            if (claim is null) continue;
+
+            var result = await _flows.SubmitAsync(
+                orgId, flowId, new MemoryStream(att.Content), att.FileName, att.ContentType, IntakeKind.Email,
+                payload.FromEmail, ct);
+            if (result.Error is "document_engine_not_enabled" or "flow_not_found")
+                return Ignored(result.Error);
+            if (result.Limit is { Allowed: false } refused) return await PausedAsync(refused);
+
+            var documentId = result.Document?.Id ?? IntakeLedger.Refused;
+            await _db.FlowIntakeItems
+                .Where(i => i.OrgId == orgId && i.Id == claim.Id)
+                .ExecuteUpdateAsync(s => s.SetProperty(i => i.DocumentId, documentId), ct);
+        }
+
+        intake.LastRunAt = DateTime.UtcNow;
+        intake.LastStatus = "ok";
+        intake.LastMessage = usable == 0
+            ? $"An email from {payload.FromEmail} had no PDF, CSV or Excel file attached."
+            : null;
+        await _db.SaveChangesAsync(ct);
+        return new InboundEmailResult(true, orgId, Array.Empty<Guid>(), null);
     }
 
     // ── Tenant resolution ────────────────────────────────────────────────────
