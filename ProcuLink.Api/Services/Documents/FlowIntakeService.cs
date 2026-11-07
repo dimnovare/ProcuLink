@@ -127,8 +127,9 @@ public sealed class FlowIntakeService(
             bool Changed(params string[] names) => names.Any(n => after[n]?.ToJsonString() != before[n]?.ToJsonString());
             if (existing.EncryptedCredentials is not null && !newCredentials && Changed(WhereAndWho))
                 throw new IntakeException("invalid_intake", "Enter the password again when you change the server or user name.");
-            // A new server is fresh trust: forget the SFTP host key learned from the old one.
-            if (Changed("host", "port") && after["hostKeyFingerprints"] is not null)
+            // A new server is fresh trust: forget the saved host key, unless this request pins one.
+            if (Changed("host", "port") && after["hostKeyFingerprints"] is not null
+                && !(req.Config.TryGetProperty("hostKeyFingerprints", out var pinned) && pinned.ValueKind != JsonValueKind.Null))
             {
                 after["hostKeyFingerprints"] = new JsonArray();
                 configJson = after.ToJsonString();

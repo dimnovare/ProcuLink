@@ -84,10 +84,29 @@ public class FlowIntakesApiTests(DocumentEngineTestFactory factory) : IClassFixt
         var body = await moved.Content.ReadAsStringAsync();
         body.Should().Contain("invalid_intake").And.Contain("Enter the password again when you change the server or user name.");
         Saved().Should().Be(before);
+        string Pins()
+        {
+            using var scope = factory.Services.CreateScope();
+            return scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowIntake>().Single(i => i.Id == id).ConfigJson;
+        }
+
+        // A pin saved for the old server is dropped by a server change that pins nothing, and replaced by one that does.
+        (await http.PutAsJsonAsync($"{url}/{id}", new
+        {
+            kind = "sftp", config = new { host = "sftp.example.test", username = "u", hostKeyFingerprints = new[] { "SHA256:old" } },
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+        Pins().Should().Contain("SHA256:old");
         (await http.PutAsJsonAsync($"{url}/{id}", new
         {
             kind = "sftp", config = new { host = "other.example.test", username = "u" }, credentials = new { password = "new" },
         })).StatusCode.Should().Be(HttpStatusCode.OK);
+        Pins().Should().Contain("\"hostKeyFingerprints\":[]");
+        (await http.PutAsJsonAsync($"{url}/{id}", new
+        {
+            kind = "sftp", config = new { host = "third.example.test", username = "u", hostKeyFingerprints = new[] { "SHA256:new" } },
+            credentials = new { password = "new" },
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+        Pins().Should().Contain("\"hostKeyFingerprints\":[\"SHA256:new\"]");
 
         (await http.PostAsJsonAsync(url, new { kind = "sftp", config = new { host = "h" } })).StatusCode.Should().Be((HttpStatusCode)422);
         (await http.PostAsJsonAsync(url, new { kind = "email", config = new { } })).StatusCode.Should().Be((HttpStatusCode)422);
