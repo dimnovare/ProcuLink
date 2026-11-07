@@ -21,12 +21,36 @@ public sealed class DocumentRejectedException(string code) : Exception(code)
 }
 
 /// <summary>Accepts an uploaded file into a flow: stores it, counts its units, holds an identical file as a duplicate, and queues the read.</summary>
-public sealed class DocumentIntakeService(ProcuLinkDbContext db, IFileStorageService storage, IBackgroundJobClient jobs)
+public sealed class DocumentIntakeService(
+    ProcuLinkDbContext db, IFileStorageService storage, IBackgroundJobClient jobs,
+    DocumentEngineGate gate, IBillingService billing) : IFlowDocumentSubmitter
 {
     public static readonly string[] AcceptedFormats = ["pdf", "csv", "xlsx"];
 
+    /// <summary>The one way a file enters a flow: engine gate, flow, plan limit, then <see cref="AcceptAsync"/>.</summary>
+    public async Task<FlowSubmitResult> SubmitAsync(
+        Guid orgId, Guid flowId, Stream content, string fileName, string contentType,
+        string source, string? sourceRef, CancellationToken ct)
+    {
+        if (!gate.IsEnabled(orgId)) return new(null, "document_engine_not_enabled", null);
+        if (!await db.Flows.AnyAsync(f => f.OrgId == orgId && f.Id == flowId, ct)) return new(null, "flow_not_found", null);
+
+        var limit = await billing.CheckOrderLimitAsync(orgId, ct);
+        if (!limit.Allowed) return new(null, limit.PilotExpired ? "pilot_expired" : "order_limit_reached", limit);
+
+        try
+        {
+            return new(await AcceptAsync(orgId, flowId, content, fileName, contentType, source, sourceRef, ct), null, null);
+        }
+        catch (DocumentRejectedException e)
+        {
+            return new(null, e.Code, null);
+        }
+    }
+
     public async Task<FlowDocument> AcceptAsync(
-        Guid orgId, Guid flowId, Stream content, string fileName, string contentType, CancellationToken ct)
+        Guid orgId, Guid flowId, Stream content, string fileName, string contentType,
+        string source, string? sourceRef, CancellationToken ct)
     {
         var safeName = FileNameSanitiser.Sanitise(fileName);
         var ext = FileNameSanitiser.GetExtension(fileName).TrimStart('.');
@@ -52,7 +76,7 @@ public sealed class DocumentIntakeService(ProcuLinkDbContext db, IFileStorageSer
         {
             Id = id, OrgId = orgId, FlowId = flowId, FileName = safeName, ContentType = contentType,
             SourceFileKey = key, Sha256 = sha, PageCount = pages, BillingUnits = units,
-            Status = DocumentStatus.Received, CreatedAt = now, UpdatedAt = now,
+            Source = source, SourceRef = sourceRef, Status = DocumentStatus.Received, CreatedAt = now, UpdatedAt = now,
         };
 
         var duplicate = await db.FlowDocuments.AnyAsync(d => d.OrgId == orgId && d.FlowId == flowId && d.Sha256 == sha, ct);
@@ -71,7 +95,7 @@ public sealed class DocumentIntakeService(ProcuLinkDbContext db, IFileStorageSer
         {
             Id = Guid.NewGuid(), OrgId = orgId, EntityType = "FlowDocument", EntityId = id,
             Action = "document.received", CreatedAt = now,
-            Payload = JsonSerializer.SerializeToDocument(new { fileName = safeName, flowId }),
+            Payload = JsonSerializer.SerializeToDocument(new { fileName = safeName, flowId, source, sourceRef }),
         });
         await db.SaveChangesAsync(ct);
 

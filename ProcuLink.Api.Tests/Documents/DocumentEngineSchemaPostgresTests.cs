@@ -43,4 +43,23 @@ public sealed class DocumentEngineSchemaPostgresTests(PostgresContainerFixture p
         Assert.Equal(flowId, doc.FlowId);
         Assert.Equal("[]", doc.ChecksJson);
     }
+
+    [DockerRequiredFact]
+    public async Task Intake_ledger_rejects_the_same_item_twice()
+    {
+        var cs = await postgres.CreateDatabaseAsync("proculink_docintake");
+        var options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
+            .UseNpgsql(cs, n => n.CommandTimeout(180)).Options;
+        var orgId = Guid.NewGuid();
+        var scopeId = Guid.NewGuid();
+
+        await using var db = new ProcuLinkDbContext(options);
+        db.Organisations.Add(new Organisation { Id = orgId, Name = "Synthetic org", Slug = "synthetic-" + orgId.ToString("N") });
+        db.FlowIntakeItems.Add(new FlowIntakeItem { Id = Guid.NewGuid(), OrgId = orgId, ScopeId = scopeId, ItemKey = "path:/in/a.csv", CreatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        db.FlowIntakeItems.Add(new FlowIntakeItem { Id = Guid.NewGuid(), OrgId = orgId, ScopeId = scopeId, ItemKey = "path:/in/a.csv", CreatedAt = DateTime.UtcNow });
+        var ex = await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
+        Assert.True(ProcuLink.Infrastructure.Services.Ingress.IngressDedupe.IsUniqueViolation(ex));
+    }
 }

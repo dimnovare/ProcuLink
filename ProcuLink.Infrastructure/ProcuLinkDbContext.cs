@@ -199,6 +199,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     // ── Document engine ──────────────────────────────────────────────────────
     public DbSet<Flow>                           Flows                         { get; set; } = null!;
     public DbSet<FlowDocument>                   FlowDocuments                 { get; set; } = null!;
+    public DbSet<FlowIntake>                     FlowIntakes                   { get; set; } = null!;
+    public DbSet<FlowIntakeItem>                 FlowIntakeItems               { get; set; } = null!;
 
     // ── Org plan-history chokepoint ──────────────────────────────────────────
     // Overage metering must resolve the plan + order-limit override AS OF each
@@ -2112,6 +2114,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             e.Property(a => a.TokenPrefix).HasColumnName("token_prefix");
             e.Property(a => a.Kind).HasColumnName("kind");
             e.Property(a => a.Label).HasColumnName("label");
+            e.Property(a => a.FlowId).HasColumnName("flow_id");
             e.Property(a => a.IsActive).HasColumnName("is_active").HasDefaultValue(true);
             e.Property(a => a.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             e.Property(a => a.ExpiresAt).HasColumnName("expires_at").HasColumnType("timestamptz");
@@ -2158,6 +2161,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(d => d.StatusReason).HasColumnName("status_reason");
             b.Property(d => d.ReadJson).HasColumnName("read_json").HasColumnType("jsonb").HasDefaultValue("{}");
             b.Property(d => d.ChecksJson).HasColumnName("checks_json").HasColumnType("jsonb").HasDefaultValue("[]");
+            b.Property(d => d.Source).HasColumnName("source").HasDefaultValue("upload");
+            b.Property(d => d.SourceRef).HasColumnName("source_ref");
             b.Property(d => d.DedupKey).HasColumnName("dedup_key");
             b.Property(d => d.IsSample).HasColumnName("is_sample");
             b.Property(d => d.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
@@ -2234,6 +2239,42 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasOne<FlowDocument>().WithMany().HasForeignKey(d => d.DocumentId).OnDelete(DeleteBehavior.Cascade);
             b.HasOne<FlowOutput>().WithMany().HasForeignKey(d => d.OutputId).OnDelete(DeleteBehavior.SetNull);
             b.HasOne<FlowDestination>().WithMany().HasForeignKey(d => d.DestinationId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<FlowIntake>(b =>
+        {
+            b.ToTable("flow_intakes");
+            b.HasKey(i => i.Id);
+            b.Property(i => i.Id).HasColumnName("id");
+            b.Property(i => i.OrgId).HasColumnName("org_id");
+            b.Property(i => i.FlowId).HasColumnName("flow_id");
+            b.Property(i => i.Kind).HasColumnName("kind");
+            b.Property(i => i.ConfigJson).HasColumnName("config_json").HasColumnType("jsonb").HasDefaultValue("{}");
+            b.Property(i => i.EncryptedCredentials).HasColumnName("encrypted_credentials");
+            b.Property(i => i.IsEnabled).HasColumnName("is_enabled").HasDefaultValue(true);
+            b.Property(i => i.LastRunAt).HasColumnName("last_run_at").HasColumnType("timestamptz");
+            b.Property(i => i.LastStatus).HasColumnName("last_status");
+            b.Property(i => i.LastMessage).HasColumnName("last_message");
+            b.Property(i => i.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(i => i.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            b.HasIndex(i => new { i.OrgId, i.FlowId });
+            b.HasOne<Organisation>().WithMany().HasForeignKey(i => i.OrgId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne<Flow>().WithMany().HasForeignKey(i => i.FlowId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // scope_id is an intake id or a flow id, so it carries no foreign key.
+        modelBuilder.Entity<FlowIntakeItem>(b =>
+        {
+            b.ToTable("flow_intake_items");
+            b.HasKey(i => i.Id);
+            b.Property(i => i.Id).HasColumnName("id");
+            b.Property(i => i.OrgId).HasColumnName("org_id");
+            b.Property(i => i.ScopeId).HasColumnName("scope_id");
+            b.Property(i => i.ItemKey).HasColumnName("item_key").HasMaxLength(1024);
+            b.Property(i => i.DocumentId).HasColumnName("document_id");
+            b.Property(i => i.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.HasIndex(i => new { i.ScopeId, i.ItemKey }).IsUnique();
+            b.HasOne<Organisation>().WithMany().HasForeignKey(i => i.OrgId).OnDelete(DeleteBehavior.Cascade);
         });
 
         // ── Organisation query filters ───────────────────────────────────────
