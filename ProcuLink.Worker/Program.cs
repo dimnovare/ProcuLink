@@ -198,6 +198,7 @@ builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSou
 builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSource>(sp => new ProcuLink.Api.Services.Documents.Intake.ImapPickupSource(
     sp.GetRequiredService<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>()));
 builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowPickupJob>();
+builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowWebhookJob>();
 builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowPickupDispatchJob>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.FlowDestinationService>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.FlowIntakeService>();

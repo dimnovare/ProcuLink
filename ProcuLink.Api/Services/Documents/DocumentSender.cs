@@ -80,6 +80,8 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
 
         // The send is committed. An enqueue failure leaves the rows queued for the sweep; it must not undo the send.
         foreach (var d in queued) DeliverDocumentJob.Enqueue(jobs, d.Id, d.OrgId);
+        // Sent here only when nothing is left to deliver; otherwise DeliverDocumentJob announces the end, so a send is announced once.
+        if (doc.Status == DocumentStatus.Sent) await FlowWebhook.EnqueueAsync(db, jobs, doc, FlowWebhookEvent.Sent, ct);
         return outcome;
     }
 

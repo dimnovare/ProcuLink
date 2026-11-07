@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Auth;
 using ProcuLink.Api.Jobs;
 using ProcuLink.Api.Services.Documents;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
 
@@ -93,11 +94,17 @@ public sealed class FlowIntakesController(
     /// <summary>Opens the server, bucket or mailbox and counts the files waiting. Never claims or downloads.</summary>
     [HttpPost("{id:guid}/test")]
     [RequireOrgAdmin]
-    public async Task<IActionResult> Test(Guid flowId, Guid id, [FromServices] FlowPickupJob pickup, CancellationToken ct)
+    public async Task<IActionResult> Test(
+        Guid flowId, Guid id, [FromServices] FlowPickupJob pickup, [FromServices] FlowWebhookJob webhook, CancellationToken ct)
     {
         if (await Check(flowId, ct) is { } refused) return refused;
         try
         {
+            if (await db.FlowIntakes.AnyAsync(i => i.OrgId == tenant.OrganisationId && i.FlowId == flowId && i.Id == id && i.Kind == IntakeKind.Api, ct))
+            {
+                var (ok, error, code) = await webhook.TestAsync(tenant.OrganisationId, flowId, id, ct);
+                return Ok(new { success = ok, message = error, responseCode = code });
+            }
             var (success, message) = await pickup.TestAsync(tenant.OrganisationId, flowId, id, ct);
             return Ok(new { success, message, responseCode = (int?)null });
         }

@@ -142,6 +142,7 @@ public class ReadDocumentJob(
             failedChecks = DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).Select(c => c.Code).ToList(),
         });
         await db.SaveChangesAsync(ct);
+        await FlowWebhook.EnqueueAsync(db, jobs, doc, FlowWebhookEvent.Read, ct);
         SendDocumentJob.EnqueueIfAutomatic(jobs, doc, flow);
     }
 
@@ -152,6 +153,7 @@ public class ReadDocumentJob(
         doc.UpdatedAt = DateTime.UtcNow;
         AddAudit(doc, "document.read_failed", new { reason });
         await db.SaveChangesAsync(ct);
+        await FlowWebhook.EnqueueAsync(db, jobs, doc, FlowWebhookEvent.ReadFailed, ct);
     }
 
     private void AddAudit(FlowDocument doc, string action, object payload) =>

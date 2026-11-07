@@ -125,6 +125,8 @@ public class DeliverDocumentJob(
         await tx.CommitAsync(save);
 
         if (retryIn is { } delay) Schedule(jobs, deliveryId, organisationId, delay);
+        else if (doc.Status is DocumentStatus.Sent or DocumentStatus.SendFailed)
+            await FlowWebhook.EnqueueAsync(db, jobs, doc, doc.Status == DocumentStatus.Sent ? FlowWebhookEvent.Sent : FlowWebhookEvent.SendFailed, save);
     }
 
     private Task<int> ClaimAsync(Guid deliveryId, Guid orgId, Expression<Func<FlowDelivery, bool>> eligible, DateTime now, CancellationToken ct) =>
