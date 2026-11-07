@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Tests.Integration;
 using ProcuLink.Core.Documents;
@@ -76,5 +77,21 @@ public sealed class FlowFilesApiTests(PostgresContainerFixture postgres) : IAsyn
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ProcuLink.Infrastructure.ProcuLinkDbContext>();
         Assert.Equal(1, db.FlowDocuments.IgnoreQueryFilters().Count(d => d.FlowId == flowId));
+    }
+
+    [DockerRequiredFact]
+    public async Task A_retry_after_a_failed_submit_creates_the_document()
+    {
+        var http = factory.ApiKeyClientFor(DocumentEngineTestFactory.OrgA);
+        var flowId = await NewFlow();
+        factory.Storage.SetupSequence(s => s.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new IOException("storage down"))
+            .ReturnsAsync("key");
+
+        var failed = await Post(http, flowId, Csv, "retry-2");
+        var retried = await Post(http, flowId, Csv, "retry-2");
+
+        Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, retried.StatusCode);
     }
 }

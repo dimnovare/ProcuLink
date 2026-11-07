@@ -38,8 +38,7 @@ public sealed class SftpPickupSource(ISftpClientFactory factory, OutboundRequest
     private sealed class Session(ISftpSession sftp, string directory) : IPickupSession
     {
         public Task<IReadOnlyList<PickupFile>> ListAsync(CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<PickupFile>>(sftp.ListFileNames(directory)
-                .Select(path => new PickupFile($"path:{path}", Path.GetFileName(path), path)).ToList());
+            Task.FromResult<IReadOnlyList<PickupFile>>(sftp.ListFiles(directory).Select(PickupFile.At).ToList());
 
         public async Task<MemoryStream> DownloadAsync(PickupFile file, long maxBytes, CancellationToken ct)
         {

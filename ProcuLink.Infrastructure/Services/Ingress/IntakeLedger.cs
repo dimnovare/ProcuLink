@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Entities;
 
@@ -11,10 +13,20 @@ public static class IntakeLedger
 
     public static readonly TimeSpan RetakeAfter = TimeSpan.FromMinutes(30);
 
+    /// <summary>
+    /// The key as stored: the raw key up to 1024 UTF-8 bytes, else its SHA-256. Bytes, not characters, so a key also
+    /// fits the unique index's row limit. Every <c>ItemKey</c> write and lookup goes through this.
+    /// </summary>
+    public static string KeyFor(string raw) =>
+        Encoding.UTF8.GetByteCount(raw) <= 1024
+            ? raw
+            : "sha256:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw))).ToLowerInvariant();
+
     /// <summary>Returns the claim, or null when the item is already taken.</summary>
     public static async Task<FlowIntakeItem?> ClaimAsync(
         ProcuLinkDbContext db, Guid orgId, Guid scopeId, string itemKey, CancellationToken ct)
     {
+        itemKey = KeyFor(itemKey);
         var item = new FlowIntakeItem
         {
             Id = Guid.NewGuid(), OrgId = orgId, ScopeId = scopeId, ItemKey = itemKey, CreatedAt = DateTime.UtcNow,

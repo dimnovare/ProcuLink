@@ -665,11 +665,31 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
             var hash = Convert.ToHexString(SHA256.HashData(att.Content)).ToLowerInvariant();
             var key = $"postmark:{payload.ProviderMessageId ?? Guid.NewGuid().ToString("N")}#{hash}";
             var claim = await IntakeLedger.ClaimAsync(_db, orgId, intake.Id, key, ct);
-            if (claim is null) continue;
+            if (claim is null)
+            {
+                // A settled row (a document or a refusal) is done. One with no document yet is in flight or was left
+                // by a crash: defer, so Postmark re-delivers until it settles or is retaken after 30 minutes.
+                var itemKey = IntakeLedger.KeyFor(key);
+                if (await _db.FlowIntakeItems.AnyAsync(i => i.OrgId == orgId && i.ScopeId == intake.Id
+                                                            && i.ItemKey == itemKey && i.DocumentId == null, ct))
+                    return new InboundEmailResult(false, orgId, Array.Empty<Guid>(),
+                        "An earlier delivery of this message is still being taken in.", InboundEmailRejectionKind.Transient);
+                continue;
+            }
 
-            var result = await _flows.SubmitAsync(
-                orgId, flowId, new MemoryStream(att.Content), att.FileName, att.ContentType, IntakeKind.Email,
-                payload.FromEmail, ct);
+            FlowSubmitResult result;
+            try
+            {
+                result = await _flows.SubmitAsync(
+                    orgId, flowId, new MemoryStream(att.Content), att.FileName, att.ContentType, IntakeKind.Email,
+                    payload.FromEmail, ct);
+            }
+            catch
+            {
+                // SubmitAsync throws only before the document commits, so the claim goes back for the re-delivery.
+                await IntakeLedger.ReleaseAsync(_db, orgId, claim.Id, CancellationToken.None);
+                throw;
+            }
             if (result.Error is "document_engine_not_enabled" or "flow_not_found")
                 return Ignored(result.Error);
             if (result.Limit is { Allowed: false } refused) return await PausedAsync(refused);
@@ -677,7 +697,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
             var documentId = result.Document?.Id ?? IntakeLedger.Refused;
             await _db.FlowIntakeItems
                 .Where(i => i.OrgId == orgId && i.Id == claim.Id)
-                .ExecuteUpdateAsync(s => s.SetProperty(i => i.DocumentId, documentId), ct);
+                .ExecuteUpdateAsync(s => s.SetProperty(i => i.DocumentId, documentId), CancellationToken.None);
         }
 
         intake.LastRunAt = DateTime.UtcNow;

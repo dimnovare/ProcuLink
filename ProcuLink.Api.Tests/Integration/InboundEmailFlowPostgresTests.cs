@@ -65,6 +65,18 @@ public sealed class InboundEmailFlowPostgresTests(PostgresContainerFixture postg
     }
 
     [DockerRequiredFact]
+    public async Task A_delivery_whose_submit_threw_is_taken_by_the_redelivery()
+    {
+        var (orgId, _, to) = await SeedAsync(enabled: true);
+        await Assert.ThrowsAsync<IOException>(() => RouteAsync(Payload(to, "msg-1"), new ThrowingSubmitter()));
+        var redelivered = await RouteAsync(Payload(to, "msg-1"));
+
+        Assert.True(redelivered.Success);
+        await using var db = new ProcuLinkDbContext(_options!);
+        Assert.Equal(1, await db.FlowDocuments.CountAsync(d => d.OrgId == orgId));
+    }
+
+    [DockerRequiredFact]
     public async Task A_disabled_email_intake_makes_no_document_and_no_order()
     {
         var (_, _, to) = await SeedAsync(enabled: false);
@@ -106,15 +118,23 @@ public sealed class InboundEmailFlowPostgresTests(PostgresContainerFixture postg
         return (orgId, flowId, $"orders@{minted.Token}.proculink.eu");
     }
 
-    private async Task<InboundEmailResult> RouteAsync(InboundEmailPayload payload)
+    private async Task<InboundEmailResult> RouteAsync(InboundEmailPayload payload, IFlowDocumentSubmitter? submitter = null)
     {
         var config = InboundAddressTestHarness.Configuration();
         await using var db = new ProcuLinkDbContext(_options!);
         var router = new InboundEmailRouter(
             db, Mock.Of<IClaimedOrderCreator>(), Mock.Of<IParseJobEnqueuer>(), Mock.Of<IEmailBodyOrderExtractor>(),
             InboundAddressTestHarness.Create(db, config), PermissiveBilling.Mock().Object, config,
-            NullLogger<InboundEmailRouter>.Instance, new PersistingSubmitter(_options!));
+            NullLogger<InboundEmailRouter>.Instance, submitter ?? new PersistingSubmitter(_options!));
         return await router.RouteAsync(payload, CancellationToken.None);
+    }
+
+    /// <summary>A submit that fails before anything commits, as a storage outage would.</summary>
+    private sealed class ThrowingSubmitter : IFlowDocumentSubmitter
+    {
+        public Task<FlowSubmitResult> SubmitAsync(
+            Guid orgId, Guid flowId, Stream content, string fileName, string contentType,
+            string source, string? sourceRef, CancellationToken ct) => throw new IOException("storage down");
     }
 
     /// <summary>Stands in for the Api submitter: persists the document the way AcceptAsync would.</summary>

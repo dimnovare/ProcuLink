@@ -77,6 +77,10 @@ public sealed class RenciSftpClientFactory : ISftpClientFactory
                 .Select(f => f.FullName);
         }
 
+        public IEnumerable<RemoteFile> ListFiles(string remoteDirectory) =>
+            _client.ListDirectory(remoteDirectory).Where(f => f.IsRegularFile)
+                .Select(f => new RemoteFile(f.FullName, f.Length, f.LastWriteTimeUtc));
+
         public MemoryStream DownloadFile(string remotePath)
         {
             var ms = new MemoryStream();

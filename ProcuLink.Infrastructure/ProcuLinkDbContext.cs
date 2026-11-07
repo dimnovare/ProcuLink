@@ -2258,6 +2258,10 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(i => i.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             b.Property(i => i.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             b.HasIndex(i => new { i.OrgId, i.FlowId });
+            // One email and one api intake per flow, even when two first requests race to create it. Partial, so it
+            // cannot stand in for the flow_id foreign-key index, which is therefore kept explicitly.
+            b.HasIndex(i => i.FlowId);
+            b.HasIndex(i => new { i.FlowId, i.Kind }).IsUnique().HasFilter("kind IN ('email','api')");
             b.HasOne<Organisation>().WithMany().HasForeignKey(i => i.OrgId).OnDelete(DeleteBehavior.Cascade);
             b.HasOne<Flow>().WithMany().HasForeignKey(i => i.FlowId).OnDelete(DeleteBehavior.Cascade);
         });

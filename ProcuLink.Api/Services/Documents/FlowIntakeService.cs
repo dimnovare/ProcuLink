@@ -9,6 +9,7 @@ using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
+using ProcuLink.Infrastructure.Services.Ingress;
 
 namespace ProcuLink.Api.Services.Documents;
 
@@ -70,8 +71,18 @@ public sealed class FlowIntakeService(
                 ConfigJson = new JsonObject { ["addressId"] = minted.Id }.ToJsonString(), CreatedAt = now, UpdatedAt = now,
             };
             db.Set<FlowIntake>().Add(email);
-            await db.SaveChangesAsync(ct);
-            rows.Insert(0, email);
+            try
+            {
+                await db.SaveChangesAsync(ct);
+                rows.Insert(0, email);
+            }
+            catch (DbUpdateException e) when (IngressDedupe.IsUniqueViolation(e))
+            {
+                // A concurrent first view made it: keep that one, and revoke the address minted here.
+                db.Entry(email).State = EntityState.Detached;
+                await addresses.RevokeAsync(orgId, minted.Id, ct);
+                rows = await Intakes(orgId, flowId).OrderBy(i => i.CreatedAt).ToListAsync(ct);
+            }
         }
 
         var dtos = new List<FlowIntakeDto>();
@@ -152,7 +163,15 @@ public sealed class FlowIntakeService(
 
         if (req.Enabled is { } enabled) existing.IsEnabled = enabled;
         existing.UpdatedAt = now;
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException e) when (IngressDedupe.IsUniqueViolation(e))
+        {
+            throw new IntakeException("intake_exists"); // a concurrent create of the flow's api intake won
+        }
+
         return existing;
     }
 

@@ -1106,6 +1106,10 @@ namespace ProcuLink.Infrastructure.Migrations
 
                     b.HasIndex("FlowId");
 
+                    b.HasIndex("FlowId", "Kind")
+                        .IsUnique()
+                        .HasFilter("kind IN ('email','api')");
+
                     b.HasIndex("OrgId", "FlowId");
 
                     b.ToTable("flow_intakes", (string)null);

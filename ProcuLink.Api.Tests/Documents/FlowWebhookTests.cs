@@ -24,6 +24,7 @@ namespace ProcuLink.Api.Tests.Documents;
 public sealed class FlowWebhookTests
 {
     private static readonly Guid Org = Guid.NewGuid();
+    private static readonly DocumentEngineGate Gate = new(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions { EnabledForAll = true }));
 
     private static ProcuLinkDbContext NewDb() =>
         new(new DbContextOptionsBuilder<ProcuLinkDbContext>().UseInMemoryDatabase($"flow-webhook-{Guid.NewGuid()}").Options);
@@ -102,7 +103,7 @@ public sealed class FlowWebhookTests
         factory.Setup(f => f.CreateClient("delivery")).Returns(() => new HttpClient(handler));
         var guard = new OutboundRequestGuard(new ConfigurationBuilder().AddInMemoryCollection(
             new Dictionary<string, string?> { ["Delivery:AllowPrivateNetworkTargets"] = "true" }).Build(), NullLogger<OutboundRequestGuard>.Instance);
-        var job = new FlowWebhookJob(db, factory.Object, enc, guard, NullLogger<FlowWebhookJob>.Instance);
+        var job = new FlowWebhookJob(db, factory.Object, enc, guard, Gate, NullLogger<FlowWebhookJob>.Instance);
         var eventId = Guid.NewGuid();
 
         await job.ExecuteAsync(Org, doc.Id, "document.read", eventId, CancellationToken.None);
@@ -136,7 +137,7 @@ public sealed class FlowWebhookTests
         factory.Setup(f => f.CreateClient("delivery")).Returns(() => new HttpClient(handler));
         var guard = new OutboundRequestGuard(new ConfigurationBuilder().AddInMemoryCollection(
             new Dictionary<string, string?> { ["Delivery:AllowPrivateNetworkTargets"] = "true" }).Build(), NullLogger<OutboundRequestGuard>.Instance);
-        var job = new FlowWebhookJob(db, factory.Object, enc, guard, NullLogger<FlowWebhookJob>.Instance);
+        var job = new FlowWebhookJob(db, factory.Object, enc, guard, Gate, NullLogger<FlowWebhookJob>.Instance);
 
         var act = () => job.ExecuteAsync(Org, doc.Id, "document.read", Guid.NewGuid(), CancellationToken.None);
 

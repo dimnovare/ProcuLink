@@ -1,11 +1,17 @@
 using System.Text.Json;
 using ProcuLink.Core.Entities;
+using ProcuLink.Infrastructure.Services.Ingress;
 
 namespace ProcuLink.Api.Services.Documents.Intake;
 
 /// <param name="Key">The ledger key; unique within the intake.</param>
 /// <param name="SourceRef">The remote path (SFTP, FTP, FTPS), the object key (S3) or the sender (IMAP).</param>
-public sealed record PickupFile(string Key, string FileName, string? SourceRef);
+public sealed record PickupFile(string Key, string FileName, string? SourceRef)
+{
+    /// <summary>A server file, keyed on path, size and modified time, so a rewritten fixed-name file is taken again.</summary>
+    public static PickupFile At(RemoteFile f) =>
+        new($"path:{f.Path}:{f.Size}:{f.ModifiedUtc.Ticks}", System.IO.Path.GetFileName(f.Path), f.Path);
+}
 
 /// <summary>A server or mailbox a flow intake picks files up from.</summary>
 public interface IPickupSource

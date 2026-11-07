@@ -63,9 +63,10 @@ public class FlowPickupJob(
         }
     }
 
-    /// <summary>The user-facing copy for a failure on the remote side, or null for anything else.</summary>
+    /// <summary>The user-facing copy for a failure on the remote side or a saved credential that won't open, or null for anything else.</summary>
     private static string? ConnectionMessage(Exception ex, FlowIntake intake)
     {
+        if (ex is CredentialUnbindableException) return "The saved password or key can't be read. Enter it again.";
         if (ex is not (SshHostKeyRejectedException or RemoteFailure)) return null;
         var config = JsonNode.Parse(intake.ConfigJson);
         var serviceUrl = config?["serviceUrl"]?.GetValue<string>();
@@ -87,15 +88,23 @@ public class FlowPickupJob(
         try
         {
             using var session = await OpenAsync(intake, source, ct);
-            var keys = (await Remote(() => session.ListAsync(ct))).Where(IsReadable).Select(f => f.Key).ToList();
-            var known = await db.FlowIntakeItems.CountAsync(
-                i => i.OrgId == organisationId && i.ScopeId == intake.Id && keys.Contains(i.ItemKey), ct);
-            return (true, $"Connected. {keys.Count - known} file(s) waiting.");
+            var files = (await Remote(() => session.ListAsync(ct))).Where(IsReadable).ToList();
+            var known = (await LedgerAsync(intake, files, ct)).Count;
+            return (true, $"Connected. {files.Count - known} file(s) waiting.");
         }
         catch (Exception ex) when (ConnectionMessage(ex, intake) is { } message)
         {
             return (false, message);
         }
+    }
+
+    /// <summary>This intake's ledger rows for the listed files, by stored key.</summary>
+    private Task<Dictionary<string, FlowIntakeItem>> LedgerAsync(FlowIntake intake, IEnumerable<PickupFile> files, CancellationToken ct)
+    {
+        var keys = files.Select(f => IntakeLedger.KeyFor(f.Key)).ToList();
+        return db.FlowIntakeItems.AsNoTracking()
+            .Where(i => i.OrgId == intake.OrgId && i.ScopeId == intake.Id && keys.Contains(i.ItemKey))
+            .ToDictionaryAsync(i => i.ItemKey, ct);
     }
 
     private static bool IsReadable(PickupFile f) => Extensions.Contains(Path.GetExtension(f.FileName), StringComparer.OrdinalIgnoreCase);
@@ -132,19 +141,26 @@ public class FlowPickupJob(
         using var session = await OpenAsync(intake, source, ct);
 
         int taken = 0, skipped = 0, claimed = 0;
-        foreach (var file in (await Remote(() => session.ListAsync(ct))).Where(IsReadable))
+        var files = (await Remote(() => session.ListAsync(ct))).Where(IsReadable).ToList();
+        var ledger = await LedgerAsync(intake, files, ct);
+        foreach (var file in files)
         {
             if (claimed == MaxFilesPerRun) break;
-            var claim = await IntakeLedger.ClaimAsync(db, intake.OrgId, intake.Id, file.Key, ct);
-            if (claim is null)
+            if (ledger.TryGetValue(IntakeLedger.KeyFor(file.Key), out var row))
             {
                 // Already ingested (a document or a refusal): count it done so a mail's other files can finish it.
-                // A row with no document is in flight or a crashed claim, so it must not be marked.
-                if (await db.FlowIntakeItems.AnyAsync(i => i.OrgId == intake.OrgId && i.ScopeId == intake.Id
-                                                           && i.ItemKey == file.Key && i.DocumentId != null, ct))
+                if (row.DocumentId is not null)
+                {
                     await Remote(async () => { await session.MarkDoneAsync(file, ct); return 0; });
-                continue;
+                    continue;
+                }
+
+                // In flight, or a crashed claim not yet due for its retake: leave it, unmarked.
+                if (row.CreatedAt >= DateTime.UtcNow - IntakeLedger.RetakeAfter) continue;
             }
+
+            var claim = await IntakeLedger.ClaimAsync(db, intake.OrgId, intake.Id, file.Key, ct);
+            if (claim is null) continue;
             claimed++;
 
             // A transient download or submit exception leaves the claim; it is retaken after 30 minutes.
@@ -156,13 +172,13 @@ public class FlowPickupJob(
                     ContentTypeOf(file.FileName), intake.Kind, file.SourceRef, ct);
                 if (result.Limit is { Allowed: false } refused)
                 {
-                    await IntakeLedger.ReleaseAsync(db, intake.OrgId, claim.Id, ct);
+                    await IntakeLedger.ReleaseAsync(db, intake.OrgId, claim.Id, CancellationToken.None);
                     return ("paused", refused.FlowPausedMessage);
                 }
 
                 if (result.Error is "document_engine_not_enabled" or "flow_not_found")
                 {
-                    await IntakeLedger.ReleaseAsync(db, intake.OrgId, claim.Id, ct);
+                    await IntakeLedger.ReleaseAsync(db, intake.OrgId, claim.Id, CancellationToken.None);
                     return ("failed", "Couldn't pick up files. The next try is in 5 minutes.");
                 }
 
@@ -176,7 +192,7 @@ public class FlowPickupJob(
             }
 
             await db.FlowIntakeItems.Where(i => i.OrgId == intake.OrgId && i.Id == claim.Id)
-                .ExecuteUpdateAsync(s => s.SetProperty(i => i.DocumentId, documentId), ct);
+                .ExecuteUpdateAsync(s => s.SetProperty(i => i.DocumentId, documentId), CancellationToken.None);
             await Remote(async () => { await session.MarkDoneAsync(file, ct); return 0; });
         }
 

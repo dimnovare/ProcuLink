@@ -28,8 +28,7 @@ public sealed class FtpPickupSource(string kind, IFtpFetchClientFactory factory,
     private sealed class Session(IFtpFetchSession ftp, string directory) : IPickupSession
     {
         public async Task<IReadOnlyList<PickupFile>> ListAsync(CancellationToken ct) =>
-            (await ftp.ListFileNamesAsync(directory, ct))
-                .Select(path => new PickupFile($"path:{path}", Path.GetFileName(path), path)).ToList();
+            (await ftp.ListFilesAsync(directory, ct)).Select(PickupFile.At).ToList();
 
         public Task<MemoryStream> DownloadAsync(PickupFile file, long maxBytes, CancellationToken ct) =>
             ftp.DownloadAsync(file.SourceRef!, maxBytes, ct);

@@ -18,7 +18,7 @@ namespace ProcuLink.Api.Jobs;
 /// </summary>
 public class FlowWebhookJob(
     ProcuLinkDbContext db, IHttpClientFactory http, DeliveryEncryptionService encryption, OutboundRequestGuard guard,
-    ILogger<FlowWebhookJob> logger)
+    DocumentEngineGate gate, ILogger<FlowWebhookJob> logger)
 {
     private sealed record Body(Guid Id, string Type, DateTime CreatedAt, object Document);
 
@@ -26,6 +26,7 @@ public class FlowWebhookJob(
     [AutomaticRetry(Attempts = 3, DelaysInSeconds = new[] { 30, 120, 600 })]
     public async Task ExecuteAsync(Guid organisationId, Guid documentId, string eventType, Guid eventId, CancellationToken ct)
     {
+        if (!gate.IsEnabled(organisationId)) return;
         var doc = await db.FlowDocuments.AsNoTracking().FirstOrDefaultAsync(d => d.Id == documentId && d.OrgId == organisationId, ct);
         if (doc is null) return;
         var intake = await db.FlowIntakes.AsNoTracking().FirstOrDefaultAsync(

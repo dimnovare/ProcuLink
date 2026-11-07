@@ -23,7 +23,7 @@ public sealed class DocumentRejectedException(string code) : Exception(code)
 /// <summary>Accepts an uploaded file into a flow: stores it, counts its units, holds an identical file as a duplicate, and queues the read.</summary>
 public sealed class DocumentIntakeService(
     ProcuLinkDbContext db, IFileStorageService storage, IBackgroundJobClient jobs,
-    DocumentEngineGate gate, IBillingService billing) : IFlowDocumentSubmitter
+    DocumentEngineGate gate, IBillingService billing, ILogger<DocumentIntakeService> logger) : IFlowDocumentSubmitter
 {
     public static readonly string[] AcceptedFormats = ["pdf", "csv", "xlsx"];
 
@@ -97,9 +97,18 @@ public sealed class DocumentIntakeService(
             Action = "document.received", CreatedAt = now,
             Payload = JsonSerializer.SerializeToDocument(new { fileName = safeName, flowId, source, sourceRef }),
         });
-        await db.SaveChangesAsync(ct);
+        // Never cancelled half-way, and nothing after it throws: a caller that sees a throw knows nothing committed.
+        await db.SaveChangesAsync(CancellationToken.None);
 
-        if (!duplicate) ReadDocumentJob.Enqueue(jobs, id, orgId);
+        try
+        {
+            if (!duplicate) ReadDocumentJob.Enqueue(jobs, id, orgId);
+        }
+        catch (Exception e)
+        {
+            logger.LogWarning(e, "Could not queue the read for document {DocumentId}.", id);
+        }
+
         return doc;
     }
 

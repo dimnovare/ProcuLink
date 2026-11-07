@@ -16,6 +16,8 @@ using ProcuLink.Core.Services.Security;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
+using ProcuLink.Infrastructure.Services.Ingress;
+using ProcuLink.Infrastructure.Services.Security;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Documents;
@@ -59,12 +61,12 @@ public sealed class FlowPickupJobTests(PostgresContainerFixture postgres)
         public ProcuLinkDbContext NewDb() =>
             new(new DbContextOptionsBuilder<ProcuLinkDbContext>().UseNpgsql(ConnectionString, n => n.CommandTimeout(180)).Options);
 
-        public async Task RunAsync()
+        public async Task RunAsync(IPickupSource? source = null)
         {
             await using var db = NewDb();
             var gate = new DocumentEngineGate(Options.Create(new DocumentEngineOptions { EnabledForAll = true }));
-            var submitter = new DocumentIntakeService(db, new MemoryStorage(), new Mock<IBackgroundJobClient>().Object, gate, Billing.Object);
-            var job = new FlowPickupJob(db, [Source.Object], Encryption, submitter, gate, Billing.Object, NullLogger<FlowPickupJob>.Instance);
+            var submitter = new DocumentIntakeService(db, new MemoryStorage(), new Mock<IBackgroundJobClient>().Object, gate, Billing.Object, NullLogger<DocumentIntakeService>.Instance);
+            var job = new FlowPickupJob(db, [source ?? Source.Object], Encryption, submitter, gate, Billing.Object, NullLogger<FlowPickupJob>.Instance);
             await job.ExecuteAsync(Org, IntakeId, CancellationToken.None);
         }
 
@@ -111,6 +113,30 @@ public sealed class FlowPickupJobTests(PostgresContainerFixture postgres)
         (await h.IntakeAsync()).LastMessage.Should().Be("No new files.");
         // Run 1 marks it after taking it; run 2 marks it again because it was already ingested.
         h.Session.Verify(s => s.MarkDoneAsync(It.Is<PickupFile>(f => f.FileName == "a.csv"), It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    [DockerRequiredFact]
+    public async Task An_unchanged_file_is_taken_once_and_a_rewritten_one_again()
+    {
+        var h = await SeedAsync();
+        var file = new RemoteFile("/in/orders.csv", 10, new DateTime(2026, 11, 7, 9, 0, 0, DateTimeKind.Utc));
+        var sftp = new Mock<ISftpSession>();
+        sftp.Setup(s => s.ListFiles("/in")).Returns(() => [file]);
+        sftp.Setup(s => s.OpenRead("/in/orders.csv")).Returns(() => new MemoryStream("a,b\r\n1,2\r\n"u8.ToArray()));
+        var factory = new Mock<ISftpClientFactory>();
+        factory.Setup(f => f.Connect(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SshHostKeyVerifier>()))
+            .Returns(sftp.Object);
+        var source = new SftpPickupSource(factory.Object, new OutboundRequestGuard(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["Delivery:AllowPrivateNetworkTargets"] = "true" }).Build(), NullLogger<OutboundRequestGuard>.Instance));
+
+        await h.RunAsync(source);
+        await h.RunAsync(source);
+        (await h.LedgerAsync()).Should().Be(1);
+        (await h.DocumentsAsync()).Should().ContainSingle();
+
+        file = file with { ModifiedUtc = file.ModifiedUtc.AddMinutes(1) };
+        await h.RunAsync(source);
+        (await h.DocumentsAsync()).Should().HaveCount(2);
     }
 
     [DockerRequiredFact]

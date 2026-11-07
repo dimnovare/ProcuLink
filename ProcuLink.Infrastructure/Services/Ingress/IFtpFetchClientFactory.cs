@@ -29,6 +29,6 @@ public interface IFtpFetchSession : IDisposable
     /// </summary>
     Task<MemoryStream> DownloadAsync(string remotePath, long maxBytes, CancellationToken ct);
 
-    /// <summary>Full paths of the plain files in <paramref name="directory"/>; no recursion.</summary>
-    Task<IReadOnlyList<string>> ListFileNamesAsync(string directory, CancellationToken ct);
+    /// <summary>The plain files in <paramref name="directory"/>, with size and modified time; no recursion.</summary>
+    Task<IReadOnlyList<RemoteFile>> ListFilesAsync(string directory, CancellationToken ct);
 }

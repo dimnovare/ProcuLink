@@ -40,7 +40,7 @@ public sealed class FlowFilesController(
         FlowIntakeItem? claim = null;
         if (key is not null)
         {
-            var itemKey = $"api:{key}";
+            var itemKey = IntakeLedger.KeyFor($"api:{key}");
             claim = await IntakeLedger.ClaimAsync(db, orgId, flowId, itemKey, ct);
             if (claim is null)
             {
@@ -56,13 +56,22 @@ public sealed class FlowFilesController(
             }
         }
 
-        await using var stream = file.OpenReadStream();
-        var result = await submitter.SubmitAsync(orgId, flowId, stream, file.FileName, file.ContentType, "api", null, ct);
-        if (claim is not null)
+        FlowSubmitResult? result = null;
+        try
         {
-            if (result.Document is null) await IntakeLedger.ReleaseAsync(db, orgId, claim.Id, ct);
-            else await db.FlowIntakeItems.Where(i => i.OrgId == orgId && i.Id == claim.Id)
-                .ExecuteUpdateAsync(s => s.SetProperty(i => i.DocumentId, result.Document.Id), ct);
+            await using var stream = file.OpenReadStream();
+            result = await submitter.SubmitAsync(orgId, flowId, stream, file.FileName, file.ContentType, "api", null, ct);
+        }
+        finally
+        {
+            // A throw means nothing committed, so the key goes back. Settled whatever the request token says: a client
+            // gone after the commit must not leave the key open to the 30-minute retake and a second document.
+            if (claim is not null)
+            {
+                if (result?.Document is not { } doc) await IntakeLedger.ReleaseAsync(db, orgId, claim.Id, CancellationToken.None);
+                else await db.FlowIntakeItems.Where(i => i.OrgId == orgId && i.Id == claim.Id)
+                    .ExecuteUpdateAsync(s => s.SetProperty(i => i.DocumentId, doc.Id), CancellationToken.None);
+            }
         }
 
         return IntakeResults.From(this, result, flowName);
