@@ -2211,6 +2211,20 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasOne<FlowDestination>().WithMany().HasForeignKey(o => o.DestinationId).OnDelete(DeleteBehavior.Restrict);
         });
 
+        modelBuilder.Entity<Lookup>(b =>
+        {
+            b.ToTable("lookups");
+            b.HasKey(l => l.Id);
+            b.Property(l => l.Id).HasColumnName("id");
+            b.Property(l => l.OrgId).HasColumnName("org_id");
+            b.Property(l => l.Name).HasColumnName("name").HasMaxLength(120);
+            b.Property(l => l.EntriesJson).HasColumnName("entries_json").HasColumnType("jsonb").HasDefaultValue("[]");
+            b.Property(l => l.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(l => l.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            b.HasIndex(l => l.OrgId);
+            b.HasOne<Organisation>().WithMany().HasForeignKey(l => l.OrgId).OnDelete(DeleteBehavior.Cascade);
+        });
+
         modelBuilder.Entity<FlowDelivery>(b =>
         {
             b.ToTable("flow_deliveries");

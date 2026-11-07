@@ -1597,6 +1597,45 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.ToTable("item_mappings", (string)null);
                 });
 
+            modelBuilder.Entity("ProcuLink.Core.Entities.Lookup", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("EntriesJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasDefaultValue("[]")
+                        .HasColumnName("entries_json");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)")
+                        .HasColumnName("name");
+
+                    b.Property<Guid>("OrgId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("org_id");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrgId");
+
+                    b.ToTable("lookups", (string)null);
+                });
+
             modelBuilder.Entity("ProcuLink.Core.Entities.MappingCorrection", b =>
                 {
                     b.Property<Guid>("Id")
@@ -4493,6 +4532,15 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.Navigation("Organisation");
 
                     b.Navigation("Supplier");
+                });
+
+            modelBuilder.Entity("ProcuLink.Core.Entities.Lookup", b =>
+                {
+                    b.HasOne("ProcuLink.Core.Entities.Organisation", null)
+                        .WithMany()
+                        .HasForeignKey("OrgId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("ProcuLink.Core.Entities.MappingCorrection", b =>
