@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using FluentAssertions;
@@ -105,6 +107,47 @@ public class SmtpDeliveryDispatcherTests
 
         result.Success.Should().BeFalse();
         result.ErrorMessage.Should().Be("SMTP delivery credentials are missing — username is required.");
+    }
+
+    // A server (or a man-in-the-middle) that strips STARTTLS but still offers AUTH: the dispatcher
+    // must refuse the connection, not hand the supplier credential over in clear.
+    [Fact]
+    public async Task Dispatch_ServerWithoutStartTls_NeverSendsCredentials()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var received = new List<string>();
+        var server = Task.Run(async () =>
+        {
+            using var tcp = await listener.AcceptTcpClientAsync();
+            var stream = tcp.GetStream();
+            var reader = new StreamReader(stream, Encoding.ASCII);
+            var writer = new StreamWriter(stream, Encoding.ASCII) { NewLine = "\r\n", AutoFlush = true };
+            try
+            {
+                await writer.WriteLineAsync("220 stub ESMTP");
+                while (await reader.ReadLineAsync() is { } line)
+                {
+                    received.Add(line);
+                    await writer.WriteLineAsync(line.StartsWith("EHLO") ? "250-stub\r\n250 AUTH PLAIN LOGIN" : "535 5.7.8 no");
+                }
+            }
+            catch (IOException) { } // client hung up
+        });
+
+        var config = MakeConfig(new
+        {
+            host = "127.0.0.1", port, fromAddress = "po@buyer.test", toAddresses = "supplier@vendor.test",
+        });
+        var result = await Dispatcher().DispatchAsync(
+            Encoding.UTF8.GetBytes("data"), "order.csv", "text/csv", config, Creds(), default);
+        await server.WaitAsync(TimeSpan.FromSeconds(10));
+        listener.Stop();
+
+        result.Success.Should().BeFalse();
+        received.Should().Contain(l => l.StartsWith("EHLO"), "the client must actually have reached the stub");
+        received.Should().NotContain(l => l.StartsWith("AUTH"));
     }
 
     [Fact]

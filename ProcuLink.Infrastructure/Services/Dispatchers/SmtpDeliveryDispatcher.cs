@@ -117,7 +117,7 @@ public sealed class SmtpDeliveryDispatcher : IDeliveryDispatcher
 
         var secureOptions = cfg.UseSsl
             ? SecureSocketOptions.SslOnConnect
-            : SecureSocketOptions.StartTlsWhenAvailable;
+            : SecureSocketOptions.StartTls;
 
         var message = BuildMessage(
             cfg.FromAddress, recipients, subject, body,
