@@ -17,6 +17,7 @@ public static class ManipulatorRegistry
             "Multiply"   => new MultiplyManipulator(@params),
             "Divide"     => new DivideManipulator(@params),
             "LoadCatalogProduct" => new LoadCatalogProductManipulator(@params),
+            "Lookup"     => new LookupManipulator(@params, LookupScope.Current),
             _            => throw new InvalidOperationException($"Unknown manipulator type: {type}")
         };
 }

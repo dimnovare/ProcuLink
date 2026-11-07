@@ -2202,12 +2202,27 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(o => o.TemplateJson).HasColumnName("template_json").HasColumnType("jsonb").HasDefaultValue("{}");
             b.Property(o => o.TableKey).HasColumnName("table_key");
             b.Property(o => o.DestinationId).HasColumnName("destination_id");
+            b.Property(o => o.SendWhenJson).HasColumnName("send_when_json").HasColumnType("jsonb");
             b.Property(o => o.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             b.Property(o => o.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             b.HasIndex(o => o.FlowId);
             b.HasOne<Organisation>().WithMany().HasForeignKey(o => o.OrgId).OnDelete(DeleteBehavior.Cascade);
             b.HasOne<Flow>().WithMany().HasForeignKey(o => o.FlowId).OnDelete(DeleteBehavior.Cascade);
             b.HasOne<FlowDestination>().WithMany().HasForeignKey(o => o.DestinationId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<Lookup>(b =>
+        {
+            b.ToTable("lookups");
+            b.HasKey(l => l.Id);
+            b.Property(l => l.Id).HasColumnName("id");
+            b.Property(l => l.OrgId).HasColumnName("org_id");
+            b.Property(l => l.Name).HasColumnName("name").HasMaxLength(120);
+            b.Property(l => l.EntriesJson).HasColumnName("entries_json").HasColumnType("jsonb").HasDefaultValue("[]");
+            b.Property(l => l.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(l => l.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            b.HasIndex(l => l.OrgId);
+            b.HasOne<Organisation>().WithMany().HasForeignKey(l => l.OrgId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<FlowDelivery>(b =>

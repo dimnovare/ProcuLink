@@ -12,11 +12,11 @@ using ProcuLink.Transform.Documents;
 
 namespace ProcuLink.Api.Controllers;
 
-public sealed record OutputRequest(string Name, string Format, string? TableKey, Guid? DestinationId, OutputNodeTemplate? Template);
+public sealed record OutputRequest(string Name, string Format, string? TableKey, Guid? DestinationId, OutputNodeTemplate? Template, SendWhen? SendWhen = null);
 
 public sealed record OutputDto(
     Guid Id, Guid FlowId, string Name, string Format, string? TableKey, Guid? DestinationId,
-    OutputNodeTemplate Template, DateTime CreatedAt);
+    OutputNodeTemplate Template, DateTime CreatedAt, SendWhen? SendWhen);
 
 [Authorize]
 [ApiController]
@@ -27,7 +27,8 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
 
     private static OutputDto ToDto(FlowOutput o) =>
         new(o.Id, o.FlowId, o.Name, o.Format, o.TableKey, o.DestinationId,
-            DocumentJson.Deserialize<OutputNodeTemplate>(o.TemplateJson), o.CreatedAt);
+            DocumentJson.Deserialize<OutputNodeTemplate>(o.TemplateJson), o.CreatedAt,
+            o.SendWhenJson is null ? null : DocumentJson.Deserialize<SendWhen>(o.SendWhenJson));
 
     private static IActionResult Invalid(string detail) =>
         new UnprocessableEntityObjectResult(new { error = "output_invalid", detail });
@@ -93,7 +94,8 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         var template = DocumentJson.Deserialize<OutputNodeTemplate>(output.TemplateJson);
         // A workbook is binary; its preview is the CSV text of the same grid (xlsx renders from the csv template).
         var format = output.Format == FlowOutputFormats.Xlsx ? FlowOutputFormats.Csv : output.Format;
-        var render = DocumentOutputRenderer.Render(format, template, DocumentJson.Deserialize<ReadResult>(doc.ReadJson), output.TableKey);
+        var lookups = await DocumentLookups.LoadAsync(db, orgId, [template], ct);
+        var render = DocumentOutputRenderer.Render(format, template, DocumentJson.Deserialize<ReadResult>(doc.ReadJson), output.TableKey, lookups);
         if (!render.Ok) return UnprocessableEntity(new { error = render.Error, detail = render.Detail });
 
         using var reader = new StreamReader(render.Result!.Content, Encoding.UTF8);
@@ -103,6 +105,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
             contentType = render.Result.ContentType,
             fileName = Path.GetFileNameWithoutExtension(doc.FileName) + render.Result.FileExtension,
             content,
+            lookupMisses = render.Misses ?? [],
         });
     }
 
@@ -125,15 +128,25 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
             && !await db.Set<FlowDestination>().AnyAsync(d => d.OrgId == orgId && d.Id == destinationId, ct))
             return Invalid("The destination does not exist.");
 
+        if (request.SendWhen is { } rule
+            && (fields.Fields.All(f => f.Key != rule.Field) || !SendWhenOps.All.Contains(rule.Op) || rule.Value?.Trim().Length is not (>= 1 and <= 200)))
+            return Invalid("send_when");
+
         var template = request.Template ?? DefaultOutputTemplate.For(fields, request.Format, request.TableKey);
         if (template.Format != FlowOutputFormats.TemplateFormat(request.Format) || !OutputTreeFormats.IsRenderable(template.Format))
             return Invalid($"The template must be a {FlowOutputFormats.TemplateFormat(request.Format)} template.");
+
+        var lookups = await DocumentLookups.LoadAsync(db, orgId, [template], ct);
+        if (DocumentLookups.Steps(template).Any(s => !Guid.TryParse(s.Params.ElementAtOrDefault(0), out var id) || !lookups.Has(id)
+                || s.Params.ElementAtOrDefault(1) is not (null or "keep" or "blank")))
+            return Invalid("lookup");
 
         output.Name = name;
         output.Format = request.Format;
         output.TableKey = request.TableKey;
         output.DestinationId = request.DestinationId;
         output.TemplateJson = DocumentJson.Serialize(template);
+        output.SendWhenJson = request.SendWhen is { } sw ? DocumentJson.Serialize(sw with { Value = sw.Value.Trim() }) : null;
         output.UpdatedAt = DateTime.UtcNow;
         return null;
     }
