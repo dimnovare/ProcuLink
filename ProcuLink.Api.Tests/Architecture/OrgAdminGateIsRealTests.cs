@@ -40,14 +40,14 @@ public sealed class OrgAdminGateIsRealTests
     /// <para>Changing this number is the deliberate act of widening or narrowing what an
     /// organisation reserves to its administrators, and it should never move on its own.</para>
     /// </summary>
-    private const int ExpectedGatedEndpointCount = 19;
+    private const int ExpectedGatedEndpointCount = 23;
 
     /// <summary>
     /// How many operations are declared destructive. Twenty-one endpoints reach twenty-one primitives,
     /// because <c>UpsertDeliveryConfig</c> both writes the delivery row and republishes the live
     /// connection revision.
     /// </summary>
-    private const int ExpectedDestructivePrimitiveCount = 21;
+    private const int ExpectedDestructivePrimitiveCount = 24;
 
     /// <summary>
     /// Endpoints that gate only PART of a request, in-method: resolve (an invoice's IBAN, number and

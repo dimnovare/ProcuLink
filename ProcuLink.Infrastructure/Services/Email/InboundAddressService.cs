@@ -147,7 +147,14 @@ public sealed class InboundAddressService : IInboundAddressService
 
     // ── Minting ──────────────────────────────────────────────────────────────
 
-    public async Task<MintedInboundAddress> MintPrimaryAsync(Guid orgId, string label, CancellationToken ct)
+    public Task<MintedInboundAddress> MintPrimaryAsync(Guid orgId, string label, CancellationToken ct) =>
+        MintAsync(orgId, InboundAddressKind.Primary, label, null, ct);
+
+    public Task<MintedInboundAddress> MintForFlowAsync(Guid orgId, Guid flowId, CancellationToken ct) =>
+        MintAsync(orgId, InboundAddressKind.Flow, "flow", flowId, ct);
+
+    private async Task<MintedInboundAddress> MintAsync(
+        Guid orgId, string kind, string label, Guid? flowId, CancellationToken ct)
     {
         var secret = HashSecret()
             ?? throw new InvalidOperationException(
@@ -155,7 +162,8 @@ public sealed class InboundAddressService : IInboundAddressService
                 "never be resolved. Set SECURITY__APIKEYHASHSECRET before issuing addresses.");
 
         var token = NewToken();
-        var entity = BuildRow(orgId, token, secret, InboundAddressKind.Primary, label, expiresAt: null);
+        var entity = BuildRow(orgId, token, secret, kind, label, expiresAt: null);
+        entity.FlowId = flowId;
 
         _db.OrgInboundAddresses.Add(entity);
         await _db.SaveChangesAsync(ct);
@@ -303,7 +311,7 @@ public sealed class InboundAddressService : IInboundAddressService
     {
         var rows = await _db.OrgInboundAddresses
             .AsNoTracking()
-            .Where(a => a.OrganisationId == orgId)
+            .Where(a => a.OrganisationId == orgId && a.FlowId == null)
             .OrderByDescending(a => a.CreatedAt)
             .ToListAsync(ct);
 

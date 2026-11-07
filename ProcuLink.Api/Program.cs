@@ -676,6 +676,7 @@ builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentSender>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentIntakeService>();
 builder.Services.AddScoped<ProcuLink.Core.Documents.IFlowDocumentSubmitter>(sp => sp.GetRequiredService<ProcuLink.Api.Services.Documents.DocumentIntakeService>());
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.FlowDestinationService>();
+builder.Services.AddScoped<ProcuLink.Api.Services.Documents.FlowIntakeService>();
 builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
 builder.Services.AddScoped<IEmailSettingsService, EmailSettingsService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Organisation.IOrganisationSettingsService, ProcuLink.Infrastructure.Services.OrganisationSettingsService>();

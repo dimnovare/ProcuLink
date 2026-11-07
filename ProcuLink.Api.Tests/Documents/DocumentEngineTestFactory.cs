@@ -54,6 +54,7 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             ["Sentry:Dsn"] = "",
             ["Storage:R2AccessKeyId"] = "",
             ["Frontend:Url"] = "http://localhost:3000",
+            ["Security:ApiKeyHashSecret"] = "test-api-key-hash-secret-not-a-real-one",
             ["DocumentEngine:EnabledOrgIds:0"] = OrgA.ToString(),
             ["DocumentEngine:EnabledOrgIds:1"] = OrgB.ToString(),
         }));
