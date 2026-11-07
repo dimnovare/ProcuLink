@@ -111,6 +111,11 @@ public sealed class EndpointReachabilityGuardTests
             + "posts to it, and a frontend caller would be the bug. Its sibling POST "
             + "/api/ingress/{slug}/orders needs no entry: scripts/live-matrix/ingest-harness.mjs:97 "
             + "really calls it."),
+        new("POST /api/v1/flows/{}/documents",
+            "2026-11-07 — machine-to-machine file API. ProcuLink.Api/Controllers/FlowFilesController.cs carries "
+            + "[Authorize(AuthenticationSchemes = \"ApiKey\")], not Clerk: the customer's own system "
+            + "calls it with an org API key to post a file into a flow, and the browser never posts to "
+            + "it, so a frontend caller would be the bug. Permanent entry."),
         new("GET /api/ingress/{}/ping",
             "2026-08-13 — the reachability probe a customer runs while wiring the ingress API up, "
             + "documented for them at "
@@ -344,6 +349,10 @@ public sealed class EndpointReachabilityGuardTests
             "GET /api/billing/ai-usage",
             "GET /api/dev/files/{**}",
             "GET /api/ingress/{}/ping",
+            // Moved into the baseline on 2026-11-07, deliberately and in the open: the file API is a
+            // machine-facing ingress (ProcuLink.Api/Controllers/FlowFilesController.cs) whose only caller is the
+            // customer's own system, with an org API key.
+            "POST /api/v1/flows/{}/documents",
             // Moved into the baseline on 2026-08-15, deliberately and in the open, exactly as the
             // failure text asks: the Postmark bounce webhook is caller-less BY CONSTRUCTION — the
             // caller is the mail provider. It is the second provider webhook here, beside Stripe's.

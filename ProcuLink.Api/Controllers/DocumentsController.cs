@@ -45,7 +45,7 @@ public sealed class DocumentsController(
         return IntakeResults.From(this, result, flowName);
     }
 
-    private static DocumentDto ToDto(FlowDocument d, string flowName) =>
+    internal static DocumentDto ToDto(FlowDocument d, string flowName) =>
         new(ToSummary(d, flowName), d.ContentType, DocumentJson.Deserialize<ReadResult>(d.ReadJson),
             DocumentJson.Deserialize<List<DocumentCheck>>(d.ChecksJson));
 
@@ -239,7 +239,7 @@ public sealed class DocumentsController(
         };
     }
 
-    private static object ToDeliveryDto(FlowDelivery d) =>
+    internal static object ToDeliveryDto(FlowDelivery d) =>
         new { d.Id, d.OutputName, d.Protocol, d.Status, d.Attempts, d.LastError, d.FileName, d.DeliveredAt };
 
     [HttpGet("{id:guid}/deliveries")]

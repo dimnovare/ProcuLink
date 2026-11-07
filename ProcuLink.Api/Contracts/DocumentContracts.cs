@@ -22,6 +22,9 @@ public record DocumentSummaryDto(
 
 public record DocumentDto(DocumentSummaryDto Summary, string ContentType, ReadResult Read, IReadOnlyList<DocumentCheck> Checks);
 
+/// <summary>What the file API returns for a document: the read result and the sends made from it.</summary>
+public record FlowFileResultDto(DocumentDto Document, IReadOnlyList<object> Deliveries);
+
 public record FieldEdit(string Key, string? Value);
 
 /// <summary><paramref name="Row"/> is a 0-based index.</summary>

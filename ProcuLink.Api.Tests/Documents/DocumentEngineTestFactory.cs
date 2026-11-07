@@ -34,6 +34,9 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
     /// <summary>Replaces <see cref="IFileStorageService"/>; tests inspect the uploads.</summary>
     public Mock<IFileStorageService> Storage { get; } = new();
 
+    /// <summary>Set before the host first boots to run on Postgres, for the claim-first ledger (EF InMemory has neither unique indexes nor ExecuteUpdate).</summary>
+    public string? PostgresConnection { get; init; }
+
     /// <summary>Replaces <see cref="IBackgroundJobClient"/>; tests count the jobs created.</summary>
     public Mock<IBackgroundJobClient> Jobs { get; } = new();
 
@@ -69,7 +72,7 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             foreach (var d in services.Where(d => d.ServiceType == typeof(DbContextOptions<ProcuLinkDbContext>)
                                                || d.ServiceType == typeof(ProcuLinkDbContext)).ToList())
                 services.Remove(d);
-            services.AddDbContext<ProcuLinkDbContext>(o => o.UseInMemoryDatabase(_dbName));
+            services.AddDbContext<ProcuLinkDbContext>(o => { if (PostgresConnection is null) o.UseInMemoryDatabase(_dbName); else o.UseNpgsql(PostgresConnection); });
 
             foreach (var d in services.Where(d => d.ServiceType.FullName?.StartsWith("Hangfire") == true).ToList())
                 services.Remove(d);
@@ -97,7 +100,8 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
                     o.DefaultAuthenticateScheme = RbacTestAuthHandler.SchemeName;
                     o.DefaultChallengeScheme = RbacTestAuthHandler.SchemeName;
                 })
-                .AddScheme<AuthenticationSchemeOptions, RbacTestAuthHandler>(RbacTestAuthHandler.SchemeName, _ => { });
+                .AddScheme<AuthenticationSchemeOptions, RbacTestAuthHandler>(RbacTestAuthHandler.SchemeName, _ => { })
+                .AddScheme<ProcuLink.Api.Auth.ApiKeyAuthOptions, ProcuLink.Api.Auth.ApiKeyAuthHandler>("ApiKey", _ => { });
         });
     }
 
@@ -122,6 +126,28 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
         client.DefaultRequestHeaders.Add(RbacTestAuthHandler.OrgHeader, ClerkId(org));
         client.DefaultRequestHeaders.Add(RbacTestAuthHandler.RoleHeader, "org:admin");
         client.DefaultRequestHeaders.Add(RbacTestAuthHandler.SubHeader, "user_DOC_TEST");
+        return client;
+    }
+
+    /// <summary>A client holding an org API key (the real ApiKey handler), as a customer's own system would.</summary>
+    public HttpClient ApiKeyClientFor(Guid org)
+    {
+        ClientFor(org).Dispose();
+        var raw = "plk_" + Guid.NewGuid().ToString("N");
+        using (var scope = Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.TenantApiKeys.Add(new TenantApiKey
+            {
+                Id = Guid.NewGuid(), OrganisationId = org, Label = "Test", KeyPrefix = raw[..8], IsActive = true,
+                KeyHash = ProcuLink.Core.Security.ApiKeyHasher.ComputeHash(raw, "test-api-key-hash-secret-not-a-real-one"),
+                CreatedAt = DateTime.UtcNow,
+            });
+            db.SaveChanges();
+        }
+
+        var client = CreateClient();
+        client.DefaultRequestHeaders.Add("X-ProcuLink-Key", raw);
         return client;
     }
 }
