@@ -136,7 +136,15 @@ public class FlowPickupJob(
         {
             if (claimed == MaxFilesPerRun) break;
             var claim = await IntakeLedger.ClaimAsync(db, intake.OrgId, intake.Id, file.Key, ct);
-            if (claim is null) continue;
+            if (claim is null)
+            {
+                // Already ingested (a document or a refusal): count it done so a mail's other files can finish it.
+                // A row with no document is in flight or a crashed claim, so it must not be marked.
+                if (await db.FlowIntakeItems.AnyAsync(i => i.OrgId == intake.OrgId && i.ScopeId == intake.Id
+                                                           && i.ItemKey == file.Key && i.DocumentId != null, ct))
+                    await Remote(async () => { await session.MarkDoneAsync(file, ct); return 0; });
+                continue;
+            }
             claimed++;
 
             // A transient download or submit exception leaves the claim; it is retaken after 30 minutes.

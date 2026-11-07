@@ -32,13 +32,14 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard) : IPickupSource
         var client = new ImapClient();
         try
         {
-            await client.ConnectAsync(host, port,
+            // The guard's pinned socket, so the host is not resolved a second time; the host name still drives TLS.
+            await client.ConnectAsync(await guard.OpenGuardedStreamAsync(host, port, ct), host, port,
                 config["useSsl"]!.GetValue<bool>() ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTlsWhenAvailable, ct);
             await client.AuthenticateAsync(config["username"]!.GetValue<string>(),
                 credentials.TryGetProperty("password", out var p) ? p.GetString() ?? "" : "", ct);
             var folder = await client.GetFolderAsync(config["folder"]!.GetValue<string>(), ct);
             await folder.OpenAsync(FolderAccess.ReadWrite, ct);
-            return new Session(client, folder, config["fromFilter"]?.GetValue<string>(), config["subjectFilter"]?.GetValue<string>());
+            return new Session(client, folder, folder.UidValidity, config["fromFilter"]?.GetValue<string>(), config["subjectFilter"]?.GetValue<string>());
         }
         catch
         {
@@ -59,7 +60,7 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard) : IPickupSource
         return Any(Terms(fromFilter), senders) && Any(Terms(subjectFilter), [subject ?? ""]);
     }
 
-    private sealed class Session(ImapClient client, IMailFolder folder, string? fromFilter, string? subjectFilter) : IPickupSession
+    private sealed class Session(ImapClient client, IMailFolder folder, uint uidValidity, string? fromFilter, string? subjectFilter) : IPickupSession
     {
         private readonly Dictionary<string, (UniqueId Uid, BodyPartBasic Part)> _parts = [];
         private readonly Dictionary<UniqueId, int> _open = [];
@@ -87,7 +88,8 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard) : IPickupSource
                 _open[m.UniqueId] = readable.Count;
                 foreach (var part in readable)
                 {
-                    var key = $"imap:{m.Envelope.MessageId ?? m.UniqueId.ToString()}#{part.PartSpecifier}";
+                    // The server's ids, not the sender's Message-ID: a sender can reuse that to suppress or swap a file.
+                    var key = $"imap:{uidValidity}:{m.UniqueId.Id}#{part.PartSpecifier}";
                     _parts[key] = (m.UniqueId, part);
                     files.Add(new PickupFile(key, part.FileName!, senders.FirstOrDefault()));
                 }
@@ -113,7 +115,8 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard) : IPickupSource
         public async Task<IReadOnlyList<string>> SettleAsync(CancellationToken ct)
         {
             foreach (var (uid, _) in _unreadable) await folder.AddFlagsAsync(uid, MessageFlags.Seen, silent: true, ct);
-            return _unreadable.Select(u => $"An email from {u.Sender} had no PDF, CSV or Excel file attached.").ToList();
+            // Only the latest, so one run's message stays one sentence however many such mails arrived.
+            return _unreadable.TakeLast(1).Select(u => $"An email from {u.Sender} had no PDF, CSV or Excel file attached.").ToList();
         }
 
         public void Dispose() => client.Dispose();

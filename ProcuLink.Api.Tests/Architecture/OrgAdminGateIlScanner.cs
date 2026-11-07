@@ -189,8 +189,8 @@ internal static class OrgAdminGateIlScanner
 
         new("FlowPickupJob.TestAsync",
             OnInterface<ProcuLink.Api.Jobs.FlowPickupJob>(nameof(ProcuLink.Api.Jobs.FlowPickupJob.TestAsync)),
-            "Opens a connection from our servers to a host the organisation named, with its saved credentials, "
-          + "and can record the SFTP host key that server will be trusted with from then on."),
+            "Opens a connection from our servers to a host the organisation named, with its saved credentials "
+          + "(an SFTP host key it learns is not saved by a test)."),
 
         new("new IntegrationSubscription / DbSet<IntegrationSubscription>.Add",
             CreatesIntegrationSubscription,

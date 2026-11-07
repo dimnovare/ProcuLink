@@ -109,6 +109,8 @@ public sealed class FlowPickupJobTests(PostgresContainerFixture postgres)
         docs.Should().ContainSingle().Which.Source.Should().Be("sftp");
         h.Session.Verify(s => s.DownloadAsync(It.Is<PickupFile>(f => f.FileName == "b.docx"), It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
         (await h.IntakeAsync()).LastMessage.Should().Be("No new files.");
+        // Run 1 marks it after taking it; run 2 marks it again because it was already ingested.
+        h.Session.Verify(s => s.MarkDoneAsync(It.Is<PickupFile>(f => f.FileName == "a.csv"), It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
     [DockerRequiredFact]
