@@ -30,10 +30,12 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard) : IPickupSource
         if (!guarded.Allowed) throw new InvalidOperationException(guarded.Reason);
 
         var client = new ImapClient();
+        Stream? stream = null;
         try
         {
             // The guard's pinned socket, so the host is not resolved a second time; the host name still drives TLS.
-            await client.ConnectAsync(await guard.OpenGuardedStreamAsync(host, port, ct), host, port,
+            stream = await guard.OpenGuardedStreamAsync(host, port, ct);
+            await client.ConnectAsync(stream, host, port,
                 config["useSsl"]!.GetValue<bool>() ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTlsWhenAvailable, ct);
             await client.AuthenticateAsync(config["username"]!.GetValue<string>(),
                 credentials.TryGetProperty("password", out var p) ? p.GetString() ?? "" : "", ct);
@@ -44,6 +46,7 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard) : IPickupSource
         catch
         {
             client.Dispose();
+            stream?.Dispose();
             throw;
         }
     }
