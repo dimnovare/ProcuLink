@@ -45,7 +45,7 @@ public sealed class FlowIntakeService(
     };
 
     /// <summary>Config keys that decide which server a saved password is sent to, and as whom.</summary>
-    private static readonly string[] WhereAndWho = ["host", "port", "username", "serviceUrl", "bucket", "region", "accessKeyId"];
+    private static readonly string[] WhereAndWho = ["host", "port", "useSsl", "username", "serviceUrl", "bucket", "region", "accessKeyId"];
 
     private static readonly Dictionary<string, string[]> Required = new()
     {

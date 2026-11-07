@@ -36,7 +36,8 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard) : IPickupSource
             // The guard's pinned socket, so the host is not resolved a second time; the host name still drives TLS.
             stream = await guard.OpenGuardedStreamAsync(host, port, ct);
             await client.ConnectAsync(stream, host, port,
-                config["useSsl"]!.GetValue<bool>() ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTlsWhenAvailable, ct);
+                // Never StartTlsWhenAvailable: a stripped STARTTLS would send the password in clear.
+                config["useSsl"]!.GetValue<bool>() ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls, ct);
             await client.AuthenticateAsync(config["username"]!.GetValue<string>(),
                 credentials.TryGetProperty("password", out var p) ? p.GetString() ?? "" : "", ct);
             var folder = await client.GetFolderAsync(config["folder"]!.GetValue<string>(), ct);
