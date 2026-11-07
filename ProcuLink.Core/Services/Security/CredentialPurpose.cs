@@ -49,6 +49,9 @@ public static class CredentialPurpose
     /// <summary>Scope id: FlowDestination.Id. Credentials for a document-flow destination.</summary>
     public const string FlowDestinationCredentials = "flow.destination.credentials";
 
+    /// <summary>Scope id: FlowIntake.Id. Password, key or secret for a flow pickup.</summary>
+    public const string FlowIntakeCredentials = "flow.intake.credentials";
+
     /// <summary>
     /// The purposes for which a version-1 (unbound, scope-inert) envelope may STILL be read.
     ///

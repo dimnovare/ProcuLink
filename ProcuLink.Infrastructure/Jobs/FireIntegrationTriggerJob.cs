@@ -163,10 +163,7 @@ public class FireIntegrationTriggerJob
                     $"Webhook signing secret for subscription {subscriptionId} could not be decrypted.", ex);
             }
 
-            var secretBytes = Encoding.UTF8.GetBytes(secret);
-            var dataBytes   = Encoding.UTF8.GetBytes(payloadJson);
-            using var hmac  = new HMACSHA256(secretBytes);
-            sigHeader = $"sha256={Convert.ToHexString(hmac.ComputeHash(dataBytes)).ToLowerInvariant()}";
+            sigHeader = WebhookSignature.Header(Encoding.UTF8.GetBytes(payloadJson), secret);
         }
 
         // ── SSRF guard — must pass before any outbound request ────────────────

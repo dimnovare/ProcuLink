@@ -169,10 +169,28 @@ internal static class OrgAdminGateIlScanner
             OnInterface<ProcuLink.Api.Services.Documents.FlowDestinationService>(nameof(ProcuLink.Api.Services.Documents.FlowDestinationService.DeleteAsync)),
             "Destroys a destination and its credentials; outputs cannot be sent to it afterwards."),
 
+        new("FlowIntakeService.SaveAsync",
+            OnInterface<ProcuLink.Api.Services.Documents.FlowIntakeService>(nameof(ProcuLink.Api.Services.Documents.FlowIntakeService.SaveAsync)),
+            "Writes where a flow pulls documents from, and the credentials used: it decides what enters an "
+          + "organisation's flow, and sets the webhook that receives its document events."),
+
+        new("FlowIntakeService.DeleteAsync",
+            OnInterface<ProcuLink.Api.Services.Documents.FlowIntakeService>(nameof(ProcuLink.Api.Services.Documents.FlowIntakeService.DeleteAsync)),
+            "Destroys a pickup or the webhook and its credentials; documents stop arriving from it."),
+
+        new("FlowIntakeService.NewAddressAsync",
+            OnInterface<ProcuLink.Api.Services.Documents.FlowIntakeService>(nameof(ProcuLink.Api.Services.Documents.FlowIntakeService.NewAddressAsync)),
+            "Revokes the flow's email address at once; mail to the old address is no longer accepted."),
+
         new("FlowDestinationService.TestAsync",
             OnInterface<ProcuLink.Api.Services.Documents.FlowDestinationService>(nameof(ProcuLink.Api.Services.Documents.FlowDestinationService.TestAsync)),
             "Sends a real message through the organisation's own channel to an external recipient, and "
           + "can record the host key that channel will trust from then on."),
+
+        new("FlowPickupJob.TestAsync",
+            OnInterface<ProcuLink.Api.Jobs.FlowPickupJob>(nameof(ProcuLink.Api.Jobs.FlowPickupJob.TestAsync)),
+            "Opens a connection from our servers to a host the organisation named, with its saved credentials "
+          + "(an SFTP host key it learns is not saved by a test)."),
 
         new("new IntegrationSubscription / DbSet<IntegrationSubscription>.Add",
             CreatesIntegrationSubscription,

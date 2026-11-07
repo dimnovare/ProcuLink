@@ -31,6 +31,9 @@ public static class InboundAddressKind
     /// </summary>
     public const string LegacySlug = "legacy_slug";
 
+    /// <summary>A per-flow address (<c>OrgInboundAddress.FlowId</c> is set).</summary>
+    public const string Flow = "flow";
+
     /// <summary>Every defined kind. Tests enumerate THIS rather than re-typing the strings.</summary>
-    public static readonly IReadOnlyList<string> All = [Primary, LegacySlug];
+    public static readonly IReadOnlyList<string> All = [Primary, LegacySlug, Flow];
 }

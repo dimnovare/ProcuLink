@@ -71,6 +71,9 @@ public class OrgInboundAddress
     /// </summary>
     public bool IsActive { get; set; } = true;
 
+    /// <summary>Set when the address belongs to one flow rather than the organisation.</summary>
+    public Guid? FlowId { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     /// <summary>
