@@ -20,7 +20,7 @@ public static class FlowWebhookEvent
 /// <summary>Tells a flow's webhook that a document was read or sent. One enqueue per transition; nothing when the flow has no webhook.</summary>
 public static class FlowWebhook
 {
-    public static async Task EnqueueAsync(ProcuLinkDbContext db, IBackgroundJobClient jobs, FlowDocument doc, string eventType, CancellationToken ct)
+    public static async Task EnqueueAsync(ProcuLinkDbContext db, IBackgroundJobClient jobs, FlowDocument doc, string eventType, ILogger logger, CancellationToken ct)
     {
         try
         {
@@ -30,12 +30,14 @@ public static class FlowWebhook
             var (orgId, documentId, eventId) = (doc.OrgId, doc.Id, Guid.NewGuid());
             jobs.Enqueue<FlowWebhookJob>(j => j.ExecuteAsync(orgId, documentId, eventType, eventId, CancellationToken.None));
         }
-        catch (Exception e) when (e is not OperationCanceledException)
+        catch (Exception e)
         {
             // The read or send is already saved. A missed announcement must not undo it or fail its job.
+            logger.LogWarning(e, "Could not queue the {EventType} webhook for document {DocumentId}.", eventType, doc.Id);
         }
     }
 
     public static string? UrlOf(FlowIntake? intake) =>
-        intake is null ? null : JsonNode.Parse(intake.ConfigJson)?["webhookUrl"]?.GetValue<string>();
+        intake is null ? null
+            : JsonNode.Parse(intake.ConfigJson)?["webhookUrl"] is JsonValue v && v.TryGetValue<string>(out var url) ? url : null;
 }

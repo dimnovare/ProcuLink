@@ -112,4 +112,35 @@ public sealed class FlowWebhookTests
         handler.Request.Headers.GetValues("X-ProcuLink-Event-Id").Single().Should().Be(eventId.ToString());
         JsonDocument.Parse(handler.Body).RootElement.GetProperty("document").GetProperty("id").GetGuid().Should().Be(doc.Id);
     }
+
+    [Fact]
+    public async Task A_secret_that_will_not_decrypt_sends_nothing()
+    {
+        var db = NewDb();
+        var enc = Encryption();
+        var intake = new FlowIntake
+        {
+            Id = Guid.NewGuid(), OrgId = Org, FlowId = Guid.NewGuid(), Kind = IntakeKind.Api,
+            ConfigJson = """{"webhookUrl":"https://hooks.example.test/in"}""",
+        };
+        // Bound to another intake, so it will not open for this one.
+        intake.EncryptedCredentials = enc.Encrypt("""{"webhookSecret":"s3cret"}""",
+            new CredentialScope(Org, CredentialPurpose.FlowIntakeCredentials, Guid.NewGuid()));
+        db.FlowIntakes.Add(intake);
+        var doc = new FlowDocument { Id = Guid.NewGuid(), OrgId = Org, FlowId = intake.FlowId, FileName = "a.csv", Status = DocumentStatus.NeedsReview };
+        db.FlowDocuments.Add(doc);
+        await db.SaveChangesAsync();
+
+        var handler = new CapturingHandler();
+        var factory = new Mock<IHttpClientFactory>();
+        factory.Setup(f => f.CreateClient("delivery")).Returns(() => new HttpClient(handler));
+        var guard = new OutboundRequestGuard(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["Delivery:AllowPrivateNetworkTargets"] = "true" }).Build(), NullLogger<OutboundRequestGuard>.Instance);
+        var job = new FlowWebhookJob(db, factory.Object, enc, guard, NullLogger<FlowWebhookJob>.Instance);
+
+        var act = () => job.ExecuteAsync(Org, doc.Id, "document.read", Guid.NewGuid(), CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        handler.Request.Should().BeNull();
+    }
 }

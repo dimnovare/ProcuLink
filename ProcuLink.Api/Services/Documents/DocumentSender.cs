@@ -25,7 +25,7 @@ public sealed record SendOutcome(string? Error, object? Detail, IReadOnlyList<Fl
 /// Renders a read document through every output of its flow, stores the artifacts, and writes one delivery per output:
 /// <c>stored</c> for download-only outputs, <c>queued</c> for those with a destination (delivered by <see cref="DeliverDocumentJob"/>).
 /// </summary>
-public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billing, IFileStorageService storage, IBackgroundJobClient jobs)
+public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billing, IFileStorageService storage, IBackgroundJobClient jobs, ILogger<DocumentSender> logger)
 {
     private sealed record Rendered(FlowOutput Output, byte[] Bytes, string ContentType, string Extension);
 
@@ -81,7 +81,7 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
         // The send is committed. An enqueue failure leaves the rows queued for the sweep; it must not undo the send.
         foreach (var d in queued) DeliverDocumentJob.Enqueue(jobs, d.Id, d.OrgId);
         // Sent here only when nothing is left to deliver; otherwise DeliverDocumentJob announces the end, so a send is announced once.
-        if (doc.Status == DocumentStatus.Sent) await FlowWebhook.EnqueueAsync(db, jobs, doc, FlowWebhookEvent.Sent, ct);
+        if (doc.Status == DocumentStatus.Sent) await FlowWebhook.EnqueueAsync(db, jobs, doc, FlowWebhookEvent.Sent, logger, CancellationToken.None);
         return outcome;
     }
 
