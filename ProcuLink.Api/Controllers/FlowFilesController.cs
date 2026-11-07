@@ -31,6 +31,9 @@ public sealed class FlowFilesController(
     {
         var orgId = tenant.OrganisationId;
         if (!gate.IsEnabled(orgId)) return StatusCode(403, new { error = "document_engine_not_enabled" });
+        // Ownership first: the ledger's unique index has no OrgId, so claiming on another org's flow would collide with its keys.
+        var flowName = await db.Flows.Where(f => f.OrgId == orgId && f.Id == flowId).Select(f => f.Name).FirstOrDefaultAsync(ct);
+        if (flowName is null) return NotFound(new { error = "flow_not_found" });
         var key = string.IsNullOrWhiteSpace(idempotencyKey) ? null : idempotencyKey;
         if (key is { Length: > MaxKeyLength }) return BadRequest(new { error = "invalid_idempotency_key" });
 
@@ -45,10 +48,11 @@ public sealed class FlowFilesController(
                     .FirstOrDefaultAsync(i => i.OrgId == orgId && i.ScopeId == flowId && i.ItemKey == itemKey, ct);
                 if (taken?.DocumentId is not { } id || id == IntakeLedger.Refused)
                     return Conflict(new { error = "request_in_progress" });
-                var original = await db.FlowDocuments.AsNoTracking().Include(d => d.Flow)
-                    .FirstAsync(d => d.OrgId == orgId && d.Id == id, ct);
+                var original = await db.FlowDocuments.AsNoTracking()
+                    .FirstOrDefaultAsync(d => d.OrgId == orgId && d.Id == id, ct);
+                if (original is null) return NotFound(new { error = "document_not_found" });
                 Response.Headers["Idempotent-Replay"] = "true";
-                return Ok(DocumentSummaryDto.From(original, original.Flow!.Name));
+                return Ok(DocumentSummaryDto.From(original, flowName));
             }
         }
 
@@ -61,8 +65,6 @@ public sealed class FlowFilesController(
                 .ExecuteUpdateAsync(s => s.SetProperty(i => i.DocumentId, result.Document.Id), ct);
         }
 
-        var flowName = result.Document is null ? ""
-            : await db.Flows.Where(f => f.OrgId == orgId && f.Id == flowId).Select(f => f.Name).FirstAsync(ct);
         return IntakeResults.From(this, result, flowName);
     }
 

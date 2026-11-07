@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Tests.Integration;
 using ProcuLink.Core.Documents;
@@ -70,5 +72,9 @@ public sealed class FlowFilesApiTests(PostgresContainerFixture postgres) : IAsyn
         var a = await first.Content.ReadFromJsonAsync<DocumentSummaryDto>(DocumentJson.Options);
         var b = await second.Content.ReadFromJsonAsync<DocumentSummaryDto>(DocumentJson.Options);
         Assert.Equal(a!.Id, b!.Id);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLink.Infrastructure.ProcuLinkDbContext>();
+        Assert.Equal(1, db.FlowDocuments.IgnoreQueryFilters().Count(d => d.FlowId == flowId));
     }
 }
