@@ -240,6 +240,9 @@ public sealed class OutboundRequestGuard
         SocketsHttpConnectionContext context, CancellationToken ct)
         => GuardedConnectCoreAsync(context.DnsEndPoint.Host, context.DnsEndPoint.Port, ct);
 
+    /// <summary>A connected stream to <paramref name="host"/>:<paramref name="port"/> over the validated, pinned address; for non-HTTP clients (IMAP).</summary>
+    public ValueTask<Stream> OpenGuardedStreamAsync(string host, int port, CancellationToken ct) => GuardedConnectCoreAsync(host, port, ct);
+
     /// <summary>
     /// Re-resolves <paramref name="host"/> and validates the resolved IPs at connect time, then
     /// opens a TCP connection to the first allowed address (pinning the validated IP so the socket

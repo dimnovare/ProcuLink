@@ -37,6 +37,9 @@ public interface ISftpClientFactory
         string host, int port, string username, string password, SshHostKeyVerifier verifier);
 }
 
+/// <summary>A plain remote file: its full path, size in bytes and last write time.</summary>
+public sealed record RemoteFile(string Path, long Size, DateTime ModifiedUtc);
+
 /// <summary>
 /// Represents an active SFTP session. Dispose to close the connection.
 /// </summary>
@@ -47,6 +50,12 @@ public interface ISftpSession : IDisposable
     /// Does not recurse into sub-directories.
     /// </summary>
     IEnumerable<string> ListFileNames(string remoteDirectory);
+
+    /// <summary>
+    /// <see cref="ListFileNames"/> with each file's size and last write time, so a rewritten file reads as new.
+    /// Only the flow pickup lists this way; the default throws rather than invent a size or a time.
+    /// </summary>
+    IEnumerable<RemoteFile> ListFiles(string remoteDirectory) => throw new NotSupportedException();
 
     /// <summary>
     /// Download the file at <paramref name="remotePath"/> into a new <see cref="MemoryStream"/>

@@ -25,6 +25,11 @@ public class FlowDocument
     public string ReadJson { get; set; } = "{}";
     public string ChecksJson { get; set; } = "[]";
 
+    /// <summary><c>upload</c> or an <c>IntakeKind</c>.</summary>
+    public string Source { get; set; } = "upload";
+    /// <summary>Sender address, remote path, object key or idempotency key.</summary>
+    public string? SourceRef { get; set; }
+
     public string? DedupKey { get; set; }
     public bool IsSample { get; set; }
 

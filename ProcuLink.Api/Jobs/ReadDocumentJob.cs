@@ -143,6 +143,8 @@ public class ReadDocumentJob(
         });
         await db.SaveChangesAsync(ct);
         SendDocumentJob.EnqueueIfAutomatic(jobs, doc, flow);
+        // Committed: a shutdown must not skip the announcement or throw.
+        await FlowWebhook.EnqueueAsync(db, jobs, doc, FlowWebhookEvent.Read, logger, CancellationToken.None);
     }
 
     private async Task FailAsync(FlowDocument doc, string reason, CancellationToken ct)
@@ -152,6 +154,7 @@ public class ReadDocumentJob(
         doc.UpdatedAt = DateTime.UtcNow;
         AddAudit(doc, "document.read_failed", new { reason });
         await db.SaveChangesAsync(ct);
+        await FlowWebhook.EnqueueAsync(db, jobs, doc, FlowWebhookEvent.ReadFailed, logger, CancellationToken.None);
     }
 
     private void AddAudit(FlowDocument doc, string action, object payload) =>

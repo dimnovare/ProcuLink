@@ -37,7 +37,8 @@ public enum InboundAddressLookupStatus
 public readonly record struct InboundAddressLookup(
     InboundAddressLookupStatus Status,
     Guid? OrgId,
-    Guid? AddressId)
+    Guid? AddressId,
+    Guid? FlowId = null)
 {
     public static InboundAddressLookup Found(Guid orgId, Guid addressId) =>
         new(InboundAddressLookupStatus.Resolved, orgId, addressId);
@@ -92,6 +93,12 @@ public interface IInboundAddressService
 
     /// <summary>Mints a new high-entropy primary address for an organisation.</summary>
     Task<MintedInboundAddress> MintPrimaryAsync(Guid orgId, string label, CancellationToken ct);
+
+    /// <summary>
+    /// Mints an address that belongs to one flow (kind <c>flow</c>). Revokes nothing; the caller
+    /// decides what the new address replaces.
+    /// </summary>
+    Task<MintedInboundAddress> MintForFlowAsync(Guid orgId, Guid flowId, CancellationToken ct);
 
     /// <summary>
     /// Mints a primary address only if the organisation has no live one. Lets an organisation

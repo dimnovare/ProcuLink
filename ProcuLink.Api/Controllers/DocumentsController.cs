@@ -22,15 +22,13 @@ namespace ProcuLink.Api.Controllers;
 [Route("api/documents")]
 public sealed class DocumentsController(
     ProcuLinkDbContext db, ICurrentTenantService tenant, DocumentEngineGate gate,
-    IBillingService billing, DocumentIntakeService intake, DocumentRechecker rechecker,
+    IFlowDocumentSubmitter submitter, DocumentRechecker rechecker,
     DocumentSender sender, IFileStorageService storage, IBackgroundJobClient jobs, ILogger<DocumentsController> logger) : ControllerBase
 {
     private IActionResult? Refuse() =>
         gate.IsEnabled(tenant.OrganisationId) ? null : StatusCode(403, new { error = "document_engine_not_enabled" });
 
-    private static DocumentSummaryDto ToSummary(FlowDocument d, string flowName) =>
-        new(d.Id, d.FlowId, flowName, d.FileName, d.Status, d.StatusReason, d.PageCount, d.BillingUnits,
-            DocumentJson.Deserialize<List<DocumentCheck>>(d.ChecksJson).Count, d.CreatedAt);
+    private static DocumentSummaryDto ToSummary(FlowDocument d, string flowName) => DocumentSummaryDto.From(d, flowName);
 
     [HttpPost("~/api/flows/{flowId:guid}/documents")]
     [Consumes("multipart/form-data")]
@@ -39,38 +37,15 @@ public sealed class DocumentsController(
     [RequestSizeLimit(IngressLimits.MaxFileBytes + 1024 * 1024)]
     public async Task<IActionResult> Upload(Guid flowId, IFormFile file, CancellationToken ct)
     {
-        if (Refuse() is { } refused) return refused;
+        await using var stream = file.OpenReadStream();
         var orgId = tenant.OrganisationId;
-        var flow = await db.Flows.FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == flowId, ct);
-        if (flow is null) return NotFound(new { error = "flow_not_found" });
-
-        var limit = await billing.CheckOrderLimitAsync(orgId, ct);
-        if (!limit.Allowed)
-            return StatusCode(429, new
-            {
-                error = limit.PilotExpired ? "pilot_expired" : "order_limit_reached",
-                plan = limit.Plan, limit = limit.Limit, upgradeUrl = "/settings",
-            });
-
-        try
-        {
-            await using var stream = file.OpenReadStream();
-            var doc = await intake.AcceptAsync(orgId, flowId, stream, file.FileName, file.ContentType, ct);
-            return Created($"/api/documents/{doc.Id}", ToSummary(doc, flow.Name));
-        }
-        catch (DocumentRejectedException e)
-        {
-            return e.Code switch
-            {
-                "unsupported_format" => StatusCode(415, new { error = e.Code, accepted = DocumentIntakeService.AcceptedFormats }),
-                "file_too_large" => StatusCode(413, new { error = e.Code }),
-                "unreadable_file" => StatusCode(422, new { error = e.Code }),
-                _ => throw e,
-            };
-        }
+        var result = await submitter.SubmitAsync(orgId, flowId, stream, file.FileName, file.ContentType, "upload", null, ct);
+        var flowName = result.Document is null ? ""
+            : await db.Flows.Where(f => f.OrgId == orgId && f.Id == flowId).Select(f => f.Name).FirstAsync(ct);
+        return IntakeResults.From(this, result, flowName);
     }
 
-    private static DocumentDto ToDto(FlowDocument d, string flowName) =>
+    internal static DocumentDto ToDto(FlowDocument d, string flowName) =>
         new(ToSummary(d, flowName), d.ContentType, DocumentJson.Deserialize<ReadResult>(d.ReadJson),
             DocumentJson.Deserialize<List<DocumentCheck>>(d.ChecksJson));
 
@@ -264,7 +239,7 @@ public sealed class DocumentsController(
         };
     }
 
-    private static object ToDeliveryDto(FlowDelivery d) =>
+    internal static object ToDeliveryDto(FlowDelivery d) =>
         new { d.Id, d.OutputName, d.Protocol, d.Status, d.Attempts, d.LastError, d.FileName, d.DeliveredAt };
 
     [HttpGet("{id:guid}/deliveries")]

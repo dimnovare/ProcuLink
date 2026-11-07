@@ -111,6 +111,16 @@ public sealed class EndpointReachabilityGuardTests
             + "posts to it, and a frontend caller would be the bug. Its sibling POST "
             + "/api/ingress/{slug}/orders needs no entry: scripts/live-matrix/ingest-harness.mjs:97 "
             + "really calls it."),
+        new("POST /api/v1/flows/{}/documents",
+            "2026-11-07 — machine-to-machine file API. ProcuLink.Api/Controllers/FlowFilesController.cs carries "
+            + "[Authorize(AuthenticationSchemes = \"ApiKey\")], not Clerk: the customer's own system "
+            + "calls it with an org API key to post a file into a flow, and the browser never posts to "
+            + "it, so a frontend caller would be the bug. Permanent entry."),
+        new("GET /api/v1/documents/{}",
+            "2026-11-07 — machine-to-machine result fetch. ProcuLink.Api/Controllers/FlowFilesController.cs carries "
+            + "[Authorize(AuthenticationSchemes = \"ApiKey\")], not Clerk: after posting a file the "
+            + "customer's own system fetches the result by id with an org API key, and no browser "
+            + "screen calls it, so a frontend caller would be the bug. Permanent entry."),
         new("GET /api/ingress/{}/ping",
             "2026-08-13 — the reachability probe a customer runs while wiring the ingress API up, "
             + "documented for them at "
@@ -319,7 +329,9 @@ public sealed class EndpointReachabilityGuardTests
         MachineFacing.Concat(UncalledPendingDecision).ToDictionary(e => e.Key, e => e, StringComparer.Ordinal);
 
     /// <summary>
-    /// The union as landed, 2026-08-15 (was 2026-08-13; moved once, for the entry named below). <b>SHRINK-ONLY.</b> An entry may be deleted — when the
+    /// The union as landed, 2026-08-15 (was 2026-08-13). Moved three times, each deliberately and in the open, and each
+    /// marked at its entries with the date and the caller: 2026-08-15 (the Postmark bounce webhook), 2026-08-20 (the
+    /// support PO-number lookup) and 2026-11-07 (plan 4's file API, two routes). <b>SHRINK-ONLY.</b> An entry may be deleted — when the
     /// endpoint gains a caller, or is removed — but nothing may ever be added: a NEW caller-less
     /// endpoint has to be fixed, not excused.
     ///
@@ -344,6 +356,11 @@ public sealed class EndpointReachabilityGuardTests
             "GET /api/billing/ai-usage",
             "GET /api/dev/files/{**}",
             "GET /api/ingress/{}/ping",
+            // Moved into the baseline on 2026-11-07, deliberately and in the open: the file API is a
+            // machine-facing ingress (ProcuLink.Api/Controllers/FlowFilesController.cs) whose only caller is the
+            // customer's own system, with an org API key.
+            "GET /api/v1/documents/{}",
+            "POST /api/v1/flows/{}/documents",
             // Moved into the baseline on 2026-08-15, deliberately and in the open, exactly as the
             // failure text asks: the Postmark bounce webhook is caller-less BY CONSTRUCTION — the
             // caller is the mail provider. It is the second provider webhook here, beside Stripe's.

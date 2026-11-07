@@ -185,6 +185,21 @@ builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.DocumentEngineGat
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentRechecker>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentSender>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentIntakeService>();
+builder.Services.AddScoped<ProcuLink.Core.Documents.IFlowDocumentSubmitter>(sp => sp.GetRequiredService<ProcuLink.Api.Services.Documents.DocumentIntakeService>());
+
+// -- Flow intake pickups: SFTP / FTP / FTPS (more kinds register here) --
+builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSource, ProcuLink.Api.Services.Documents.Intake.SftpPickupSource>();
+builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSource>(sp => new ProcuLink.Api.Services.Documents.Intake.FtpPickupSource(
+    ProcuLink.Core.Documents.IntakeKind.Ftp, sp.GetRequiredService<ProcuLink.Infrastructure.Services.Ingress.IFtpFetchClientFactory>(), sp.GetRequiredService<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>()));
+builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSource>(sp => new ProcuLink.Api.Services.Documents.Intake.FtpPickupSource(
+    ProcuLink.Core.Documents.IntakeKind.Ftps, sp.GetRequiredService<ProcuLink.Infrastructure.Services.Ingress.IFtpFetchClientFactory>(), sp.GetRequiredService<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>()));
+builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSource>(sp => new ProcuLink.Api.Services.Documents.Intake.S3PickupSource(
+    sp.GetRequiredService<IAmazonS3ClientFactory>(), sp.GetRequiredService<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>()));
+builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSource>(sp => new ProcuLink.Api.Services.Documents.Intake.ImapPickupSource(
+    sp.GetRequiredService<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>()));
+builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowPickupJob>();
+builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowWebhookJob>();
+builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowPickupDispatchJob>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.FlowDestinationService>();
 builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
 builder.Services.AddScoped<IOrderService, OrderService>();

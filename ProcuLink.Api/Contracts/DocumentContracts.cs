@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ProcuLink.Core.Documents;
+using ProcuLink.Core.Entities;
 
 namespace ProcuLink.Api.Contracts;
 
@@ -11,9 +12,18 @@ public record RenameFlowRequest(string? Name = null, string? Automation = null);
 
 public record DocumentSummaryDto(
     Guid Id, Guid FlowId, string FlowName, string FileName, string Status, string? StatusReason,
-    int? PageCount, int BillingUnits, int FailedChecks, DateTime CreatedAt);
+    int? PageCount, int BillingUnits, int FailedChecks, DateTime CreatedAt,
+    string Source = "upload", string? SourceRef = null)
+{
+    public static DocumentSummaryDto From(FlowDocument d, string flowName) =>
+        new(d.Id, d.FlowId, flowName, d.FileName, d.Status, d.StatusReason, d.PageCount, d.BillingUnits,
+            DocumentJson.Deserialize<List<DocumentCheck>>(d.ChecksJson).Count, d.CreatedAt, d.Source, d.SourceRef);
+}
 
 public record DocumentDto(DocumentSummaryDto Summary, string ContentType, ReadResult Read, IReadOnlyList<DocumentCheck> Checks);
+
+/// <summary>What the file API returns for a document: the read result and the sends made from it.</summary>
+public record FlowFileResultDto(DocumentDto Document, IReadOnlyList<object> Deliveries);
 
 public record FieldEdit(string Key, string? Value);
 

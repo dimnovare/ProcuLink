@@ -79,6 +79,15 @@ public sealed class FluentFtpFetchClientFactory : IFtpFetchClientFactory
             return await BoundedRead.CopyAsync(remote, maxBytes, ct).ConfigureAwait(false);
         }
 
+        public async Task<IReadOnlyList<RemoteFile>> ListFilesAsync(string directory, CancellationToken ct)
+        {
+            if (!_client.IsConnected)
+                await _client.Connect(ct).ConfigureAwait(false);
+
+            var items = await _client.GetListing(directory, ct).ConfigureAwait(false);
+            return items.Where(i => i.Type == FtpObjectType.File).Select(i => new RemoteFile(i.FullName, i.Size, i.Modified)).ToList();
+        }
+
         public void Dispose() => _client.Dispose();
     }
 }

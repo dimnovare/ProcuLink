@@ -186,7 +186,7 @@ public sealed class SettingsController : ControllerBase
             r.LastUsedAt)).ToList());
     }
 
-    private static string ComposeAddress(string token, string? inboundDomain, string? hostSuffix) =>
+    internal static string ComposeAddress(string token, string? inboundDomain, string? hostSuffix) =>
         !string.IsNullOrWhiteSpace(inboundDomain)
             ? $"{token}@{inboundDomain}"
             : $"orders@{token}{(string.IsNullOrWhiteSpace(hostSuffix) ? ".proculink.eu" : hostSuffix)}";
