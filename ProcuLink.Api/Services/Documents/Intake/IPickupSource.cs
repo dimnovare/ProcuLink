@@ -26,4 +26,7 @@ public interface IPickupSession : IDisposable
 
     /// <summary>Does nothing except on IMAP, which marks the message seen.</summary>
     Task MarkDoneAsync(PickupFile file, CancellationToken ct);
+
+    /// <summary>Called once after a real run. IMAP marks matching messages with nothing readable seen and returns a note for each; nothing else has any.</summary>
+    Task<IReadOnlyList<string>> SettleAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>([]);
 }

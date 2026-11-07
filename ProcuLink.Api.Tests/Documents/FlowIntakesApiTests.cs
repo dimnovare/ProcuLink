@@ -3,6 +3,8 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
+using ProcuLink.Api.Services.Documents.Intake;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Tests.Integration;
 using ProcuLink.Core.Documents;
@@ -119,5 +121,40 @@ public class FlowIntakesApiTests(DocumentEngineTestFactory factory) : IClassFixt
         var denied = await member.PostAsJsonAsync(url, new { kind = "api", config = new { } });
         denied.StatusCode.Should().Be(HttpStatusCode.Forbidden);
         (await denied.Content.ReadAsStringAsync()).Should().Contain("requires_org_admin");
+    }
+
+    [Fact]
+    public async Task Test_connection_lists_without_claiming()
+    {
+        var (http, flowId) = await NewFlow();
+        var url = $"/api/flows/{flowId}/intakes";
+        var created = await Body(await http.PostAsJsonAsync(url, new
+        {
+            kind = "sftp", config = new { host = "sftp.example.test", username = "u" }, credentials = new { password = "pw" },
+        }));
+        var id = created.GetProperty("id").GetGuid();
+        factory.Pickup.Setup(s => s.OpenAsync(It.IsAny<FlowIntake>(), It.IsAny<JsonElement>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(factory.PickupSession.Object);
+        factory.PickupSession.Setup(s => s.ListAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new[]
+        {
+            new PickupFile("path:/in/a.csv", "a.csv", "/in/a.csv"), new PickupFile("path:/in/b.pdf", "b.pdf", "/in/b.pdf"),
+            new PickupFile("path:/in/c.docx", "c.docx", "/in/c.docx"),
+        });
+
+        var ok = await Body(await http.PostAsync($"{url}/{id}/test", null));
+        ok.GetProperty("success").GetBoolean().Should().BeTrue();
+        ok.GetProperty("message").GetString().Should().Contain("2 file(s) waiting");
+        factory.PickupSession.Verify(s => s.DownloadAsync(It.IsAny<PickupFile>(), It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+        using (var scope = factory.Services.CreateScope())
+            scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().FlowIntakeItems.Count(i => i.ScopeId == id).Should().Be(0);
+
+        factory.Pickup.Setup(s => s.OpenAsync(It.IsAny<FlowIntake>(), It.IsAny<JsonElement>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new IOException("Connection refused"));
+        var failed = await Body(await http.PostAsync($"{url}/{id}/test", null));
+        failed.GetProperty("success").GetBoolean().Should().BeFalse();
+        failed.GetProperty("message").GetString().Should().Be("Couldn't connect to sftp.example.test: Connection refused");
+
+        var email = (await Body(await http.GetAsync(url))).EnumerateArray().Single(i => i.GetProperty("kind").GetString() == "email").GetProperty("id").GetGuid();
+        (await http.PostAsync($"{url}/{email}/test", null)).StatusCode.Should().Be((HttpStatusCode)422);
     }
 }

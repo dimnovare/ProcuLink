@@ -682,6 +682,10 @@ builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSou
     ProcuLink.Core.Documents.IntakeKind.Ftp, sp.GetRequiredService<ProcuLink.Infrastructure.Services.Ingress.IFtpFetchClientFactory>(), sp.GetRequiredService<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>()));
 builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSource>(sp => new ProcuLink.Api.Services.Documents.Intake.FtpPickupSource(
     ProcuLink.Core.Documents.IntakeKind.Ftps, sp.GetRequiredService<ProcuLink.Infrastructure.Services.Ingress.IFtpFetchClientFactory>(), sp.GetRequiredService<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>()));
+builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSource>(sp => new ProcuLink.Api.Services.Documents.Intake.S3PickupSource(
+    sp.GetRequiredService<IAmazonS3ClientFactory>(), sp.GetRequiredService<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>()));
+builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSource>(sp => new ProcuLink.Api.Services.Documents.Intake.ImapPickupSource(
+    sp.GetRequiredService<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>()));
 builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowPickupJob>();
 builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowPickupDispatchJob>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.FlowDestinationService>();

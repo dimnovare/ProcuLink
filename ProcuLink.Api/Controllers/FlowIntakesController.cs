@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Auth;
+using ProcuLink.Api.Jobs;
 using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
@@ -86,6 +87,27 @@ public sealed class FlowIntakesController(
         catch (IntakeException ex)
         {
             return Rejected(ex);
+        }
+    }
+
+    /// <summary>Opens the server, bucket or mailbox and counts the files waiting. Never claims or downloads.</summary>
+    [HttpPost("{id:guid}/test")]
+    [RequireOrgAdmin]
+    public async Task<IActionResult> Test(Guid flowId, Guid id, [FromServices] FlowPickupJob pickup, CancellationToken ct)
+    {
+        if (await Check(flowId, ct) is { } refused) return refused;
+        try
+        {
+            var (success, message) = await pickup.TestAsync(tenant.OrganisationId, flowId, id, ct);
+            return Ok(new { success, message, responseCode = (int?)null });
+        }
+        catch (IntakeException ex)
+        {
+            return Rejected(ex);
+        }
+        catch (KeyNotFoundException)
+        {
+            return IntakeNotFound();
         }
     }
 

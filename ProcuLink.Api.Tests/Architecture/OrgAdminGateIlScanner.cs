@@ -187,6 +187,11 @@ internal static class OrgAdminGateIlScanner
             "Sends a real message through the organisation's own channel to an external recipient, and "
           + "can record the host key that channel will trust from then on."),
 
+        new("FlowPickupJob.TestAsync",
+            OnInterface<ProcuLink.Api.Jobs.FlowPickupJob>(nameof(ProcuLink.Api.Jobs.FlowPickupJob.TestAsync)),
+            "Opens a connection from our servers to a host the organisation named, with its saved credentials, "
+          + "and can record the SFTP host key that server will be trusted with from then on."),
+
         new("new IntegrationSubscription / DbSet<IntegrationSubscription>.Add",
             CreatesIntegrationSubscription,
             "Stands up an outbound subscription that ships the payload of every matching order to "

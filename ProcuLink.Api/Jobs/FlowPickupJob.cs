@@ -26,7 +26,7 @@ public class FlowPickupJob(
     IFlowDocumentSubmitter submitter, DocumentEngineGate gate, IBillingService billing, ILogger<FlowPickupJob> logger)
 {
     public const int MaxFilesPerRun = 50;
-    private static readonly string[] Extensions = [".pdf", ".csv", ".xlsx"];
+    internal static readonly string[] Extensions = [".pdf", ".csv", ".xlsx"];
 
     [Queue("polling")]
     [AutomaticRetry(Attempts = 0)]
@@ -54,21 +54,59 @@ public class FlowPickupJob(
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogWarning(ex, "Pickup failed for intake {IntakeId}", intakeId);
-            var host = JsonNode.Parse(intake.ConfigJson)?["host"]?.GetValue<string>();
-            var reason = ex.InnerException?.Message ?? "";
-            Finish(intake, "failed", ex switch
-            {
-                SshHostKeyRejectedException =>
-                    $"Couldn't connect to {host}: the server's identity changed. Check with the server's owner, then clear the saved fingerprint.",
-                RemoteFailure => $"Couldn't connect to {host}: {(reason.Length > 200 ? reason[..200] : reason)}",
-                _ => "Couldn't pick up files. The next try is in 5 minutes.",
-            });
+            Finish(intake, "failed", ConnectionMessage(ex, intake) ?? "Couldn't pick up files. The next try is in 5 minutes.");
         }
         finally
         {
             intake.LastRunAt = DateTime.UtcNow;
             await db.SaveChangesAsync(CancellationToken.None);
         }
+    }
+
+    /// <summary>The user-facing copy for a failure on the remote side, or null for anything else.</summary>
+    private static string? ConnectionMessage(Exception ex, FlowIntake intake)
+    {
+        if (ex is not (SshHostKeyRejectedException or RemoteFailure)) return null;
+        var config = JsonNode.Parse(intake.ConfigJson);
+        var serviceUrl = config?["serviceUrl"]?.GetValue<string>();
+        var host = config?["host"]?.GetValue<string>()
+                   ?? (Uri.TryCreate(serviceUrl, UriKind.Absolute, out var uri) ? uri.Host : config?["bucket"]?.GetValue<string>());
+        if (ex is SshHostKeyRejectedException)
+            return $"Couldn't connect to {host}: the server's identity changed. Check with the server's owner, then clear the saved fingerprint.";
+        var reason = ex.InnerException?.Message ?? "";
+        return $"Couldn't connect to {host}: {(reason.Length > 200 ? reason[..200] : reason)}";
+    }
+
+    /// <summary>A manual "Test connection": opens and lists, never claims or downloads. A non-remote failure is not caught.</summary>
+    public async Task<(bool Success, string Message)> TestAsync(Guid organisationId, Guid flowId, Guid intakeId, CancellationToken ct)
+    {
+        var intake = await db.FlowIntakes.FirstOrDefaultAsync(
+            i => i.OrgId == organisationId && i.FlowId == flowId && i.Id == intakeId, ct) ?? throw new KeyNotFoundException();
+        var source = sources.FirstOrDefault(s => s.Kind == intake.Kind)
+                     ?? throw new IntakeException("invalid_intake", "Only folder, bucket and mailbox intakes can be tested.");
+        try
+        {
+            using var session = await OpenAsync(intake, source, ct);
+            var keys = (await Remote(() => session.ListAsync(ct))).Where(IsReadable).Select(f => f.Key).ToList();
+            var known = await db.FlowIntakeItems.CountAsync(
+                i => i.OrgId == organisationId && i.ScopeId == intake.Id && keys.Contains(i.ItemKey), ct);
+            return (true, $"Connected. {keys.Count - known} file(s) waiting.");
+        }
+        catch (Exception ex) when (ConnectionMessage(ex, intake) is { } message)
+        {
+            return (false, message);
+        }
+    }
+
+    private static bool IsReadable(PickupFile f) => Extensions.Contains(Path.GetExtension(f.FileName), StringComparer.OrdinalIgnoreCase);
+
+    private async Task<IPickupSession> OpenAsync(FlowIntake intake, IPickupSource source, CancellationToken ct)
+    {
+        using var credentials = JsonDocument.Parse(intake.EncryptedCredentials is null
+            ? "{}"
+            : encryption.Decrypt(intake.EncryptedCredentials,
+                new CredentialScope(intake.OrgId, CredentialPurpose.FlowIntakeCredentials, intake.Id)));
+        return await Remote(() => source.OpenAsync(intake, credentials.RootElement, ct));
     }
 
     /// <summary>A failure on the remote side (connect, list, download, mark done); only these read as "couldn't connect".</summary>
@@ -91,14 +129,10 @@ public class FlowPickupJob(
 
     private async Task<(string Status, string Message)> PickUpAsync(FlowIntake intake, IPickupSource source, CancellationToken ct)
     {
-        using var credentials = JsonDocument.Parse(intake.EncryptedCredentials is null
-            ? "{}"
-            : encryption.Decrypt(intake.EncryptedCredentials,
-                new CredentialScope(intake.OrgId, CredentialPurpose.FlowIntakeCredentials, intake.Id)));
-        using var session = await Remote(() => source.OpenAsync(intake, credentials.RootElement, ct));
+        using var session = await OpenAsync(intake, source, ct);
 
         int taken = 0, skipped = 0, claimed = 0;
-        foreach (var file in (await Remote(() => session.ListAsync(ct))).Where(f => Extensions.Contains(Path.GetExtension(f.FileName), StringComparer.OrdinalIgnoreCase)))
+        foreach (var file in (await Remote(() => session.ListAsync(ct))).Where(IsReadable))
         {
             if (claimed == MaxFilesPerRun) break;
             var claim = await IntakeLedger.ClaimAsync(db, intake.OrgId, intake.Id, file.Key, ct);
@@ -138,8 +172,10 @@ public class FlowPickupJob(
             await Remote(async () => { await session.MarkDoneAsync(file, ct); return 0; });
         }
 
-        var message = taken == 0 ? "No new files." : $"Picked up {taken} new file(s).";
+        var notes = await Remote(() => session.SettleAsync(ct)) ?? [];
+        var message = taken > 0 ? $"Picked up {taken} new file(s)." : notes.Count > 0 ? "" : "No new files.";
         if (skipped > 0) message += $" Skipped {skipped} file(s) over {IngressLimits.MaxFileBytes / (1024 * 1024)} MB.";
+        message = string.Join(" ", new[] { message }.Concat(notes).Where(m => m.Length > 0)).Trim();
         return ("ok", message);
     }
 

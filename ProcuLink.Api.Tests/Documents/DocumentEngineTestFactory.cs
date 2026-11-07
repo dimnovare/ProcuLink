@@ -37,6 +37,11 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
     /// <summary>Replaces <see cref="IBackgroundJobClient"/>; tests count the jobs created.</summary>
     public Mock<IBackgroundJobClient> Jobs { get; } = new();
 
+    /// <summary>The only <see cref="ProcuLink.Api.Services.Documents.Intake.IPickupSource"/> (kind sftp) in this host.</summary>
+    public Mock<ProcuLink.Api.Services.Documents.Intake.IPickupSource> Pickup { get; } = new();
+
+    public Mock<ProcuLink.Api.Services.Documents.Intake.IPickupSession> PickupSession { get; } = new();
+
     public int Enqueued<T>() =>
         Jobs.Invocations.Count(i => i.Method.Name == nameof(IBackgroundJobClient.Create)
                                     && ((Job)i.Arguments[0]).Type == typeof(T));
@@ -77,6 +82,10 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             Storage.Setup(s => s.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync((Stream _, string key, string _, CancellationToken _) => key);
             Jobs.Setup(j => j.Create(It.IsAny<Job>(), It.IsAny<IState>())).Returns("job-1");
+            Pickup.SetupGet(p => p.Kind).Returns(ProcuLink.Core.Documents.IntakeKind.Sftp);
+            foreach (var d in services.Where(d => d.ServiceType == typeof(ProcuLink.Api.Services.Documents.Intake.IPickupSource)).ToList())
+                services.Remove(d);
+            services.AddSingleton(Pickup.Object);
             services.AddSingleton(Storage.Object);
             services.AddSingleton(Jobs.Object);
 
