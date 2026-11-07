@@ -74,10 +74,20 @@ public class FlowIntakesApiTests(DocumentEngineTestFactory factory) : IClassFixt
         var before = Saved();
         var put = await http.PutAsJsonAsync($"{url}/{id}", new
         {
-            kind = "sftp", config = new { host = "sftp.example.test", username = "u", port = 2222 }, credentials = (object?)null,
+            kind = "sftp", config = new { host = "sftp.example.test", username = "u", directory = "/in" }, credentials = (object?)null,
         });
         put.StatusCode.Should().Be(HttpStatusCode.OK);
         Saved().Should().Be(before);
+
+        var moved = await http.PutAsJsonAsync($"{url}/{id}", new { kind = "sftp", config = new { host = "other.example.test", username = "u" } });
+        moved.StatusCode.Should().Be((HttpStatusCode)422);
+        var body = await moved.Content.ReadAsStringAsync();
+        body.Should().Contain("invalid_intake").And.Contain("Enter the password again when you change the server or user name.");
+        Saved().Should().Be(before);
+        (await http.PutAsJsonAsync($"{url}/{id}", new
+        {
+            kind = "sftp", config = new { host = "other.example.test", username = "u" }, credentials = new { password = "new" },
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
 
         (await http.PostAsJsonAsync(url, new { kind = "sftp", config = new { host = "h" } })).StatusCode.Should().Be((HttpStatusCode)422);
         (await http.PostAsJsonAsync(url, new { kind = "email", config = new { } })).StatusCode.Should().Be((HttpStatusCode)422);

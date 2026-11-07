@@ -6,7 +6,6 @@ using ProcuLink.Api.Services.Documents;
 using ProcuLink.Api.Services.Documents.Intake;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
-using ProcuLink.Core.Services.Security;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Catalog;
 using ProcuLink.Core.Services.Ingress;
@@ -56,14 +55,31 @@ public class FlowPickupJob(
         {
             logger.LogWarning(ex, "Pickup failed for intake {IntakeId}", intakeId);
             var host = JsonNode.Parse(intake.ConfigJson)?["host"]?.GetValue<string>();
-            Finish(intake, "failed", ex is SshHostKeyRejectedException
-                ? $"Couldn't connect to {host}: the server's identity changed. Check with the server's owner, then clear the saved fingerprint."
-                : $"Couldn't connect to {host}: {(ex.Message.Length > 200 ? ex.Message[..200] : ex.Message)}");
+            var reason = ex.InnerException?.Message ?? "";
+            Finish(intake, "failed", ex switch
+            {
+                SshHostKeyRejectedException =>
+                    $"Couldn't connect to {host}: the server's identity changed. Check with the server's owner, then clear the saved fingerprint.",
+                RemoteFailure => $"Couldn't connect to {host}: {(reason.Length > 200 ? reason[..200] : reason)}",
+                _ => "Couldn't pick up files. The next try is in 5 minutes.",
+            });
         }
         finally
         {
             intake.LastRunAt = DateTime.UtcNow;
             await db.SaveChangesAsync(CancellationToken.None);
+        }
+    }
+
+    /// <summary>A failure on the remote side (connect, list, download, mark done); only these read as "couldn't connect".</summary>
+    private sealed class RemoteFailure(Exception inner) : Exception(inner.Message, inner);
+
+    private static async Task<T> Remote<T>(Func<Task<T>> call)
+    {
+        try { return await call(); }
+        catch (Exception e) when (e is not (OperationCanceledException or SshHostKeyRejectedException or CatalogFileTooLargeException))
+        {
+            throw new RemoteFailure(e);
         }
     }
 
@@ -79,20 +95,21 @@ public class FlowPickupJob(
             ? "{}"
             : encryption.Decrypt(intake.EncryptedCredentials,
                 new CredentialScope(intake.OrgId, CredentialPurpose.FlowIntakeCredentials, intake.Id)));
-        using var session = await source.OpenAsync(intake, credentials.RootElement, ct);
+        using var session = await Remote(() => source.OpenAsync(intake, credentials.RootElement, ct));
 
         int taken = 0, skipped = 0, claimed = 0;
-        foreach (var file in (await session.ListAsync(ct)).Where(f => Extensions.Contains(Path.GetExtension(f.FileName), StringComparer.OrdinalIgnoreCase)))
+        foreach (var file in (await Remote(() => session.ListAsync(ct))).Where(f => Extensions.Contains(Path.GetExtension(f.FileName), StringComparer.OrdinalIgnoreCase)))
         {
             if (claimed == MaxFilesPerRun) break;
             var claim = await IntakeLedger.ClaimAsync(db, intake.OrgId, intake.Id, file.Key, ct);
             if (claim is null) continue;
             claimed++;
 
+            // A transient download or submit exception leaves the claim; it is retaken after 30 minutes.
             Guid documentId;
             try
             {
-                using var content = await session.DownloadAsync(file, IngressLimits.MaxFileBytes, ct);
+                using var content = await Remote(() => session.DownloadAsync(file, IngressLimits.MaxFileBytes, ct));
                 var result = await submitter.SubmitAsync(intake.OrgId, intake.FlowId, content, file.FileName,
                     ContentTypeOf(file.FileName), intake.Kind, file.SourceRef, ct);
                 if (result.Limit is { Allowed: false } refused)
@@ -104,7 +121,7 @@ public class FlowPickupJob(
                 if (result.Error is "document_engine_not_enabled" or "flow_not_found")
                 {
                     await IntakeLedger.ReleaseAsync(db, intake.OrgId, claim.Id, ct);
-                    return ("failed", "This flow can't take documents right now.");
+                    return ("failed", "Couldn't pick up files. The next try is in 5 minutes.");
                 }
 
                 documentId = result.Document?.Id ?? IntakeLedger.Refused;
@@ -118,11 +135,11 @@ public class FlowPickupJob(
 
             await db.FlowIntakeItems.Where(i => i.OrgId == intake.OrgId && i.Id == claim.Id)
                 .ExecuteUpdateAsync(s => s.SetProperty(i => i.DocumentId, documentId), ct);
-            await session.MarkDoneAsync(file, ct);
+            await Remote(async () => { await session.MarkDoneAsync(file, ct); return 0; });
         }
 
         var message = taken == 0 ? "No new files." : $"Picked up {taken} new file(s).";
-        if (skipped > 0) message += $" Skipped {skipped} file(s) over 10 MB.";
+        if (skipped > 0) message += $" Skipped {skipped} file(s) over {IngressLimits.MaxFileBytes / (1024 * 1024)} MB.";
         return ("ok", message);
     }
 

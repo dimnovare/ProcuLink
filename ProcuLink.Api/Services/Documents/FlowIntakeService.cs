@@ -43,6 +43,9 @@ public sealed class FlowIntakeService(
         [IntakeKind.Api] = [("webhookUrl", 's', "")],
     };
 
+    /// <summary>Config keys that decide which server a saved password is sent to, and as whom.</summary>
+    private static readonly string[] WhereAndWho = ["host", "port", "username", "serviceUrl", "bucket", "region", "accessKeyId"];
+
     private static readonly Dictionary<string, string[]> Required = new()
     {
         [IntakeKind.Imap] = ["host", "username"], [IntakeKind.Sftp] = ["host", "username"],
@@ -116,6 +119,22 @@ public sealed class FlowIntakeService(
         }
 
         var configJson = kind == IntakeKind.Email ? null : Normalize(kind, req.Config, existing?.ConfigJson ?? "{}");
+        var newCredentials = req.Credentials is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) };
+        if (existing is not null && configJson is not null)
+        {
+            var before = JsonNode.Parse(existing.ConfigJson) as JsonObject ?? new JsonObject();
+            var after = JsonNode.Parse(configJson)!.AsObject();
+            bool Changed(params string[] names) => names.Any(n => after[n]?.ToJsonString() != before[n]?.ToJsonString());
+            if (existing.EncryptedCredentials is not null && !newCredentials && Changed(WhereAndWho))
+                throw new IntakeException("invalid_intake", "Enter the password again when you change the server or user name.");
+            // A new server is fresh trust: forget the SFTP host key learned from the old one.
+            if (Changed("host", "port") && after["hostKeyFingerprints"] is not null)
+            {
+                after["hostKeyFingerprints"] = new JsonArray();
+                configJson = after.ToJsonString();
+            }
+        }
+
         var now = DateTime.UtcNow;
         if (existing is null)
         {
@@ -126,8 +145,8 @@ public sealed class FlowIntakeService(
         if (configJson is not null)
         {
             existing.ConfigJson = configJson;
-            if (req.Credentials is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) } c)
-                existing.EncryptedCredentials = encryption.Encrypt(c.GetRawText(), new CredentialScope(orgId, Purpose, existing.Id));
+            if (newCredentials)
+                existing.EncryptedCredentials = encryption.Encrypt(req.Credentials!.Value.GetRawText(), new CredentialScope(orgId, Purpose, existing.Id));
         }
 
         if (req.Enabled is { } enabled) existing.IsEnabled = enabled;
