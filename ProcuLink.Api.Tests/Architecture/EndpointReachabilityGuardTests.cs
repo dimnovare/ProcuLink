@@ -116,6 +116,11 @@ public sealed class EndpointReachabilityGuardTests
             + "[Authorize(AuthenticationSchemes = \"ApiKey\")], not Clerk: the customer's own system "
             + "calls it with an org API key to post a file into a flow, and the browser never posts to "
             + "it, so a frontend caller would be the bug. Permanent entry."),
+        new("GET /api/v1/documents/{}",
+            "2026-11-07 — machine-to-machine result fetch. ProcuLink.Api/Controllers/FlowFilesController.cs carries "
+            + "[Authorize(AuthenticationSchemes = \"ApiKey\")], not Clerk: after posting a file the "
+            + "customer's own system fetches the result by id with an org API key, and no browser "
+            + "screen calls it, so a frontend caller would be the bug. Permanent entry."),
         new("GET /api/ingress/{}/ping",
             "2026-08-13 — the reachability probe a customer runs while wiring the ingress API up, "
             + "documented for them at "
@@ -352,6 +357,7 @@ public sealed class EndpointReachabilityGuardTests
             // Moved into the baseline on 2026-11-07, deliberately and in the open: the file API is a
             // machine-facing ingress (ProcuLink.Api/Controllers/FlowFilesController.cs) whose only caller is the
             // customer's own system, with an org API key.
+            "GET /api/v1/documents/{}",
             "POST /api/v1/flows/{}/documents",
             // Moved into the baseline on 2026-08-15, deliberately and in the open, exactly as the
             // failure text asks: the Postmark bounce webhook is caller-less BY CONSTRUCTION — the
