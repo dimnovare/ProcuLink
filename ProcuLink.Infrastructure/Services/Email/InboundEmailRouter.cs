@@ -667,11 +667,11 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
             var claim = await IntakeLedger.ClaimAsync(_db, orgId, intake.Id, key, ct);
             if (claim is null)
             {
-                // A settled row (a document or a refusal) is done. One with no document yet is in flight or was left
-                // by a crash: defer, so Postmark re-delivers until it settles or is retaken after 30 minutes.
+                // Only a settled row (a document or a refusal) is done. Anything else is in flight, was released a
+                // moment ago, or was left by a crash: defer, so Postmark re-delivers until it settles or is retaken.
                 var itemKey = IntakeLedger.KeyFor(key);
-                if (await _db.FlowIntakeItems.AnyAsync(i => i.OrgId == orgId && i.ScopeId == intake.Id
-                                                            && i.ItemKey == itemKey && i.DocumentId == null, ct))
+                if (!await _db.FlowIntakeItems.AnyAsync(i => i.OrgId == orgId && i.ScopeId == intake.Id
+                                                             && i.ItemKey == itemKey && i.DocumentId != null, ct))
                     return new InboundEmailResult(false, orgId, Array.Empty<Guid>(),
                         "An earlier delivery of this message is still being taken in.", InboundEmailRejectionKind.Transient);
                 continue;

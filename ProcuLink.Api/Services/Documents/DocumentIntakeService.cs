@@ -90,15 +90,26 @@ public sealed class DocumentIntakeService(
             });
         }
 
-        db.FlowDocuments.Add(doc);
-        db.AuditEvents.Add(new AuditEvent
+        var audit = new AuditEvent
         {
             Id = Guid.NewGuid(), OrgId = orgId, EntityType = "FlowDocument", EntityId = id,
             Action = "document.received", CreatedAt = now,
             Payload = JsonSerializer.SerializeToDocument(new { fileName = safeName, flowId, source, sourceRef }),
-        });
+        };
+        db.FlowDocuments.Add(doc);
+        db.AuditEvents.Add(audit);
         // Never cancelled half-way, and nothing after it throws: a caller that sees a throw knows nothing committed.
-        await db.SaveChangesAsync(CancellationToken.None);
+        try
+        {
+            await db.SaveChangesAsync(CancellationToken.None);
+        }
+        catch
+        {
+            // A caller that saves this context later (a pickup run's status) must not commit them after all.
+            db.Entry(doc).State = EntityState.Detached;
+            db.Entry(audit).State = EntityState.Detached;
+            throw;
+        }
 
         try
         {

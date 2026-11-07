@@ -80,7 +80,7 @@ public sealed class FlowIntakeService(
             {
                 // A concurrent first view made it: keep that one, and revoke the address minted here.
                 db.Entry(email).State = EntityState.Detached;
-                await addresses.RevokeAsync(orgId, minted.Id, ct);
+                await addresses.RevokeAsync(orgId, minted.Id, CancellationToken.None);
                 rows = await Intakes(orgId, flowId).OrderBy(i => i.CreatedAt).ToListAsync(ct);
             }
         }
