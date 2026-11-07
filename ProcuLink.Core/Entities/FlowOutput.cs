@@ -11,6 +11,8 @@ public class FlowOutput
     public string TemplateJson { get; set; } = "{}";
     public string? TableKey { get; set; }
     public Guid? DestinationId { get; set; }
+    /// <summary>A serialized <c>SendWhen</c>; null means the output sends for every document.</summary>
+    public string? SendWhenJson { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }

@@ -29,6 +29,16 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
 {
     private sealed record Rendered(FlowOutput Output, byte[] Bytes, string ContentType, string Extension);
 
+    private const string NoOutputMatches = "no_output_matches";
+
+    private async Task HoldAsync(FlowDocument doc, string reason, CancellationToken ct)
+    {
+        doc.Status = DocumentStatus.NeedsReview;
+        doc.StatusReason = reason;
+        doc.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+    }
+
     private static SendOutcome Refuse(string error, object? detail = null) => new(error, detail, []);
 
     public async Task<SendOutcome> SendAsync(FlowDocument doc, SendMode mode, string? userId, CancellationToken ct)
@@ -43,19 +53,23 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
 
         // Render everything first: one bad output means nothing is stored or sent.
         var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
-        var rendered = new List<Rendered>();
-        foreach (var o in outputs)
+        var header = DocumentRows.Build(read, null).Header;
+        outputs = outputs.Where(o => SendWhenOps.Matches(o.SendWhenJson is null ? null : DocumentJson.Deserialize<SendWhen>(o.SendWhenJson), header)).ToList();
+        if (outputs.Count == 0)
         {
-            var render = DocumentOutputRenderer.Render(o.Format, DocumentJson.Deserialize<OutputNodeTemplate>(o.TemplateJson), read, o.TableKey);
+            if (mode == SendMode.Automatic) await HoldAsync(doc, NoOutputMatches, ct);
+            return Refuse(NoOutputMatches);
+        }
+
+        var templates = outputs.Select(o => DocumentJson.Deserialize<OutputNodeTemplate>(o.TemplateJson)).ToList();
+        var lookups = await DocumentLookups.LoadAsync(db, doc.OrgId, templates, ct);
+        var rendered = new List<Rendered>();
+        foreach (var (o, template) in outputs.Zip(templates))
+        {
+            var render = DocumentOutputRenderer.Render(o.Format, template, read, o.TableKey, lookups);
             if (!render.Ok)
             {
-                if (mode == SendMode.Automatic)
-                {
-                    doc.Status = DocumentStatus.NeedsReview;
-                    doc.StatusReason = render.Error;
-                    doc.UpdatedAt = DateTime.UtcNow;
-                    await db.SaveChangesAsync(ct);
-                }
+                if (mode == SendMode.Automatic) await HoldAsync(doc, render.Error!, ct);
                 return Refuse(render.Error!, new OutputFailure(o.Name, render.Detail));
             }
             using var buffer = new MemoryStream();
@@ -93,6 +107,11 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
         var stem = FileNameSanitiser.Sanitise(Path.GetFileNameWithoutExtension(doc.FileName));
         var now = DateTime.UtcNow;
         var sent = new List<FlowDelivery>();
+
+        // A dead letter from an output this send no longer routes to is history, not a failure: detach it like a deleted output.
+        var routed = rendered.Select(r => r.Output.Id).ToHashSet();
+        foreach (var stale in existing.Where(d => d.Status == FlowDeliveryStatus.DeadLetter && d.OutputId is { } id && !routed.Contains(id)))
+            stale.OutputId = null;
 
         foreach (var r in rendered)
         {

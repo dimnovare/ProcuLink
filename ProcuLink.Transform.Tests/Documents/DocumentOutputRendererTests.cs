@@ -4,6 +4,7 @@ using ProcuLink.Core.Documents;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Transform.Documents;
+using ProcuLink.Transform.Mapping;
 using Xunit;
 
 namespace ProcuLink.Transform.Tests.Documents;
@@ -77,5 +78,32 @@ public class DocumentOutputRendererTests
         var cell = new XLWorkbook(xlsx.Result.Content).Worksheet(1).Cell(2, 1);
         cell.HasFormula.Should().BeFalse();
         cell.GetString().Should().Be("=1+1");
+    }
+
+    [Fact]
+    public void Lookup_SwapsTrimmedCaseInsensitive_KeepsOrBlanksMisses_AndReportsThem()
+    {
+        var id = Guid.NewGuid();
+        var read = new ReadResult("Invoice", [],
+            [new ReadTable("items", "Items", [new ReadColumn("code", "Code", "text", null)],
+                [.. new[] { " blt-10 ", "00123", "NUT-4" }.Select(c => new ReadRow(new Dictionary<string, ReadCell> { ["code"] = Cell(c) }))],
+                true)]);
+        LookupTables Tables() => new(new Dictionary<Guid, IReadOnlyDictionary<string, string>>
+            { [id] = new Dictionary<string, string> { ["BLT-10"] = "A-7", ["00123"] = "A-0042" } });
+        OutputNodeTemplate Template(string ifMissing) => Csv(Lf, OutputNode.Arr("Lines", OutputNode.Obj("Line",
+            OutputNode.FieldOf("Code", new OutputFieldRule
+            {
+                OutputPath = "Code", CanonicalField = "code",
+                FieldManipulators = [new ManipulatorEntry { Type = "Lookup", Params = [id.ToString(), ifMissing] }],
+            }))));
+
+        var kept = DocumentOutputRenderer.Render("csv", Template("keep"), read, "items", Tables());
+        Text(kept).Should().Be("Code\nA-7\nA-0042\nNUT-4\n");
+        kept.Misses.Should().Equal(new LookupMiss(id, "NUT-4"));
+
+        Text(DocumentOutputRenderer.Render("csv", Template("blank"), read, "items", Tables())).Should().Be("Code\nA-7\nA-0042\n\n");
+
+        // No tables in scope: the step cannot run, which is a refusal of the output, not a crash.
+        DocumentOutputRenderer.Render("csv", Template("keep"), read, "items").Error.Should().Be("output_invalid");
     }
 }
