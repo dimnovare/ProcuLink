@@ -5,7 +5,9 @@ namespace ProcuLink.Core.Documents;
 /// <summary>The one key shape for fields, tables and columns.</summary>
 public static class FieldKey
 {
-    public static readonly Regex Pattern = new("^[a-z][a-z0-9_]{0,63}$", RegexOptions.Compiled);
+    public const int MaxLength = 64;
+
+    public static readonly Regex Pattern = new($"^[a-z][a-z0-9_]{{0,{MaxLength - 1}}}$", RegexOptions.Compiled);
 
     /// <summary>Lower-case, non-alphanumerics to "_", repeats collapsed, trimmed; "f_" before a leading digit; "field" when empty.</summary>
     public static string Normalise(string? raw)
@@ -13,15 +15,17 @@ public static class FieldKey
         var key = Regex.Replace((raw ?? "").ToLowerInvariant(), "[^a-z0-9]+", "_").Trim('_');
         if (key.Length == 0) return "field";
         if (char.IsAsciiDigit(key[0])) key = "f_" + key;
-        return key.Length > 60 ? key[..60].TrimEnd('_') : key;
+        return Fit(key, MaxLength);
     }
+
+    private static string Fit(string key, int length) => key.Length > length ? key[..length].TrimEnd('_') : key;
 
     /// <summary>Normalises, then suffixes _2, _3, ... until the key is new to <paramref name="seen"/>, which it joins.</summary>
     public static string Unique(ISet<string> seen, string? raw)
     {
         var key = Normalise(raw);
         var candidate = key;
-        for (var n = 2; !seen.Add(candidate); n++) candidate = $"{key}_{n}";
+        for (var n = 2; !seen.Add(candidate); n++) candidate = Fit(key, MaxLength - $"_{n}".Length) + $"_{n}";
         return candidate;
     }
 }
