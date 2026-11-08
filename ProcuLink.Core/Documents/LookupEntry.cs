@@ -27,11 +27,11 @@ public static class LookupRules
     /// <summary>Null when the list to choose from is valid, otherwise a short reason.</summary>
     public static string? CandidateProblem(IReadOnlyList<LookupCandidate> candidates)
     {
-        if (candidates.Count > MaxEntries) return $"The list to choose from holds at most {MaxEntries} values.";
+        if (candidates.Count > MaxEntries) return $"A lookup can list at most {MaxEntries} values to choose from.";
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var c in candidates)
         {
-            if (string.IsNullOrWhiteSpace(c.Value)) return "Every value to choose from needs a value.";
+            if (c is null || string.IsNullOrWhiteSpace(c.Value)) return "Each row in the list to choose from needs a value.";
             if (c.Value.Length > MaxValueLength) return $"Values can be at most {MaxValueLength} characters.";
             if ((c.Description?.Length ?? 0) > MaxDescriptionLength) return $"Descriptions can be at most {MaxDescriptionLength} characters.";
             if (!seen.Add(c.Value.Trim())) return $"'{c.Value.Trim()}' appears more than once in the list to choose from.";

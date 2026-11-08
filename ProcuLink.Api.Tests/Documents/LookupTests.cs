@@ -80,6 +80,9 @@ public class LookupTests(DocumentEngineTestFactory factory) : IClassFixture<Docu
         dup.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
         var body = await dup.Content.ReadAsStringAsync();
         body.Should().Contain("lookup_invalid").And.Contain("'a' appears more than once in the list to choose from.");
+        var blank = await http.PutAsJsonAsync($"/api/lookups/{id}", new { name = "Codes", entries = Entries(("A", "SUP-1")), candidates = new object?[] { null } });
+        blank.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await blank.Content.ReadAsStringAsync()).Should().Contain("Each row in the list to choose from needs a value.");
     }
 
     [Fact]
