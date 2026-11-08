@@ -34,7 +34,7 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
     /// <summary>Replaces <see cref="IFileStorageService"/>; tests inspect the uploads.</summary>
     public Mock<IFileStorageService> Storage { get; } = new();
 
-    /// <summary>Replaces <see cref="ProcuLink.Core.Services.Ai.IAiMappingService"/>; unset, it suggests nothing.</summary>
+    /// <summary>Replaces <see cref="ProcuLink.Core.Services.Ai.IAiMappingService"/>; unset, its calls return null (no default setup).</summary>
     public Mock<ProcuLink.Core.Services.Ai.IAiMappingService> Ai { get; } = new();
 
     /// <summary>Set before the host first boots to run on Postgres, for the claim-first ledger (EF InMemory has neither unique indexes nor ExecuteUpdate).</summary>

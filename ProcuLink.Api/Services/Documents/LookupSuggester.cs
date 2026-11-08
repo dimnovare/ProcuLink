@@ -31,14 +31,17 @@ public sealed class LookupSuggester(ProcuLinkDbContext db, IAiMappingService ai,
         var lookups = await db.Set<Lookup>().AsNoTracking()
             .Where(l => l.OrgId == orgId && ids.Contains(l.Id) && l.CandidatesJson != "[]").ToListAsync(ct);
 
+        // One global bound per call, counted over usable misses only (their lookup has a list); original index kept for ordering.
+        var loaded = lookups.Select(l => l.Id).ToHashSet();
+        var usable = misses.Select((m, i) => (m, i)).Where(x => loaded.Contains(x.m.LookupId)).Take(MaxMisses).ToList();
+
         var found = new List<(int Order, LookupSuggestion Suggestion)>();
         foreach (var lookup in lookups)
         {
             var candidates = DocumentJson.Deserialize<List<LookupCandidate>>(lookup.CandidatesJson);
             var ranked = new List<Ranked>();
-            for (var order = 0; order < Math.Min(misses.Count, MaxMisses); order++)
+            foreach (var (miss, order) in usable)
             {
-                var miss = misses[order];
                 if (miss.LookupId != lookup.Id) continue;
                 var context = Context(miss);
                 var tokens = LexicalScore.Tokenize($"{miss.Value} {context}");
@@ -68,7 +71,7 @@ public sealed class LookupSuggester(ProcuLinkDbContext db, IAiMappingService ai,
     private static string Context(LookupMiss miss)
     {
         var text = string.Join(" · ", (miss.Row ?? new Dictionary<string, string>())
-            .Where(kv => !string.IsNullOrWhiteSpace(kv.Value) && kv.Value != miss.Value).Select(kv => $"{kv.Key}: {kv.Value}"));
+            .Where(kv => !string.IsNullOrWhiteSpace(kv.Value) && kv.Value.Trim() != miss.Value).Select(kv => $"{kv.Key}: {kv.Value}"));
         return text.Length > MaxContext ? text[..MaxContext] : text;
     }
 }
