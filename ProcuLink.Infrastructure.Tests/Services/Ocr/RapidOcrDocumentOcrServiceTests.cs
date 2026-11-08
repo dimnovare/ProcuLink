@@ -55,6 +55,19 @@ public class RapidOcrDocumentOcrServiceTests
         text.Should().NotBeNullOrWhiteSpace("the self-hosted OCR must read the rendered text");
         // Allow for minor OCR variance — assert a substantial digit run round-trips.
         text.Should().Contain("2026");
+
+        // Word boxes: pixel coordinates of the decoded page must normalise to 0..1 on page 1.
+        var pages = new SkiaPdfRasterizer(NullLogger<SkiaPdfRasterizer>.Instance)
+            .RenderPagesPng(pdf.ToArray(), 1);
+        var words = await svc.ReadWordsAsync(pages, CancellationToken.None);
+        var w = words.First(x => x.Text.Contains("2026"));
+        w.Page.Should().Be(1);
+        w.Box.X.Should().BeGreaterThan(0);
+        w.Box.Y.Should().BeGreaterThan(0);
+        w.Box.Width.Should().BeGreaterThan(0);
+        w.Box.Height.Should().BeGreaterThan(0);
+        (w.Box.X + w.Box.Width).Should().BeLessThanOrEqualTo(1);
+        (w.Box.Y + w.Box.Height).Should().BeLessThanOrEqualTo(1);
     }
 
     [Fact]
