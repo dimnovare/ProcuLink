@@ -6,7 +6,9 @@ using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Ocr;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Services.Ocr;
 using ProcuLink.Transform.Documents;
 using ProcuLink.Transform.Parsing;
 
@@ -15,10 +17,12 @@ namespace ProcuLink.Api.Jobs;
 /// <summary>Hangfire job: reads a received flow document. Idempotent — a document past <c>reading</c> is skipped.</summary>
 public class ReadDocumentJob(
     ProcuLinkDbContext db, IFileStorageService storage, IDocumentReader reader,
-    DocumentRechecker rechecker, IBackgroundJobClient jobs, ILogger<ReadDocumentJob> logger)
+    DocumentRechecker rechecker, IBackgroundJobClient jobs, IPdfRasterizer rasterizer, IDocumentOcrService ocr,
+    DocumentEngineGate gate, ILogger<ReadDocumentJob> logger)
 {
     private const int MaxChars = 60_000;
     private const int MinWordsPerTextPage = 5;
+    private const int MaxScanPages = 10;
     private const int LastRetry = 3;
 
     [Queue("critical")]
@@ -57,6 +61,8 @@ public class ReadDocumentJob(
     {
         var flow = await db.Flows.FirstAsync(f => f.Id == doc.FlowId && f.OrgId == doc.OrgId, ct);
         var isPdf = Path.GetExtension(doc.FileName).Equals(".pdf", StringComparison.OrdinalIgnoreCase);
+        var isImage = DocumentFormats.IsImage(doc.FileName);
+        var pdfPages = 0;
         IReadOnlyList<PageWord> words = [];
         IReadOnlyList<SheetCell> cells = [];
         var text = "";
@@ -74,9 +80,9 @@ public class ReadDocumentJob(
             if (isPdf)
             {
                 var pdf = PdfWordExtractor.Extract(bytes);
-                (words, text) = (pdf.Words, pdf.Text);
+                (words, text, pdfPages) = (pdf.Words, pdf.Text, pdf.PageCount);
             }
-            else
+            else if (!isImage)
             {
                 cells = SheetCellReader.Read(new MemoryStream(bytes), Path.GetExtension(doc.FileName));
                 text = SheetCellReader.ToText(cells, MaxChars);
@@ -90,17 +96,34 @@ public class ReadDocumentJob(
             return;
         }
 
-        if (isPdf && !words.GroupBy(w => w.Page).Any(g => g.Count() >= MinWordsPerTextPage))
+        IReadOnlyList<byte[]>? pages = null;
+        var truncated = false;
+        if (isImage || (isPdf && !words.GroupBy(w => w.Page).Any(g => g.Count() >= MinWordsPerTextPage)))
         {
-            await FailAsync(doc, "scanned_not_supported", ct);
-            return;
+            if (!gate.ScansOn(doc.OrgId))
+            {
+                await FailAsync(doc, "scanned_not_supported", ct);
+                return;
+            }
+            var upright = isImage ? ScanImages.Upright(bytes) : null;
+            pages = isImage ? (upright is null ? [] : [upright]) : rasterizer.RenderPagesPng(bytes, MaxScanPages);
+            if (pages.Count == 0)
+            {
+                await FailAsync(doc, "unreadable_file", ct);
+                return;
+            }
+            truncated = pdfPages > MaxScanPages;
+            words = await ocr.ReadWordsAsync(pages, ct);
         }
 
-        var truncated = text.Length > MaxChars;
-        if (truncated) text = text[..MaxChars];
+        if (text.Length > MaxChars)
+        {
+            truncated = true;
+            text = text[..MaxChars];
+        }
 
         var expected = flow.FieldsConfirmed ? DocumentJson.Deserialize<FlowFieldList>(flow.FieldsJson) : null;
-        var outcome = await reader.ReadAsync(new DocumentReadInput(doc.FileName, doc.ContentType, text, expected), doc.OrgId, ct);
+        var outcome = await reader.ReadAsync(new DocumentReadInput(doc.FileName, doc.ContentType, text, expected, pages), doc.OrgId, ct);
         if (!outcome.Success || outcome.Result is null)
         {
             var reason = outcome.FailureReason ?? "ai_error";
@@ -112,8 +135,9 @@ public class ReadDocumentJob(
 
         (SourceLocation? Location, bool NotOnPage) Locate(string? value)
         {
-            var loc = isPdf ? ValueLocator.Locate(value, words) : ValueLocator.LocateInCells(value, cells);
-            return (loc, isPdf && !string.IsNullOrWhiteSpace(value) && loc is null);
+            var onWords = isPdf || isImage;
+            var loc = onWords ? ValueLocator.Locate(value, words) : ValueLocator.LocateInCells(value, cells);
+            return (loc, onWords && words.Count > 0 && !string.IsNullOrWhiteSpace(value) && loc is null);
         }
 
         var first = outcome.Result;
