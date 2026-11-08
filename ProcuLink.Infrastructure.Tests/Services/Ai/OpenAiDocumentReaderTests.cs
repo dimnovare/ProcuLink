@@ -162,6 +162,19 @@ public class OpenAiDocumentReaderTests
             It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatCompletionOptions>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    [Fact]
+    public async Task A_failing_no_egress_check_is_retryable_and_never_calls_the_model()
+    {
+        var (reader, client) = Create(noEgress: (_, _) => throw new InvalidOperationException("db down"));
+
+        var outcome = await reader.ReadAsync(Input(), Org, CancellationToken.None);
+
+        outcome.Success.Should().BeFalse();
+        outcome.FailureReason.Should().Be("ai_error");
+        client.Verify(c => c.CompleteChatAsync(
+            It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatCompletionOptions>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [Theory]
     [InlineData(null, "none")]          // default gpt-6-luna
     [InlineData("gpt-5-mini", "low")]   // gpt-5 stops at low

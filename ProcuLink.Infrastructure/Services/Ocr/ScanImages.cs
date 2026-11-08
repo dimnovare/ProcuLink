@@ -25,14 +25,15 @@ public static class ScanImages
             using var raw = SKBitmap.Decode(codec, info.WithSize(size));
             if (raw is null) return null;
 
-            using var upright = Rotate(raw, codec.EncodedOrigin);
-            var scale = Math.Min(1f, (float)MaxSide / Math.Max(upright.Width, upright.Height));
+            var scale = Math.Min(1f, (float)MaxSide / Math.Max(raw.Width, raw.Height));
             using var sized = scale < 1f
-                ? upright.Resize(new SKImageInfo(
-                    Math.Max(1, (int)Math.Round(upright.Width * scale)),
-                    Math.Max(1, (int)Math.Round(upright.Height * scale))), SKSamplingOptions.Default)
+                ? raw.Resize(new SKImageInfo(
+                    Math.Max(1, (int)Math.Round(raw.Width * scale)),
+                    Math.Max(1, (int)Math.Round(raw.Height * scale))), SKSamplingOptions.Default)
                 : null;
-            using var data = SKImage.FromBitmap(sized ?? upright).Encode(SKEncodedImageFormat.Png, 100);
+            var origin = codec.EncodedOrigin;
+            using var upright = origin is SKEncodedOrigin.TopLeft ? null : Rotate(sized ?? raw, origin);
+            using var data = SKImage.FromBitmap(upright ?? sized ?? raw).Encode(SKEncodedImageFormat.Png, 100);
             return data.ToArray();
         }
         catch

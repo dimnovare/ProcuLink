@@ -61,11 +61,15 @@ public sealed class ReadDocumentJobTests
     private static ReadField Field(string key, string value) =>
         new(key, key, value, FieldTypes.Text, null, 0.95, null, false, false, false);
 
+    // A real 1x1 PNG: rendered pages now pass through ScanImages.Upright, which drops bytes it cannot decode.
+    private static readonly byte[] TinyPng = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==");
+
     private static IPdfRasterizer Rasterizer(int pages)
     {
         var r = new Mock<IPdfRasterizer>();
         r.Setup(x => x.RenderPagesPng(It.IsAny<byte[]>(), It.IsAny<int>()))
-            .Returns(Enumerable.Range(0, pages).Select(i => new byte[] { 1, (byte)i }).ToList());
+            .Returns(Enumerable.Range(0, pages).Select(_ => TinyPng).ToList());
         return r.Object;
     }
 

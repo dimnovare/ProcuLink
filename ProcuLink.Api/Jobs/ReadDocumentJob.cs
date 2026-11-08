@@ -106,13 +106,13 @@ public class ReadDocumentJob(
                 return;
             }
             var upright = isImage ? ScanImages.Upright(bytes) : null;
-            pages = isImage ? (upright is null ? [] : [upright]) : rasterizer.RenderPagesPng(bytes, MaxScanPages);
+            pages = isImage ? (upright is null ? [] : [upright]) : rasterizer.RenderPagesPng(bytes, MaxScanPages).Select(ScanImages.Upright).OfType<byte[]>().ToList();
             if (pages.Count == 0)
             {
                 await FailAsync(doc, "unreadable_file", ct);
                 return;
             }
-            truncated = pdfPages > MaxScanPages;
+            truncated = pdfPages > pages.Count;
             words = await ocr.ReadWordsAsync(pages, ct);
         }
 
@@ -133,14 +133,19 @@ public class ReadDocumentJob(
             return;
         }
 
+        var first = outcome.Result;
+        // OCR words but nothing located (sideways photo, non-Latin scan, noise): flagging every value would be noise.
+        var anyLocated = first.Fields.Select(f => f.Value)
+            .Concat(first.Tables.SelectMany(t => t.Rows.SelectMany(r => r.Cells.Values.Select(c => c.Value))))
+            .Any(v => ValueLocator.Locate(v, words) is not null);
+
         (SourceLocation? Location, bool NotOnPage) Locate(string? value)
         {
             var onWords = isPdf || isImage;
             var loc = onWords ? ValueLocator.Locate(value, words) : ValueLocator.LocateInCells(value, cells);
-            return (loc, onWords && words.Count > 0 && !string.IsNullOrWhiteSpace(value) && loc is null);
+            return (loc, onWords && anyLocated && !string.IsNullOrWhiteSpace(value) && loc is null);
         }
 
-        var first = outcome.Result;
         var read = new ReadResult(first.KindLabel,
             first.Fields.Select(f =>
             {
