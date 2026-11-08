@@ -119,6 +119,49 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
     }
 
     [Fact]
+    public async Task Preview_with_a_draft_template_renders_the_draft_and_keeps_the_saved_one()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, docId) = await Seed(confirmed: true);
+        var output = (await (await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "CSV", format = "csv" }))
+            .Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+        var first = output.Template.Root.Children[0];
+        var draft = output.Template with
+        {
+            Root = output.Template.Root with
+            {
+                Children = [first with { Rule = first.Rule! with { FixedValue = "DRAFT-1", CanonicalField = null } }, .. output.Template.Root.Children.Skip(1)],
+            },
+        };
+        string Saved()
+        {
+            using var scope = factory.Services.CreateScope();
+            return scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowOutput>().AsNoTracking().Single(o => o.Id == output.Id).TemplateJson;
+        }
+        var before = Saved();
+
+        var res = await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/{output.Id}/preview", new { template = draft });
+        res.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("content").GetString().Should().Contain("DRAFT-1");
+        Saved().Should().Be(before);
+    }
+
+    [Fact]
+    public async Task Preview_with_a_draft_of_the_wrong_format_is_refused()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, docId) = await Seed(confirmed: true);
+        var csv = (await (await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "CSV", format = "csv" }))
+            .Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+        var json = (await (await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "JSON", format = "json" }))
+            .Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+
+        var res = await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/{csv.Id}/preview", new { template = json.Template });
+        res.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await res.Content.ReadAsStringAsync()).Should().Contain("output_invalid").And.Contain("must be a Csv template");
+    }
+
+    [Fact]
     public async Task LookupStep_IsCheckedOnSave_AndPreviewListsMisses()
     {
         var http = factory.ClientFor(Org);

@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Documents;
@@ -18,6 +19,8 @@ public sealed record OutputDto(
     Guid Id, Guid FlowId, string Name, string Format, string? TableKey, Guid? DestinationId,
     OutputNodeTemplate Template, DateTime CreatedAt, SendWhen? SendWhen);
 
+public sealed record PreviewRequest(OutputNodeTemplate? Template);
+
 [Authorize]
 [ApiController]
 public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantService tenant, DocumentEngineGate gate) : ControllerBase
@@ -32,6 +35,11 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
 
     private static IActionResult Invalid(string detail) =>
         new UnprocessableEntityObjectResult(new { error = "output_invalid", detail });
+
+    private static bool FitsFormat(OutputNodeTemplate t, string format) =>
+        t.Format == FlowOutputFormats.TemplateFormat(format) && OutputTreeFormats.IsRenderable(t.Format);
+
+    private static IActionResult WrongFormat(string format) => Invalid($"The template must be a {FlowOutputFormats.TemplateFormat(format)} template.");
 
     private static IActionResult OutputNotFound() => new NotFoundObjectResult(new { error = "output_not_found" });
 
@@ -79,9 +87,10 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         return removed == 0 ? OutputNotFound() : NoContent();
     }
 
-    /// <summary>Renders the document through the output and returns the text. Nothing is sent or saved.</summary>
+    /// <summary>Renders the document through the output (or the draft template in the body, if given) and returns the text. Nothing is sent or saved.</summary>
     [HttpPost("api/documents/{documentId:guid}/outputs/{outputId:guid}/preview")]
-    public async Task<IActionResult> Preview(Guid documentId, Guid outputId, CancellationToken ct)
+    public async Task<IActionResult> Preview(Guid documentId, Guid outputId,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] PreviewRequest? body, CancellationToken ct)
     {
         if (Refuse() is { } refused) return refused;
         var orgId = tenant.OrganisationId;
@@ -91,7 +100,8 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
             .FirstOrDefaultAsync(o => o.OrgId == orgId && o.FlowId == doc.FlowId && o.Id == outputId, ct);
         if (output is null) return OutputNotFound();
 
-        var template = DocumentJson.Deserialize<OutputNodeTemplate>(output.TemplateJson);
+        var template = body?.Template ?? DocumentJson.Deserialize<OutputNodeTemplate>(output.TemplateJson);
+        if (body?.Template is not null && !FitsFormat(template, output.Format)) return WrongFormat(output.Format);
         // A workbook is binary; its preview is the CSV text of the same grid (xlsx renders from the csv template).
         var format = output.Format == FlowOutputFormats.Xlsx ? FlowOutputFormats.Csv : output.Format;
         var lookups = await DocumentLookups.LoadAsync(db, orgId, [template], ct);
@@ -133,8 +143,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
             return Invalid("send_when");
 
         var template = request.Template ?? DefaultOutputTemplate.For(fields, request.Format, request.TableKey);
-        if (template.Format != FlowOutputFormats.TemplateFormat(request.Format) || !OutputTreeFormats.IsRenderable(template.Format))
-            return Invalid($"The template must be a {FlowOutputFormats.TemplateFormat(request.Format)} template.");
+        if (!FitsFormat(template, request.Format)) return WrongFormat(request.Format);
 
         var lookups = await DocumentLookups.LoadAsync(db, orgId, [template], ct);
         if (DocumentLookups.Steps(template).Any(s => !Guid.TryParse(s.Params.ElementAtOrDefault(0), out var id) || !lookups.Has(id)
