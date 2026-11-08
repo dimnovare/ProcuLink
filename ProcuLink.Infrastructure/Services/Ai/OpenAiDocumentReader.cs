@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using OpenAI.Chat;
 using ProcuLink.Core.Documents;
@@ -40,6 +41,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
     private readonly IServiceScopeFactory? _scopeFactory;
     private readonly IAiUsageTracker? _tracker;
     private readonly string _model;
+    private readonly Func<Guid, CancellationToken, Task<bool>>? _noEgressCheck;
 
     public OpenAiDocumentReader(
         IConfiguration configuration, ILogger<OpenAiDocumentReader> logger, IServiceScopeFactory? scopeFactory = null)
@@ -49,8 +51,10 @@ public sealed class OpenAiDocumentReader : IDocumentReader
     }
 
     internal OpenAiDocumentReader(
-        IConfiguration configuration, ILogger<OpenAiDocumentReader> logger, IAiUsageTracker? tracker, ChatClient? overrideClient)
+        IConfiguration configuration, ILogger<OpenAiDocumentReader> logger, IAiUsageTracker? tracker, ChatClient? overrideClient,
+        Func<Guid, CancellationToken, Task<bool>>? noEgressCheck = null)
     {
+        _noEgressCheck = noEgressCheck;
         _logger = logger;
         _tracker = tracker;
         var model = configuration["Ai:OpenAI:ExtractionModel"] ?? configuration["Ai:OpenAI:MappingModel"] ?? DefaultModel;
@@ -67,11 +71,30 @@ public sealed class OpenAiDocumentReader : IDocumentReader
 
     public async Task<DocumentReadOutcome> ReadAsync(DocumentReadInput input, Guid organisationId, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(input.Text)) return Fail("empty_document");
+        if (string.IsNullOrWhiteSpace(input.Text) && input.Pages is not { Count: > 0 }) return Fail("empty_document");
         if (_client is null) return Fail("ai_unavailable");
 
         using var scope = _scopeFactory?.CreateScope();
         var tracker = _tracker ?? scope?.ServiceProvider.GetService<IAiUsageTracker>();
+
+        // A no-egress org's documents never reach the model. Fails safe, like OpenAiMappingService.IsNoEgressOrgAsync.
+        if (organisationId != Guid.Empty)
+        {
+            try
+            {
+                var noEgress = _noEgressCheck is not null
+                    ? await _noEgressCheck(organisationId, ct)
+                    : scope?.ServiceProvider.GetService<ProcuLinkDbContext>() is { } db
+                      && await db.Organisations.AsNoTracking().Where(o => o.Id == organisationId)
+                          .Select(o => o.SelfHostedOcr).FirstOrDefaultAsync(ct);
+                if (noEgress) return Fail("no_egress");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "No-egress check failed for org {OrgId}; refusing the read to be safe.", organisationId);
+                return Fail("no_egress");
+            }
+        }
 
         if (tracker is not null)
         {
@@ -92,7 +115,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
             var messages = new List<ChatMessage>
             {
                 new SystemChatMessage(SystemPrompt),
-                new UserChatMessage(BuildUserMessage(input)),
+                new UserChatMessage(UserParts(input)),
             };
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(CallTimeout);
@@ -133,6 +156,14 @@ public sealed class OpenAiDocumentReader : IDocumentReader
                 _logger.LogWarning(ex, "Document read failed (org {OrgId}).", organisationId);
             return Fail("ai_error");
         }
+    }
+
+    private static IEnumerable<ChatMessageContentPart> UserParts(DocumentReadInput input)
+    {
+        var text = BuildUserMessage(input);
+        if (input.Pages is not { Count: > 0 } pages) return [ChatMessageContentPart.CreateTextPart(text)];
+        return pages.Select(png => ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(png), "image/png", ChatImageDetailLevel.High))
+            .Prepend(ChatMessageContentPart.CreateTextPart(text + "\nThe document is the attached page images, in page order."));
     }
 
     private static DocumentReadOutcome Fail(string reason) => new(false, null, reason);

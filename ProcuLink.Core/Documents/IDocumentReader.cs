@@ -1,8 +1,10 @@
 namespace ProcuLink.Core.Documents;
 
-public sealed record DocumentReadInput(string FileName, string ContentType, string Text, FlowFieldList? Expected);
+/// <summary><c>Pages</c> holds PNG page images in page order, for documents with no text layer.</summary>
+public sealed record DocumentReadInput(string FileName, string ContentType, string Text, FlowFieldList? Expected,
+    IReadOnlyList<byte[]>? Pages = null);
 
-/// <summary>FailureReason is one of "usage_cap", "ai_unavailable", "ai_error", "empty_document".</summary>
+/// <summary>FailureReason is one of "usage_cap", "ai_unavailable", "ai_error", "empty_document", "no_egress".</summary>
 public sealed record DocumentReadOutcome(bool Success, ReadResult? Result, string? FailureReason);
 
 /// <summary>The engine's one AI call: reads every field and table out of a document's text.</summary>
