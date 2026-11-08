@@ -22,4 +22,8 @@ public sealed class NoOpOcrService : IDocumentOcrService
         string contentType,
         CancellationToken ct)
         => Task.FromResult(string.Empty);
+
+    /// <inheritdoc/>
+    public Task<IReadOnlyList<ProcuLink.Core.Documents.PageWord>> ReadWordsAsync(IReadOnlyList<byte[]> pagePngs, CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<ProcuLink.Core.Documents.PageWord>>([]);
 }
