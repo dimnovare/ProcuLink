@@ -42,7 +42,7 @@ public sealed class DocumentsController(
         var result = await submitter.SubmitAsync(orgId, flowId, stream, file.FileName, file.ContentType, "upload", null, ct);
         var flowName = result.Document is null ? ""
             : await db.Flows.Where(f => f.OrgId == orgId && f.Id == flowId).Select(f => f.Name).FirstAsync(ct);
-        return IntakeResults.From(this, result, flowName);
+        return IntakeResults.From(this, result, flowName, submitter.AcceptedFormats(orgId));
     }
 
     internal static DocumentDto ToDto(FlowDocument d, string flowName) =>

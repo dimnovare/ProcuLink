@@ -135,11 +135,15 @@ public sealed class InboundEmailFlowPostgresTests(PostgresContainerFixture postg
         public Task<FlowSubmitResult> SubmitAsync(
             Guid orgId, Guid flowId, Stream content, string fileName, string contentType,
             string source, string? sourceRef, CancellationToken ct) => throw new IOException("storage down");
+
+        public IReadOnlyList<string> AcceptedFormats(Guid orgId) => DocumentFormats.Base;
     }
 
     /// <summary>Stands in for the Api submitter: persists the document the way AcceptAsync would.</summary>
     private sealed class PersistingSubmitter(DbContextOptions<ProcuLinkDbContext> options) : IFlowDocumentSubmitter
     {
+        public IReadOnlyList<string> AcceptedFormats(Guid orgId) => DocumentFormats.Base;
+
         public async Task<FlowSubmitResult> SubmitAsync(
             Guid orgId, Guid flowId, Stream content, string fileName, string contentType,
             string source, string? sourceRef, CancellationToken ct)

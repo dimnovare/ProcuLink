@@ -13,4 +13,7 @@ public interface IFlowDocumentSubmitter
     Task<FlowSubmitResult> SubmitAsync(
         Guid orgId, Guid flowId, Stream content, string fileName, string contentType,
         string source, string? sourceRef, CancellationToken ct);
+
+    /// <summary>The file extensions (no dot) this org's flows accept.</summary>
+    IReadOnlyList<string> AcceptedFormats(Guid orgId);
 }

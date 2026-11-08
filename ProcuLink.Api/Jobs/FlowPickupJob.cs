@@ -26,7 +26,7 @@ public class FlowPickupJob(
     IFlowDocumentSubmitter submitter, DocumentEngineGate gate, IBillingService billing, ILogger<FlowPickupJob> logger)
 {
     public const int MaxFilesPerRun = 50;
-    internal static readonly string[] Extensions = [".pdf", ".csv", ".xlsx"];
+    internal static readonly string[] Extensions = [.. DocumentFormats.Base, .. DocumentFormats.Images];
 
     [Queue("polling")]
     [AutomaticRetry(Attempts = 0)]
@@ -88,7 +88,7 @@ public class FlowPickupJob(
         try
         {
             using var session = await OpenAsync(intake, source, ct);
-            var files = (await Remote(() => session.ListAsync(ct))).Where(IsReadable).ToList();
+            var files = (await Remote(() => session.ListAsync(ct))).Where(IsReadable(intake.OrgId)).ToList();
             var known = (await LedgerAsync(intake, files, ct)).Count;
             return (true, $"Connected. {files.Count - known} file(s) waiting.");
         }
@@ -107,7 +107,11 @@ public class FlowPickupJob(
             .ToDictionaryAsync(i => i.ItemKey, ct);
     }
 
-    private static bool IsReadable(PickupFile f) => Extensions.Contains(Path.GetExtension(f.FileName), StringComparer.OrdinalIgnoreCase);
+    private Func<PickupFile, bool> IsReadable(Guid orgId)
+    {
+        var accepted = submitter.AcceptedFormats(orgId);
+        return f => accepted.Contains(Path.GetExtension(f.FileName).TrimStart('.'), StringComparer.OrdinalIgnoreCase);
+    }
 
     private async Task<IPickupSession> OpenAsync(FlowIntake intake, IPickupSource source, CancellationToken ct)
     {
@@ -141,7 +145,7 @@ public class FlowPickupJob(
         using var session = await OpenAsync(intake, source, ct);
 
         int taken = 0, skipped = 0, claimed = 0;
-        var files = (await Remote(() => session.ListAsync(ct))).Where(IsReadable).ToList();
+        var files = (await Remote(() => session.ListAsync(ct))).Where(IsReadable(intake.OrgId)).ToList();
         var ledger = await LedgerAsync(intake, files, ct);
         foreach (var file in files)
         {
@@ -207,6 +211,8 @@ public class FlowPickupJob(
     {
         ".pdf" => "application/pdf",
         ".csv" => "text/csv",
+        ".png" => "image/png",
+        ".jpg" or ".jpeg" => "image/jpeg",
         _ => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     };
 }

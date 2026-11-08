@@ -74,7 +74,7 @@ public sealed class FlowFilesController(
             }
         }
 
-        return IntakeResults.From(this, result, flowName);
+        return IntakeResults.From(this, result, flowName, submitter.AcceptedFormats(orgId));
     }
 
     [HttpGet("documents/{id:guid}")]
