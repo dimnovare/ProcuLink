@@ -26,7 +26,6 @@ public class FlowPickupJob(
     IFlowDocumentSubmitter submitter, DocumentEngineGate gate, IBillingService billing, ILogger<FlowPickupJob> logger)
 {
     public const int MaxFilesPerRun = 50;
-    internal static readonly string[] Extensions = [.. DocumentFormats.Base, .. DocumentFormats.Images];
 
     [Queue("polling")]
     [AutomaticRetry(Attempts = 0)]

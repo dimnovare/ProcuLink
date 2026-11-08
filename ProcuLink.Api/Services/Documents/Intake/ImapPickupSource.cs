@@ -17,7 +17,7 @@ namespace ProcuLink.Api.Services.Documents.Intake;
 /// Mailbox pickup. Unseen messages that match the filters give one file per readable attachment; a message that does not
 /// match is left untouched, and a matching one is marked seen once all its files are done.
 /// </summary>
-public sealed class ImapPickupSource(OutboundRequestGuard guard) : IPickupSource
+public sealed class ImapPickupSource(OutboundRequestGuard guard, DocumentEngineGate gate) : IPickupSource
 {
     public string Kind => IntakeKind.Imap;
 
@@ -42,7 +42,8 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard) : IPickupSource
                 credentials.TryGetProperty("password", out var p) ? p.GetString() ?? "" : "", ct);
             var folder = await client.GetFolderAsync(config["folder"]!.GetValue<string>(), ct);
             await folder.OpenAsync(FolderAccess.ReadWrite, ct);
-            return new Session(client, folder, folder.UidValidity, config["fromFilter"]?.GetValue<string>(), config["subjectFilter"]?.GetValue<string>());
+            return new Session(client, folder, folder.UidValidity, config["fromFilter"]?.GetValue<string>(), config["subjectFilter"]?.GetValue<string>(),
+                DocumentFormats.For(gate.ScansOn(intake.OrgId)));
         }
         catch
         {
@@ -51,6 +52,10 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard) : IPickupSource
             throw;
         }
     }
+
+    /// <summary>The attachment's extension is one the org accepts; both sides are compared without the dot.</summary>
+    internal static bool Readable(string? fileName, IReadOnlyList<string> accepted) =>
+        accepted.Contains(Path.GetExtension(fileName ?? "").TrimStart('.'), StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Any sender address contains any <paramref name="fromFilter"/> term AND the subject contains any <paramref name="subjectFilter"/> term; a blank filter matches all.</summary>
     internal static bool Matches(string? fromFilter, string? subjectFilter, IEnumerable<string> senders, string? subject)
@@ -64,7 +69,7 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard) : IPickupSource
         return Any(Terms(fromFilter), senders) && Any(Terms(subjectFilter), [subject ?? ""]);
     }
 
-    private sealed class Session(ImapClient client, IMailFolder folder, uint uidValidity, string? fromFilter, string? subjectFilter) : IPickupSession
+    private sealed class Session(ImapClient client, IMailFolder folder, uint uidValidity, string? fromFilter, string? subjectFilter, IReadOnlyList<string> accepted) : IPickupSession
     {
         private readonly Dictionary<string, (UniqueId Uid, BodyPartBasic Part)> _parts = [];
         private readonly Dictionary<UniqueId, int> _open = [];
@@ -81,8 +86,7 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard) : IPickupSource
                 var senders = m.Envelope.From.Mailboxes.Select(b => b.Address).ToList();
                 if (!Matches(fromFilter, subjectFilter, senders, m.Envelope.Subject)) continue;
 
-                var readable = m.Attachments.Where(a => FlowPickupJob.Extensions.Contains(
-                    Path.GetExtension(a.FileName ?? ""), StringComparer.OrdinalIgnoreCase)).ToList();
+                var readable = m.Attachments.Where(a => Readable(a.FileName, accepted)).ToList();
                 if (readable.Count == 0)
                 {
                     _unreadable.Add((m.UniqueId, senders.FirstOrDefault() ?? "an unknown sender"));

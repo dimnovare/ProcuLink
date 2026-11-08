@@ -686,7 +686,8 @@ builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSou
 builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSource>(sp => new ProcuLink.Api.Services.Documents.Intake.S3PickupSource(
     sp.GetRequiredService<IAmazonS3ClientFactory>(), sp.GetRequiredService<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>()));
 builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSource>(sp => new ProcuLink.Api.Services.Documents.Intake.ImapPickupSource(
-    sp.GetRequiredService<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>()));
+    sp.GetRequiredService<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>(),
+    sp.GetRequiredService<ProcuLink.Api.Services.Documents.DocumentEngineGate>()));
 builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowPickupJob>();
 builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowWebhookJob>();
 builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowPickupDispatchJob>();
