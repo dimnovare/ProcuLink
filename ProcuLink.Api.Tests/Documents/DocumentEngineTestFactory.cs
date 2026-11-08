@@ -65,6 +65,7 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             ["Security:ApiKeyHashSecret"] = "test-api-key-hash-secret-not-a-real-one",
             ["DocumentEngine:EnabledOrgIds:0"] = OrgA.ToString(),
             ["DocumentEngine:EnabledOrgIds:1"] = OrgB.ToString(),
+            ["DocumentEngine:LookupSuggestionOrgIds:0"] = OrgA.ToString(),
         }));
 
         builder.ConfigureServices(services =>

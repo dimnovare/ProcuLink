@@ -2219,6 +2219,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(l => l.OrgId).HasColumnName("org_id");
             b.Property(l => l.Name).HasColumnName("name").HasMaxLength(120);
             b.Property(l => l.EntriesJson).HasColumnName("entries_json").HasColumnType("jsonb").HasDefaultValue("[]");
+            b.Property(l => l.CandidatesJson).HasColumnName("candidates_json").HasColumnType("jsonb").HasDefaultValue("[]");
             b.Property(l => l.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             b.Property(l => l.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             b.HasIndex(l => l.OrgId);

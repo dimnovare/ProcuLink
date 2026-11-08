@@ -60,6 +60,29 @@ public class LookupTests(DocumentEngineTestFactory factory) : IClassFixture<Docu
     }
 
     [Fact]
+    public async Task Candidates_round_trip_and_a_save_without_them_keeps_them()
+    {
+        var http = factory.ClientFor(Org);
+        var id = (await Create(http, "Codes", ("A", "SUP-1"))).Id;
+        var candidates = new object[] { new { value = "SUP-1", description = "Pilsner bottle 0.5L" }, new { value = " SUP-2 ", description = "  " } };
+        (await http.PutAsJsonAsync($"/api/lookups/{id}", new { name = "Codes", entries = Entries(("A", "SUP-1")), candidates })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var got = (await http.GetFromJsonAsync<LookupDto>($"/api/lookups/{id}", DocumentJson.Options))!;
+        got.Candidates.Should().Equal(new LookupCandidate("SUP-1", "Pilsner bottle 0.5L"), new LookupCandidate("SUP-2", null));
+        got.SuggestionsOn.Should().BeTrue();
+
+        (await http.PutAsJsonAsync($"/api/lookups/{id}", new { name = "Codes", entries = Entries(("A", "SUP-1")) })).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await http.GetFromJsonAsync<LookupDto>($"/api/lookups/{id}", DocumentJson.Options))!.Candidates.Should().HaveCount(2);
+        (await http.GetFromJsonAsync<List<LookupSummaryDto>>("/api/lookups", DocumentJson.Options))!
+            .Single(l => l.Id == id).Should().Match<LookupSummaryDto>(l => l.HasCandidates && l.SuggestionsOn);
+
+        var dup = await http.PutAsJsonAsync($"/api/lookups/{id}", new { name = "Codes", entries = Entries(("A", "SUP-1")), candidates = new object[] { new { value = "A" }, new { value = "a" } } });
+        dup.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var body = await dup.Content.ReadAsStringAsync();
+        body.Should().Contain("lookup_invalid").And.Contain("'a' appears more than once in the list to choose from.");
+    }
+
+    [Fact]
     public async Task Lookup_DeleteRefusedWhileAnOutputUsesIt()
     {
         var http = factory.ClientFor(Org);

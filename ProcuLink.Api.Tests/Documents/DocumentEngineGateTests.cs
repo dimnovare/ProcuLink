@@ -1,3 +1,4 @@
+using FluentAssertions;
 using Microsoft.Extensions.Options;
 using ProcuLink.Api.Services.Documents;
 using Xunit;
@@ -15,6 +16,16 @@ public class DocumentEngineGateTests
         var gate = Gate(new() { EnabledOrgIds = [listed.ToString()] });
         Assert.True(gate.IsEnabled(listed));
         Assert.False(gate.IsEnabled(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public void LookupSuggestionsOn_needs_the_engine_and_the_org_or_ForAll()
+    {
+        var org = Guid.NewGuid();
+        Gate(new() { LookupSuggestionOrgIds = [org.ToString()] }).LookupSuggestionsOn(org).Should().BeFalse();
+        Gate(new() { EnabledOrgIds = [org.ToString()], LookupSuggestionOrgIds = [org.ToString()] }).LookupSuggestionsOn(org).Should().BeTrue();
+        Gate(new() { EnabledOrgIds = [org.ToString()] }).LookupSuggestionsOn(org).Should().BeFalse();
+        Gate(new() { EnabledForAll = true, LookupSuggestionsForAll = true }).LookupSuggestionsOn(Guid.NewGuid()).Should().BeTrue();
     }
 
     [Fact]

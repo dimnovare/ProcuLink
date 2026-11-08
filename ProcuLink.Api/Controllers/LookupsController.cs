@@ -10,11 +10,11 @@ using ProcuLink.Infrastructure;
 
 namespace ProcuLink.Api.Controllers;
 
-public sealed record LookupRequest(string Name, List<LookupEntry>? Entries);
+public sealed record LookupRequest(string Name, List<LookupEntry>? Entries, List<LookupCandidate>? Candidates = null);
 
-public sealed record LookupSummaryDto(Guid Id, string Name, int Count, DateTime UpdatedAt);
+public sealed record LookupSummaryDto(Guid Id, string Name, int Count, DateTime UpdatedAt, bool HasCandidates, bool SuggestionsOn);
 
-public sealed record LookupDto(Guid Id, string Name, List<LookupEntry> Entries, DateTime UpdatedAt);
+public sealed record LookupDto(Guid Id, string Name, List<LookupEntry> Entries, DateTime UpdatedAt, List<LookupCandidate> Candidates, bool SuggestionsOn);
 
 [Authorize]
 [ApiController]
@@ -25,7 +25,8 @@ public sealed class LookupsController(ProcuLinkDbContext db, ICurrentTenantServi
 
     private static List<LookupEntry> EntriesOf(Lookup l) => DocumentJson.Deserialize<List<LookupEntry>>(l.EntriesJson);
 
-    private static LookupDto ToDto(Lookup l) => new(l.Id, l.Name, EntriesOf(l), l.UpdatedAt);
+    private LookupDto ToDto(Lookup l) =>
+        new(l.Id, l.Name, EntriesOf(l), l.UpdatedAt, DocumentJson.Deserialize<List<LookupCandidate>>(l.CandidatesJson), gate.LookupSuggestionsOn(tenant.OrganisationId));
 
     private static IActionResult Invalid(string detail) => new UnprocessableEntityObjectResult(new { error = "lookup_invalid", detail });
 
@@ -38,6 +39,12 @@ public sealed class LookupsController(ProcuLinkDbContext db, ICurrentTenantServi
         if (name.Length is < 1 or > LookupRules.MaxNameLength) return Invalid($"The name must be 1 to {LookupRules.MaxNameLength} characters.");
         var entries = request.Entries ?? [];
         if (LookupRules.Problem(entries) is { } problem) return Invalid(problem);
+        if (request.Candidates is { } candidates)
+        {
+            if (LookupRules.CandidateProblem(candidates) is { } candidateProblem) return Invalid(candidateProblem);
+            l.CandidatesJson = DocumentJson.Serialize(candidates.Select(c =>
+                new LookupCandidate(c.Value.Trim(), string.IsNullOrWhiteSpace(c.Description) ? null : c.Description.Trim())).ToList());
+        }
         l.Name = name;
         l.EntriesJson = DocumentJson.Serialize(entries.Select(e => new LookupEntry(e.From.Trim(), e.To ?? "")).ToList());
         l.UpdatedAt = DateTime.UtcNow;
@@ -49,8 +56,9 @@ public sealed class LookupsController(ProcuLinkDbContext db, ICurrentTenantServi
     {
         if (Refuse() is { } refused) return refused;
         var orgId = tenant.OrganisationId;
+        var suggestionsOn = gate.LookupSuggestionsOn(orgId);
         var rows = await db.Set<Lookup>().AsNoTracking().Where(l => l.OrgId == orgId).OrderBy(l => l.Name).ToListAsync(ct);
-        return Ok(rows.Select(l => new LookupSummaryDto(l.Id, l.Name, EntriesOf(l).Count, l.UpdatedAt)));
+        return Ok(rows.Select(l => new LookupSummaryDto(l.Id, l.Name, EntriesOf(l).Count, l.UpdatedAt, l.CandidatesJson != "[]", suggestionsOn)));
     }
 
     [HttpPost("api/lookups")]
