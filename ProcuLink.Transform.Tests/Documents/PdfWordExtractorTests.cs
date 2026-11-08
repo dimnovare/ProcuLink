@@ -47,7 +47,7 @@ public class PdfWordExtractorTests
     }
 
     [Fact]
-    public void Words_follow_the_reading_order_of_Text_not_the_content_stream()
+    public void Words_on_one_line_with_uneven_baselines_read_left_to_right()
     {
         var builder = new PdfDocumentBuilder();
         var font = builder.AddStandard14Font(Standard14Font.Helvetica);
