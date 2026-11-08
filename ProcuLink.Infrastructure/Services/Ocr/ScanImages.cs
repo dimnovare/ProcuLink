@@ -7,13 +7,22 @@ public static class ScanImages
 {
     private const int MaxSide = 2048;
 
-    public static byte[]? Upright(byte[] image)
+    private const long MaxDecodePixels = 40_000_000;
+
+    public static byte[]? Upright(byte[] image) => Upright(image, MaxDecodePixels);
+
+    internal static byte[]? Upright(byte[] image, long maxDecodePixels)
     {
         try
         {
             using var codec = SKCodec.Create(new MemoryStream(image));
             if (codec is null) return null;
-            using var raw = SKBitmap.Decode(codec);
+
+            // Decode at the codec's native reduced size (JPEG 1/2, 1/4, 1/8) so a huge image never exists in full.
+            var info = codec.Info;
+            var size = codec.GetScaledDimensions(Math.Min(1f, (float)MaxSide / Math.Max(info.Width, info.Height)));
+            if (size.Width <= 0 || size.Height <= 0 || (long)size.Width * size.Height > maxDecodePixels) return null;
+            using var raw = SKBitmap.Decode(codec, info.WithSize(size));
             if (raw is null) return null;
 
             using var upright = Rotate(raw, codec.EncodedOrigin);

@@ -36,6 +36,7 @@ public class ScanImagesTests
 
         Size(ScanImages.Upright(tagged)!).Should().Be((20, 40));
         Size(ScanImages.Upright(Encode(4000, 1000, SKEncodedImageFormat.Png))!).Should().Be((2048, 512));
+        ScanImages.Upright(Encode(100, 100, SKEncodedImageFormat.Png), 1000).Should().BeNull();
         ScanImages.Upright([1, 2, 3, 4, 5, 6, 7, 8]).Should().BeNull();
     }
 }
