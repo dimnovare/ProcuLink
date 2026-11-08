@@ -99,7 +99,7 @@ public class DocumentOutputRendererTests
 
         var kept = DocumentOutputRenderer.Render("csv", Template("keep"), read, "items", Tables());
         Text(kept).Should().Be("Code\nA-7\nA-0042\nNUT-4\n");
-        kept.Misses.Should().Equal(new LookupMiss(id, "NUT-4"));
+        kept.Misses!.Select(m => (m.LookupId, m.Value)).Should().Equal((id, "NUT-4"));
 
         Text(DocumentOutputRenderer.Render("csv", Template("blank"), read, "items", Tables())).Should().Be("Code\nA-7\nA-0042\n\n");
 

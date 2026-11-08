@@ -34,6 +34,9 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
     /// <summary>Replaces <see cref="IFileStorageService"/>; tests inspect the uploads.</summary>
     public Mock<IFileStorageService> Storage { get; } = new();
 
+    /// <summary>Replaces <see cref="ProcuLink.Core.Services.Ai.IAiMappingService"/>; unset, its calls return null (no default setup).</summary>
+    public Mock<ProcuLink.Core.Services.Ai.IAiMappingService> Ai { get; } = new();
+
     /// <summary>Set before the host first boots to run on Postgres, for the claim-first ledger (EF InMemory has neither unique indexes nor ExecuteUpdate).</summary>
     public string? PostgresConnection { get; init; }
 
@@ -65,6 +68,7 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             ["Security:ApiKeyHashSecret"] = "test-api-key-hash-secret-not-a-real-one",
             ["DocumentEngine:EnabledOrgIds:0"] = OrgA.ToString(),
             ["DocumentEngine:EnabledOrgIds:1"] = OrgB.ToString(),
+            ["DocumentEngine:LookupSuggestionOrgIds:0"] = OrgA.ToString(),
         }));
 
         builder.ConfigureServices(services =>
@@ -89,6 +93,9 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             foreach (var d in services.Where(d => d.ServiceType == typeof(ProcuLink.Api.Services.Documents.Intake.IPickupSource)).ToList())
                 services.Remove(d);
             services.AddSingleton(Pickup.Object);
+            foreach (var d in services.Where(d => d.ServiceType == typeof(ProcuLink.Core.Services.Ai.IAiMappingService)).ToList())
+                services.Remove(d);
+            services.AddSingleton(Ai.Object);
             services.AddSingleton(Storage.Object);
             services.AddSingleton(Jobs.Object);
 

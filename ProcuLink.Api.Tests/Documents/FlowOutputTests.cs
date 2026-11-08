@@ -4,10 +4,12 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
 using ProcuLink.Api.Controllers;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using Xunit;
@@ -195,5 +197,86 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         p.GetProperty("content").GetString().Should().Contain("INV-7,A-7");
         var miss = p.GetProperty("lookupMisses").EnumerateArray().Single();
         (miss.GetProperty("lookupId").GetGuid(), miss.GetProperty("value").GetString()).Should().Be((lookup.Id, "INV-7"));
+    }
+
+    [Fact]
+    public async Task Preview_with_suggest_sends_each_miss_with_its_own_row_and_returns_the_matches()
+    {
+        var http = factory.ClientFor(Org);
+        Guid flowId, docId, lookupId = Guid.NewGuid();
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            var cols = new[] { Field("sku", "SKU"), Field("name", "Name") };
+            var flow = new Flow
+            {
+                Id = Guid.NewGuid(), OrgId = Org, Name = "Synthetic flow", FieldsConfirmed = true,
+                FieldsJson = DocumentJson.Serialize(new FlowFieldList([], [new FlowTable("items", "Items", cols)])),
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            };
+            ReadRow Row(string sku, string name) => new(new Dictionary<string, ReadCell>
+                { ["sku"] = new(sku, 1, null, false, false), ["name"] = new(name, 1, null, false, false) });
+            var read = new ReadResult("Invoice",
+                [new ReadField("seller", "Seller", "Brewery North", FieldTypes.Text, null, 1, null, false, true, false)],
+                [new ReadTable("items", "Items", cols.Select(c => new ReadColumn(c.Key, c.Label, FieldTypes.Text, null)).ToList(),
+                    [Row("A1", "Pilsner 0.5"), Row("B2", "Stout")], true)]);
+            var doc = new FlowDocument
+            {
+                Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, FileName = "synthetic.pdf", ContentType = "application/pdf",
+                Status = DocumentStatus.Ready, ReadJson = DocumentJson.Serialize(read), ReadAt = DateTime.UtcNow,
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            };
+            db.Flows.Add(flow);
+            db.FlowDocuments.Add(doc);
+            db.Set<Lookup>().Add(new Lookup
+            {
+                Id = lookupId, OrgId = Org, Name = "Codes",
+                CandidatesJson = DocumentJson.Serialize(new[] { new LookupCandidate("SUP-1", "Pilsner bottle 0.5L"), new LookupCandidate("SUP-2", "Stout can") }),
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+            (flowId, docId) = (flow.Id, doc.Id);
+        }
+        var output = (await (await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "CSV", format = "csv", tableKey = "items" }))
+            .Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+        var leaf = OutputNode.FieldOf("SKU", new OutputFieldRule
+        {
+            OutputPath = "SKU", CanonicalField = "sku",
+            FieldManipulators = [new ManipulatorEntry { Type = "Lookup", Params = [lookupId.ToString(), "keep"] }],
+        });
+        (await http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{output.Id}", new
+        {
+            name = "CSV", format = "csv", tableKey = "items",
+            template = new OutputNodeTemplate { Format = OutputFormat.Csv, Root = OutputNode.Obj("root", OutputNode.Arr("Lines", OutputNode.Obj("Line", leaf))) },
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var lines = new List<AiMappingLineContext>();
+        var candidates = new List<AiMappingCandidate>();
+        factory.Ai.Setup(a => a.SuggestSupplierItemCodesAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(),
+                It.IsAny<IReadOnlyList<AiMappingLineContext>>(), It.IsAny<IReadOnlyList<AiMappingCandidate>>(), It.IsAny<CancellationToken>()))
+            .Callback((Guid _, Guid _, string _, IReadOnlyList<AiMappingLineContext> l, IReadOnlyList<AiMappingCandidate> c, CancellationToken _) =>
+                { lines.AddRange(l); candidates.AddRange(c); })
+            .ReturnsAsync(new Dictionary<int, AiMappingSuggestion> { [0] = new("SUP-1", 0.9f, "name match", "lookup") });
+
+        var url = $"/api/documents/{docId}/outputs/{output.Id}/preview";
+        var plain = await (await http.PostAsync(url, null)).Content.ReadFromJsonAsync<JsonElement>();
+        plain.GetProperty("lookupMisses").EnumerateArray().Should().OnlyContain(m =>
+            m.EnumerateObject().Select(p => p.Name).OrderBy(n => n).SequenceEqual(new[] { "lookupId", "value" }));
+
+        var res = await http.PostAsync(url + "?suggest=true", null);
+        res.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await res.Content.ReadFromJsonAsync<JsonElement>();
+        lines.Single(l => l.BuyerItemCode == "A1").Description.Should().Contain("Pilsner 0.5");
+        lines.Single(l => l.BuyerItemCode == "B2").Description.Should().Contain("Stout").And.NotContain("Pilsner");
+        lines.Should().OnlyContain(l => !l.Description!.Contains("Brewery North"));
+        candidates.Should().OnlyContain(c => c.IsCatalogProduct);
+        var s = body.GetProperty("suggestions").EnumerateArray().Single();
+        (s.GetProperty("lookupId").GetGuid(), s.GetProperty("value").GetString(), s.GetProperty("to").GetString(),
+            s.GetProperty("confidence").GetSingle(), s.GetProperty("description").GetString())
+            .Should().Be((lookupId, "A1", "SUP-1", 0.9f, "Pilsner bottle 0.5L"));
+
+        var off = await factory.ClientFor(DocumentEngineTestFactory.OrgB).PostAsync(url + "?suggest=true", null);
+        off.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await off.Content.ReadAsStringAsync()).Should().Contain("lookup_suggestions_off");
     }
 }

@@ -90,10 +90,12 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
     /// <summary>Renders the document through the output (or the draft template in the body, if given) and returns the text. Nothing is sent or saved.</summary>
     [HttpPost("api/documents/{documentId:guid}/outputs/{outputId:guid}/preview")]
     public async Task<IActionResult> Preview(Guid documentId, Guid outputId,
-        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] PreviewRequest? body, CancellationToken ct)
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] PreviewRequest? body, CancellationToken ct,
+        [FromQuery] bool suggest = false, [FromServices] LookupSuggester? suggester = null)
     {
         if (Refuse() is { } refused) return refused;
         var orgId = tenant.OrganisationId;
+        if (suggest && !gate.LookupSuggestionsOn(orgId)) return StatusCode(403, new { error = "lookup_suggestions_off" });
         var doc = await db.FlowDocuments.AsNoTracking().FirstOrDefaultAsync(d => d.OrgId == orgId && d.Id == documentId, ct);
         if (doc is null) return NotFound(new { error = "document_not_found" });
         var output = await db.Set<FlowOutput>().AsNoTracking()
@@ -105,18 +107,20 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         // A workbook is binary; its preview is the CSV text of the same grid (xlsx renders from the csv template).
         var format = output.Format == FlowOutputFormats.Xlsx ? FlowOutputFormats.Csv : output.Format;
         var lookups = await DocumentLookups.LoadAsync(db, orgId, [template], ct);
-        var render = DocumentOutputRenderer.Render(format, template, DocumentJson.Deserialize<ReadResult>(doc.ReadJson), output.TableKey, lookups);
+        var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
+        var render = DocumentOutputRenderer.Render(format, template, read, output.TableKey, lookups);
         if (!render.Ok) return UnprocessableEntity(new { error = render.Error, detail = render.Detail });
 
         using var reader = new StreamReader(render.Result!.Content, Encoding.UTF8);
         var content = await reader.ReadToEndAsync(ct);
-        return Ok(new
-        {
-            contentType = render.Result.ContentType,
-            fileName = Path.GetFileNameWithoutExtension(doc.FileName) + render.Result.FileExtension,
-            content,
-            lookupMisses = render.Misses ?? [],
-        });
+        var misses = render.Misses ?? [];
+        var shown = misses.Select(m => new { lookupId = m.LookupId, value = m.Value }).ToList();
+        var fileName = Path.GetFileNameWithoutExtension(doc.FileName) + render.Result.FileExtension;
+        if (!suggest) return Ok(new { contentType = render.Result.ContentType, fileName, content, lookupMisses = shown });
+
+        var found = await suggester!.SuggestAsync(orgId, misses, DocumentRows.Build(read, output.TableKey).Header, ct);
+        if (found.CapReached) return StatusCode(429, new { error = "ai_usage_cap" });
+        return Ok(new { contentType = render.Result.ContentType, fileName, content, lookupMisses = shown, suggestions = found.Suggestions });
     }
 
     /// <summary>Validates <paramref name="request"/> and copies it onto <paramref name="output"/>; returns the refusal, or null.</summary>

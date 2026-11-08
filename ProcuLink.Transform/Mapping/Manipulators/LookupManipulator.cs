@@ -17,6 +17,6 @@ public class LookupManipulator(IReadOnlyList<string> @params, LookupTables? tabl
         if (string.IsNullOrWhiteSpace(value)) return value;
         if (!Guid.TryParse(@params.ElementAtOrDefault(0), out var id) || !tables.Has(id))
             throw new InvalidOperationException("lookup_unavailable");
-        return tables.TryMap(id, value, out var mapped) ? mapped : _blank ? "" : value;
+        return tables.TryMap(id, value, out var mapped, row) ? mapped : _blank ? "" : value;
     }
 }

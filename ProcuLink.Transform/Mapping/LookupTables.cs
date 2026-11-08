@@ -1,7 +1,7 @@
 namespace ProcuLink.Transform.Mapping;
 
 /// <summary>A value a Lookup step looked for and did not find. Reported, never a failure.</summary>
-public sealed record LookupMiss(Guid LookupId, string Value);
+public sealed record LookupMiss(Guid LookupId, string Value, IReadOnlyDictionary<string, string>? Row = null);
 
 /// <summary>The org's lookups one render may use: per lookup id, From → To. From matches trimmed and case-insensitive.</summary>
 public sealed class LookupTables(IReadOnlyDictionary<Guid, IReadOnlyDictionary<string, string>> byId)
@@ -9,12 +9,12 @@ public sealed class LookupTables(IReadOnlyDictionary<Guid, IReadOnlyDictionary<s
     private readonly Dictionary<Guid, Dictionary<string, string>> _byId = byId.ToDictionary(t => t.Key,
         t => t.Value.ToDictionary(e => e.Key.Trim(), e => e.Value, StringComparer.OrdinalIgnoreCase));
     private readonly List<LookupMiss> _misses = [];
-    private readonly HashSet<LookupMiss> _seen = [];
+    private readonly HashSet<(Guid, string)> _seen = [];
 
     public bool Has(Guid lookupId) => _byId.ContainsKey(lookupId);
 
-    /// <summary>The stored To for <paramref name="value"/>; on a miss, <paramref name="mapped"/> is the value and the miss is recorded once.</summary>
-    public bool TryMap(Guid lookupId, string value, out string mapped)
+    /// <summary>The stored To for <paramref name="value"/>; on a miss, <paramref name="mapped"/> is the value and the miss is recorded once, with a copy of <paramref name="row"/> (the caller reuses its row bag).</summary>
+    public bool TryMap(Guid lookupId, string value, out string mapped, IReadOnlyDictionary<string, string>? row = null)
     {
         var key = value.Trim();
         if (_byId.TryGetValue(lookupId, out var table) && table.TryGetValue(key, out var to))
@@ -22,7 +22,7 @@ public sealed class LookupTables(IReadOnlyDictionary<Guid, IReadOnlyDictionary<s
             mapped = to;
             return true;
         }
-        if (_seen.Add(new(lookupId, key))) _misses.Add(new(lookupId, key));
+        if (_seen.Add((lookupId, key))) _misses.Add(new(lookupId, key, row is null ? null : new Dictionary<string, string>(row)));
         mapped = value;
         return false;
     }

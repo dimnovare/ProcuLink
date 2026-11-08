@@ -8,6 +8,8 @@ public class Lookup
     public string Name { get; set; } = "";
     /// <summary>A serialized <c>LookupEntry[]</c>.</summary>
     public string EntriesJson { get; set; } = "[]";
+    /// <summary>A serialized <c>LookupCandidate[]</c>: the values this table may write.</summary>
+    public string CandidatesJson { get; set; } = "[]";
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }

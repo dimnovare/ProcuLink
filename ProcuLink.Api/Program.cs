@@ -673,6 +673,7 @@ builder.Services.Configure<ProcuLink.Api.Services.Documents.DocumentEngineOption
 builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.DocumentEngineGate>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentRechecker>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentSender>();
+builder.Services.AddScoped<ProcuLink.Api.Services.Documents.LookupSuggester>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentIntakeService>();
 builder.Services.AddScoped<ProcuLink.Core.Documents.IFlowDocumentSubmitter>(sp => sp.GetRequiredService<ProcuLink.Api.Services.Documents.DocumentIntakeService>());
 
