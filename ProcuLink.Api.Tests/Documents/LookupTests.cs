@@ -60,6 +60,10 @@ public class LookupTests(DocumentEngineTestFactory factory) : IClassFixture<Docu
     }
 
     [Fact]
+    public void A_null_entry_is_a_problem_not_a_crash() =>
+        LookupRules.Problem([null!]).Should().Be("Every entry needs a value to look for.");
+
+    [Fact]
     public async Task Candidates_round_trip_and_a_save_without_them_keeps_them()
     {
         var http = factory.ClientFor(Org);
