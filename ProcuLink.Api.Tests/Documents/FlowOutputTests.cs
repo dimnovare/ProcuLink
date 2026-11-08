@@ -216,7 +216,8 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
             };
             ReadRow Row(string sku, string name) => new(new Dictionary<string, ReadCell>
                 { ["sku"] = new(sku, 1, null, false, false), ["name"] = new(name, 1, null, false, false) });
-            var read = new ReadResult("Invoice", [],
+            var read = new ReadResult("Invoice",
+                [new ReadField("seller", "Seller", "Brewery North", FieldTypes.Text, null, 1, null, false, true, false)],
                 [new ReadTable("items", "Items", cols.Select(c => new ReadColumn(c.Key, c.Label, FieldTypes.Text, null)).ToList(),
                     [Row("A1", "Pilsner 0.5"), Row("B2", "Stout")], true)]);
             var doc = new FlowDocument
@@ -267,6 +268,7 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         var body = await res.Content.ReadFromJsonAsync<JsonElement>();
         lines.Single(l => l.BuyerItemCode == "A1").Description.Should().Contain("Pilsner 0.5");
         lines.Single(l => l.BuyerItemCode == "B2").Description.Should().Contain("Stout").And.NotContain("Pilsner");
+        lines.Should().OnlyContain(l => !l.Description!.Contains("Brewery North"));
         candidates.Should().OnlyContain(c => c.IsCatalogProduct);
         var s = body.GetProperty("suggestions").EnumerateArray().Single();
         (s.GetProperty("lookupId").GetGuid(), s.GetProperty("value").GetString(), s.GetProperty("to").GetString(),

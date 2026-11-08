@@ -107,7 +107,8 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         // A workbook is binary; its preview is the CSV text of the same grid (xlsx renders from the csv template).
         var format = output.Format == FlowOutputFormats.Xlsx ? FlowOutputFormats.Csv : output.Format;
         var lookups = await DocumentLookups.LoadAsync(db, orgId, [template], ct);
-        var render = DocumentOutputRenderer.Render(format, template, DocumentJson.Deserialize<ReadResult>(doc.ReadJson), output.TableKey, lookups);
+        var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
+        var render = DocumentOutputRenderer.Render(format, template, read, output.TableKey, lookups);
         if (!render.Ok) return UnprocessableEntity(new { error = render.Error, detail = render.Detail });
 
         using var reader = new StreamReader(render.Result!.Content, Encoding.UTF8);
@@ -117,7 +118,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         var fileName = Path.GetFileNameWithoutExtension(doc.FileName) + render.Result.FileExtension;
         if (!suggest) return Ok(new { contentType = render.Result.ContentType, fileName, content, lookupMisses = shown });
 
-        var found = await suggester!.SuggestAsync(orgId, misses, ct);
+        var found = await suggester!.SuggestAsync(orgId, misses, DocumentRows.Build(read, output.TableKey).Header, ct);
         if (found.CapReached) return StatusCode(429, new { error = "ai_usage_cap" });
         return Ok(new { contentType = render.Result.ContentType, fileName, content, lookupMisses = shown, suggestions = found.Suggestions });
     }

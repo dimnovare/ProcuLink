@@ -18,11 +18,11 @@ public sealed record LookupSuggestionResult(IReadOnlyList<LookupSuggestion> Sugg
 /// </summary>
 public sealed class LookupSuggester(ProcuLinkDbContext db, IAiMappingService ai, IAiUsageTracker usage)
 {
-    public const int MaxMisses = 25, PerMiss = 8, PerCall = 5, MaxContext = 500;
+    public const int MaxMisses = 25, PerMiss = 8, PerCall = 5, MaxContext = 500, WholeListMax = 40;
 
     private sealed record Ranked(int Order, LookupMiss Miss, string Context, List<LookupCandidate> Candidates);
 
-    public async Task<LookupSuggestionResult> SuggestAsync(Guid orgId, IReadOnlyList<LookupMiss> misses, CancellationToken ct)
+    public async Task<LookupSuggestionResult> SuggestAsync(Guid orgId, IReadOnlyList<LookupMiss> misses, IReadOnlyDictionary<string, string>? header, CancellationToken ct)
     {
         if (misses.Count == 0) return new([], false);
         if (await usage.IsAtOrOverLimitAsync(orgId, ct)) return new([], true);
@@ -43,8 +43,11 @@ public sealed class LookupSuggester(ProcuLinkDbContext db, IAiMappingService ai,
             foreach (var (miss, order) in usable)
             {
                 if (miss.LookupId != lookup.Id) continue;
-                var context = Context(miss);
-                var tokens = LexicalScore.Tokenize($"{miss.Value} {context}");
+                var cells = Cells(miss, header);
+                var context = string.Join(" · ", cells.Select(kv => $"{kv.Key}: {kv.Value}"));
+                if (context.Length > MaxContext) context = context[..MaxContext];
+                if (candidates.Count <= WholeListMax) { ranked.Add(new(order, miss, context, candidates)); continue; }
+                var tokens = LexicalScore.Tokenize($"{miss.Value} {string.Join(' ', cells.Select(kv => kv.Value))}");
                 var top = candidates
                     .Select(c => (c, score: LexicalScore.Score(miss.Value, tokens, c.Value, c.Description, null)))
                     .Where(x => x.score > 0).OrderByDescending(x => x.score).Take(PerMiss).Select(x => x.c).ToList();
@@ -60,18 +63,20 @@ public sealed class LookupSuggester(ProcuLinkDbContext db, IAiMappingService ai,
                 foreach (var (i, s) in answers)
                 {
                     if (i < 0 || i >= chunk.Length) continue;
-                    var description = pool.FirstOrDefault(c => string.Equals(c.Value, s.SupplierItemCode, StringComparison.OrdinalIgnoreCase))?.Description;
-                    found.Add((chunk[i].Order, new(lookup.Id, chunk[i].Miss.Value, s.SupplierItemCode, s.Confidence, description)));
+                    var match = pool.FirstOrDefault(c => string.Equals(c.Value, s.SupplierItemCode, StringComparison.OrdinalIgnoreCase));
+                    found.Add((chunk[i].Order, new(lookup.Id, chunk[i].Miss.Value, match?.Value ?? s.SupplierItemCode, s.Confidence, match?.Description)));
                 }
             }
         }
         return new(found.OrderBy(f => f.Order).Select(f => f.Suggestion).ToList(), false);
     }
 
-    private static string Context(LookupMiss miss)
+    /// <summary>The row's own cells: header pairs (equal key and value) are dropped, unless nothing else is left. Blanks and the miss itself are skipped.</summary>
+    private static List<KeyValuePair<string, string>> Cells(LookupMiss miss, IReadOnlyDictionary<string, string>? header)
     {
-        var text = string.Join(" · ", (miss.Row ?? new Dictionary<string, string>())
-            .Where(kv => !string.IsNullOrWhiteSpace(kv.Value) && kv.Value.Trim() != miss.Value).Select(kv => $"{kv.Key}: {kv.Value}"));
-        return text.Length > MaxContext ? text[..MaxContext] : text;
+        var all = (miss.Row ?? new Dictionary<string, string>())
+            .Where(kv => !string.IsNullOrWhiteSpace(kv.Value) && kv.Value.Trim() != miss.Value.Trim()).ToList();
+        var own = header is null ? all : all.Where(kv => !(header.TryGetValue(kv.Key, out var h) && h == kv.Value)).ToList();
+        return own.Count > 0 ? own : all;
     }
 }
