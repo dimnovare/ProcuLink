@@ -3045,37 +3045,12 @@ internal sealed class OrderIngestionService
         AiMappingLineContext line, IReadOnlyList<SupplierProduct> catalog, int take)
     {
         var buyerCode = (line.BuyerItemCode ?? string.Empty).Trim();
-        var buyerCodeLower = buyerCode.ToLowerInvariant();
-        var queryText = $"{buyerCode} {line.Description}".Trim();
-        var queryTokens = Tokenize(queryText);
+        var queryTokens = LexicalScore.Tokenize($"{buyerCode} {line.Description}".Trim());
 
         var scored = new List<(SupplierProduct Product, int Score)>(catalog.Count);
         foreach (var p in catalog)
         {
-            var code = (p.Code ?? string.Empty).Trim();
-            var codeLower = code.ToLowerInvariant();
-            var barcode = (p.Barcode ?? string.Empty).Trim();
-            var name = p.Name ?? string.Empty;
-
-            var score = 0;
-
-            // Strongest signals: exact code or exact barcode match against the buyer code.
-            if (buyerCodeLower.Length > 0 && codeLower == buyerCodeLower) score += 100;
-            if (buyerCodeLower.Length > 0 && barcode.Length > 0
-                && string.Equals(barcode, buyerCode, StringComparison.OrdinalIgnoreCase)) score += 100;
-
-            // Substring containment in either direction (code embedded in the line, or vice versa).
-            if (buyerCodeLower.Length >= 3 && codeLower.Length >= 3
-                && (codeLower.Contains(buyerCodeLower) || buyerCodeLower.Contains(codeLower))) score += 25;
-
-            // Token overlap between the line text and the product code+name.
-            var productTokens = Tokenize($"{code} {name}");
-            if (queryTokens.Count > 0 && productTokens.Count > 0)
-            {
-                var overlap = queryTokens.Count(t => productTokens.Contains(t));
-                score += overlap * 5;
-            }
-
+            var score = LexicalScore.Score(buyerCode, queryTokens, p.Code ?? string.Empty, p.Name, p.Barcode);
             if (score > 0) scored.Add((p, score));
         }
 
@@ -3084,21 +3059,6 @@ internal sealed class OrderIngestionService
             .ThenBy(s => s.Product.Code, ItemCodeComparison.Comparer)
             .Take(take)
             .Select(s => s.Product);
-    }
-
-    private static readonly char[] TokenSeparators =
-        { ' ', '\t', '\r', '\n', ',', ';', '.', '/', '\\', '-', '_', '(', ')', '[', ']', '{', '}', ':', '"', '\'', '#', '*', '+', '&' };
-
-    /// <summary>Lowercase, punctuation-split token set; drops tokens shorter than 2 chars as noise.</summary>
-    private static HashSet<string> Tokenize(string? text)
-    {
-        var set = new HashSet<string>(StringComparer.Ordinal);
-        if (string.IsNullOrWhiteSpace(text)) return set;
-        foreach (var raw in text.ToLowerInvariant().Split(TokenSeparators, StringSplitOptions.RemoveEmptyEntries))
-        {
-            if (raw.Length >= 2) set.Add(raw);
-        }
-        return set;
     }
 
     /// <summary>
