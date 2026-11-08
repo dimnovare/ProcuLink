@@ -17,8 +17,13 @@ public static class PdfWordExtractor
 
         foreach (var page in document.GetPages())
         {
-            var pageWords = page.GetWords().ToList();
-            foreach (var w in pageWords)
+            // One line grouping per page feeds both Words and Text, so the two share a reading order.
+            var lines = page.GetWords()
+                .GroupBy(w => Math.Round(w.BoundingBox.Bottom / 4.0) * 4.0)
+                .OrderByDescending(g => g.Key)
+                .Select(g => g.OrderBy(w => w.BoundingBox.Left).ToList())
+                .ToList();
+            foreach (var w in lines.SelectMany(l => l))
             {
                 var b = w.BoundingBox;
                 var x = Clamp(b.Left / page.Width);
@@ -30,11 +35,7 @@ public static class PdfWordExtractor
             }
 
             text.Append("=== Page ").Append(page.Number).Append(" ===\n");
-            var lines = pageWords
-                .GroupBy(w => Math.Round(w.BoundingBox.Bottom / 4.0) * 4.0)
-                .OrderByDescending(g => g.Key)
-                .Select(g => string.Join(" ", g.OrderBy(w => w.BoundingBox.Left).Select(w => w.Text)));
-            foreach (var line in lines) text.Append(line).Append('\n');
+            foreach (var line in lines) text.Append(string.Join(" ", line.Select(w => w.Text))).Append('\n');
         }
 
         return new PdfWords(document.NumberOfPages, words, text.ToString());
