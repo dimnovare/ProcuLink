@@ -12,8 +12,8 @@ public static class DocumentLookups
     /// <summary>Every Lookup step in a template, whatever its params.</summary>
     public static IEnumerable<ManipulatorEntry> Steps(OutputNodeTemplate template)
     {
-        IEnumerable<ManipulatorEntry> Walk(OutputNode n) =>
-            (n.Rule?.FieldManipulators ?? []).Where(m => m?.Type == "Lookup").Concat((n.Children ?? []).SelectMany(Walk));
+        IEnumerable<ManipulatorEntry> Walk(OutputNode? n) =>
+            n is null ? [] : (n.Rule?.FieldManipulators ?? []).Where(m => m?.Type == "Lookup").Concat((n.Children ?? []).SelectMany(Walk));
         return template.Root is null ? [] : Walk(template.Root);
     }
 

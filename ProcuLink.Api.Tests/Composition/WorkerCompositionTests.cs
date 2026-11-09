@@ -24,13 +24,13 @@ public class WorkerCompositionTests
     private sealed class HostBuiltSentinel(IHost host) : Exception { public IHost Host { get; } = host; }
 
     [Fact]
-    public void Worker_services_resolve()
+    public void Worker_host_builds_with_validation_on()
     {
         var env = new Dictionary<string, string>
         {
             ["DOTNET_ENVIRONMENT"] = "Development",
             ["ConnectionStrings__DefaultConnection"] = "Host=localhost;Database=none;Username=none;Password=none",
-            ["Storage__R2Endpoint"] = "", // keep the startup clock probe off the network
+            ["Storage__R2Endpoint"] = " ", // blank disables the startup clock probe; "" would delete the variable on .NET 8 and fall back to the appsettings placeholder
             ["Sentry__Dsn"] = "",
         };
         var saved = env.Keys.ToDictionary(k => k, Environment.GetEnvironmentVariable);
@@ -58,6 +58,7 @@ public class WorkerCompositionTests
         var registered = host!.Services.GetRequiredService<IServiceProviderIsService>();
         registered.IsService(typeof(DisposableOrgSweepJob)).Should().BeTrue();
         registered.IsService(typeof(ReadDocumentJob)).Should().BeTrue();
+        host.Dispose();
     }
 
     /// <summary>Aborts the Worker's own build only; a host another test builds is left alone.</summary>

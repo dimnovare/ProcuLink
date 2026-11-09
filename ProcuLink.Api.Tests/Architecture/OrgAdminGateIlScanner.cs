@@ -203,7 +203,7 @@ internal static class OrgAdminGateIlScanner
             "Deletes an output, so documents stop being rendered and sent through it."),
 
         new("Flow.Automation setter",
-            member => member is MethodBase { Name: "set_Automation" } m && m.DeclaringType == typeof(ProcuLink.Core.Entities.Flow),
+            member => member is MethodBase { Name: "set_" + nameof(ProcuLink.Core.Entities.Flow.Automation) } m && m.DeclaringType == typeof(ProcuLink.Core.Entities.Flow),
             "Switches a flow between review and automatic sending; automatic sending releases documents to "
           + "the vendor's destination with nobody checking them first. Its caller gates in-method, because "
           + "every member may still rename the flow."),

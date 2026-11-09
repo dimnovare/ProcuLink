@@ -43,15 +43,16 @@ public sealed class OrgAdminGateIsRealTests
     private const int ExpectedGatedEndpointCount = 27;
 
     /// <summary>
-    /// How many operations are declared destructive. Every gated endpoint reaches a declared primitive,
-    /// because <c>UpsertDeliveryConfig</c> both writes the delivery row and republishes the live
-    /// connection revision.
+    /// How many operations are declared destructive. Every gated endpoint reaches a declared primitive;
+    /// <c>UpsertDeliveryConfig</c> reaches two, since it writes the delivery row and republishes the
+    /// live connection revision.
     /// </summary>
     private const int ExpectedDestructivePrimitiveCount = 28;
 
     /// <summary>
     /// Endpoints that gate only PART of a request, in-method: resolve (an invoice's IBAN, number and
-    /// seller) and the organisation settings PUT (where invoices go; the order direction stays open).
+    /// seller), the organisation settings PUT (where invoices go; the order direction stays open) and
+    /// <c>FlowsController.Rename</c> (an automation change).
     /// </summary>
     private const int ExpectedInMethodGatedCount = 3;
 

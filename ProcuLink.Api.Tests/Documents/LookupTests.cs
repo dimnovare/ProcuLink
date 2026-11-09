@@ -141,7 +141,7 @@ public class LookupTests(DocumentEngineTestFactory factory) : IClassFixture<Docu
             db.Set<FlowOutput>().Add(new FlowOutput
             {
                 Id = Guid.NewGuid(), OrgId = Org, FlowId = flowId, Name = "CSV", Format = "csv",
-                TemplateJson = """{"format":"csv","root":{"name":"root","children":[{"name":"c","children":null,"rule":{"fieldManipulators":[null,{"type":"Lookup","params":null}]}}]}}""",
+                TemplateJson = """{"format":"csv","root":{"name":"root","children":[null,{"name":"c","children":null,"rule":{"fieldManipulators":[null,{"type":"Lookup","params":null}]}}]}}""",
                 CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
             });
             await db.SaveChangesAsync();
