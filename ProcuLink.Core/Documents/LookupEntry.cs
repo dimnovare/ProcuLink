@@ -17,7 +17,7 @@ public static class LookupRules
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var e in entries)
         {
-            if (string.IsNullOrWhiteSpace(e.From)) return "Every entry needs a value to look for.";
+            if (e is null || string.IsNullOrWhiteSpace(e.From)) return "Every entry needs a value to look for.";
             if (e.From.Length > MaxValueLength || (e.To?.Length ?? 0) > MaxValueLength) return $"Values can be at most {MaxValueLength} characters.";
             if (!seen.Add(e.From.Trim())) return $"'{e.From.Trim()}' appears more than once.";
         }

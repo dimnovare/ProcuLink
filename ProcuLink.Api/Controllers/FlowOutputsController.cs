@@ -39,6 +39,10 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
     private static bool FitsFormat(OutputNodeTemplate t, string format) =>
         t.Format == FlowOutputFormats.TemplateFormat(format) && OutputTreeFormats.IsRenderable(t.Format);
 
+    /// <summary>JSON nulls overwrite the empty defaults; a null node, child list, step or params would crash the walks below.</summary>
+    private static bool HasNullHole(OutputNode? n) =>
+        n?.Children is null || n.Rule?.FieldManipulators?.Any(m => m?.Params is null) == true || n.Children.Any(HasNullHole);
+
     private static IActionResult WrongFormat(string format) => Invalid($"The template must be a {FlowOutputFormats.TemplateFormat(format)} template.");
 
     private static IActionResult OutputNotFound() => new NotFoundObjectResult(new { error = "output_not_found" });
@@ -106,6 +110,8 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         if (body?.Template is not null && !FitsFormat(template, output.Format)) return WrongFormat(output.Format);
         // A workbook is binary; its preview is the CSV text of the same grid (xlsx renders from the csv template).
         var format = output.Format == FlowOutputFormats.Xlsx ? FlowOutputFormats.Csv : output.Format;
+        if (HasNullHole(template.Root)) return Invalid("template");
+
         var lookups = await DocumentLookups.LoadAsync(db, orgId, [template], ct);
         var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
         var render = DocumentOutputRenderer.Render(format, template, read, output.TableKey, lookups);
@@ -148,6 +154,8 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
 
         var template = request.Template ?? DefaultOutputTemplate.For(fields, request.Format, request.TableKey);
         if (!FitsFormat(template, request.Format)) return WrongFormat(request.Format);
+
+        if (HasNullHole(template.Root)) return Invalid("template");
 
         var lookups = await DocumentLookups.LoadAsync(db, orgId, [template], ct);
         if (DocumentLookups.Steps(template).Any(s => !Guid.TryParse(s.Params.ElementAtOrDefault(0), out var id) || !lookups.Has(id)

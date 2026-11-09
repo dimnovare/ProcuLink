@@ -80,6 +80,26 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
     }
 
     [Fact]
+    public async Task A_template_with_a_null_step_params_or_child_is_refused_not_a_500()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, _) = await Seed(confirmed: true);
+        object Template(object?[] children) => new { format = "csv", root = new { name = "r", nodeType = "object", children } };
+        object Leaf(object?[] steps) => new { name = "a", nodeType = "field", rule = new { fieldManipulators = steps } };
+
+        foreach (var bad in new[]
+        {
+            Template([Leaf([null])]),
+            Template([null]),
+        })
+        {
+            var res = await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "x", format = "csv", template = bad });
+            res.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity, await res.Content.ReadAsStringAsync());
+            (await res.Content.ReadAsStringAsync()).Should().Contain("output_invalid").And.Contain("\"detail\":\"template\"");
+        }
+    }
+
+    [Fact]
     public async Task SendWhen_RoundTrips_AndMustNameAHeaderField()
     {
         var http = factory.ClientFor(Org);
