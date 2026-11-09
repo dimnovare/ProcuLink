@@ -1,4 +1,5 @@
 using System.Text;
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using ProcuLink.Transform.Tokenizing;
@@ -12,12 +13,56 @@ public sealed record DocumentTextResult(string Text, IReadOnlyList<TextSpan> Spa
 /// <summary>Turns a Word, text or structured file into text for the reader, plus the addressed spans a value can be located in.</summary>
 public static class DocumentText
 {
-    private static string ParagraphText(Paragraph p) => string.Concat(p.Descendants().Select(e => e switch
+    // One pass over the body, so every element is visited once. A paragraph gives only its own runs; a text box
+    // inside it is walked afterwards as blocks of its own, so nested boxes are never repeated by each enclosing
+    // paragraph. Content controls and other containers are walked through. Of an AlternateContent, only the
+    // first branch is read, since Word stores the same text box twice (DrawingML and a VML fallback).
+    // Real documents nest a handful of levels; a crafted one could nest deep enough to overflow the stack.
+    private const int MaxDepth = 64;
+
+    private static void Blocks(OpenXmlElement e, List<string> lines, int depth = 0)
     {
-        Text t => t.Text,
-        TabChar or Break => " ",
-        _ => "",
-    }));
+        if (depth > MaxDepth) throw new InvalidDataException("The document nests too deeply.");
+        foreach (var c in e.ChildElements)
+        {
+            var boxes = new List<OpenXmlElement>();
+            switch (c)
+            {
+                case Paragraph p:
+                    lines.Add(Inline(p, boxes, depth));
+                    break;
+                case Table t:
+                    foreach (var r in t.Elements<TableRow>())
+                        lines.Add(string.Join(" | ", r.Elements<TableCell>().Select(cell =>
+                            string.Join(' ', cell.Elements<Paragraph>().Select(cp => Inline(cp, boxes, depth))).Trim())));
+                    break;
+                default:
+                    Blocks(c, lines, depth + 1);
+                    break;
+            }
+            foreach (var b in boxes) Blocks(b, lines, depth + 1);
+        }
+    }
+
+    private static string Inline(OpenXmlElement e, List<OpenXmlElement> boxes, int depth)
+    {
+        var sb = new StringBuilder();
+        void Walk(OpenXmlElement x, int d)
+        {
+            if (d > MaxDepth) throw new InvalidDataException("The document nests too deeply.");
+            foreach (var c in x.ChildElements)
+                switch (c)
+                {
+                    case Text t: sb.Append(t.Text); break;
+                    case TabChar or Break: sb.Append(' '); break;
+                    case TextBoxContent box: boxes.Add(box); break;
+                    case AlternateContent ac: if (ac.FirstChild is { } first) Walk(first, d + 1); break;
+                    default: Walk(c, d + 1); break;
+                }
+        }
+        Walk(e, depth);
+        return sb.ToString();
+    }
 
     /// <summary>A Word part may hold at most this many characters. A 10 MB .docx can inflate to gigabytes, so the SDK stops reading past this instead of the cap running after the whole body is in memory.</summary>
     public const long MaxDocxPartChars = 10_000_000;
@@ -33,16 +78,9 @@ public static class DocumentText
                 using (var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false, new OpenSettings { MaxCharactersInPart = MaxDocxPartChars }))
                 {
                     var n = 0;
-                    spans = (doc.MainDocumentPart?.Document?.Body?.Descendants().Where(e => e is Paragraph or Table && !e.Ancestors<Table>().Any()) ?? [])
-                        .Select(e => e switch
-                        {
-                            Paragraph p => ParagraphText(p),
-                            Table t => string.Join('\n', t.Elements<TableRow>().Select(r =>
-                                string.Join(" | ", r.Elements<TableCell>().Select(c =>
-                                    string.Join(' ', c.Elements<Paragraph>().Select(ParagraphText)).Trim())))),
-                            _ => "",
-                        })
-                        .SelectMany(s => s.Split('\n'))
+                    var lines = new List<string>();
+                    if (doc.MainDocumentPart?.Document?.Body is { } body) Blocks(body, lines);
+                    spans = lines
                         .Where(s => !string.IsNullOrWhiteSpace(s))
                         .Select(s => new TextSpan($"para:{++n}", s.Trim())).ToList();
                 }

@@ -22,7 +22,9 @@ public class DocumentTextTests
             main.Document = new Document(new Body(
                 new Paragraph(new Run(new Text("Order no:"), new TabChar(), new Text("PO-77"))),
                 new Table(new TableRow(Cell("A"), Cell("3"), Cell("9.50"))),
-                new SdtBlock(new SdtContentBlock(new Paragraph(new Run(new Text("In a control")))))));
+                new SdtBlock(new SdtContentBlock(new Paragraph(new Run(new Text("In a control"))))),
+                new Paragraph(new Run(new Text("Ship to:"), new Picture(new DocumentFormat.OpenXml.Vml.Shape(new DocumentFormat.OpenXml.Vml.TextBox(
+                    new TextBoxContent(new Paragraph(new Run(new Text("Dock 4")))))))))));
         }
 
         var r = await DocumentText.ReadAsync("po.docx", ms.ToArray(), Tokenizer, default);
@@ -30,6 +32,8 @@ public class DocumentTextTests
         r.Spans[0].Should().Be(new TextSpan("para:1", "Order no: PO-77"));
         r.Spans[1].Should().Be(new TextSpan("para:2", "A | 3 | 9.50"));
         r.Spans[2].Should().Be(new TextSpan("para:3", "In a control"));
+        // A text box is its own span, read once, and not repeated inside the paragraph that holds it.
+        r.Spans.Skip(3).Should().Equal(new TextSpan("para:4", "Ship to:"), new TextSpan("para:5", "Dock 4"));
         r.Text.Should().Contain("A | 3 | 9.50");
     }
 
@@ -62,6 +66,20 @@ public class DocumentTextTests
         var r = await DocumentText.ReadAsync("po.edi", Encoding.UTF8.GetBytes(x12), Tokenizer, default);
 
         r.Spans.Should().Contain(s => s.Text == "PO-X12-000123");
+    }
+
+    [Fact]
+    public async Task A_word_file_nested_too_deep_is_refused_not_overflowed()
+    {
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            DocumentFormat.OpenXml.OpenXmlElement inner = new Paragraph(new Run(new Text("deep")));
+            for (var i = 0; i < 200; i++) inner = new SdtBlock(new SdtContentBlock(inner));
+            doc.AddMainDocumentPart().Document = new Document(new Body(inner));
+        }
+
+        await FluentActions.Awaiting(() => DocumentText.ReadAsync("deep.docx", ms.ToArray(), Tokenizer, default)).Should().ThrowAsync<InvalidDataException>();
     }
 
     [Fact]
