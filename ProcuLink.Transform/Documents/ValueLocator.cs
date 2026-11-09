@@ -42,6 +42,16 @@ public static class ValueLocator
         return hit is null ? null : new SourceLocation(null, null, $"cell:r{hit.Row}c{hit.Column}");
     }
 
+    /// <summary>A whole-span match first (trimmed, case-insensitive), else the first span that contains the value.</summary>
+    public static SourceLocation? LocateInSpans(string? value, IReadOnlyList<TextSpan> spans)
+    {
+        var v = value?.Trim();
+        if (string.IsNullOrEmpty(v)) return null;
+        var hit = spans.FirstOrDefault(s => string.Equals(s.Text.Trim(), v, StringComparison.OrdinalIgnoreCase))
+            ?? spans.FirstOrDefault(s => s.Text.Contains(v, StringComparison.OrdinalIgnoreCase));
+        return hit is null ? null : new SourceLocation(null, null, hit.Address);
+    }
+
     private static string[] Tokens(string? s) =>
         string.IsNullOrWhiteSpace(s) ? [] : Regex.Split(s.Trim(), @"\s+").Select(Norm).ToArray();
 

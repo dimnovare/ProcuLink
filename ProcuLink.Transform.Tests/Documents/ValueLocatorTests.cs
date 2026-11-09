@@ -51,6 +51,15 @@ public class ValueLocatorTests
     }
 
     [Fact]
+    public void LocateInSpans_prefers_a_whole_span_then_containment()
+    {
+        var spans = new List<TextSpan> { new("a", "PO-9 total"), new("b", "po-9") };
+        ValueLocator.LocateInSpans("PO-9", spans)!.Address.Should().Be("b");
+        ValueLocator.LocateInSpans("total", spans)!.Address.Should().Be("a");
+        ValueLocator.LocateInSpans("zzz", spans).Should().BeNull();
+    }
+
+    [Fact]
     public void Locates_thousands_and_trailing_punctuation()
     {
         var words = new List<PageWord>
