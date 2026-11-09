@@ -96,14 +96,33 @@ public class DocumentUploadApiTests : IClassFixture<DocumentEngineTestFactory>
     }
 
     [Fact]
-    public async Task Docx_is_415_unsupported_format()
+    public async Task A_word_file_is_refused_while_formats_are_off()
     {
-        var res = await Upload(await NewFlow(), "letter.docx", [1, 2, 3]);
+        var flowId = await NewFlow();
+
+        var res = await Upload(flowId, "po.docx", [1, 2, 3]);
 
         Assert.Equal(HttpStatusCode.UnsupportedMediaType, res.StatusCode);
         using var body = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
         Assert.Equal("unsupported_format", body.RootElement.GetProperty("error").GetString());
         Assert.Equal(["pdf", "csv", "xlsx"], body.RootElement.GetProperty("accepted").EnumerateArray().Select(e => e.GetString()));
+        var list = await _http.GetFromJsonAsync<JsonElement>($"/api/documents?flowId={flowId}");
+        Assert.Equal(0, list.GetArrayLength());
+    }
+
+    [Fact]
+    public async Task An_upper_case_json_is_accepted_with_formats_on()
+    {
+        var http = _factory.ClientFor(DocumentEngineTestFactory.OrgB);
+        var created = await http.PostAsJsonAsync("/api/flows", new CreateFlowRequest("Formats"));
+        var flowId = (await created.Content.ReadFromJsonAsync<FlowDto>(DocumentJson.Options))!.Id;
+        var form = new MultipartFormDataContent { { new ByteArrayContent("{}"u8.ToArray()), "file", "ORDER.JSON" } };
+
+        var res = await http.PostAsync($"/api/flows/{flowId}/documents", form);
+
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var dto = (await res.Content.ReadFromJsonAsync<DocumentSummaryDto>(DocumentJson.Options))!;
+        Assert.Equal(1, dto.BillingUnits);
     }
 
     [Fact]

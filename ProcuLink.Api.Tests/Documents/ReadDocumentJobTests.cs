@@ -110,8 +110,35 @@ public sealed class ReadDocumentJobTests
         ocr.Setup(o => o.ReadWordsAsync(It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>())).ReturnsAsync(ocrWords ?? []);
         var gate = new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions { EnabledForAll = true, ScansForAll = scans }));
         var job = new ReadDocumentJob(db, storage.Object, reader.Object, new DocumentRechecker(db), Mock.Of<Hangfire.IBackgroundJobClient>(),
-            rasterizer ?? Mock.Of<IPdfRasterizer>(), ocr.Object, gate, NullLogger<ReadDocumentJob>.Instance);
+            rasterizer ?? Mock.Of<IPdfRasterizer>(), ocr.Object, gate, new ProcuLink.Transform.Tokenizing.SourceTokenizer(), NullLogger<ReadDocumentJob>.Instance);
         return (job, db, reader, doc.Id);
+    }
+
+    [Fact]
+    public async Task A_json_document_is_read_as_text_and_located_by_pointer()
+    {
+        var (job, db, reader, id) = Arrange(System.Text.Encoding.UTF8.GetBytes("{\"po\":\"PO-9\"}"), fileName: "order.json",
+            readFields: [Field("po", "PO-9")]);
+
+        await job.ExecuteAsync(id, Org, null, CancellationToken.None);
+
+        reader.Verify(r => r.ReadAsync(It.Is<DocumentReadInput>(i => i.Text.Contains("PO-9") && i.Pages == null), Org, It.IsAny<CancellationToken>()), Times.Once);
+        var po = DocumentJson.Deserialize<ReadResult>((await db.FlowDocuments.SingleAsync(d => d.Id == id)).ReadJson).Fields.Single();
+        po.Location!.Address.Should().Be("json:/po");
+        po.NotOnPage.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_damaged_word_file_fails_unreadable()
+    {
+        var (job, db, reader, id) = Arrange(System.Text.Encoding.UTF8.GetBytes("not a zip"), fileName: "po.docx");
+
+        await job.ExecuteAsync(id, Org, null, CancellationToken.None);
+
+        var doc = await db.FlowDocuments.SingleAsync(d => d.Id == id);
+        doc.Status.Should().Be(DocumentStatus.ReadFailed);
+        doc.StatusReason.Should().Be("unreadable_file");
+        reader.Verify(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

@@ -4,6 +4,7 @@ using Hangfire;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using ProcuLink.Api.Jobs;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Infrastructure.Tenancy;
@@ -283,17 +284,8 @@ public sealed class InboundEmailController : ControllerBase
     /// need a plain-text body good enough for the NLP extractor, not a perfect
     /// HTML-to-text renderer.
     /// </summary>
-    private static string? ResolveBody(PostmarkInboundPayload body)
-    {
-        if (!string.IsNullOrWhiteSpace(body.TextBody))
-            return body.TextBody;
-        if (!string.IsNullOrWhiteSpace(body.HtmlBody))
-            return StripHtml(body.HtmlBody!);
-        return null;
-    }
-
-    private static readonly Regex HtmlTagRegex = new(@"<[^>]+>", RegexOptions.Compiled);
-    private static readonly Regex WhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
+    private static string? ResolveBody(PostmarkInboundPayload body) =>
+        EmailBodyText.Resolve(body.TextBody, body.HtmlBody);
 
     // ── POST /api/inbound-email/postmark-bounce ──────────────────────────────
 
@@ -430,20 +422,6 @@ public sealed class InboundEmailController : ControllerBase
         }
 
         return null;
-    }
-
-    private static string StripHtml(string html)
-    {
-        // Drop <script> and <style> blocks (content, not just tags) so their
-        // text doesn't bleed into the extracted body.
-        var noScripts = Regex.Replace(html, "<script[^>]*>.*?</script>",
-            string.Empty, RegexOptions.IgnoreCase | RegexOptions.Singleline);
-        var noStyles = Regex.Replace(noScripts, "<style[^>]*>.*?</style>",
-            string.Empty, RegexOptions.IgnoreCase | RegexOptions.Singleline);
-
-        var stripped = HtmlTagRegex.Replace(noStyles, " ");
-        var decoded = System.Net.WebUtility.HtmlDecode(stripped);
-        return WhitespaceRegex.Replace(decoded, " ").Trim();
     }
 
     /// <summary>

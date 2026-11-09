@@ -89,6 +89,40 @@ public sealed class InboundEmailFlowPostgresTests(PostgresContainerFixture postg
         Assert.Empty(db.PurchaseOrders);
     }
 
+    [DockerRequiredFact]
+    public async Task A_body_only_email_becomes_one_email_txt_document_even_when_delivered_twice()
+    {
+        var (orgId, _, to) = await SeedAsync(enabled: true);
+        var mail = Payload(to, "msg-1") with { Attachments = [], Body = "10 x bolts, PO 4411" };
+        await RouteAsync(mail, formatsOn: true);
+        await RouteAsync(mail, formatsOn: true);
+
+        await using var db = new ProcuLinkDbContext(_options!);
+        Assert.Equal("email.txt", (await db.FlowDocuments.AsNoTracking().SingleAsync(d => d.OrgId == orgId)).FileName);
+    }
+
+    [DockerRequiredFact]
+    public async Task An_email_with_a_pdf_and_a_body_makes_only_the_pdf()
+    {
+        var (orgId, _, to) = await SeedAsync(enabled: true);
+        await RouteAsync(Payload(to, "msg-1") with { Body = "see attached" }, formatsOn: true);
+
+        await using var db = new ProcuLinkDbContext(_options!);
+        Assert.Equal("a.pdf", (await db.FlowDocuments.AsNoTracking().SingleAsync(d => d.OrgId == orgId)).FileName);
+    }
+
+    [DockerRequiredFact]
+    public async Task A_body_only_email_with_formats_off_makes_no_document_and_says_so()
+    {
+        var (orgId, _, to) = await SeedAsync(enabled: true);
+        await RouteAsync(Payload(to, "msg-1") with { Attachments = [], Body = "10 x bolts" });
+
+        await using var db = new ProcuLinkDbContext(_options!);
+        Assert.Empty(db.FlowDocuments);
+        Assert.Equal("An email from buyer@example.test had no file we can read attached.",
+            (await db.FlowIntakes.AsNoTracking().SingleAsync(i => i.OrgId == orgId)).LastMessage);
+    }
+
     private static InboundEmailPayload Payload(string to, string messageId) => new(
         "buyer@example.test", to, "Docs",
         [new InboundAttachment("a.pdf", "application/pdf", Encoding.UTF8.GetBytes("%PDF-1.4 test"))],
@@ -118,14 +152,14 @@ public sealed class InboundEmailFlowPostgresTests(PostgresContainerFixture postg
         return (orgId, flowId, $"orders@{minted.Token}.proculink.eu");
     }
 
-    private async Task<InboundEmailResult> RouteAsync(InboundEmailPayload payload, IFlowDocumentSubmitter? submitter = null)
+    private async Task<InboundEmailResult> RouteAsync(InboundEmailPayload payload, IFlowDocumentSubmitter? submitter = null, bool formatsOn = false)
     {
         var config = InboundAddressTestHarness.Configuration();
         await using var db = new ProcuLinkDbContext(_options!);
         var router = new InboundEmailRouter(
             db, Mock.Of<IClaimedOrderCreator>(), Mock.Of<IParseJobEnqueuer>(), Mock.Of<IEmailBodyOrderExtractor>(),
             InboundAddressTestHarness.Create(db, config), PermissiveBilling.Mock().Object, config,
-            NullLogger<InboundEmailRouter>.Instance, submitter ?? new PersistingSubmitter(_options!));
+            NullLogger<InboundEmailRouter>.Instance, submitter ?? new PersistingSubmitter(_options!, formatsOn));
         return await router.RouteAsync(payload, CancellationToken.None);
     }
 
@@ -140,9 +174,9 @@ public sealed class InboundEmailFlowPostgresTests(PostgresContainerFixture postg
     }
 
     /// <summary>Stands in for the Api submitter: persists the document the way AcceptAsync would.</summary>
-    private sealed class PersistingSubmitter(DbContextOptions<ProcuLinkDbContext> options) : IFlowDocumentSubmitter
+    private sealed class PersistingSubmitter(DbContextOptions<ProcuLinkDbContext> options, bool formatsOn) : IFlowDocumentSubmitter
     {
-        public IReadOnlyList<string> AcceptedFormats(Guid orgId) => DocumentFormats.Base;
+        public IReadOnlyList<string> AcceptedFormats(Guid orgId) => DocumentFormats.For(false, formatsOn);
 
         public async Task<FlowSubmitResult> SubmitAsync(
             Guid orgId, Guid flowId, Stream content, string fileName, string contentType,

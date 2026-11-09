@@ -49,6 +49,7 @@
          unchanged — until the composition root assigns a factory. net8 servicing band to match
          the EF/ASP.NET 8.0.x packages the rest of the solution resolves transitively. -->
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
+    <PackageReference Include="DocumentFormat.OpenXml" Version="3.1.1" />
     <PackageReference Include="PdfPig" Version="0.1.14" />
     <!-- Community licence (free under USD 1M annual revenue); set in DocumentPdfOutput. -->
     <PackageReference Include="QuestPDF" Version="2026.9.1" />

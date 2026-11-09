@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -626,7 +627,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         }
     }
 
-    /// <summary>Mail sent to one flow's own address: each PDF, CSV or Excel attachment becomes a document in that flow.</summary>
+    /// <summary>Mail sent to one flow's own address: each attachment the flow accepts becomes a document in that flow.</summary>
     private async Task<InboundEmailResult> RouteToFlowAsync(
         InboundEmailPayload payload, Guid orgId, Guid flowId, CancellationToken ct)
     {
@@ -657,12 +658,19 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
 
         var usable = 0;
         var accepted = _flows.AcceptedFormats(orgId);
-        foreach (var att in payload.Attachments.Where(a =>
-                     accepted.Contains(Path.GetExtension(a.FileName).TrimStart('.'), StringComparer.OrdinalIgnoreCase)))
+        var messageKey = $"postmark:{payload.ProviderMessageId ?? Guid.NewGuid().ToString("N")}";
+        var files = payload.Attachments.Where(a =>
+                accepted.Contains(Path.GetExtension(a.FileName).TrimStart('.'), StringComparer.OrdinalIgnoreCase))
+            .Select(a => (a.FileName, a.ContentType, a.Content,
+                Key: $"{messageKey}#{Convert.ToHexString(SHA256.HashData(a.Content)).ToLowerInvariant()}"))
+            .ToList();
+        // Nothing was submitted, so the body is the document, when the org reads text files.
+        if (files.Count == 0 && accepted.Contains("txt") && !string.IsNullOrWhiteSpace(payload.Body))
+            files.Add(("email.txt", "text/plain", Encoding.UTF8.GetBytes(payload.Body), $"{messageKey}#body"));
+        foreach (var att in files)
         {
             usable++;
-            var hash = Convert.ToHexString(SHA256.HashData(att.Content)).ToLowerInvariant();
-            var key = $"postmark:{payload.ProviderMessageId ?? Guid.NewGuid().ToString("N")}#{hash}";
+            var key = att.Key;
             var claim = await IntakeLedger.ClaimAsync(_db, orgId, intake.Id, key, ct);
             if (claim is null)
             {
@@ -702,7 +710,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         intake.LastRunAt = DateTime.UtcNow;
         intake.LastStatus = "ok";
         intake.LastMessage = usable == 0
-            ? $"An email from {payload.FromEmail} had no PDF, CSV or Excel file attached."
+            ? $"An email from {payload.FromEmail} had no file we can read attached."
             : null;
         await _db.SaveChangesAsync(ct);
         return new InboundEmailResult(true, orgId, Array.Empty<Guid>(), null);

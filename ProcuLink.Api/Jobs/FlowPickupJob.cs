@@ -8,6 +8,7 @@ using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Catalog;
+using ProcuLink.Core.Services.Detection;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
@@ -172,7 +173,7 @@ public class FlowPickupJob(
             {
                 using var content = await Remote(() => session.DownloadAsync(file, IngressLimits.MaxFileBytes, ct));
                 var result = await submitter.SubmitAsync(intake.OrgId, intake.FlowId, content, file.FileName,
-                    ContentTypeOf(file.FileName), intake.Kind, file.SourceRef, ct);
+                    SourceDocumentMediaType.For(Path.GetExtension(file.FileName).TrimStart('.')).ContentType, intake.Kind, file.SourceRef, ct);
                 if (result.Limit is { Allowed: false } refused)
                 {
                     await IntakeLedger.ReleaseAsync(db, intake.OrgId, claim.Id, CancellationToken.None);
@@ -205,13 +206,4 @@ public class FlowPickupJob(
         message = string.Join(" ", new[] { message }.Concat(notes).Where(m => m.Length > 0)).Trim();
         return ("ok", message);
     }
-
-    private static string ContentTypeOf(string fileName) => Path.GetExtension(fileName).ToLowerInvariant() switch
-    {
-        ".pdf" => "application/pdf",
-        ".csv" => "text/csv",
-        ".png" => "image/png",
-        ".jpg" or ".jpeg" => "image/jpeg",
-        _ => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    };
 }

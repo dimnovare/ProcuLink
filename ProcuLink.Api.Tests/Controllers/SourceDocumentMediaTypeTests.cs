@@ -46,7 +46,7 @@ public sealed class SourceDocumentMediaTypeTests
     [InlineData("   ")]
     [InlineData(null)]
     [InlineData("email")]      // a real SourceCapture.Format value with no media type of its own
-    [InlineData("docx")]       // a format the detector does not emit
+    [InlineData("rtf")]        // a format nothing reads
     public void AnythingUnrecognised_IsOpaqueOctets_AndNeverInline(string? format)
     {
         var media = SourceDocumentMediaType.For(format);
@@ -55,6 +55,13 @@ public sealed class SourceDocumentMediaTypeTests
         Assert.Equal("application/octet-stream", media.ContentType);
         Assert.False(media.RenderInline);
     }
+
+    [Theory]
+    [InlineData("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")]
+    [InlineData("json", "application/json")]
+    [InlineData("txt", "text/plain")]
+    public void TheMoreFormatsMapToTheirStandardMediaTypes(string format, string expected) =>
+        Assert.Equal(expected, SourceDocumentMediaType.For(format).ContentType);
 
     [Theory]
     [InlineData("PDF")]

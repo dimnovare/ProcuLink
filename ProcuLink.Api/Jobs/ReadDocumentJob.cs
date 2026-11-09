@@ -18,7 +18,7 @@ namespace ProcuLink.Api.Jobs;
 public class ReadDocumentJob(
     ProcuLinkDbContext db, IFileStorageService storage, IDocumentReader reader,
     DocumentRechecker rechecker, IBackgroundJobClient jobs, IPdfRasterizer rasterizer, IDocumentOcrService ocr,
-    DocumentEngineGate gate, ILogger<ReadDocumentJob> logger)
+    DocumentEngineGate gate, ProcuLink.Transform.Tokenizing.ISourceTokenizer tokenizer, ILogger<ReadDocumentJob> logger)
 {
     private const int MaxChars = 60_000;
     private const int MinWordsPerTextPage = 5;
@@ -65,6 +65,7 @@ public class ReadDocumentJob(
         var pdfPages = 0;
         IReadOnlyList<PageWord> words = [];
         IReadOnlyList<SheetCell> cells = [];
+        IReadOnlyList<TextSpan>? spans = null;
         var text = "";
 
         byte[] bytes;
@@ -81,6 +82,10 @@ public class ReadDocumentJob(
             {
                 var pdf = PdfWordExtractor.Extract(bytes);
                 (words, text, pdfPages) = (pdf.Words, pdf.Text, pdf.PageCount);
+            }
+            else if (DocumentFormats.IsMore(doc.FileName))
+            {
+                (text, spans) = await DocumentText.ReadAsync(doc.FileName, bytes, tokenizer, ct);
             }
             else if (!isImage)
             {
@@ -144,7 +149,8 @@ public class ReadDocumentJob(
         (SourceLocation? Location, bool NotOnPage) Locate(string? value)
         {
             var onWords = isPdf || isImage;
-            var loc = onWords ? ValueLocator.Locate(value, words) : ValueLocator.LocateInCells(value, cells);
+            var loc = onWords ? ValueLocator.Locate(value, words)
+                : spans is not null ? ValueLocator.LocateInSpans(value, spans) : ValueLocator.LocateInCells(value, cells);
             return (loc, onWords && anyLocated && !string.IsNullOrWhiteSpace(value) && loc is null);
         }
 
