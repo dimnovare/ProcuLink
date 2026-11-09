@@ -25,14 +25,21 @@ public static class OutputSample
         {
             var format = FormatFor(fileName);
             if (format is null) return null;
-            if (format == FlowOutputFormats.Xlsx) return Flat(HeaderCsv(bytes), ',');
-            var text = Encoding.UTF8.GetString(bytes).TrimStart('﻿');
-            return format switch
+            var text = format == FlowOutputFormats.Xlsx ? "" : Encoding.UTF8.GetString(bytes).TrimStart('﻿');
+            var t = format switch
             {
+                FlowOutputFormats.Xlsx => Flat(HeaderCsv(bytes), ','),
                 FlowOutputFormats.Csv => Flat(text, Sniff(text)),
                 FlowOutputFormats.Json => Cleared(OutputNodeTemplateInferrer.FromSample(text, OutputFormat.Json)),
-                _ => Cleared(OutputNodeTemplateInferrer.FromSample(text, OutputFormat.Xml)),
+                // A DTD can expand entities; the inferrer parses with DTDs on, so a sample that has one is refused.
+                _ => text.Contains("<!DOCTYPE", StringComparison.OrdinalIgnoreCase)
+                    ? null
+                    : Cleared(OutputNodeTemplateInferrer.FromSample(text, OutputFormat.Xml)),
             };
+            // A draft needs at least one leaf, and leaf paths must be unique.
+            if (t is null) return null;
+            var paths = OutputLeafPaths.Of(t).Select(l => l.Path).ToList();
+            return paths.Count == 0 || paths.Distinct().Count() != paths.Count ? null : t;
         }
         catch
         {

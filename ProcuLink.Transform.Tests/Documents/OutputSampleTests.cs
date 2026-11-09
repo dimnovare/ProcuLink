@@ -66,5 +66,9 @@ public class OutputSampleTests
         OutputSample.Infer("a.xml", Encoding.UTF8.GetBytes("<o id=\"1\"><l q=\"2\"/></o>")).Should().NotBeNull();
         OutputSample.Infer("a.json", Encoding.UTF8.GetBytes("{not json")).Should().BeNull();
         OutputSample.Infer("a.xlsx", Workbook()).Should().BeNull();
+        // No leaves, or repeated leaf paths, can't make a draft; nor can a DTD.
+        OutputSample.Infer("a.csv", Encoding.UTF8.GetBytes("a,a\n")).Should().BeNull();
+        OutputSample.Infer("a.json", Encoding.UTF8.GetBytes("5")).Should().BeNull();
+        OutputSample.Infer("a.xml", Encoding.UTF8.GetBytes("<!DOCTYPE o [<!ENTITY x \"y\">]><o>&x;</o>")).Should().BeNull();
     }
 }
