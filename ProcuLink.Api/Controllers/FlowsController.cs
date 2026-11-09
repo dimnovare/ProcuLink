@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Contracts;
+using ProcuLink.Api.Auth;
 using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
@@ -77,6 +78,8 @@ public sealed class FlowsController(
         var orgId = tenant.OrganisationId;
         var flow = await db.Flows.FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == id, ct);
         if (flow is null) return FlowNotFound();
+        // Automatic sending is an admin decision; a member may still rename.
+        if (request.Automation is not null && !RequireOrgAdminAttribute.IsAdmin(HttpContext)) return RequireOrgAdminAttribute.Refusal();
         if (request.Name is null && request.Automation is null) return BadRequest(new { error = "invalid_name" });
         if (request.Name is not null)
         {

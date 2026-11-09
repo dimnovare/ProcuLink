@@ -127,4 +127,26 @@ public class LookupTests(DocumentEngineTestFactory factory) : IClassFixture<Docu
         }
         (await http.DeleteAsync($"/api/lookups/{id}")).StatusCode.Should().Be(HttpStatusCode.NoContent);
     }
+
+    [Fact]
+    public async Task Deleting_a_lookup_ignores_outputs_with_empty_steps()
+    {
+        var http = factory.ClientFor(Org);
+        var id = (await Create(http, "Unrelated", ("A", "B"))).Id;
+        var flowId = Guid.NewGuid();
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.Flows.Add(new Flow { Id = flowId, OrgId = Org, Name = "Empty steps", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+            db.Set<FlowOutput>().Add(new FlowOutput
+            {
+                Id = Guid.NewGuid(), OrgId = Org, FlowId = flowId, Name = "CSV", Format = "csv",
+                TemplateJson = """{"format":"csv","root":{"name":"root","children":[null,{"name":"c","children":null,"rule":{"fieldManipulators":[null,{"type":"Lookup","params":null}]}}]}}""",
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        (await http.DeleteAsync($"/api/lookups/{id}")).StatusCode.Should().Be(HttpStatusCode.NoContent);
+    }
 }

@@ -12,14 +12,14 @@ public static class DocumentLookups
     /// <summary>Every Lookup step in a template, whatever its params.</summary>
     public static IEnumerable<ManipulatorEntry> Steps(OutputNodeTemplate template)
     {
-        IEnumerable<ManipulatorEntry> Walk(OutputNode n) =>
-            (n.Rule?.FieldManipulators ?? []).Where(m => m.Type == "Lookup").Concat(n.Children.SelectMany(Walk));
-        return Walk(template.Root);
+        IEnumerable<ManipulatorEntry> Walk(OutputNode? n) =>
+            n is null ? [] : (n.Rule?.FieldManipulators ?? []).Where(m => m?.Type == "Lookup").Concat((n.Children ?? []).SelectMany(Walk));
+        return template.Root is null ? [] : Walk(template.Root);
     }
 
     /// <summary>Ids of the lookups a template's Lookup steps point at; unparsable ids are skipped.</summary>
     public static IReadOnlySet<Guid> UsedBy(OutputNodeTemplate template) =>
-        Steps(template).Select(m => Guid.TryParse(m.Params.ElementAtOrDefault(0), out var id) ? id : (Guid?)null).OfType<Guid>().ToHashSet();
+        Steps(template).Select(m => Guid.TryParse((m.Params ?? []).ElementAtOrDefault(0), out var id) ? id : (Guid?)null).OfType<Guid>().ToHashSet();
 
     /// <summary>The org's lookups the templates point at, loaded once for a render.</summary>
     public static async Task<LookupTables> LoadAsync(ProcuLinkDbContext db, Guid orgId, IEnumerable<OutputNodeTemplate> templates, CancellationToken ct)

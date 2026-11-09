@@ -5,6 +5,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
+using ProcuLink.Api.Tests.Integration;
 using ProcuLink.Api.Controllers;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
@@ -55,6 +56,41 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
 
     private static IEnumerable<OutputNode> Leaves(OutputNode n) =>
         n.NodeType is OutputNodeType.Field ? [n] : n.Children.SelectMany(Leaves);
+
+    private HttpClient MemberClient()
+    {
+        var http = factory.ClientFor(Org);
+        http.DefaultRequestHeaders.Remove(RbacTestAuthHandler.RoleHeader);
+        http.DefaultRequestHeaders.Add(RbacTestAuthHandler.RoleHeader, "org:member");
+        return http;
+    }
+
+    [Fact]
+    public async Task A_member_cannot_create_an_output()
+    {
+        var (flowId, _) = await Seed(confirmed: true);
+
+        var res = await MemberClient().PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "CSV", format = "csv" });
+
+        res.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await res.Content.ReadAsStringAsync()).Should().Contain("requires_org_admin");
+    }
+
+    [Fact]
+    public async Task A_member_can_rename_a_flow_but_not_change_its_automation()
+    {
+        var (flowId, _) = await Seed(confirmed: true);
+        var member = MemberClient();
+
+        (await member.PatchAsJsonAsync($"/api/flows/{flowId}", new { name = "Renamed" })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var res = await member.PatchAsJsonAsync($"/api/flows/{flowId}", new { automation = FlowAutomation.All.First(a => a != FlowAutomation.Review) });
+        res.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await res.Content.ReadAsStringAsync()).Should().Contain("requires_org_admin");
+        using var scope = factory.Services.CreateScope();
+        (await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Flows.AsNoTracking().SingleAsync(f => f.Id == flowId))
+            .Automation.Should().Be(FlowAutomation.Review);
+    }
 
     [Fact]
     public async Task A_new_output_is_pre_bound_to_the_flow()

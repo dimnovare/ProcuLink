@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Api.Auth;
 using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
@@ -59,6 +60,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         return Ok(rows.Select(ToDto));
     }
 
+    [RequireOrgAdmin]
     [HttpPost("api/flows/{flowId:guid}/outputs")]
     public async Task<IActionResult> Create(Guid flowId, [FromBody] OutputRequest request, CancellationToken ct)
     {
@@ -70,6 +72,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         return Created($"/api/flows/{flowId}/outputs/{output.Id}", ToDto(output));
     }
 
+    [RequireOrgAdmin]
     [HttpPut("api/flows/{flowId:guid}/outputs/{id:guid}")]
     public async Task<IActionResult> Update(Guid flowId, Guid id, [FromBody] OutputRequest request, CancellationToken ct)
     {
@@ -82,6 +85,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         return Ok(ToDto(output));
     }
 
+    [RequireOrgAdmin]
     [HttpDelete("api/flows/{flowId:guid}/outputs/{id:guid}")]
     public async Task<IActionResult> Delete(Guid flowId, Guid id, CancellationToken ct)
     {
