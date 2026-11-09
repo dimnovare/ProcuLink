@@ -113,6 +113,8 @@ public class ReadDocumentJob(
                 return;
             }
             truncated = pdfPages > pages.Count;
+            // Bill the pages we read, not the pages uploaded (intake billed one unit per ten).
+            doc.BillingUnits = Math.Max(1, (int)Math.Ceiling(pages.Count / 10.0));
             words = await ocr.ReadWordsAsync(pages, ct);
         }
 

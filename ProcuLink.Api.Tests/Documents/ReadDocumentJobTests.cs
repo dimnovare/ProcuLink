@@ -153,11 +153,15 @@ public sealed class ReadDocumentJobTests
         var box = new Box(0.1, 0.2, 0.3, 0.05);
         var (job, db, reader, id) = Arrange(ImageOnlyPdf(11), scans: true, rasterizer: Rasterizer(10),
             ocrWords: [new PageWord("PO-77", 2, box)], readFields: [Field("po", "PO-77"), Field("ghost", "ZZZ")]);
+        (await db.FlowDocuments.SingleAsync(d => d.Id == id)).BillingUnits = 2; // what intake bills for 11 pages
+        await db.SaveChangesAsync();
 
         await job.ExecuteAsync(id, Org, null, CancellationToken.None);
 
         reader.Verify(r => r.ReadAsync(It.Is<DocumentReadInput>(i => i.Pages!.Count == 10), Org, It.IsAny<CancellationToken>()), Times.Once);
-        var read = DocumentJson.Deserialize<ReadResult>((await db.FlowDocuments.SingleAsync(d => d.Id == id)).ReadJson);
+        var doc = await db.FlowDocuments.SingleAsync(d => d.Id == id);
+        doc.BillingUnits.Should().Be(1);
+        var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
         read.Truncated.Should().BeTrue();
         var located = read.Fields.Single(f => f.Key == "po").Location!;
         located.Page.Should().Be(2);
