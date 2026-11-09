@@ -192,6 +192,22 @@ internal static class OrgAdminGateIlScanner
             "Opens a connection from our servers to a host the organisation named, with its saved credentials "
           + "(an SFTP host key it learns is not saved by a test)."),
 
+        new("FlowOutputsController.Apply",
+            member => member is MethodBase { Name: "Apply" } m && m.DeclaringType == typeof(ProcuLink.Api.Controllers.FlowOutputsController),
+            "Writes an output's template, format and destination, which decides what is rendered and where "
+          + "it is sent: the shared step behind creating and updating an output."),
+
+        new("ExecuteDeleteAsync<FlowOutput>",
+            member => member is MethodInfo { Name: "ExecuteDeleteAsync", IsGenericMethod: true } m
+                && m.GetGenericArguments()[0] == typeof(ProcuLink.Core.Entities.FlowOutput),
+            "Deletes an output, so documents stop being rendered and sent through it."),
+
+        new("Flow.Automation setter",
+            member => member is MethodBase { Name: "set_Automation" } m && m.DeclaringType == typeof(ProcuLink.Core.Entities.Flow),
+            "Switches a flow between review and automatic sending; automatic sending releases documents to "
+          + "the vendor's destination with nobody checking them first. Its caller gates in-method, because "
+          + "every member may still rename the flow."),
+
         new("new IntegrationSubscription / DbSet<IntegrationSubscription>.Add",
             CreatesIntegrationSubscription,
             "Stands up an outbound subscription that ships the payload of every matching order to "
