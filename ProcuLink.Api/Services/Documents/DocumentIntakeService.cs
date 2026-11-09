@@ -25,7 +25,7 @@ public sealed class DocumentIntakeService(
     ProcuLinkDbContext db, IFileStorageService storage, IBackgroundJobClient jobs,
     DocumentEngineGate gate, IBillingService billing, ILogger<DocumentIntakeService> logger) : IFlowDocumentSubmitter
 {
-    public IReadOnlyList<string> AcceptedFormats(Guid orgId) => DocumentFormats.For(gate.ScansOn(orgId));
+    public IReadOnlyList<string> AcceptedFormats(Guid orgId) => gate.AcceptedFormats(orgId);
 
     /// <summary>The one way a file enters a flow: engine gate, flow, plan limit, then <see cref="AcceptAsync"/>.</summary>
     public async Task<FlowSubmitResult> SubmitAsync(

@@ -43,7 +43,7 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard, DocumentEngineG
             var folder = await client.GetFolderAsync(config["folder"]!.GetValue<string>(), ct);
             await folder.OpenAsync(FolderAccess.ReadWrite, ct);
             return new Session(client, folder, folder.UidValidity, config["fromFilter"]?.GetValue<string>(), config["subjectFilter"]?.GetValue<string>(),
-                DocumentFormats.For(gate.ScansOn(intake.OrgId)));
+                gate.AcceptedFormats(intake.OrgId));
         }
         catch
         {

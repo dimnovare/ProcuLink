@@ -68,6 +68,12 @@ public sealed record SourceDocumentMediaType(string ContentType, bool RenderInli
             // common browser use; text/plain is the honest, inert answer.
             "edifact" or "x12" => new("text/plain", RenderInline: true),
 
+            "docx" => new("application/vnd.openxmlformats-officedocument.wordprocessingml.document", RenderInline: false),
+            "json" => new("application/json", RenderInline: true),
+            "txt" or "edi" => new("text/plain", RenderInline: true),
+            "png" => new("image/png", RenderInline: false),
+            "jpg" or "jpeg" => new("image/jpeg", RenderInline: false),
+
             _ => Unknown,
         };
 }
