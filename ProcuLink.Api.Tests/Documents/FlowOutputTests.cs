@@ -335,4 +335,74 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         off.StatusCode.Should().Be(HttpStatusCode.Forbidden);
         (await off.Content.ReadAsStringAsync()).Should().Contain("lookup_suggestions_off");
     }
+
+    private static MultipartFormDataContent File(byte[] bytes)
+    {
+        var part = new ByteArrayContent(bytes);
+        part.Headers.ContentType = new("image/png");
+        return new MultipartFormDataContent { { part, "file", "logo.png" } };
+    }
+
+    private static readonly byte[] OnePixelPng = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
+
+    [Fact]
+    public async Task Pdf_output_keeps_its_layout_and_logo_and_previews_as_pdf()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, docId) = await Seed(confirmed: true);
+
+        var created = await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "PDF", format = "pdf", layout = new { title = " Order " } });
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        var output = (await created.Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+        (await http.PutAsync($"/api/flows/{flowId}/outputs/{output.Id}/logo", File(OnePixelPng))).StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var saved = (await http.GetFromJsonAsync<List<OutputDto>>($"/api/flows/{flowId}/outputs", DocumentJson.Options))!.Single(o => o.Id == output.Id);
+        saved.Layout!.Title.Should().Be("Order");
+        saved.HasLogo.Should().BeTrue();
+
+        var preview = await (await http.PostAsync($"/api/documents/{docId}/outputs/{output.Id}/preview", null)).Content.ReadFromJsonAsync<JsonElement>();
+        preview.GetProperty("base64").GetString().Should().StartWith("JVBER");
+        preview.GetProperty("content").GetString().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Fixed_output_needs_a_width_on_every_column()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, _) = await Seed(confirmed: true);
+
+        var created = await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "Fixed", format = "fixed" });
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        var output = (await created.Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+
+        var template = System.Text.Json.Nodes.JsonNode.Parse(DocumentJson.Serialize(output.Template))!;
+        Leaves(output.Template.Root).Should().OnlyContain(l => l.Rule!.Width >= 10);
+        static System.Text.Json.Nodes.JsonObject? FirstWithWidth(System.Text.Json.Nodes.JsonNode? n) => n switch
+        {
+            System.Text.Json.Nodes.JsonObject o when o.ContainsKey("width") => o,
+            System.Text.Json.Nodes.JsonObject o => o.Select(kv => FirstWithWidth(kv.Value)).FirstOrDefault(x => x is not null),
+            System.Text.Json.Nodes.JsonArray a => a.Select(FirstWithWidth).FirstOrDefault(x => x is not null),
+            _ => null,
+        };
+        FirstWithWidth(template)!.Remove("width");
+
+        var res = await http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{output.Id}", new { name = "Fixed", format = "fixed", template });
+        res.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("detail").GetString().Should().Be("widths");
+    }
+
+    [Fact]
+    public async Task Logo_that_is_not_an_image_is_refused()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, _) = await Seed(confirmed: true);
+        var output = (await (await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "PDF", format = "pdf" }))
+            .Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+
+        var res = await http.PutAsync($"/api/flows/{flowId}/outputs/{output.Id}/logo", File("hello"u8.ToArray()));
+
+        res.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await res.Content.ReadAsStringAsync()).Should().Contain("invalid_logo");
+    }
 }

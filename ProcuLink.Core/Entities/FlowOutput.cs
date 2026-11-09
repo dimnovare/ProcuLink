@@ -13,6 +13,10 @@ public class FlowOutput
     public Guid? DestinationId { get; set; }
     /// <summary>A serialized <c>SendWhen</c>; null means the output sends for every document.</summary>
     public string? SendWhenJson { get; set; }
+    /// <summary>A serialized <c>OutputLayout</c> (pdf and txt only); null means none.</summary>
+    public string? LayoutJson { get; set; }
+    /// <summary>The PNG or JPEG printed at the top of a pdf output; null means none.</summary>
+    public byte[]? Logo { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }

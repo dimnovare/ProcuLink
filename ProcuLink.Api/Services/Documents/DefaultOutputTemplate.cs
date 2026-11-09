@@ -14,7 +14,11 @@ public static class DefaultOutputTemplate
         OutputNode Leaf(FlowField f)
         {
             var name = byKey ? f.Key : f.Label;
-            return OutputNode.FieldOf(name, new OutputFieldRule { OutputPath = name, CanonicalField = f.Key });
+            return OutputNode.FieldOf(name, new OutputFieldRule
+            {
+                OutputPath = name, CanonicalField = f.Key,
+                Width = format == FlowOutputFormats.Fixed ? Math.Clamp(name.Length, 10, 1000) : null,
+            });
         }
 
         var children = fields.Fields.Select(Leaf).ToList();

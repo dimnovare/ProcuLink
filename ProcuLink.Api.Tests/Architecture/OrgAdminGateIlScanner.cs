@@ -202,6 +202,10 @@ internal static class OrgAdminGateIlScanner
                 && m.GetGenericArguments()[0] == typeof(ProcuLink.Core.Entities.FlowOutput),
             "Deletes an output, so documents stop being rendered and sent through it."),
 
+        new("FlowOutput.Logo setter",
+            member => member is MethodBase { Name: "set_" + nameof(ProcuLink.Core.Entities.FlowOutput.Logo) } m && m.DeclaringType == typeof(ProcuLink.Core.Entities.FlowOutput),
+            "Sets or clears the image printed at the top of a pdf output, which every document sent through it carries."),
+
         new("Flow.Automation setter",
             member => member is MethodBase { Name: "set_" + nameof(ProcuLink.Core.Entities.Flow.Automation) } m && m.DeclaringType == typeof(ProcuLink.Core.Entities.Flow),
             "Switches a flow between review and automatic sending; automatic sending releases documents to "
