@@ -69,7 +69,7 @@ public sealed class FlowWebhookTests
         reader.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DocumentReadOutcome(true, new ReadResult("Invoice", []), null));
         var jobs = new Mock<IBackgroundJobClient>();
-        var job = new ReadDocumentJob(db, storage.Object, reader.Object, new DocumentRechecker(db), jobs.Object, Mock.Of<ProcuLink.Core.Services.Ocr.IPdfRasterizer>(), Mock.Of<ProcuLink.Core.Services.Ocr.IDocumentOcrService>(), new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), NullLogger<ReadDocumentJob>.Instance);
+        var job = new ReadDocumentJob(db, storage.Object, reader.Object, new DocumentRechecker(db), jobs.Object, Mock.Of<ProcuLink.Core.Services.Ocr.IPdfRasterizer>(), Mock.Of<ProcuLink.Core.Services.Ocr.IDocumentOcrService>(), new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), new ProcuLink.Transform.Tokenizing.SourceTokenizer(), NullLogger<ReadDocumentJob>.Instance);
 
         await job.ExecuteAsync(docA.Id, Org, null, CancellationToken.None);
         await job.ExecuteAsync(docB.Id, Org, null, CancellationToken.None);
