@@ -1,3 +1,4 @@
+using System.Xml;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Services.Mapping;
 
@@ -27,7 +28,7 @@ public static class ProposalDraft
         {
             return Build(p!, name, format, fields, docs);
         }
-        catch
+        catch // Last resort against any model output: an empty draft with left_out can also mean an internal bug.
         {
             var empty = new OutputNodeTemplate { Format = FlowOutputFormats.TemplateFormat(format), Root = OutputNode.Obj("document") };
             return (new OutputDraft(name, format, null, empty, [], ["left_out"]), null, null);
@@ -41,12 +42,12 @@ public static class ProposalDraft
         var kids = new List<OutputNode>();
         if (Formats.Contains(format)) kids = Kids(p.Root?.Children, format, false, 1, w);
         else w.LeftOut = true;
-        var rootName = !flat && ValidName(p.Root?.Name) is { } n ? n : "document";
+        var rootName = !flat && ValidName(p.Root?.Name, format) is { } n ? n : "document";
         var template = new OutputNodeTemplate
         {
             Format = FlowOutputFormats.TemplateFormat(format),
             Root = OutputNode.Obj(rootName, [.. kids]),
-            CsvDialect = format == FlowOutputFormats.Csv && p.Delimiter is { Length: 1 } d ? new CsvDialect { Delimiter = d } : null,
+            CsvDialect = format == FlowOutputFormats.Csv && p.Delimiter is "," or ";" or "\t" or "|" ? new CsvDialect { Delimiter = p.Delimiter } : null,
         };
 
         var matches = OutputLeafPaths.Of(template)
@@ -75,7 +76,7 @@ public static class ProposalDraft
         foreach (var k in children ?? [])
         {
             var kind = k?.Kind?.Trim().ToLowerInvariant();
-            var name = ValidName(k?.Name);
+            var name = ValidName(k?.Name, format);
             var allowed = flat ? kind == "field" || (kind == "array" && !inArray && !w.HasArray)
                 : kind is "object" or "array" or "field" || (kind == "attribute" && format == FlowOutputFormats.Xml);
             if (k is null || name is null || !allowed || depth > MaxDepth || w.Count >= MaxNodes || !seen.Add(name))
@@ -106,10 +107,20 @@ public static class ProposalDraft
         return result;
     }
 
-    private static string? ValidName(string? name)
+    private static string? ValidName(string? name, string format)
     {
         var n = name?.Trim();
-        return string.IsNullOrEmpty(n) || n.Length > MaxName || n.Contains('/') ? null : n;
+        if (string.IsNullOrEmpty(n) || n.Length > MaxName || n.Contains('/')) return null;
+        if (format != FlowOutputFormats.Xml) return n;
+        try
+        {
+            XmlConvert.VerifyNCName(n);
+            return n;
+        }
+        catch (XmlException)
+        {
+            return null;
+        }
     }
 
     private static int Idx(OutputNode leaf) => int.Parse(leaf.Rule!.OutputPath.AsSpan(1));
@@ -131,6 +142,6 @@ public static class ProposalDraft
         if (d is null || method is not ("POST" or "PUT" or "PATCH")
             || !Uri.TryCreate(d.Url?.Trim(), UriKind.Absolute, out var url) || url.Scheme is not ("http" or "https")) return null;
         var auth = d.AuthType?.Trim().ToLowerInvariant();
-        return new DraftDestination(url.ToString(), method, AuthTypes.Contains(auth) ? auth! : "none", CiteOf(d.Quote, docs));
+        return new DraftDestination(url.AbsoluteUri, method, AuthTypes.Contains(auth) ? auth! : "none", CiteOf(d.Quote, docs));
     }
 }

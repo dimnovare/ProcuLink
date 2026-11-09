@@ -36,6 +36,9 @@ public class ProposalDraftTests
         draft.Leaves.Single(l => l.Path == "OrderNumber").Cite!.Where.Should().Be("page 2");
         draft.Leaves.Single(l => l.Path == "Other").Cite.Should().BeNull();
         draft.Leaves.Single(l => l.Path == "OrderNumber").By.Should().Be("docs");
+
+        var html = DocumentationText.Read("spec.html", System.Text.Encoding.UTF8.GetBytes("<p>intro text here</p><p>OrderNumber is required</p>"))!;
+        html.Locate("OrderNumber is required").Should().Be("line 2");
     }
 
     [Fact]
@@ -56,5 +59,13 @@ public class ProposalDraftTests
 
         var (_, _, js) = ProposalDraft.From(Proposal("json", new ProposedDestination("javascript:alert(1)", "POST", "none", ""), Leaf("PO", "po_number")), Fields, docs);
         js.Should().BeNull();
+
+        var xml = new ProposedOutput("Out", "xml", "", null, new ProposedNode("root", "object", null, false, null, "", [Leaf("my field", "po_number"), Leaf("ok", "po_number")]), null);
+        var (xmlDraft, _, _) = ProposalDraft.From(xml, Fields, docs);
+        xmlDraft.Leaves.Select(l => l.Path).Should().Equal("ok");
+        xmlDraft.Notes.Should().Contain("left_out");
+
+        var quoted = ProposalDraft.From(new ProposedOutput("Out", "csv", "", "\"", new ProposedNode("root", "object", null, false, null, "", [Leaf("PO", "po_number")]), null), Fields, docs);
+        quoted.Draft.Template.CsvDialect.Should().BeNull();
     }
 }

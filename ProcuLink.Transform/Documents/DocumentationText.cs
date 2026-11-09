@@ -29,7 +29,7 @@ public sealed record DocumentationText(string Text, bool Truncated, bool Paged =
                 var pdf = PdfWordExtractor.Extract(bytes);
                 text = pdf.Words.Count == 0 ? null : Regex.Replace(pdf.Text, @"(?m)^=== Page (\d+) ===$", "[page $1]");
             }
-            else if (ext is ".html" or ".htm") text = EmailBodyText.Resolve(null, Encoding.UTF8.GetString(bytes));
+            else if (ext is ".html" or ".htm") text = HtmlLines(Encoding.UTF8.GetString(bytes));
             else text = Plain.Contains(ext) ? Encoding.UTF8.GetString(bytes).TrimStart('﻿') : null;
             if (string.IsNullOrWhiteSpace(text)) return null;
             return new DocumentationText(text.Length > MaxChars ? text[..MaxChars] : text, text.Length > MaxChars, ext == ".pdf");
@@ -53,6 +53,10 @@ public sealed record DocumentationText(string Text, bool Truncated, bool Paged =
         var digits = mark < 0 ? "" : new string(Text[(mark + 6)..].TakeWhile(char.IsAsciiDigit).ToArray());
         return digits.Length == 0 ? "page 1" : $"page {digits}";
     }
+
+    // EmailBodyText collapses all whitespace, so strip each block on its own to keep one line per block.
+    private static string? HtmlLines(string html) => string.Join("\n", Regex.Split(html, @"(?i)</(?:p|div|li|tr|h[1-6])>|<br\s*/?>")
+        .Select(c => EmailBodyText.Resolve(null, c)).Where(c => c is not null));
 
     private static string Normalise(string s, out List<int> map)
     {
