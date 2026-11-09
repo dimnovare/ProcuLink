@@ -23,6 +23,7 @@ public class ReadDocumentJob(
     private const int MaxChars = 60_000;
     private const int MinWordsPerTextPage = 5;
     private const int MaxScanPages = 10;
+    private const int MaxHints = 40;
     private const int LastRetry = 3;
 
     [Queue("critical")]
@@ -130,7 +131,9 @@ public class ReadDocumentJob(
         }
 
         var expected = flow.FieldsConfirmed ? DocumentJson.Deserialize<FlowFieldList>(flow.FieldsJson) : null;
-        var outcome = await reader.ReadAsync(new DocumentReadInput(doc.FileName, doc.ContentType, text, expected, pages), doc.OrgId, ct);
+        var keys = expected?.Fields.Select(f => f.Key).ToHashSet();
+        var hints = keys is null ? [] : DocumentJson.Deserialize<List<FieldHint>>(flow.HintsJson).Where(h => keys.Contains(h.FieldKey)).OrderByDescending(h => h.TaughtAt).Take(MaxHints).ToList();
+        var outcome = await reader.ReadAsync(new DocumentReadInput(doc.FileName, doc.ContentType, text, expected, pages, hints.Count > 0 ? hints : null), doc.OrgId, ct);
         if (!outcome.Success || outcome.Result is null)
         {
             var reason = outcome.FailureReason ?? "ai_error";
