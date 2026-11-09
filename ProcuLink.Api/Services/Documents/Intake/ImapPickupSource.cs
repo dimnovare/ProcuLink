@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MailKit;
@@ -74,6 +75,7 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard, DocumentEngineG
         private readonly Dictionary<string, (UniqueId Uid, BodyPartBasic Part)> _parts = [];
         private readonly Dictionary<UniqueId, int> _open = [];
         private readonly List<(UniqueId Uid, string Sender)> _unreadable = [];
+        private readonly Dictionary<string, string> _bodies = [];
 
         public async Task<IReadOnlyList<PickupFile>> ListAsync(CancellationToken ct)
         {
@@ -87,6 +89,17 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard, DocumentEngineG
                 if (!Matches(fromFilter, subjectFilter, senders, m.Envelope.Subject)) continue;
 
                 var readable = m.Attachments.Where(a => Readable(a.FileName, accepted)).ToList();
+                if (readable.Count == 0 && accepted.Contains("txt") && await BodyAsync(m, ct) is { } body)
+                {
+                    // Nothing readable was attached, so the body is the document.
+                    var key = $"imap:{uidValidity}:{m.UniqueId.Id}#body";
+                    _bodies[key] = body;
+                    _parts[key] = (m.UniqueId, (m.TextBody ?? m.HtmlBody)!);
+                    _open[m.UniqueId] = 1;
+                    files.Add(new PickupFile(key, "email.txt", senders.FirstOrDefault()));
+                    continue;
+                }
+
                 if (readable.Count == 0)
                 {
                     _unreadable.Add((m.UniqueId, senders.FirstOrDefault() ?? "an unknown sender"));
@@ -106,8 +119,14 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard, DocumentEngineG
             return files;
         }
 
+        private async Task<string?> BodyAsync(IMessageSummary m, CancellationToken ct) =>
+            EmailBodyText.Resolve(
+                m.TextBody is null ? null : ((TextPart)await folder.GetBodyPartAsync(m.UniqueId, m.TextBody, ct)).Text,
+                m.HtmlBody is null ? null : ((TextPart)await folder.GetBodyPartAsync(m.UniqueId, m.HtmlBody, ct)).Text);
+
         public async Task<MemoryStream> DownloadAsync(PickupFile file, long maxBytes, CancellationToken ct)
         {
+            if (_bodies.TryGetValue(file.Key, out var body)) return new MemoryStream(Encoding.UTF8.GetBytes(body));
             var (uid, part) = _parts[file.Key];
             var entity = (MimePart)await folder.GetBodyPartAsync(uid, part, ct);
             await using var content = entity.Content.Open();
@@ -124,7 +143,7 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard, DocumentEngineG
         {
             foreach (var (uid, _) in _unreadable) await folder.AddFlagsAsync(uid, MessageFlags.Seen, silent: true, ct);
             // Only the latest, so one run's message stays one sentence however many such mails arrived.
-            return _unreadable.TakeLast(1).Select(u => $"An email from {u.Sender} had no PDF, CSV or Excel file attached.").ToList();
+            return _unreadable.TakeLast(1).Select(u => $"An email from {u.Sender} had no file we can read attached.").ToList();
         }
 
         public void Dispose() => client.Dispose();
