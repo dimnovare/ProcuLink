@@ -20,7 +20,7 @@ public class DocumentTextTests
             var main = doc.AddMainDocumentPart();
             TableCell Cell(string t) => new(new Paragraph(new Run(new Text(t))));
             main.Document = new Document(new Body(
-                new Paragraph(new Run(new Text("Order no: PO-77"))),
+                new Paragraph(new Run(new Text("Order no:"), new TabChar(), new Text("PO-77"))),
                 new Table(new TableRow(Cell("A"), Cell("3"), Cell("9.50")))));
         }
 
@@ -40,6 +40,24 @@ public class DocumentTextTests
 
         r.Spans.Should().Equal(new TextSpan("line:1", "Tõnis Äär"), new TextSpan("line:3", "PO-9"));
         r.Spans.Should().OnlyContain(s => !s.Text.Contains('﻿'));
+    }
+
+    [Theory]
+    [InlineData("a.txt", "\n\n")]
+    [InlineData("a.json", "{")]
+    [InlineData("a.docx", null)]
+    public async Task A_file_with_no_text_throws(string name, string? content)
+    {
+        var bytes = Encoding.UTF8.GetBytes(content ?? "");
+        if (content is null)
+        {
+            var ms = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                doc.AddMainDocumentPart().Document = new Document(new Body());
+            bytes = ms.ToArray();
+        }
+
+        await FluentActions.Awaiting(() => DocumentText.ReadAsync(name, bytes, Tokenizer, default)).Should().ThrowAsync<Exception>();
     }
 
     [Fact]

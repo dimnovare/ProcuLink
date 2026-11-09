@@ -12,6 +12,13 @@ public sealed record DocumentTextResult(string Text, IReadOnlyList<TextSpan> Spa
 /// <summary>Turns a Word, text or structured file into text for the reader, plus the addressed spans a value can be located in.</summary>
 public static class DocumentText
 {
+    private static string ParagraphText(Paragraph p) => string.Concat(p.Descendants().Select(e => e switch
+    {
+        Text t => t.Text,
+        TabChar or Break => " ",
+        _ => "",
+    }));
+
     /// <summary>Throws when the file cannot be opened or yields no text; the job maps that to <c>unreadable_file</c>.</summary>
     public static async Task<DocumentTextResult> ReadAsync(string fileName, byte[] bytes, ISourceTokenizer tokenizer, CancellationToken ct)
     {
@@ -23,12 +30,13 @@ public static class DocumentText
                 using (var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false))
                 {
                     var n = 0;
-                    spans = doc.MainDocumentPart!.Document!.Body!.ChildElements
+                    spans = (doc.MainDocumentPart?.Document?.Body?.ChildElements.AsEnumerable() ?? [])
                         .Select(e => e switch
                         {
-                            Paragraph p => p.InnerText,
+                            Paragraph p => ParagraphText(p),
                             Table t => string.Join('\n', t.Elements<TableRow>().Select(r =>
-                                string.Join(" | ", r.Elements<TableCell>().Select(c => c.InnerText)))),
+                                string.Join(" | ", r.Elements<TableCell>().Select(c =>
+                                    string.Join(' ', c.Elements<Paragraph>().Select(ParagraphText)).Trim())))),
                             _ => "",
                         })
                         .SelectMany(s => s.Split('\n'))
