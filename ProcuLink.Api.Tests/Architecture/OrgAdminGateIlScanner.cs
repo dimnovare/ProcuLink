@@ -196,6 +196,10 @@ internal static class OrgAdminGateIlScanner
             OnInterface<ProcuLink.Core.Documents.IOutputDesigner>(nameof(ProcuLink.Core.Documents.IOutputDesigner.BindAsync)),
             "Sends the organisation's field names and sample headings to an external AI model and spends the monthly AI cap."),
 
+        new("IOutputDesigner.ProposeAsync",
+            OnInterface<ProcuLink.Core.Documents.IOutputDesigner>(nameof(ProcuLink.Core.Documents.IOutputDesigner.ProposeAsync)),
+            "Sends the organisation's documentation text and field names to an external AI model and spends the monthly AI cap."),
+
         new("FlowOutputsController.Apply",
             member => member is MethodBase { Name: "Apply" } m && m.DeclaringType == typeof(ProcuLink.Api.Controllers.FlowOutputsController),
             "Writes an output's template, format and destination, which decides what is rendered and where "

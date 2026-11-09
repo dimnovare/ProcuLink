@@ -29,7 +29,13 @@ public sealed record OutputDraftDto(
 public interface IOutputDesigner
 {
     Task<IReadOnlyList<SlotMatch>> BindAsync(Guid orgId, IReadOnlyList<OutputSlot> slots, FlowFieldList fields, CancellationToken ct);
+
+    /// <summary>Asks the AI to design an output from documentation text. Never throws: a refusal or failure is in <see cref="ProposalResult.Failure"/>.</summary>
+    Task<ProposalResult> ProposeAsync(Guid orgId, string documentation, FlowFieldList fields, CancellationToken ct);
 }
+
+/// <summary><paramref name="Failure"/> is <c>no_egress</c>, <c>ai_usage_cap</c> or <c>ai_error</c>; exactly one of the two is set.</summary>
+public sealed record ProposalResult(ProposedOutput? Proposal, string? Failure);
 
 /// <summary>The AI's strict JSON answer for "build an output from this documentation". <paramref name="Format"/> is csv, json, xml or fixed.</summary>
 public sealed record ProposedOutput(string Name, string Format, string FormatQuote, string? Delimiter, ProposedNode Root, ProposedDestination? Destination);

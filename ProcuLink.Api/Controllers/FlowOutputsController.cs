@@ -8,6 +8,7 @@ using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using ProcuLink.Transform.Documents;
@@ -166,6 +167,40 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         var name = Path.GetFileNameWithoutExtension(file.FileName);
         var draft = DraftBinder.Apply(name.Length > 120 ? name[..120] : name, format, template, matches, fields);
         return Ok(new OutputDraftDto(draft.Name, draft.Format, draft.TableKey, draft.Template, draft.Leaves, draft.Notes));
+    }
+
+    /// <summary>Reads the receiving system's documentation and proposes a cited output from it. Nothing is saved.</summary>
+    [RequireOrgAdmin]
+    [HttpPost("api/flows/{flowId:guid}/outputs/from-documentation")]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit(IngressLimits.MaxFileBytes + 1024 * 1024)]
+    public async Task<IActionResult> FromDocumentation(Guid flowId, IFormFile file, [FromServices] IOutputDesigner designer, CancellationToken ct)
+    {
+        if (Refuse() is { } refused) return refused;
+        var orgId = tenant.OrganisationId;
+        if (!gate.DocsOutputsOn(orgId)) return StatusCode(403, new { error = "docs_outputs_off" });
+        var flow = await db.Flows.AsNoTracking().FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == flowId, ct);
+        if (flow is null) return FlowNotFound();
+        if (!flow.FieldsConfirmed) return Conflict(new { error = "fields_unconfirmed" });
+        if (file.Length > IngressLimits.MaxFileBytes) return StatusCode(413, new { error = "file_too_large" });
+        if (!DocumentationText.Supports(file.FileName)) return UnprocessableEntity(new { error = "unsupported_format" });
+        using var buffer = new MemoryStream();
+        await file.CopyToAsync(buffer, ct);
+        if (DocumentationText.Read(file.FileName, buffer.ToArray()) is not { } docs) return UnprocessableEntity(new { error = "unreadable_file" });
+
+        var fields = DocumentJson.Deserialize<FlowFieldList>(flow.FieldsJson);
+        var result = await designer.ProposeAsync(orgId, docs.Text, fields, ct);
+        if (result.Proposal is not { } proposal)
+            return result.Failure switch
+            {
+                "no_egress" => UnprocessableEntity(new { error = "no_egress" }),
+                "ai_usage_cap" => StatusCode(429, new { error = "ai_usage_cap" }),
+                _ => StatusCode(502, new { error = "ai_error" }),
+            };
+
+        var (draft, formatCite, destination) = ProposalDraft.From(proposal, fields, docs);
+        var notes = docs.Truncated ? [.. draft.Notes, "truncated"] : draft.Notes;
+        return Ok(new OutputDraftDto(draft.Name, draft.Format, draft.TableKey, draft.Template, draft.Leaves, notes, formatCite, destination, docs.Truncated));
     }
 
     /// <summary>Renders the document through the output (or the draft template in the body, if given) and returns the text. Nothing is sent or saved.</summary>

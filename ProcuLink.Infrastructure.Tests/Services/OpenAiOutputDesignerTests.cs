@@ -17,7 +17,7 @@ public class OpenAiOutputDesignerTests
     // A no-egress org must never reach OpenAI. The check runs BEFORE the cap check, so a strict
     // tracker (no setups) throws if the cap is consulted, which proves the call was never prepared.
     [Fact]
-    public async Task BindAsync_NoEgressOrg_ReturnsEmptyWithoutCheckingTheCap()
+    public async Task NoEgressOrg_SendsNothingAndNeverChecksTheCap()
     {
         var orgId = Guid.NewGuid();
         var tracker = new Mock<IAiUsageTracker>(MockBehavior.Strict);
@@ -43,6 +43,11 @@ public class OpenAiOutputDesignerTests
             new FlowFieldList([new FlowField("ship_address", "Delivery address", FieldTypes.Text, null, false)]), CancellationToken.None);
 
         result.Should().BeEmpty();
+        tracker.Verify(t => t.IsAtOrOverLimitAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+
+        var proposal = await designer.ProposeAsync(orgId, "Synthetic documentation", new FlowFieldList([]), CancellationToken.None);
+
+        proposal.Should().Be(new ProposalResult(null, "no_egress"));
         tracker.Verify(t => t.IsAtOrOverLimitAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 }

@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using ProcuLink.Api.Tests.Integration;
+using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Controllers;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
@@ -449,5 +450,51 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         (await pdf.Content.ReadAsStringAsync()).Should().Contain("unsupported_format");
         bad.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
         (await bad.Content.ReadAsStringAsync()).Should().Contain("unreadable_file");
+    }
+    [Fact]
+    public async Task From_documentation_is_off_unless_switched_on()
+    {
+        var (flowId, _) = await Seed(confirmed: true);
+        var other = factory.ClientFor(DocumentEngineTestFactory.OrgB);
+        var created = (await (await other.PostAsJsonAsync("/api/flows", new CreateFlowRequest("Synthetic flow"))).Content
+            .ReadFromJsonAsync<FlowDto>(new JsonSerializerOptions(JsonSerializerDefaults.Web)))!;
+        created.DocsOutputsOn.Should().BeFalse();
+
+        var res = await other.PostAsync($"/api/flows/{created.Id}/outputs/from-documentation", Upload("spec.txt", "x"));
+
+        res.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await res.Content.ReadAsStringAsync()).Should().Contain("docs_outputs_off");
+        var flow = (await factory.ClientFor(Org).GetFromJsonAsync<FlowDto>($"/api/flows/{flowId}", new JsonSerializerOptions(JsonSerializerDefaults.Web)))!;
+        flow.DocsOutputsOn.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task From_documentation_returns_a_cited_draft_and_maps_failures()
+    {
+        var (flowId, _) = await Seed(confirmed: true);
+        factory.Designer.Reset();
+        var proposal = new ProposedOutput("Invoice import", "csv", "Send a CSV", ",",
+            new ProposedNode("document", "object", null, false, null, "", [new ProposedNode("Invoice", "field", "invoice_no", true, null, "Invoice: the number", [])]),
+            null);
+        factory.Designer.SetupSequence(d => d.ProposeAsync(Org, It.IsAny<string>(), It.IsAny<FlowFieldList>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProposalResult(proposal, null))
+            .ReturnsAsync(new ProposalResult(null, "no_egress"))
+            .ReturnsAsync(new ProposalResult(null, "ai_usage_cap"));
+        var http = factory.ClientFor(Org);
+        var url = $"/api/flows/{flowId}/outputs/from-documentation";
+
+        var ok = await http.PostAsync(url, Upload("spec.txt", "Send a CSV file.\nInvoice: the number\n"));
+        var egress = await http.PostAsync(url, Upload("spec.txt", "x"));
+        var cap = await http.PostAsync(url, Upload("spec.txt", "x"));
+
+        ok.StatusCode.Should().Be(HttpStatusCode.OK);
+        var draft = (await ok.Content.ReadFromJsonAsync<OutputDraftDto>(new JsonSerializerOptions(JsonSerializerDefaults.Web)))!;
+        draft.Leaves.Single().Should().Match<DraftLeaf>(l => l.FieldKey == "invoice_no" && l.Required && l.Cite!.Where == "line 2");
+        draft.FormatCite!.Where.Should().Be("line 1");
+        egress.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await egress.Content.ReadAsStringAsync()).Should().Contain("no_egress");
+        ((int)cap.StatusCode).Should().Be(429);
+        using var scope = factory.Services.CreateScope();
+        scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowOutput>().Count(o => o.FlowId == flowId).Should().Be(0);
     }
 }

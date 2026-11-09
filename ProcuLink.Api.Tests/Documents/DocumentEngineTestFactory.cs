@@ -74,6 +74,7 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             ["DocumentEngine:LookupSuggestionOrgIds:0"] = OrgA.ToString(),
             ["DocumentEngine:ScanOrgIds:0"] = OrgB.ToString(),
             ["DocumentEngine:FormatOrgIds:0"] = OrgB.ToString(),
+            ["DocumentEngine:DocsOutputOrgIds:0"] = OrgA.ToString(),
         }));
 
         builder.ConfigureServices(services =>
