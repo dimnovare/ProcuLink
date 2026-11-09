@@ -59,7 +59,7 @@ public sealed record DocumentationText(string Text, bool Truncated, bool Paged =
     private (string Flat, List<int> Map)? _normalised;
     private (string, List<int>) Normalised() { var flat = Normalise(Text, out var map); return (flat, map); }
 
-    private static readonly Regex Hidden = new(@"<script\b.*?</script\s*>|<style\b.*?</style\s*>|<!--.*?-->", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex Hidden = new(@"<script\b.*?</script\s*>|<style\b.*?</style\s*>|<!--.*?-->", RegexOptions.NonBacktracking | RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
     // EmailBodyText collapses all whitespace, so strip each block on its own to keep one line per block.
     private static string? HtmlLines(string html) => string.Join("\n", Regex.Split(Hidden.Replace(html, ""), @"(?i)</(?:p|div|li|tr|h[1-6])>|<br\s*/?>")
