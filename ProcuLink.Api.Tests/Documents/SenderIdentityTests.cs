@@ -12,7 +12,7 @@ public sealed class SenderIdentityTests
     [Fact]
     public void Vat_wins_and_is_normalised()
     {
-        var id = SenderIdentity.Of(Read((FieldMeanings.SenderVatId, " ee 1009-1234 5 "), (FieldMeanings.SenderName, "Acme GmbH")), "email", "x@y.com");
+        var id = SenderIdentity.Of(Read((FieldMeanings.SenderVatId, " ee 1009-1234 5 "), (FieldMeanings.SenderName, "Acme GmbH")), "email", "x@y.example");
         id.Should().Be(new SenderIdentity("vat:EE100912345", "Acme GmbH"));
     }
 
@@ -21,8 +21,8 @@ public sealed class SenderIdentityTests
     {
         SenderIdentity.Of(Read((FieldMeanings.SenderName, "ACME GmbH")), "upload", null)!.Key
             .Should().Be(SenderIdentity.Of(Read((FieldMeanings.SenderName, "Acme")), "upload", null)!.Key);
-        SenderIdentity.Of(Read(), "imap", "Orders@Mail.Example.COM")
-            .Should().Be(new SenderIdentity("email:mail.example.com", "mail.example.com"));
+        SenderIdentity.Of(Read(), "imap", "Orders@Mail.Shop.EXAMPLE")
+            .Should().Be(new SenderIdentity("email:mail.shop.example", "mail.shop.example"));
     }
 
     [Fact]
