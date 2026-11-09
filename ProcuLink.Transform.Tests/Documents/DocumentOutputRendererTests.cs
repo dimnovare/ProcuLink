@@ -141,4 +141,29 @@ public class DocumentOutputRendererTests
         Text(DocumentOutputRenderer.Render(FlowOutputFormats.Text, t, new ReadResult("Order", [Field("po", "A1")]), null,
             layout: new OutputLayout("Order", null, null))).Should().Be("Order\n\npo: A1\n");
     }
+
+    private static readonly byte[] TinyPng = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==");
+
+    [Fact]
+    public void Pdf_layout_is_real_text_with_title_fields_and_rows()
+    {
+        var t = Csv(new CsvDialect(), Rule("po", "po"), OutputNode.Arr("Lines", OutputNode.Obj("Line", Rule("qty", "qty"))));
+
+        var r = DocumentOutputRenderer.Render(FlowOutputFormats.Pdf, t, TwoRows(), "items",
+            layout: new OutputLayout("Order", null, "Thanks"), logo: TinyPng);
+
+        r.Ok.Should().BeTrue(r.Detail);
+        (r.Result!.ContentType, r.Result.FileExtension).Should().Be(("application/pdf", ".pdf"));
+        using var ms = new MemoryStream();
+        r.Result.Content.CopyTo(ms);
+        var bytes = ms.ToArray();
+        System.Text.Encoding.ASCII.GetString(bytes, 0, 4).Should().Be("%PDF");
+        var text = ProcuLink.Transform.Parsing.PdfWordExtractor.Extract(bytes).Text;
+        text.Should().Contain("Order").And.Contain("A1").And.Contain("12").And.Contain("Thanks");
+        LayoutPdfWriter.IsUsableLogo(TinyPng).Should().BeTrue();
+        LayoutPdfWriter.IsUsableLogo(new byte[] { 1, 2, 3 }).Should().BeFalse();
+        // No table rows: fields only, no crash.
+        DocumentOutputRenderer.Render(FlowOutputFormats.Pdf, t, new ReadResult("Order", [Field("po", "A1")]), null).Ok.Should().BeTrue();
+    }
 }
