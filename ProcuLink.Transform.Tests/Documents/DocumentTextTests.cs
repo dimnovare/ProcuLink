@@ -42,6 +42,17 @@ public class DocumentTextTests
         r.Spans.Should().OnlyContain(s => !s.Text.Contains('﻿'));
     }
 
+    [Fact]
+    public async Task A_word_part_over_the_character_cap_is_refused_not_inflated()
+    {
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+            doc.AddMainDocumentPart().Document = new Document(new Body(
+                new Paragraph(new Run(new Text(new string('a', (int)DocumentText.MaxDocxPartChars + 1))))));
+
+        await FluentActions.Awaiting(() => DocumentText.ReadAsync("big.docx", ms.ToArray(), Tokenizer, default)).Should().ThrowAsync<Exception>();
+    }
+
     [Theory]
     [InlineData("a.txt", "\n\n")]
     [InlineData("a.json", "{")]

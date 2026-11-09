@@ -19,6 +19,9 @@ public static class DocumentText
         _ => "",
     }));
 
+    /// <summary>A Word part may hold at most this many characters. A 10 MB .docx can inflate to gigabytes, so the SDK stops reading past this instead of the cap running after the whole body is in memory.</summary>
+    public const long MaxDocxPartChars = 10_000_000;
+
     /// <summary>Throws when the file cannot be opened or yields no text; the job maps that to <c>unreadable_file</c>.</summary>
     public static async Task<DocumentTextResult> ReadAsync(string fileName, byte[] bytes, ISourceTokenizer tokenizer, CancellationToken ct)
     {
@@ -27,7 +30,7 @@ public static class DocumentText
         switch (ext)
         {
             case ".docx":
-                using (var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false))
+                using (var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false, new OpenSettings { MaxCharactersInPart = MaxDocxPartChars }))
                 {
                     var n = 0;
                     spans = (doc.MainDocumentPart?.Document?.Body?.ChildElements.AsEnumerable() ?? [])
