@@ -51,6 +51,9 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
 
     public Mock<ProcuLink.Api.Services.Documents.Intake.IPickupSession> PickupSession { get; } = new();
 
+    /// <summary>The only <see cref="ProcuLink.Core.Services.Delivery.IDeliveryDispatcher"/> (protocol http) in this host; records what a destination test sends.</summary>
+    public Mock<ProcuLink.Core.Services.Delivery.IDeliveryDispatcher> Dispatcher { get; } = new();
+
     public int Enqueued<T>() =>
         Jobs.Invocations.Count(i => i.Method.Name == nameof(IBackgroundJobClient.Create)
                                     && ((Job)i.Arguments[0]).Type == typeof(T));
@@ -99,6 +102,10 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             foreach (var d in services.Where(d => d.ServiceType == typeof(ProcuLink.Api.Services.Documents.Intake.IPickupSource)).ToList())
                 services.Remove(d);
             services.AddSingleton(Pickup.Object);
+            Dispatcher.SetupGet(x => x.Protocol).Returns("http");
+            foreach (var d in services.Where(d => d.ServiceType == typeof(ProcuLink.Core.Services.Delivery.IDeliveryDispatcher)).ToList())
+                services.Remove(d);
+            services.AddSingleton(Dispatcher.Object);
             foreach (var d in services.Where(d => d.ServiceType == typeof(ProcuLink.Core.Services.Ai.IAiMappingService)).ToList())
                 services.Remove(d);
             services.AddSingleton(Ai.Object);

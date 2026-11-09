@@ -24,9 +24,11 @@ public sealed record OutputDto(
 
 public sealed record PreviewRequest(OutputNodeTemplate? Template);
 
+public sealed record TestOutputRequest(string Format, string? TableKey, Guid DestinationId, OutputNodeTemplate Template, OutputLayout? Layout = null);
+
 [Authorize]
 [ApiController]
-public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantService tenant, DocumentEngineGate gate) : ControllerBase
+public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantService tenant, DocumentEngineGate gate, FlowDestinationService destinations) : ControllerBase
 {
     private IActionResult? Refuse() =>
         gate.IsEnabled(tenant.OrganisationId) ? null : StatusCode(403, new { error = "document_engine_not_enabled" });
@@ -252,6 +254,33 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         if (found.CapReached) return StatusCode(429, new { error = "ai_usage_cap" });
         shownBody["suggestions"] = found.Suggestions;
         return Ok(shownBody);
+    }
+
+    /// <summary>Renders the document through a draft output (not saved, no logo) and sends it to one of the org's destinations, marked as a test.</summary>
+    [HttpPost("api/documents/{documentId:guid}/outputs/test")]
+    [RequireOrgAdmin]
+    public async Task<IActionResult> TestDraft(Guid documentId, [FromBody] TestOutputRequest request, CancellationToken ct)
+    {
+        if (Refuse() is { } refused) return refused;
+        var orgId = tenant.OrganisationId;
+        var doc = await db.FlowDocuments.AsNoTracking().FirstOrDefaultAsync(d => d.OrgId == orgId && d.Id == documentId, ct);
+        if (doc is null) return NotFound(new { error = "document_not_found" });
+        if (!FlowOutputFormats.All.Contains(request.Format)) return UnprocessableEntity(new { error = "unsupported_format" });
+        if (await CheckTemplate(request.Template, request.Format, ct) is { } badTemplate) return badTemplate;
+
+        var lookups = await DocumentLookups.LoadAsync(db, orgId, [request.Template], ct);
+        var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
+        var render = DocumentOutputRenderer.Render(request.Format == FlowOutputFormats.Xlsx ? FlowOutputFormats.Csv : request.Format,
+            request.Template, read, request.TableKey, lookups, request.Layout);
+        if (!render.Ok) return UnprocessableEntity(new { error = render.Error, detail = render.Detail });
+
+        using var content = new MemoryStream();
+        await render.Result!.Content.CopyToAsync(content, ct);
+        var payload = new TestPayload(content.ToArray(), Path.GetFileNameWithoutExtension(doc.FileName) + render.Result.FileExtension, render.Result.ContentType);
+        var result = await destinations.TestAsync(orgId, request.DestinationId, ct, payload);
+        return result is null
+            ? NotFound(new { error = "destination_not_found" })
+            : Ok(new { success = result.Success, message = result.ErrorMessage, responseCode = result.ResponseCode });
     }
 
     /// <summary>Validates <paramref name="request"/> and copies it onto <paramref name="output"/>; returns the refusal, or null.</summary>

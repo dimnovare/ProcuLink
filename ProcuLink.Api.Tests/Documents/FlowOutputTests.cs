@@ -11,6 +11,7 @@ using ProcuLink.Api.Controllers;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
@@ -496,5 +497,41 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         ((int)cap.StatusCode).Should().Be(429);
         using var scope = factory.Services.CreateScope();
         scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowOutput>().Count(o => o.FlowId == flowId).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Draft_test_sends_the_rendered_document_marked_as_a_test()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, docId) = await Seed(confirmed: true);
+        var output = (await (await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "CSV", format = "csv" }))
+            .Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+        Guid Destination(Guid org)
+        {
+            using var scope = factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            var d = new FlowDestination { Id = Guid.NewGuid(), OrgId = org, Name = "d", Protocol = "http", ConfigJson = """{"url":"https://example.com/in"}""" };
+            db.Set<FlowDestination>().Add(d);
+            db.SaveChanges();
+            return d.Id;
+        }
+        string? sentName = null, sentText = null;
+        factory.Dispatcher.Setup(x => x.DispatchAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SupplierDeliveryConfig>(),
+                It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<string?>(), It.IsAny<bool>()))
+            .Callback((byte[] c, string n, string _, SupplierDeliveryConfig _, string _, CancellationToken _, string? _, bool _) =>
+                (sentName, sentText) = (n, System.Text.Encoding.UTF8.GetString(c)))
+            .ReturnsAsync(new DeliveryResult(true, null, 200));
+        var url = $"/api/documents/{docId}/outputs/test";
+
+        var res = await http.PostAsJsonAsync(url, new { format = "csv", destinationId = Destination(Org), template = output.Template });
+
+        res.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("success").GetBoolean().Should().BeTrue();
+        sentName.Should().Be("TEST_synthetic.csv");
+        sentText.Should().Contain("INV-7");
+
+        var other = await http.PostAsJsonAsync(url, new { format = "csv", destinationId = Destination(DocumentEngineTestFactory.OrgB), template = output.Template });
+        other.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await other.Content.ReadAsStringAsync()).Should().Contain("destination_not_found");
     }
 }

@@ -40,7 +40,7 @@ public sealed class OrgAdminGateIsRealTests
     /// <para>Changing this number is the deliberate act of widening or narrowing what an
     /// organisation reserves to its administrators, and it should never move on its own.</para>
     /// </summary>
-    private const int ExpectedGatedEndpointCount = 31;
+    private const int ExpectedGatedEndpointCount = 32;
 
     /// <summary>
     /// How many operations are declared destructive. Every gated endpoint reaches a declared primitive;
