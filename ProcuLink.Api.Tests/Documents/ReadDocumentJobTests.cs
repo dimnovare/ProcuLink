@@ -115,6 +115,24 @@ public sealed class ReadDocumentJobTests
     }
 
     [Fact]
+    public async Task Hints_for_removed_fields_are_not_passed()
+    {
+        var (job, db, reader, id) = Arrange(TextPdf());
+        var flow = await db.Flows.SingleAsync();
+        FieldHint Hint(string key, string sender = "") => new(key, sender, "", null, "x", null, null, null, DateTime.UtcNow);
+        flow.HintsJson = DocumentJson.Serialize(new[] { Hint("sender_name"), Hint("document_number", "vat:XX999"), Hint("gone") });
+        await db.SaveChangesAsync();
+        DocumentReadInput? seen = null;
+        reader.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()))
+            .Callback<DocumentReadInput, Guid, CancellationToken>((i, _, _) => seen = i)
+            .ReturnsAsync(new DocumentReadOutcome(true, new ReadResult("Invoice", [Field("sender_name", "A")]), null));
+
+        await job.ExecuteAsync(id, Org, null, CancellationToken.None);
+
+        seen!.Hints!.Select(h => h.FieldKey).Should().Equal("sender_name");
+    }
+
+    [Fact]
     public async Task A_json_document_is_read_as_text_and_located_by_pointer()
     {
         var (job, db, reader, id) = Arrange(System.Text.Encoding.UTF8.GetBytes("{\"po\":\"PO-9\"}"), fileName: "order.json",

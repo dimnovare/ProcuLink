@@ -2137,6 +2137,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(f => f.Name).HasColumnName("name");
             b.Property(f => f.FieldsJson).HasColumnName("fields_json").HasColumnType("jsonb").HasDefaultValue("{}");
             b.Property(f => f.FieldsConfirmed).HasColumnName("fields_confirmed");
+            b.Property(f => f.HintsJson).HasColumnName("hints_json").HasColumnType("jsonb").HasDefaultValue("[]");
             b.Property(f => f.Automation).HasColumnName("automation").HasDefaultValue("review");
             b.Property(f => f.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             b.Property(f => f.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");

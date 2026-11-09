@@ -20,7 +20,8 @@ public record DocumentSummaryDto(
             DocumentJson.Deserialize<List<DocumentCheck>>(d.ChecksJson).Count, d.CreatedAt, d.Source, d.SourceRef);
 }
 
-public record DocumentDto(DocumentSummaryDto Summary, string ContentType, ReadResult Read, IReadOnlyList<DocumentCheck> Checks);
+public record DocumentDto(DocumentSummaryDto Summary, string ContentType, ReadResult Read, IReadOnlyList<DocumentCheck> Checks,
+    string? SenderLabel = null);
 
 /// <summary>What the file API returns for a document: the read result and the sends made from it.</summary>
 public record FlowFileResultDto(DocumentDto Document, IReadOnlyList<object> Deliveries);
@@ -35,5 +36,8 @@ public record RowRef(string Table, int Row);
 public record EditValuesRequest(
     IReadOnlyList<FieldEdit>? Fields, IReadOnlyList<CellEdit>? Cells,
     IReadOnlyList<string>? AddRowToTables, IReadOnlyList<RowRef>? RemoveRows);
+
+/// <summary>One of <paramref name="Key"/> (a flow field) or <paramref name="NewLabel"/>, and one of <paramref name="Page"/> + <paramref name="Box"/> or <paramref name="Address"/>.</summary>
+public record TeachRequest(string? Key, string? NewLabel, int? Page, Box? Box, string? Address, string? Value);
 
 public record HistoryEntryDto(string Action, DateTime At, string? UserId, JsonElement Payload);
