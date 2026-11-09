@@ -19,6 +19,13 @@ public sealed record DraftLeaf(string Path, string? FieldKey, string? By, float?
 
 public sealed record OutputDraft(string Name, string Format, string? TableKey, OutputNodeTemplate Template, IReadOnlyList<DraftLeaf> Leaves, IReadOnlyList<string> Notes);
 
+/// <summary>A destination proposed by documentation; never created automatically.</summary>
+public sealed record DraftDestination(string Url, string Method, string AuthType, DraftCite? Cite);
+
+public sealed record OutputDraftDto(
+    string Name, string Format, string? TableKey, OutputNodeTemplate Template, IReadOnlyList<DraftLeaf> Leaves, IReadOnlyList<string> Notes,
+    DraftCite? FormatCite = null, DraftDestination? Destination = null, bool Truncated = false);
+
 public interface IOutputDesigner
 {
     Task<IReadOnlyList<SlotMatch>> BindAsync(Guid orgId, IReadOnlyList<OutputSlot> slots, FlowFieldList fields, CancellationToken ct);

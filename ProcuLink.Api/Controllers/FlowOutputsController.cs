@@ -136,6 +136,38 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         return NoContent();
     }
 
+    private const int MaxSampleBytes = 2 * 1024 * 1024;
+
+    /// <summary>Reads a sample file and proposes an output from it: values are matched by name, then by the AI. Nothing is saved.</summary>
+    [RequireOrgAdmin]
+    [HttpPost("api/flows/{flowId:guid}/outputs/from-sample")]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit(MaxSampleBytes + 64 * 1024)]
+    public async Task<IActionResult> FromSample(Guid flowId, IFormFile file, [FromServices] IOutputDesigner designer, CancellationToken ct)
+    {
+        if (Refuse() is { } refused) return refused;
+        var orgId = tenant.OrganisationId;
+        var flow = await db.Flows.AsNoTracking().FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == flowId, ct);
+        if (flow is null) return FlowNotFound();
+        if (!flow.FieldsConfirmed) return Conflict(new { error = "fields_unconfirmed" });
+        if (file.Length > MaxSampleBytes) return StatusCode(413, new { error = "file_too_large" });
+        if (OutputSample.FormatFor(file.FileName) is not { } format) return UnprocessableEntity(new { error = "unsupported_format" });
+        using var buffer = new MemoryStream();
+        await file.CopyToAsync(buffer, ct);
+        if (OutputSample.Infer(file.FileName, buffer.ToArray()) is not { } template) return UnprocessableEntity(new { error = "unreadable_file" });
+
+        var fields = DocumentJson.Deserialize<FlowFieldList>(flow.FieldsJson);
+        var slots = DraftBinder.Slots(template, format, fields);
+        var matches = DraftBinder.ByName(slots, fields).Select(m => (m, "name")).ToList();
+        var left = slots.Where(s => matches.All(m => m.m.Path != s.Path)).ToList();
+        if (left.Count > 0)
+            matches.AddRange((await designer.BindAsync(orgId, left, fields, ct)).Select(m => (m, "ai")));
+
+        var name = Path.GetFileNameWithoutExtension(file.FileName);
+        var draft = DraftBinder.Apply(name.Length > 120 ? name[..120] : name, format, template, matches, fields);
+        return Ok(new OutputDraftDto(draft.Name, draft.Format, draft.TableKey, draft.Template, draft.Leaves, draft.Notes));
+    }
+
     /// <summary>Renders the document through the output (or the draft template in the body, if given) and returns the text. Nothing is sent or saved.</summary>
     [HttpPost("api/documents/{documentId:guid}/outputs/{outputId:guid}/preview")]
     public async Task<IActionResult> Preview(Guid documentId, Guid outputId,

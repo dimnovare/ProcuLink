@@ -41,6 +41,7 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
     public string? PostgresConnection { get; init; }
 
     /// <summary>Replaces <see cref="IBackgroundJobClient"/>; tests count the jobs created.</summary>
+    public Mock<ProcuLink.Core.Documents.IOutputDesigner> Designer { get; } = new();
     public Mock<IBackgroundJobClient> Jobs { get; } = new();
 
     /// <summary>The only <see cref="ProcuLink.Api.Services.Documents.Intake.IPickupSource"/> (kind sftp) in this host.</summary>
@@ -98,6 +99,9 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             foreach (var d in services.Where(d => d.ServiceType == typeof(ProcuLink.Core.Services.Ai.IAiMappingService)).ToList())
                 services.Remove(d);
             services.AddSingleton(Ai.Object);
+            foreach (var d in services.Where(d => d.ServiceType == typeof(ProcuLink.Core.Documents.IOutputDesigner)).ToList())
+                services.Remove(d);
+            services.AddSingleton(Designer.Object);
             services.AddSingleton(Storage.Object);
             services.AddSingleton(Jobs.Object);
 

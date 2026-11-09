@@ -405,4 +405,49 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         res.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
         (await res.Content.ReadAsStringAsync()).Should().Contain("invalid_logo");
     }
+
+    private static MultipartFormDataContent Upload(string fileName, string content) =>
+        new() { { new ByteArrayContent(System.Text.Encoding.UTF8.GetBytes(content)), "file", fileName } };
+
+    [Fact]
+    public async Task From_sample_uses_names_then_ai_and_ignores_keys_it_may_not_use()
+    {
+        var (flowId, _) = await Seed(confirmed: true);
+        using (var seedScope = factory.Services.CreateScope())
+        {
+            var db = seedScope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            (await db.Flows.SingleAsync(f => f.Id == flowId)).FieldsJson = DocumentJson.Serialize(new FlowFieldList([Field("po_number", "PO number"), Field("ship_address", "Delivery address")]));
+            await db.SaveChangesAsync();
+        }
+        IReadOnlyList<OutputSlot>? sent = null;
+        factory.Designer.Reset();
+        factory.Designer.Setup(d => d.BindAsync(Org, It.IsAny<IReadOnlyList<OutputSlot>>(), It.IsAny<FlowFieldList>(), It.IsAny<CancellationToken>()))
+            .Callback((Guid _, IReadOnlyList<OutputSlot> slots, FlowFieldList _, CancellationToken _) => sent = slots)
+            .ReturnsAsync([new SlotMatch("Ship to", "ship_address", 0.8f), new SlotMatch("PO number", "nope", 0.9f)]);
+
+        var res = await factory.ClientFor(Org).PostAsync($"/api/flows/{flowId}/outputs/from-sample", Upload("orders.csv", "PO number,Ship to\n1,x\n"));
+
+        res.StatusCode.Should().Be(HttpStatusCode.OK);
+        var draft = (await res.Content.ReadFromJsonAsync<OutputDraftDto>(new JsonSerializerOptions(JsonSerializerDefaults.Web)))!;
+        sent!.Select(s => s.Name).Should().Equal("Ship to");
+        draft.Leaves.Single(l => l.Path == "PO number").Should().Match<DraftLeaf>(l => l.By == "name");
+        draft.Leaves.Single(l => l.Path == "Ship to").Should().Match<DraftLeaf>(l => l.By == "ai" && l.FieldKey == "ship_address" && l.Confidence == 0.8f);
+        using var scope = factory.Services.CreateScope();
+        scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowOutput>().Count(o => o.FlowId == flowId).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task From_sample_refuses_files_it_cannot_use()
+    {
+        var (flowId, _) = await Seed(confirmed: true);
+        var http = factory.ClientFor(Org);
+
+        var pdf = await http.PostAsync($"/api/flows/{flowId}/outputs/from-sample", Upload("a.pdf", "x"));
+        var bad = await http.PostAsync($"/api/flows/{flowId}/outputs/from-sample", Upload("a.json", "{not json"));
+
+        pdf.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await pdf.Content.ReadAsStringAsync()).Should().Contain("unsupported_format");
+        bad.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await bad.Content.ReadAsStringAsync()).Should().Contain("unreadable_file");
+    }
 }

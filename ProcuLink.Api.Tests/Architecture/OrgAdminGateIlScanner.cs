@@ -192,6 +192,10 @@ internal static class OrgAdminGateIlScanner
             "Opens a connection from our servers to a host the organisation named, with its saved credentials "
           + "(an SFTP host key it learns is not saved by a test)."),
 
+        new("IOutputDesigner.BindAsync",
+            OnInterface<ProcuLink.Core.Documents.IOutputDesigner>(nameof(ProcuLink.Core.Documents.IOutputDesigner.BindAsync)),
+            "Sends the organisation's field names and sample headings to an external AI model and spends the monthly AI cap."),
+
         new("FlowOutputsController.Apply",
             member => member is MethodBase { Name: "Apply" } m && m.DeclaringType == typeof(ProcuLink.Api.Controllers.FlowOutputsController),
             "Writes an output's template, format and destination, which decides what is rendered and where "
