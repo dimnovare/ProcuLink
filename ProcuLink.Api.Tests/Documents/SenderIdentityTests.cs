@@ -22,6 +22,12 @@ public sealed class SenderIdentityTests
     }
 
     [Fact]
+    public void A_too_short_vat_falls_through_to_the_name()
+    {
+        SenderIdentity.Of(Read((FieldMeanings.SenderVatId, "N/A"), (FieldMeanings.SenderName, "Acme GmbH")), "upload", null)!.Key.Should().StartWith("name:");
+    }
+
+    [Fact]
     public void Vat_wins_and_is_normalised()
     {
         var id = SenderIdentity.Of(Read((FieldMeanings.SenderVatId, " ee 1009-1234 5 "), (FieldMeanings.SenderName, "Acme GmbH")), "email", "x@y.example");

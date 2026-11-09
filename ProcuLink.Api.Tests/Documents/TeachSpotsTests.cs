@@ -11,6 +11,12 @@ public sealed class TeachSpotsTests
     private static PageWord W(string t, double x, double y, double w = 0.08) => new(t, 1, new Box(x, y, w, 0.02));
 
     [Fact]
+    public void An_overlong_line_number_is_an_unknown_address()
+    {
+        TeachSpots.Read("notes.txt", "a"u8.ToArray(), null, null, "line:99999999999", null).Should().BeNull();
+    }
+
+    [Fact]
     public void Words_in_the_box_are_the_value_and_the_label_left_of_it_is_near()
     {
         var words = new[] { W("Total", 0.1, 0.5), W("due:", 0.19, 0.5), W("1", 0.3, 0.5, 0.02), W("234,50", 0.33, 0.5), W("EUR", 0.45, 0.5) };

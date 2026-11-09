@@ -187,9 +187,11 @@ public sealed class DocumentsController(
         if (string.IsNullOrWhiteSpace(req.Key) == (label is null) || label?.Length > 100) return BadRequest(new { error = "unknown_target" });
         if (label is null && flowFields.Fields.All(f => f.Key != req.Key)) return BadRequest(new { error = "unknown_target", target = $"field:{req.Key}" });
 
+        if (label is not null && !flow.FieldsConfirmed) return Conflict(new { error = "fields_unconfirmed" });
+
         var spotGiven = req.Address is not null
             ? req.Page is null && req.Box is null
-            : req.Page is not null && req.Box is { Width: > 0, Height: > 0 } b && b.X >= 0 && b.Y >= 0 && b.X + b.Width <= 1 && b.Y + b.Height <= 1;
+            : req.Page is > 0 && req.Box is { Width: > 0, Height: > 0 } b && b.X >= 0 && b.Y >= 0 && b.X + b.Width <= 1 && b.Y + b.Height <= 1;
         if (!spotGiven) return BadRequest(new { error = "unknown_spot" });
         byte[] bytes;
         await using (var source = await storage.DownloadAsync(doc.SourceFileKey, ct))
@@ -209,7 +211,6 @@ public sealed class DocumentsController(
             key = FieldKey.Unique(flowFields.Fields.Select(f => f.Key).Concat(flowFields.Tables.Select(t => t.Key)).ToHashSet(), label);
             flowFields = new FlowFieldList([.. flowFields.Fields, new FlowField(key, label, FieldTypes.Text, null, false)], flowFields.Tables);
             flow.FieldsJson = DocumentJson.Serialize(flowFields);
-            flow.FieldsConfirmed = true;
         }
 
         var sender = SenderIdentity.Of(DocumentJson.Deserialize<ReadResult>(doc.ReadJson), doc.Source, doc.SourceRef);

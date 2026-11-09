@@ -88,7 +88,13 @@ public class DocumentsApiTests(DocumentEngineTestFactory factory) : IClassFixtur
     public async Task Teach_a_new_field_adds_it_to_the_flow()
     {
         var http = factory.ClientFor(Org);
-        var id = await SeedDocument(DocumentStatus.NeedsReview, arrange: Source("orders.csv", "Field,Value\r\nTotal,99.50\r\n"));
+        var unconfirmed = await SeedDocument(DocumentStatus.NeedsReview, arrange: Source("orders.csv", "Field,Value\r\nTotal,99.50\r\n"));
+        var refused = await http.PostAsJsonAsync($"/api/documents/{unconfirmed}/teach", new TeachRequest(null, "Delivery note", null, null, "cell:r2c2", null));
+        Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+        Assert.False(FlowOf(unconfirmed).FieldsConfirmed);
+
+        var csv = Source("orders.csv", "Field,Value\r\nTotal,99.50\r\n");
+        var id = await SeedDocument(DocumentStatus.NeedsReview, arrange: (f, d) => { csv(f, d); f.FieldsConfirmed = true; });
 
         var res = await http.PostAsJsonAsync($"/api/documents/{id}/teach", new TeachRequest(null, "Delivery note", null, null, "cell:r2c2", null));
 

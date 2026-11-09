@@ -11,10 +11,10 @@ public sealed record SenderIdentity(string Key, string Label)
         var vat = Value(read, FieldMeanings.SenderVatId);
         var name = Value(read, FieldMeanings.SenderName);
 
-        if (vat is not null && NormaliseVat(vat) is { Length: > 0 } normalisedVat)
+        if (vat is not null && NormaliseVat(vat) is { Length: >= 5 } normalisedVat)
             return new($"vat:{normalisedVat}", name ?? vat);
 
-        if (name is not null && SupplierSuggestionScoring.NormalizeCompanyName(name) is { } normalisedName)
+        if (name is not null && SupplierSuggestionScoring.NormalizeCompanyName(name) is { Length: >= 3 } normalisedName)
             return new($"name:{normalisedName}", name);
 
         if (EmailDomain(source, sourceRef) is { } domain) return new($"email:{domain}", domain);

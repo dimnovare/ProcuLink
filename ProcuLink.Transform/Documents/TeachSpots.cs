@@ -10,7 +10,7 @@ public sealed record TeachSpot(string? Value, string? Near, SourceLocation Locat
 public static class TeachSpots
 {
     private const int NearWords = 4;
-    private static readonly Regex Address = new(@"^(cell:r(?<r>\d+)c(?<c>\d+)|line:(?<l>\d+))$", RegexOptions.Compiled);
+    private static readonly Regex Address = new(@"^(cell:r(?<r>[0-9]{1,9})c(?<c>[0-9]{1,9})|line:(?<l>[0-9]{1,9}))$", RegexOptions.Compiled);
 
     public static TeachSpot FromWords(IReadOnlyList<PageWord> words, int page, Box box)
     {
