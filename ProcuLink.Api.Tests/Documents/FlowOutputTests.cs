@@ -531,6 +531,15 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         sentText.Should().Contain("INV-7");
 
         var other = await http.PostAsJsonAsync(url, new { format = "csv", destinationId = Destination(DocumentEngineTestFactory.OrgB), template = output.Template });
+        string? sentType = null;
+        factory.Dispatcher.Setup(x => x.DispatchAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SupplierDeliveryConfig>(),
+                It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<string?>(), It.IsAny<bool>()))
+            .Callback((byte[] _, string n, string t, SupplierDeliveryConfig _, string _, CancellationToken _, string? _, bool _) => (sentName, sentType) = (n, t))
+            .ReturnsAsync(new DeliveryResult(true, null, 200));
+        var xlsx = (await (await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "Sheet", format = "xlsx" })).Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+        (await http.PostAsJsonAsync(url, new { format = "xlsx", destinationId = Destination(Org), template = xlsx.Template })).StatusCode.Should().Be(HttpStatusCode.OK);
+        sentName.Should().Be("TEST_synthetic.xlsx");
+        sentType.Should().Be("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
         other.StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await other.Content.ReadAsStringAsync()).Should().Contain("destination_not_found");
     }

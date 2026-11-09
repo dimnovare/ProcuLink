@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Auth;
+using ProcuLink.Api.Helpers;
 using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
@@ -270,13 +271,13 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
 
         var lookups = await DocumentLookups.LoadAsync(db, orgId, [request.Template], ct);
         var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
-        var render = DocumentOutputRenderer.Render(request.Format == FlowOutputFormats.Xlsx ? FlowOutputFormats.Csv : request.Format,
+        var render = DocumentOutputRenderer.Render(request.Format,
             request.Template, read, request.TableKey, lookups, request.Layout);
         if (!render.Ok) return UnprocessableEntity(new { error = render.Error, detail = render.Detail });
 
         using var content = new MemoryStream();
         await render.Result!.Content.CopyToAsync(content, ct);
-        var payload = new TestPayload(content.ToArray(), Path.GetFileNameWithoutExtension(doc.FileName) + render.Result.FileExtension, render.Result.ContentType);
+        var payload = new TestPayload(content.ToArray(), FileNameSanitiser.Sanitise(Path.GetFileNameWithoutExtension(doc.FileName)) + render.Result.FileExtension, render.Result.ContentType);
         var result = await destinations.TestAsync(orgId, request.DestinationId, ct, payload);
         return result is null
             ? NotFound(new { error = "destination_not_found" })
