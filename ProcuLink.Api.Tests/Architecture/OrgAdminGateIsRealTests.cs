@@ -43,7 +43,7 @@ public sealed class OrgAdminGateIsRealTests
     private const int ExpectedGatedEndpointCount = 27;
 
     /// <summary>
-    /// How many operations are declared destructive. Twenty-one endpoints reach twenty-one primitives,
+    /// How many operations are declared destructive. Every gated endpoint reaches a declared primitive,
     /// because <c>UpsertDeliveryConfig</c> both writes the delivery row and republishes the live
     /// connection revision.
     /// </summary>

@@ -52,6 +52,7 @@ public sealed class OrganisationEraseTests
     [Theory]
     [InlineData("proculink-ci-smoke-run1", 7, null, null, true)]
     [InlineData("proculink-ci-smoke-run1", 7, "membership", null, true)]   // signed into, never used
+    [InlineData("proculink-ci-smoke-run1", 7, "inbound", null, true)]     // a backfill mints one per org
     [InlineData("proculink-ci-smoke-run1", 7, "order", null, false)]       // used
     [InlineData("proculink-ci-smoke-run1", 7, "buyer", null, false)]       // used, in a table nobody hand-listed
     [InlineData("proculink-ci-smoke-run1", 1, null, null, false)]          // a smoke run may still be in flight
@@ -68,6 +69,7 @@ public sealed class OrganisationEraseTests
         var org = Org(slug, ageHours, customer);
         db.Organisations.Add(org);
         if (row == "membership") db.Memberships.Add(new Membership { Id = Guid.NewGuid(), OrgId = org.Id, UserId = Guid.NewGuid(), Role = "admin" });
+        if (row == "inbound") db.Set<OrgInboundAddress>().Add(new OrgInboundAddress { Id = Guid.NewGuid(), OrganisationId = org.Id });
         if (row == "order") db.PurchaseOrders.Add(new PurchaseOrderEntity { Id = Guid.NewGuid(), OrgId = org.Id });
         if (row == "buyer") db.Buyers.Add(new Buyer { Id = Guid.NewGuid(), OrgId = org.Id });
         await db.SaveChangesAsync();

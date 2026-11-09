@@ -24,7 +24,7 @@ public sealed class DisposableOrgSweepJob(
 
     /// <summary>Tables a workspace fills just by being signed into. A row anywhere else means it was used.</summary>
     private static readonly HashSet<string> Bookkeeping =
-        ["memberships", "audit_events", "org_plan_history", "ai_usage_monthly", "idempotency_keys"];
+        ["memberships", "audit_events", "org_plan_history", "ai_usage_monthly", "idempotency_keys", "org_inbound_addresses"];
 
     [Queue("background")]
     [AutomaticRetry(Attempts = 0)]
