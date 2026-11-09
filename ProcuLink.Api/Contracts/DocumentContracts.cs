@@ -20,7 +20,8 @@ public record DocumentSummaryDto(
             DocumentJson.Deserialize<List<DocumentCheck>>(d.ChecksJson).Count, d.CreatedAt, d.Source, d.SourceRef);
 }
 
-public record DocumentDto(DocumentSummaryDto Summary, string ContentType, ReadResult Read, IReadOnlyList<DocumentCheck> Checks);
+public record DocumentDto(DocumentSummaryDto Summary, string ContentType, ReadResult Read, IReadOnlyList<DocumentCheck> Checks,
+    string? SenderLabel = null);
 
 /// <summary>What the file API returns for a document: the read result and the sends made from it.</summary>
 public record FlowFileResultDto(DocumentDto Document, IReadOnlyList<object> Deliveries);

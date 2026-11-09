@@ -45,9 +45,12 @@ public sealed class DocumentsController(
         return IntakeResults.From(this, result, flowName, submitter.AcceptedFormats(orgId));
     }
 
-    internal static DocumentDto ToDto(FlowDocument d, string flowName) =>
-        new(ToSummary(d, flowName), d.ContentType, DocumentJson.Deserialize<ReadResult>(d.ReadJson),
-            DocumentJson.Deserialize<List<DocumentCheck>>(d.ChecksJson));
+    internal static DocumentDto ToDto(FlowDocument d, string flowName)
+    {
+        var read = DocumentJson.Deserialize<ReadResult>(d.ReadJson);
+        return new(ToSummary(d, flowName), d.ContentType, read, DocumentJson.Deserialize<List<DocumentCheck>>(d.ChecksJson),
+            SenderIdentity.Of(read, d.Source, d.SourceRef)?.Label);
+    }
 
     private Task<FlowDocument?> FindAsync(Guid id, CancellationToken ct) =>
         db.FlowDocuments.FirstOrDefaultAsync(d => d.OrgId == tenant.OrganisationId && d.Id == id, ct);
