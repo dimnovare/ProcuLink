@@ -9,6 +9,8 @@ using MimeKit;
 using ProcuLink.Api.Jobs;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services.Ingress;
+using ProcuLink.Core.Services.Catalog;
 using ProcuLink.Infrastructure.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Security;
 
@@ -119,14 +121,20 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard, DocumentEngineG
             return files;
         }
 
+        /// <summary>A part's text, or null when it is absent or declares more than the file limit.</summary>
+        private async Task<string?> TextOfAsync(UniqueId uid, BodyPartText? part, CancellationToken ct) =>
+            part is null || part.Octets > IngressLimits.MaxFileBytes ? null
+                : (await folder.GetBodyPartAsync(uid, part, ct) as TextPart)?.Text;
+
         private async Task<string?> BodyAsync(IMessageSummary m, CancellationToken ct) =>
-            EmailBodyText.Resolve(
-                m.TextBody is null ? null : ((TextPart)await folder.GetBodyPartAsync(m.UniqueId, m.TextBody, ct)).Text,
-                m.HtmlBody is null ? null : ((TextPart)await folder.GetBodyPartAsync(m.UniqueId, m.HtmlBody, ct)).Text);
+            EmailBodyText.Resolve(await TextOfAsync(m.UniqueId, m.TextBody, ct), await TextOfAsync(m.UniqueId, m.HtmlBody, ct));
 
         public async Task<MemoryStream> DownloadAsync(PickupFile file, long maxBytes, CancellationToken ct)
         {
-            if (_bodies.TryGetValue(file.Key, out var body)) return new MemoryStream(Encoding.UTF8.GetBytes(body));
+            if (_bodies.TryGetValue(file.Key, out var body))
+                return Encoding.UTF8.GetByteCount(body) > maxBytes
+                    ? throw new CatalogFileTooLargeException(maxBytes)
+                    : new MemoryStream(Encoding.UTF8.GetBytes(body));
             var (uid, part) = _parts[file.Key];
             var entity = (MimePart)await folder.GetBodyPartAsync(uid, part, ct);
             await using var content = entity.Content.Open();
