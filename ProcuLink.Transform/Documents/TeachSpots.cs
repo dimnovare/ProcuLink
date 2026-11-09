@@ -62,7 +62,8 @@ public static class TeachSpots
         var ext = Path.GetExtension(fileName).ToLowerInvariant();
         var m = address is null ? null : Address.Match(address);
         TeachSpot? spot = null;
-        if (m is { Success: true } && m.Groups["l"].Success && DocumentFormats.IsMore(fileName))
+        // A .docx is a zip: its bytes are not the lines the viewer shows.
+        if (m is { Success: true } && m.Groups["l"].Success && DocumentFormats.IsMore(fileName) && ext != ".docx")
         {
             using var reader = new StreamReader(new MemoryStream(bytes), detectEncodingFromByteOrderMarks: true);
             spot = FromLine(reader.ReadToEnd(), int.Parse(m.Groups["l"].Value), value);

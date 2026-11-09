@@ -37,4 +37,7 @@ public record EditValuesRequest(
     IReadOnlyList<FieldEdit>? Fields, IReadOnlyList<CellEdit>? Cells,
     IReadOnlyList<string>? AddRowToTables, IReadOnlyList<RowRef>? RemoveRows);
 
+/// <summary>One of <paramref name="Key"/> (a flow field) or <paramref name="NewLabel"/>, and one of <paramref name="Page"/> + <paramref name="Box"/> or <paramref name="Address"/>.</summary>
+public record TeachRequest(string? Key, string? NewLabel, int? Page, Box? Box, string? Address, string? Value);
+
 public record HistoryEntryDto(string Action, DateTime At, string? UserId, JsonElement Payload);

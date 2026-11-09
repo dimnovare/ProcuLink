@@ -14,6 +14,7 @@ using ProcuLink.Core.Services.Detection;
 using ProcuLink.Core.Services.Ingress;
 using Microsoft.Net.Http.Headers;
 using ProcuLink.Infrastructure;
+using ProcuLink.Transform.Documents;
 
 namespace ProcuLink.Api.Controllers;
 
@@ -148,14 +149,21 @@ public sealed class DocumentsController(
         return Ok(ToSummary(doc, await FlowNameAsync(doc, ct)));
     }
 
+    /// <summary>The document when its values may change; otherwise the refusal.</summary>
+    private async Task<(FlowDocument? Doc, IActionResult? Refused)> FindEditableAsync(Guid id, CancellationToken ct)
+    {
+        if (Refuse() is { } refused) return (null, refused);
+        var doc = await FindAsync(id, ct);
+        if (doc is null) return (null, NotFound(NotFoundBody));
+        if (doc.Status is DocumentStatus.Sending or DocumentStatus.Sent) return (null, Conflict(new { error = "document_sent" }));
+        return DocumentStatus.IsEditable(doc.Status, doc.StatusReason) ? (doc, null) : (null, Conflict(new { error = "not_editable" }));
+    }
+
     [HttpPatch("{id:guid}/values")]
     public async Task<IActionResult> EditValues(Guid id, EditValuesRequest req, CancellationToken ct)
     {
-        if (Refuse() is { } refused) return refused;
-        var doc = await FindAsync(id, ct);
-        if (doc is null) return NotFound(NotFoundBody);
-        if (doc.Status is DocumentStatus.Sending or DocumentStatus.Sent) return Conflict(new { error = "document_sent" });
-        if (!DocumentStatus.IsEditable(doc.Status, doc.StatusReason)) return Conflict(new { error = "not_editable" });
+        var (doc, refused) = await FindEditableAsync(id, ct);
+        if (doc is null) return refused!;
 
         var (fieldEdits, cellEdits, adds, removes) = (req.Fields ?? [], req.Cells ?? [], req.AddRowToTables ?? [], req.RemoveRows ?? []);
         if (fieldEdits.Count + cellEdits.Count + adds.Count + removes.Count == 0) return BadRequest(new { error = "no_changes" });
@@ -163,7 +171,65 @@ public sealed class DocumentsController(
             return BadRequest(new { error = "unknown_target", target = (string?)null });
 
         var flow = await db.Flows.FirstAsync(f => f.OrgId == doc.OrgId && f.Id == doc.FlowId, ct);
+        return await ApplyEditsAsync(doc, flow, DocumentJson.Deserialize<FlowFieldList>(flow.FieldsJson), req, null, ct);
+    }
+
+    /// <summary>A point-and-say edit: the value at a spot on the original document becomes the field's value, and the flow keeps a hint of where it was for this sender.</summary>
+    [HttpPost("{id:guid}/teach")]
+    public async Task<IActionResult> Teach(Guid id, TeachRequest req, CancellationToken ct)
+    {
+        var (doc, refused) = await FindEditableAsync(id, ct);
+        if (doc is null) return refused!;
+
+        var flow = await db.Flows.FirstAsync(f => f.OrgId == doc.OrgId && f.Id == doc.FlowId, ct);
         var flowFields = DocumentJson.Deserialize<FlowFieldList>(flow.FieldsJson);
+        var label = string.IsNullOrWhiteSpace(req.NewLabel) ? null : req.NewLabel.Trim();
+        if (string.IsNullOrWhiteSpace(req.Key) == (label is null) || label?.Length > 100) return BadRequest(new { error = "unknown_target" });
+        if (label is null && flowFields.Fields.All(f => f.Key != req.Key)) return BadRequest(new { error = "unknown_target", target = $"field:{req.Key}" });
+
+        var spotGiven = req.Address is not null
+            ? req.Page is null && req.Box is null
+            : req.Page is not null && req.Box is { Width: > 0, Height: > 0 } b && b.X >= 0 && b.Y >= 0 && b.X + b.Width <= 1 && b.Y + b.Height <= 1;
+        if (!spotGiven) return BadRequest(new { error = "unknown_spot" });
+        byte[] bytes;
+        await using (var source = await storage.DownloadAsync(doc.SourceFileKey, ct))
+        {
+            using var buffer = new MemoryStream();
+            await source.CopyToAsync(buffer, ct);
+            bytes = buffer.ToArray();
+        }
+        var spot = TeachSpots.Read(doc.FileName, bytes, req.Page, req.Box, req.Address, req.Value?.Trim());
+        if (spot is null) return BadRequest(new { error = "unknown_spot" });
+        var value = spot.Value?.Trim();
+        if (string.IsNullOrEmpty(value)) return BadRequest(new { error = "no_text_in_area" });
+
+        var key = req.Key!;
+        if (label is not null)
+        {
+            key = FieldKey.Unique(flowFields.Fields.Select(f => f.Key).Concat(flowFields.Tables.Select(t => t.Key)).ToHashSet(), label);
+            flowFields = new FlowFieldList([.. flowFields.Fields, new FlowField(key, label, FieldTypes.Text, null, false)], flowFields.Tables);
+            flow.FieldsJson = DocumentJson.Serialize(flowFields);
+            flow.FieldsConfirmed = true;
+        }
+
+        var sender = SenderIdentity.Of(DocumentJson.Deserialize<ReadResult>(doc.ReadJson), doc.Source, doc.SourceRef);
+        var loc = spot.Location;
+        var hint = new FieldHint(key, sender?.Key ?? "", sender?.Label ?? "", Cut(spot.Near, 120), Cut(value, 200)!, loc.Page, loc.Box, loc.Address, DateTime.UtcNow);
+        flow.HintsJson = DocumentJson.Serialize(FieldHints.Upsert(DocumentJson.Deserialize<List<FieldHint>>(flow.HintsJson), hint));
+        flow.UpdatedAt = DateTime.UtcNow;
+        // Saved by the edit below, with the value it sets.
+        DocumentAudit.Add(db, doc, "document.value_taught", new { key, sender = sender?.Label }, tenant.ClerkUserId);
+        return await ApplyEditsAsync(doc, flow, flowFields, new EditValuesRequest([new FieldEdit(key, value)], null, null, null),
+            new Dictionary<string, SourceLocation> { [key] = loc }, ct);
+    }
+
+    private static string? Cut(string? s, int max) => s?.Length > max ? s[..max] : s;
+
+    /// <summary>Applies validated edits, rechecks, writes history and saves. A field edit whose key is in <paramref name="locations"/> takes that location.</summary>
+    private async Task<IActionResult> ApplyEditsAsync(FlowDocument doc, Flow flow, FlowFieldList flowFields, EditValuesRequest req,
+        IReadOnlyDictionary<string, SourceLocation>? locations, CancellationToken ct)
+    {
+        var (fieldEdits, cellEdits, adds, removes) = (req.Fields ?? [], req.Cells ?? [], req.AddRowToTables ?? [], req.RemoveRows ?? []);
         var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
         var fields = read.Fields.ToList();
         var tables = read.Tables.ToList();
@@ -184,7 +250,11 @@ public sealed class DocumentsController(
                 fields.Add(new ReadField(ff.Key, ff.Label, null, ff.Type, ff.Meaning, 0, null, false, true, false));
                 i = fields.Count - 1;
             }
-            var edited = fields[i] with { Value = e.Value, Confidence = 1.0, Edited = true, NotOnPage = false };
+            var edited = fields[i] with
+            {
+                Value = e.Value, Confidence = 1.0, Edited = true, NotOnPage = false,
+                Location = locations?.GetValueOrDefault(e.Key) ?? fields[i].Location,
+            };
             // Confirming a value as it is still changes its confidence and Edited flag, so it still leaves a history row.
             if (edited != fields[i]) changes.Add(($"field:{e.Key}", fields[i].Value, e.Value));
             fields[i] = edited;

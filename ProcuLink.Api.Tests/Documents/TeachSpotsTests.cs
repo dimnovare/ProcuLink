@@ -40,5 +40,6 @@ public sealed class TeachSpotsTests
         l.Near.Should().Be("Total:");
         l.Location.Address.Should().Be("line:2");
         TeachSpots.FromLine("a\r\nTotal: 5 EUR\rz", 3, "z").Location.Address.Should().Be("line:3");
+        TeachSpots.Read("a.docx", "Total: 5 EUR"u8.ToArray(), null, null, "line:1", "5 EUR").Should().BeNull();
     }
 }

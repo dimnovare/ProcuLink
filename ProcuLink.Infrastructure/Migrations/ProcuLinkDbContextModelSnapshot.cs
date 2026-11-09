@@ -768,6 +768,13 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasDefaultValue("{}")
                         .HasColumnName("fields_json");
 
+                    b.Property<string>("HintsJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasDefaultValue("[]")
+                        .HasColumnName("hints_json");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("text")

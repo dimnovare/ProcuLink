@@ -8,6 +8,8 @@ public class Flow
     public string Name { get; set; } = "";
     public string FieldsJson { get; set; } = "{}";
     public bool FieldsConfirmed { get; set; }
+    /// <summary>A JSON list of <see cref="Documents.FieldHint"/>.</summary>
+    public string HintsJson { get; set; } = "[]";
     public string Automation { get; set; } = Documents.FlowAutomation.Review;
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
