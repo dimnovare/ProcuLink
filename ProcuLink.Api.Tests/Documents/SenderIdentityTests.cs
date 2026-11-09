@@ -10,6 +10,18 @@ public sealed class SenderIdentityTests
         new(null, f.Select(x => new ReadField(x.Meaning, x.Meaning, x.Value, FieldTypes.Text, x.Meaning, 0.9, null, false, false, false)).ToList());
 
     [Fact]
+    public void Matches_only_the_documents_own_sender()
+    {
+        SenderIdentity.Matches("", "x", "upload", null).Should().BeTrue();
+        SenderIdentity.Matches("vat:EE100912345", "VAT: ee 1009-12345", "upload", null).Should().BeTrue();
+        SenderIdentity.Matches("vat:EE100912345", "VAT: EE999", "upload", null).Should().BeFalse();
+        SenderIdentity.Matches("name:acme", "Invoice from ACME, Ltd", "upload", null).Should().BeTrue();
+        SenderIdentity.Matches("name:acme", "Invoice from Acmes", "upload", null).Should().BeFalse();
+        SenderIdentity.Matches("email:shop.example", "", "email", "a@Shop.Example").Should().BeTrue();
+        SenderIdentity.Matches("email:shop.example", "", "upload", "a@shop.example").Should().BeFalse();
+    }
+
+    [Fact]
     public void Vat_wins_and_is_normalised()
     {
         var id = SenderIdentity.Of(Read((FieldMeanings.SenderVatId, " ee 1009-1234 5 "), (FieldMeanings.SenderName, "Acme GmbH")), "email", "x@y.example");

@@ -119,8 +119,8 @@ public sealed class ReadDocumentJobTests
     {
         var (job, db, reader, id) = Arrange(TextPdf());
         var flow = await db.Flows.SingleAsync();
-        FieldHint Hint(string key) => new(key, "", "", null, "x", null, null, null, DateTime.UtcNow);
-        flow.HintsJson = DocumentJson.Serialize(new[] { Hint("sender_name"), Hint("gone") });
+        FieldHint Hint(string key, string sender = "") => new(key, sender, "", null, "x", null, null, null, DateTime.UtcNow);
+        flow.HintsJson = DocumentJson.Serialize(new[] { Hint("sender_name"), Hint("document_number", "vat:XX999"), Hint("gone") });
         await db.SaveChangesAsync();
         DocumentReadInput? seen = null;
         reader.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()))

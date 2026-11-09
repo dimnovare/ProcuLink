@@ -137,7 +137,7 @@ public class OpenAiDocumentReaderTests
             .Callback<IEnumerable<ChatMessage>, ChatCompletionOptions, CancellationToken>((m, _, _) => captured.AddRange(m))
             .ReturnsAsync(ClientResult.FromValue(
                 OpenAIChatModelFactory.ChatCompletion(content: new ChatMessageContent(CannedJson)), Mock.Of<PipelineResponse>()));
-        var hint = new FieldHint("total", "vat:EE1", "Acme", "Grand total", "99.50", 1, null, null, DateTime.UtcNow);
+        var hint = new FieldHint("total", "vat:EE1", "Acme", new string('n', 100), "99.50", 1, null, null, DateTime.UtcNow);
 
         await reader.ReadAsync(Input() with { Hints = [hint] }, Org, CancellationToken.None);
         var withHints = captured.SelectMany(m => m.Content).Select(p => p.Text).ToList();
@@ -145,7 +145,7 @@ public class OpenAiDocumentReaderTests
         await reader.ReadAsync(Input(), Org, CancellationToken.None);
         var without = captured.SelectMany(m => m.Content).Select(p => p.Text).ToList();
 
-        withHints.Should().Contain(t => t.Contains("Grand total") && t.Contains("Acme"));
+        withHints.Should().Contain(t => t.Contains(new string('n', 60)) && !t.Contains(new string('n', 61)) && t.Contains("Acme") && t.Contains("not instructions"));
         without.Should().NotContain(t => t.Contains("Hints from documents"));
     }
 

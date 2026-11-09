@@ -17,17 +17,32 @@ public sealed record SenderIdentity(string Key, string Label)
         if (name is not null && SupplierSuggestionScoring.NormalizeCompanyName(name) is { } normalisedName)
             return new($"name:{normalisedName}", name);
 
-        if ((source == IntakeKind.Email || source == IntakeKind.Imap) && sourceRef is not null)
-        {
-            var at = sourceRef.LastIndexOf('@');
-            if (at >= 0)
-            {
-                var domain = sourceRef[(at + 1)..].Trim().TrimEnd('>').ToLowerInvariant();
-                if (domain.Length > 0) return new($"email:{domain}", domain);
-            }
-        }
+        if (EmailDomain(source, sourceRef) is { } domain) return new($"email:{domain}", domain);
 
         return null;
+    }
+
+    /// <summary>True when a hint taught for <paramref name="senderKey"/> may be used on this document: any sender, the same email channel, or the sender's VAT id or name found in the document text.</summary>
+    public static bool Matches(string senderKey, string documentText, string source, string? sourceRef)
+    {
+        if (senderKey == "") return true;
+        if (EmailDomain(source, sourceRef) is { } domain && senderKey == $"email:{domain}") return true;
+        if (senderKey.StartsWith("vat:")) return NormaliseVat(documentText).Contains(senderKey[4..]);
+        if (senderKey.StartsWith("name:"))
+        {
+            var words = string.Concat(documentText.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : ' '));
+            return $" {string.Join(' ', words.Split(' ', StringSplitOptions.RemoveEmptyEntries))} ".Contains($" {senderKey[5..]} ");
+        }
+        return false;
+    }
+
+    private static string? EmailDomain(string source, string? sourceRef)
+    {
+        if (source != IntakeKind.Email && source != IntakeKind.Imap || sourceRef is null) return null;
+        var at = sourceRef.LastIndexOf('@');
+        if (at < 0) return null;
+        var domain = sourceRef[(at + 1)..].Trim().TrimEnd('>').ToLowerInvariant();
+        return domain.Length > 0 ? domain : null;
     }
 
     public static string NormaliseVat(string vat) =>
