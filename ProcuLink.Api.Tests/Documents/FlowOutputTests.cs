@@ -423,14 +423,14 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         factory.Designer.Reset();
         factory.Designer.Setup(d => d.BindAsync(Org, It.IsAny<IReadOnlyList<OutputSlot>>(), It.IsAny<FlowFieldList>(), It.IsAny<CancellationToken>()))
             .Callback((Guid _, IReadOnlyList<OutputSlot> slots, FlowFieldList _, CancellationToken _) => sent = slots)
-            .ReturnsAsync([new SlotMatch("Ship to", "ship_address", 0.8f), new SlotMatch("PO number", "nope", 0.9f)]);
+            .ReturnsAsync([new SlotMatch("Ship to", "nope", 0.9f), new SlotMatch("Ship to", "ship_address", 0.8f)]);
 
         var res = await factory.ClientFor(Org).PostAsync($"/api/flows/{flowId}/outputs/from-sample", Upload("orders.csv", "PO number,Ship to\n1,x\n"));
 
         res.StatusCode.Should().Be(HttpStatusCode.OK);
         var draft = (await res.Content.ReadFromJsonAsync<OutputDraftDto>(new JsonSerializerOptions(JsonSerializerDefaults.Web)))!;
         sent!.Select(s => s.Name).Should().Equal("Ship to");
-        draft.Leaves.Single(l => l.Path == "PO number").Should().Match<DraftLeaf>(l => l.By == "name");
+        draft.Leaves.Single(l => l.Path == "PO number").Should().Match<DraftLeaf>(l => l.By == "name" && l.FieldKey == "po_number");
         draft.Leaves.Single(l => l.Path == "Ship to").Should().Match<DraftLeaf>(l => l.By == "ai" && l.FieldKey == "ship_address" && l.Confidence == 0.8f);
         using var scope = factory.Services.CreateScope();
         scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowOutput>().Count(o => o.FlowId == flowId).Should().Be(0);

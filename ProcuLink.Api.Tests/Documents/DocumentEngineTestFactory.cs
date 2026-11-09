@@ -40,8 +40,10 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
     /// <summary>Set before the host first boots to run on Postgres, for the claim-first ledger (EF InMemory has neither unique indexes nor ExecuteUpdate).</summary>
     public string? PostgresConnection { get; init; }
 
-    /// <summary>Replaces <see cref="IBackgroundJobClient"/>; tests count the jobs created.</summary>
+    /// <summary>Replaces <see cref="ProcuLink.Core.Documents.IOutputDesigner"/>; tests set up the AI matches.</summary>
     public Mock<ProcuLink.Core.Documents.IOutputDesigner> Designer { get; } = new();
+
+    /// <summary>Replaces <see cref="IBackgroundJobClient"/>; tests count the jobs created.</summary>
     public Mock<IBackgroundJobClient> Jobs { get; } = new();
 
     /// <summary>The only <see cref="ProcuLink.Api.Services.Documents.Intake.IPickupSource"/> (kind sftp) in this host.</summary>
