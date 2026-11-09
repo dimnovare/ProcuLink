@@ -8,10 +8,13 @@ public static class FlowOutputFormats
     public const string Json = "json";
     public const string Xml = "xml";
     public const string Xlsx = "xlsx";
+    public const string Pdf = "pdf";
+    public const string Text = "txt";
+    public const string Fixed = "fixed";
 
-    public static readonly IReadOnlyList<string> All = [Csv, Json, Xml, Xlsx];
+    public static readonly IReadOnlyList<string> All = [Csv, Json, Xml, Xlsx, Pdf, Text, Fixed];
 
-    /// <summary>The template format an output renders through; xlsx is rendered from the CSV template.</summary>
+    /// <summary>The template format an output renders through; xlsx, pdf, txt and fixed are all rendered from the CSV template's grid.</summary>
     public static OutputFormat TemplateFormat(string format) => format switch
     {
         Json => OutputFormat.Json,

@@ -226,6 +226,9 @@ public record OutputFieldRule
     /// <summary>Constant value used when no canonical/custom field applies. Null if using a field. Ignored when <see cref="Expression"/> is set.</summary>
     public string? FixedValue { get; init; }
 
+    /// <summary>Fixed-width column width in characters. Ignored by every other format.</summary>
+    public int? Width { get; init; }
+
     /// <summary>
     /// Ordered manipulator chain applied to the resolved value. REUSES the existing
     /// <see cref="ManipulatorEntry"/> type (no duplication); each entry is resolved through

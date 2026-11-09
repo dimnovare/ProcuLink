@@ -106,4 +106,39 @@ public class DocumentOutputRendererTests
         // No tables in scope: the step cannot run, which is a refusal of the output, not a crash.
         DocumentOutputRenderer.Render("csv", Template("keep"), read, "items").Error.Should().Be("output_invalid");
     }
+
+    private static OutputNode Wide(string name, string field, int width) =>
+        OutputNode.FieldOf(name, new OutputFieldRule { OutputPath = name, CanonicalField = field, Width = width });
+
+    private static ReadResult TwoRows() => new("Order", [Field("po", "A1")],
+        [new ReadTable("items", "Items", [new ReadColumn("qty", "Qty", "number", null)],
+            [new ReadRow(new Dictionary<string, ReadCell> { ["qty"] = Cell("5") }),
+             new ReadRow(new Dictionary<string, ReadCell> { ["qty"] = Cell("12") })], true)]);
+
+    [Fact]
+    public void Fixed_pads_each_column_and_writes_no_header()
+    {
+        var t = Csv(new CsvDialect(), Wide("po", "po", 6), OutputNode.Arr("Lines", OutputNode.Obj("Line", Wide("qty", "qty", 3))));
+
+        Text(DocumentOutputRenderer.Render(FlowOutputFormats.Fixed, t, TwoRows(), "items")).Should().Be("A1    5  \r\nA1    12 \r\n");
+    }
+
+    [Fact]
+    public void Fixed_value_longer_than_width_fails_naming_the_column()
+    {
+        var t = Csv(new CsvDialect(), Wide("po", "po", 1));
+
+        var r = DocumentOutputRenderer.Render(FlowOutputFormats.Fixed, t, TwoRows(), null);
+
+        (r.Ok, r.Error, r.Detail).Should().Be((false, "output_invalid", "\"po\" is longer than 1 characters. Make the column wider."));
+    }
+
+    [Fact]
+    public void Text_layout_lists_fields_and_skips_the_empty_table()
+    {
+        var t = Csv(new CsvDialect(), Rule("po", "po"), OutputNode.Arr("Lines", OutputNode.Obj("Line", Rule("qty", "qty"))));
+
+        Text(DocumentOutputRenderer.Render(FlowOutputFormats.Text, t, new ReadResult("Order", [Field("po", "A1")]), null,
+            layout: new OutputLayout("Order", null, null))).Should().Be("Order\n\npo: A1\n");
+    }
 }
