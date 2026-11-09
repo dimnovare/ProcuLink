@@ -1,5 +1,5 @@
-using System.Text;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -627,7 +627,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         }
     }
 
-    /// <summary>Mail sent to one flow's own address: each PDF, CSV or Excel attachment becomes a document in that flow.</summary>
+    /// <summary>Mail sent to one flow's own address: each attachment the flow accepts becomes a document in that flow.</summary>
     private async Task<InboundEmailResult> RouteToFlowAsync(
         InboundEmailPayload payload, Guid orgId, Guid flowId, CancellationToken ct)
     {

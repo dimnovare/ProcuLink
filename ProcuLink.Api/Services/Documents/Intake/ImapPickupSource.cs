@@ -9,15 +9,15 @@ using MimeKit;
 using ProcuLink.Api.Jobs;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
-using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Core.Services.Catalog;
+using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Api.Services.Documents.Intake;
 
 /// <summary>
-/// Mailbox pickup. Unseen messages that match the filters give one file per readable attachment; a message that does not
+/// Mailbox pickup. Unseen messages that match the filters give one file per readable attachment, or the body as email.txt when there is none; a message that does not
 /// match is left untouched, and a matching one is marked seen once all its files are done.
 /// </summary>
 public sealed class ImapPickupSource(OutboundRequestGuard guard, DocumentEngineGate gate) : IPickupSource
@@ -91,7 +91,10 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard, DocumentEngineG
                 if (!Matches(fromFilter, subjectFilter, senders, m.Envelope.Subject)) continue;
 
                 var readable = m.Attachments.Where(a => Readable(a.FileName, accepted)).ToList();
-                if (readable.Count == 0 && accepted.Contains("txt") && await BodyAsync(m, ct) is { } body)
+                var bodyOnly = readable.Count == 0 && accepted.Contains("txt");
+                // A run claims at most MaxFilesPerRun files, so later bodies stay unseen for the next run instead of being downloaded now.
+                if (bodyOnly && _bodies.Count >= FlowPickupJob.MaxFilesPerRun) continue;
+                if (bodyOnly && await BodyAsync(m, ct) is { } body)
                 {
                     // Nothing readable was attached, so the body is the document.
                     var key = $"imap:{uidValidity}:{m.UniqueId.Id}#body";
@@ -127,7 +130,9 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard, DocumentEngineG
                 : (await folder.GetBodyPartAsync(uid, part, ct) as TextPart)?.Text;
 
         private async Task<string?> BodyAsync(IMessageSummary m, CancellationToken ct) =>
-            EmailBodyText.Resolve(await TextOfAsync(m.UniqueId, m.TextBody, ct), await TextOfAsync(m.UniqueId, m.HtmlBody, ct));
+            await TextOfAsync(m.UniqueId, m.TextBody, ct) is { } text && !string.IsNullOrWhiteSpace(text)
+                ? EmailBodyText.Resolve(text, null)
+                : EmailBodyText.Resolve(null, await TextOfAsync(m.UniqueId, m.HtmlBody, ct));
 
         public async Task<MemoryStream> DownloadAsync(PickupFile file, long maxBytes, CancellationToken ct)
         {

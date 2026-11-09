@@ -21,13 +21,15 @@ public class DocumentTextTests
             TableCell Cell(string t) => new(new Paragraph(new Run(new Text(t))));
             main.Document = new Document(new Body(
                 new Paragraph(new Run(new Text("Order no:"), new TabChar(), new Text("PO-77"))),
-                new Table(new TableRow(Cell("A"), Cell("3"), Cell("9.50")))));
+                new Table(new TableRow(Cell("A"), Cell("3"), Cell("9.50"))),
+                new SdtBlock(new SdtContentBlock(new Paragraph(new Run(new Text("In a control")))))));
         }
 
         var r = await DocumentText.ReadAsync("po.docx", ms.ToArray(), Tokenizer, default);
 
         r.Spans[0].Should().Be(new TextSpan("para:1", "Order no: PO-77"));
         r.Spans[1].Should().Be(new TextSpan("para:2", "A | 3 | 9.50"));
+        r.Spans[2].Should().Be(new TextSpan("para:3", "In a control"));
         r.Text.Should().Contain("A | 3 | 9.50");
     }
 
@@ -39,7 +41,27 @@ public class DocumentTextTests
         var r = await DocumentText.ReadAsync("note.txt", bytes, Tokenizer, default);
 
         r.Spans.Should().Equal(new TextSpan("line:1", "Tõnis Äär"), new TextSpan("line:3", "PO-9"));
-        r.Spans.Should().OnlyContain(s => !s.Text.Contains('﻿'));
+        r.Spans.Should().OnlyContain(s => !s.Text.Contains('\uFEFF'));
+    }
+
+    [Fact]
+    public async Task Utf16_text_file_with_a_bom_is_decoded()
+    {
+        var bytes = Encoding.Unicode.GetPreamble().Concat(Encoding.Unicode.GetBytes("Tõnis Äär")).ToArray();
+
+        var r = await DocumentText.ReadAsync("note.txt", bytes, Tokenizer, default);
+
+        r.Spans.Should().Equal(new TextSpan("line:1", "Tõnis Äär"));
+    }
+
+    [Fact]
+    public async Task X12_saved_as_edi_is_read_as_x12()
+    {
+        const string x12 = "ISA*00*          *00*          *ZZ*TESTBUYER      *ZZ*TESTSUPPLIER   *260528*1200*U*00401*000000001*0*P*>~GS*PO*B*S*20260528*1200*1*X*004010~ST*850*0001~BEG*00*NE*PO-X12-000123**20260528~SE*3*0001~";
+
+        var r = await DocumentText.ReadAsync("po.edi", Encoding.UTF8.GetBytes(x12), Tokenizer, default);
+
+        r.Spans.Should().Contain(s => s.Text == "PO-X12-000123");
     }
 
     [Fact]

@@ -33,7 +33,7 @@ public static class DocumentText
                 using (var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false, new OpenSettings { MaxCharactersInPart = MaxDocxPartChars }))
                 {
                     var n = 0;
-                    spans = (doc.MainDocumentPart?.Document?.Body?.ChildElements.AsEnumerable() ?? [])
+                    spans = (doc.MainDocumentPart?.Document?.Body?.Descendants().Where(e => e is Paragraph or Table && !e.Ancestors<Table>().Any()) ?? [])
                         .Select(e => e switch
                         {
                             Paragraph p => ParagraphText(p),
@@ -48,11 +48,13 @@ public static class DocumentText
                 }
                 break;
             case ".txt":
-                spans = Encoding.UTF8.GetString(bytes).TrimStart('﻿').Split('\n')
+                spans = new StreamReader(new MemoryStream(bytes), Encoding.UTF8, detectEncodingFromByteOrderMarks: true).ReadToEnd().Split('\n')
                     .Select((l, i) => new TextSpan($"line:{i + 1}", l.TrimEnd('\r')))
                     .Where(s => s.Text.Length > 0).ToList();
                 break;
             default:
+                // X12 is often saved as .edi; the tokenizer would find no EDIFACT segments in it.
+                if (ext == ".edi" && Encoding.UTF8.GetString(bytes).TrimStart().StartsWith("ISA", StringComparison.Ordinal)) ext = ".x12";
                 var tokens = await tokenizer.TokenizeAsync(bytes, ext, ct);
                 if (tokens.Count == 0) throw new InvalidDataException("The file has no readable text.");
                 return new(string.Join('\n', tokens.Select(t => $"{t.Id} {t.Label}: {t.Value}")),
