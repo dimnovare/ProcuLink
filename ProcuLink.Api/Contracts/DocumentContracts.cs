@@ -4,7 +4,7 @@ using ProcuLink.Core.Entities;
 
 namespace ProcuLink.Api.Contracts;
 
-public record FlowDto(Guid Id, string Name, bool FieldsConfirmed, FlowFieldList Fields, int DocumentCount, DateTime CreatedAt, string Automation = "review");
+public record FlowDto(Guid Id, string Name, bool FieldsConfirmed, FlowFieldList Fields, int DocumentCount, DateTime CreatedAt, string Automation = "review", bool ScansOn = false);
 
 public record CreateFlowRequest(string Name);
 

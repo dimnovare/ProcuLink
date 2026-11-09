@@ -27,7 +27,7 @@ public class OpenAiDocumentReaderTests
                    {"cells":[{"column":"desc","value":"Gadget","confidence":0.8}]}]}]}
         """;
 
-    private static (OpenAiDocumentReader Reader, Mock<ChatClient> Client) Create(IAiUsageTracker? tracker = null, string? model = null)
+    private static (OpenAiDocumentReader Reader, Mock<ChatClient> Client) Create(IAiUsageTracker? tracker = null, string? model = null, Func<Guid, CancellationToken, Task<bool>>? noEgress = null)
     {
         var client = new Mock<ChatClient>();
         var completion = OpenAIChatModelFactory.ChatCompletion(content: new ChatMessageContent(CannedJson));
@@ -36,7 +36,7 @@ public class OpenAiDocumentReaderTests
             .ReturnsAsync(ClientResult.FromValue(completion, Mock.Of<PipelineResponse>()));
         var reader = new OpenAiDocumentReader(
             new ConfigurationBuilder().AddInMemoryCollection(
-                new Dictionary<string, string?> { ["Ai:OpenAI:ExtractionModel"] = model }).Build(), NullLogger<OpenAiDocumentReader>.Instance, tracker, client.Object);
+                new Dictionary<string, string?> { ["Ai:OpenAI:ExtractionModel"] = model }).Build(), NullLogger<OpenAiDocumentReader>.Instance, tracker, client.Object, noEgress);
         return (reader, client);
     }
 
@@ -125,6 +125,54 @@ public class OpenAiDocumentReaderTests
         await reader.ReadAsync(Input(expected), Org, CancellationToken.None);
 
         captured.SelectMany(m => m.Content).Select(p => p.Text).Should().Contain(t => t.Contains("total_gross"));
+    }
+
+    [Fact]
+    public async Task Page_images_are_sent_as_image_parts()
+    {
+        var (reader, client) = Create();
+        var captured = new List<ChatMessage>();
+        client.Setup(c => c.CompleteChatAsync(
+                It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatCompletionOptions>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<ChatMessage>, ChatCompletionOptions, CancellationToken>((m, _, _) => captured.AddRange(m))
+            .ReturnsAsync(ClientResult.FromValue(
+                OpenAIChatModelFactory.ChatCompletion(content: new ChatMessageContent(CannedJson)), Mock.Of<PipelineResponse>()));
+        byte[] png = [0x89, 0x50, 0x4E, 0x47];
+
+        var outcome = await reader.ReadAsync(
+            new DocumentReadInput("scan.pdf", "application/pdf", "", null, [png, png]), Org, CancellationToken.None);
+
+        outcome.Success.Should().BeTrue();
+        var parts = captured.OfType<UserChatMessage>().Single().Content;
+        parts.Where(p => p.Kind == ChatMessageContentPartKind.Image).Should().HaveCount(2)
+            .And.OnlyContain(p => p.ImageBytes!.ToArray().SequenceEqual(png) && p.ImageBytesMediaType == "image/png");
+        parts.Should().Contain(p => p.Text != null && p.Text.Contains("attached page images"));
+    }
+
+    [Fact]
+    public async Task No_egress_org_is_refused_without_calling_the_model()
+    {
+        var (reader, client) = Create(noEgress: (_, _) => Task.FromResult(true));
+
+        var outcome = await reader.ReadAsync(Input(), Org, CancellationToken.None);
+
+        outcome.Success.Should().BeFalse();
+        outcome.FailureReason.Should().Be("no_egress");
+        client.Verify(c => c.CompleteChatAsync(
+            It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatCompletionOptions>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_failing_no_egress_check_is_retryable_and_never_calls_the_model()
+    {
+        var (reader, client) = Create(noEgress: (_, _) => throw new InvalidOperationException("db down"));
+
+        var outcome = await reader.ReadAsync(Input(), Org, CancellationToken.None);
+
+        outcome.Success.Should().BeFalse();
+        outcome.FailureReason.Should().Be("ai_error");
+        client.Verify(c => c.CompleteChatAsync(
+            It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatCompletionOptions>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Theory]

@@ -37,7 +37,7 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
         var reader = new Mock<IDocumentReader>();
         reader.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DocumentReadOutcome(true, new ReadResult("Invoice", []), null));
-        var job = new ReadDocumentJob(db, storage.Object, reader.Object, new DocumentRechecker(db), factory.Jobs.Object, NullLogger<ReadDocumentJob>.Instance);
+        var job = new ReadDocumentJob(db, storage.Object, reader.Object, new DocumentRechecker(db), factory.Jobs.Object, Mock.Of<ProcuLink.Core.Services.Ocr.IPdfRasterizer>(), Mock.Of<ProcuLink.Core.Services.Ocr.IDocumentOcrService>(), new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), NullLogger<ReadDocumentJob>.Instance);
         await job.ExecuteAsync(documentId, Org, null, CancellationToken.None);
     }
 

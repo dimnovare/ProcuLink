@@ -21,6 +21,12 @@ public interface IDocumentOcrService
     Task<string> ExtractTextAsync(Stream document, string contentType, CancellationToken ct);
 
     /// <summary>
+    /// Reads every word of the supplied page images with its box (0..1, top-left origin);
+    /// the page number is the index plus one. Never throws: returns empty on failure or when unavailable.
+    /// </summary>
+    Task<IReadOnlyList<ProcuLink.Core.Documents.PageWord>> ReadWordsAsync(IReadOnlyList<byte[]> pagePngs, CancellationToken ct);
+
+    /// <summary>
     /// Returns <c>true</c> when the underlying provider is configured and ready to accept
     /// calls. When <c>false</c>, <see cref="ExtractTextAsync"/> will immediately return an
     /// empty string without making any network calls.

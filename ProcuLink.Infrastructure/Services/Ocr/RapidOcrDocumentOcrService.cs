@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Services.Ocr;
 using RapidOcrNet;
 using SkiaSharp;
@@ -87,6 +88,45 @@ public sealed class RapidOcrDocumentOcrService : IDocumentOcrService, IDisposabl
         {
             _logger.LogWarning(ex, "Self-hosted OCR extraction failed.");
             return string.Empty;
+        }
+        finally
+        {
+            if (acquired) _gate.Release();
+        }
+    }
+
+    public async Task<IReadOnlyList<PageWord>> ReadWordsAsync(IReadOnlyList<byte[]> pagePngs, CancellationToken ct)
+    {
+        if (!_enabled) return [];
+
+        var acquired = false;
+        try
+        {
+            await _gate.WaitAsync(ct);
+            acquired = true;
+
+            var words = new List<PageWord>();
+            _ocr ??= InitOcr();
+            for (var i = 0; i < pagePngs.Count; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                using var bitmap = SKBitmap.Decode(pagePngs[i]);
+                if (bitmap is null) continue;
+                var result = _ocr.Detect(bitmap, RapidOcrOptions.Default);
+                foreach (var block in result?.TextBlocks ?? [])
+                {
+                    var pts = block.BoxPoints;
+                    words.AddRange(OcrWords.FromLine(block.Text ?? "",
+                        pts.Min(p => p.X), pts.Min(p => p.Y), pts.Max(p => p.X), pts.Max(p => p.Y),
+                        bitmap.Width, bitmap.Height, i + 1));
+                }
+            }
+            return words;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Self-hosted OCR word extraction failed.");
+            return [];
         }
         finally
         {

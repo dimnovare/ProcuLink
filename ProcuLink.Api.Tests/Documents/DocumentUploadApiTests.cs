@@ -83,6 +83,19 @@ public class DocumentUploadApiTests : IClassFixture<DocumentEngineTestFactory>
     }
 
     [Fact]
+    public async Task Jpg_is_accepted_when_scans_are_on()
+    {
+        var http = _factory.ClientFor(DocumentEngineTestFactory.OrgB);
+        var created = await http.PostAsJsonAsync("/api/flows", new CreateFlowRequest("Scans"));
+        var flowId = (await created.Content.ReadFromJsonAsync<FlowDto>(DocumentJson.Options))!.Id;
+        var form = new MultipartFormDataContent { { new ByteArrayContent([1, 2, 3]), "file", "IMG_0001.JPG" } };
+
+        var res = await http.PostAsync($"/api/flows/{flowId}/documents", form);
+
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+    }
+
+    [Fact]
     public async Task Docx_is_415_unsupported_format()
     {
         var res = await Upload(await NewFlow(), "letter.docx", [1, 2, 3]);

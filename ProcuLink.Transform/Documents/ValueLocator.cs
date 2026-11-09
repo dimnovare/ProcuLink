@@ -45,5 +45,7 @@ public static class ValueLocator
     private static string[] Tokens(string? s) =>
         string.IsNullOrWhiteSpace(s) ? [] : Regex.Split(s.Trim(), @"\s+").Select(Norm).ToArray();
 
-    private static string Norm(string s) => s.Trim().Trim('.', ',', ';', ':', '(', ')', '"', '\'').ToLowerInvariant();
+    private static string Norm(string s) => string.Concat(s.Trim().Trim('.', ',', ';', ':', '(', ')', '"', '\'').ToLowerInvariant()
+            .Normalize(System.Text.NormalizationForm.FormD)
+            .Where(c => System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c) != System.Globalization.UnicodeCategory.NonSpacingMark));
 }

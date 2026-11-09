@@ -626,8 +626,6 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         }
     }
 
-    private static readonly string[] FlowExtensions = [".pdf", ".csv", ".xlsx"];
-
     /// <summary>Mail sent to one flow's own address: each PDF, CSV or Excel attachment becomes a document in that flow.</summary>
     private async Task<InboundEmailResult> RouteToFlowAsync(
         InboundEmailPayload payload, Guid orgId, Guid flowId, CancellationToken ct)
@@ -658,8 +656,9 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         if (!limit.Allowed) return await PausedAsync(limit);
 
         var usable = 0;
+        var accepted = _flows.AcceptedFormats(orgId);
         foreach (var att in payload.Attachments.Where(a =>
-                     FlowExtensions.Contains(Path.GetExtension(a.FileName), StringComparer.OrdinalIgnoreCase)))
+                     accepted.Contains(Path.GetExtension(a.FileName).TrimStart('.'), StringComparer.OrdinalIgnoreCase)))
         {
             usable++;
             var hash = Convert.ToHexString(SHA256.HashData(att.Content)).ToLowerInvariant();

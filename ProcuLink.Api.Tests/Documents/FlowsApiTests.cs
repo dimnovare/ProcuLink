@@ -35,6 +35,19 @@ public class FlowsApiTests(DocumentEngineTestFactory factory) : IClassFixture<Do
     }
 
     [Fact]
+    public async Task Flow_reports_whether_scans_are_on()
+    {
+        foreach (var (org, expected) in new[] { (DocumentEngineTestFactory.OrgB, true), (DocumentEngineTestFactory.OrgA, false) })
+        {
+            var http = factory.ClientFor(org);
+            var created = await http.PostAsJsonAsync("/api/flows", new CreateFlowRequest("Scans flag"));
+            var id = (await created.Content.ReadFromJsonAsync<FlowDto>(DocumentJson.Options))!.Id;
+            var flow = (await http.GetFromJsonAsync<FlowDto>($"/api/flows/{id}", DocumentJson.Options))!;
+            Assert.Equal(expected, flow.ScansOn);
+        }
+    }
+
+    [Fact]
     public async Task Other_org_flow_is_404_and_disabled_org_is_403()
     {
         var created = await factory.ClientFor(DocumentEngineTestFactory.OrgA).PostAsJsonAsync("/api/flows", new CreateFlowRequest("Mine"));

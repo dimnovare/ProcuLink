@@ -17,4 +17,14 @@ public class ImapPickupFilterTests
     [InlineData(null, "order", "ap@example.test", null, false)]
     public void Matches_needs_every_set_filter_to_match(string? from, string? subject, string sender, string? title, bool expected) =>
         ImapPickupSource.Matches(from, subject, [sender], title).Should().Be(expected);
+
+    [Theory]
+    [InlineData("order.pdf", false, true)]
+    [InlineData("ORDER.PDF", false, true)]
+    [InlineData("scan.png", false, false)]
+    [InlineData("scan.PNG", true, true)]
+    [InlineData("notes.docx", true, false)]
+    [InlineData(null, true, false)]
+    public void Readable_compares_the_extension_to_the_orgs_accepted_list(string? name, bool scansOn, bool expected) =>
+        ImapPickupSource.Readable(name, ProcuLink.Core.Documents.DocumentFormats.For(scansOn)).Should().Be(expected);
 }

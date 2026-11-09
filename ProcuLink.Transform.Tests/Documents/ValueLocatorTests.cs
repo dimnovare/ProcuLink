@@ -7,6 +7,30 @@ namespace ProcuLink.Transform.Tests.Documents;
 public class ValueLocatorTests
 {
     [Fact]
+    public void Ocr_line_splits_into_word_boxes_by_character_offset()
+    {
+        var words = OcrWords.FromLine("PO 12345", 100, 50, 900, 70, 1000, 200, 1);
+        words.Should().HaveCount(2);
+        words[0].Text.Should().Be("PO");
+        words[0].Box.X.Should().BeApproximately(0.1, 1e-3);
+        words[0].Box.Width.Should().BeApproximately(0.8 * 2 / 8, 1e-3);
+        words[1].Text.Should().Be("12345");
+        words[1].Box.X.Should().BeApproximately(0.1 + 0.8 * 3 / 8, 1e-3);
+        words.Should().OnlyContain(w => Math.Abs(w.Box.Y - 0.25) < 1e-3 && Math.Abs(w.Box.Height - 0.1) < 1e-3);
+    }
+
+    [Fact]
+    public void Locator_matches_across_diacritics()
+    {
+        var words = new List<PageWord>
+        {
+            new("Tonis", 1, new Box(0.1, 0.1, 0.1, 0.02)),
+            new("Aar", 1, new Box(0.22, 0.1, 0.1, 0.02)),
+        };
+        ValueLocator.Locate("Tõnis Äär", words)!.Page.Should().Be(1);
+    }
+
+    [Fact]
     public void Locate_spans_multiword_value_and_matches_number_formats()
     {
         var words = new List<PageWord>

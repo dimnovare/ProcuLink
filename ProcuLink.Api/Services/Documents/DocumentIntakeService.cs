@@ -25,7 +25,7 @@ public sealed class DocumentIntakeService(
     ProcuLinkDbContext db, IFileStorageService storage, IBackgroundJobClient jobs,
     DocumentEngineGate gate, IBillingService billing, ILogger<DocumentIntakeService> logger) : IFlowDocumentSubmitter
 {
-    public static readonly string[] AcceptedFormats = ["pdf", "csv", "xlsx"];
+    public IReadOnlyList<string> AcceptedFormats(Guid orgId) => DocumentFormats.For(gate.ScansOn(orgId));
 
     /// <summary>The one way a file enters a flow: engine gate, flow, plan limit, then <see cref="AcceptAsync"/>.</summary>
     public async Task<FlowSubmitResult> SubmitAsync(
@@ -54,7 +54,7 @@ public sealed class DocumentIntakeService(
     {
         var safeName = FileNameSanitiser.Sanitise(fileName);
         var ext = FileNameSanitiser.GetExtension(fileName).TrimStart('.');
-        if (!AcceptedFormats.Contains(ext)) throw new DocumentRejectedException("unsupported_format");
+        if (!AcceptedFormats(orgId).Contains(ext)) throw new DocumentRejectedException("unsupported_format");
 
         using var buffer = new MemoryStream();
         await content.CopyToAsync(buffer, ct);
