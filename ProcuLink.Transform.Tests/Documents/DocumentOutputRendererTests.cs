@@ -163,6 +163,11 @@ public class DocumentOutputRendererTests
         text.Should().Contain("Order").And.Contain("A1").And.Contain("12").And.Contain("Thanks");
         LayoutPdfWriter.IsUsableLogo(TinyPng).Should().BeTrue();
         LayoutPdfWriter.IsUsableLogo(new byte[] { 1, 2, 3 }).Should().BeFalse();
+        // A header declaring 5000 x 5000 is refused before it is decoded.
+        var huge = TinyPng.ToArray();
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(huge.AsSpan(16), 5000);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(huge.AsSpan(20), 5000);
+        LayoutPdfWriter.IsUsableLogo(huge).Should().BeFalse();
         // No table rows: fields only, no crash.
         DocumentOutputRenderer.Render(FlowOutputFormats.Pdf, t, new ReadResult("Order", [Field("po", "A1")]), null).Ok.Should().BeTrue();
     }

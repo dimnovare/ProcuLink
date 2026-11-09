@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using ProcuLink.Core.Documents;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
@@ -16,8 +17,27 @@ public static class LayoutPdfWriter
     public static bool IsUsableLogo(byte[] bytes)
     {
         if (!bytes.AsSpan().StartsWith(Png) && !bytes.AsSpan().StartsWith(Jpeg)) return false;
-        try { Image.FromBinaryData(bytes); return true; }
+        if (Dimensions(bytes) is not { } d || d.Width > MaxLogoSide || d.Height > MaxLogoSide) return false;
+        try { using var _ = Image.FromBinaryData(bytes); return true; }
         catch (Exception) { return false; }
+    }
+
+    private const int MaxLogoSide = 4096;
+
+    // Pixel size from the header, so an oversized image is refused before it is decoded. Null when the header is unreadable.
+    private static (uint Width, uint Height)? Dimensions(byte[] b)
+    {
+        if (b.AsSpan().StartsWith(Png))
+            return b.Length < 24 ? null : (BinaryPrimitives.ReadUInt32BigEndian(b.AsSpan(16)), BinaryPrimitives.ReadUInt32BigEndian(b.AsSpan(20)));
+        for (var i = 2; i + 9 <= b.Length;)
+        {
+            if (b[i] != 0xFF) return null;
+            var marker = b[i + 1];
+            if (marker is >= 0xC0 and <= 0xCF and not (0xC4 or 0xC8 or 0xCC))
+                return (BinaryPrimitives.ReadUInt16BigEndian(b.AsSpan(i + 7)), BinaryPrimitives.ReadUInt16BigEndian(b.AsSpan(i + 5)));
+            i += 2 + BinaryPrimitives.ReadUInt16BigEndian(b.AsSpan(i + 2));
+        }
+        return null;
     }
 
     public static byte[] Write(DocumentLayout layout, OutputLayout? settings, byte[]? logo)

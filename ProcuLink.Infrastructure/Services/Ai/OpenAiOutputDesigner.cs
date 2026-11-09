@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -18,6 +19,8 @@ public sealed class OpenAiOutputDesigner : IOutputDesigner
 {
     private const int MaxSlots = 200;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    // The prompt keeps <, > and quotes as written so the model's quotes still match the documentation in Locate.
+    private static readonly JsonSerializerOptions PromptOptions = new(JsonSerializerDefaults.Web) { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     private static readonly BinaryData MatchSchema = BinaryData.FromBytes("""
         {
@@ -64,15 +67,20 @@ public sealed class OpenAiOutputDesigner : IOutputDesigner
             "delimiter": { "type": ["string", "null"] },
             "root": { "$ref": "#/$defs/node" },
             "destination": {
-              "type": ["object", "null"],
-              "properties": {
-                "url": { "type": "string" },
-                "method": { "type": "string" },
-                "authType": { "type": "string" },
-                "quote": { "type": "string" }
-              },
-              "required": ["url", "method", "authType", "quote"],
-              "additionalProperties": false
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "url": { "type": "string" },
+                    "method": { "type": "string" },
+                    "authType": { "type": "string" },
+                    "quote": { "type": "string" }
+                  },
+                  "required": ["url", "method", "authType", "quote"],
+                  "additionalProperties": false
+                },
+                { "type": "null" }
+              ]
             }
           },
           "required": ["name", "format", "formatQuote", "delimiter", "root", "destination"],
@@ -117,7 +125,7 @@ public sealed class OpenAiOutputDesigner : IOutputDesigner
         try
         {
             var db = scoped.GetService<ProcuLinkDbContext>();
-            if (db is null) return false;
+            if (db is null) return true;
             return await db.Organisations.AsNoTracking().Where(o => o.Id == orgId).Select(o => o.SelfHostedOcr).FirstOrDefaultAsync(ct);
         }
         catch (Exception ex)
@@ -129,11 +137,12 @@ public sealed class OpenAiOutputDesigner : IOutputDesigner
 
     public async Task<IReadOnlyList<SlotMatch>> BindAsync(Guid orgId, IReadOnlyList<OutputSlot> slots, FlowFieldList fields, CancellationToken ct)
     {
-        if (_client is null || slots.Count == 0) return [];
+        if (slots.Count == 0) return [];
         try
         {
             await using var scope = _scopeFactory.CreateAsyncScope();
             if (await IsNoEgressOrgAsync(scope.ServiceProvider, orgId, ct)) return [];
+            if (_client is null) return [];
 
             var tracker = scope.ServiceProvider.GetService<IAiUsageTracker>();
             if (tracker is not null && await tracker.IsAtOrOverLimitAsync(orgId, ct)) return [];
@@ -153,7 +162,7 @@ public sealed class OpenAiOutputDesigner : IOutputDesigner
             };
             OpenAiModels.UseLeastReasoning(options, _model);
             ChatCompletion completion = await _client.CompleteChatAsync(
-                [new SystemChatMessage(SystemPrompt), new UserChatMessage(JsonSerializer.Serialize(prompt, JsonOptions))], options, ct);
+                [new SystemChatMessage(SystemPrompt), new UserChatMessage(JsonSerializer.Serialize(prompt, PromptOptions))], options, ct);
 
             await RecordUsageAsync(tracker, orgId, completion, ct);
 
@@ -191,11 +200,11 @@ public sealed class OpenAiOutputDesigner : IOutputDesigner
 
     public async Task<ProposalResult> ProposeAsync(Guid orgId, string documentation, FlowFieldList fields, CancellationToken ct)
     {
-        if (_client is null) return new(null, "ai_error");
         try
         {
             await using var scope = _scopeFactory.CreateAsyncScope();
             if (await IsNoEgressOrgAsync(scope.ServiceProvider, orgId, ct)) return new(null, "no_egress");
+            if (_client is null) return new(null, "ai_error");
 
             var tracker = scope.ServiceProvider.GetService<IAiUsageTracker>();
             if (tracker is not null && await tracker.IsAtOrOverLimitAsync(orgId, ct)) return new(null, "ai_usage_cap");
@@ -212,7 +221,7 @@ public sealed class OpenAiOutputDesigner : IOutputDesigner
             };
             OpenAiModels.UseLeastReasoning(options, _model);
             ChatCompletion completion = await _client.CompleteChatAsync(
-                [new SystemChatMessage(ProposalPrompt), new UserChatMessage(JsonSerializer.Serialize(prompt, JsonOptions))], options, ct);
+                [new SystemChatMessage(ProposalPrompt), new UserChatMessage(JsonSerializer.Serialize(prompt, PromptOptions))], options, ct);
             await RecordUsageAsync(tracker, orgId, completion, ct);
 
             // A cut-off answer is not valid JSON, so it lands in ai_error with the rest.

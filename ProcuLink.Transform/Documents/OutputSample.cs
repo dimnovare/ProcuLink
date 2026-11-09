@@ -4,6 +4,7 @@ using ProcuLink.Core.Documents;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Transform.Output;
+using ProcuLink.Transform.Parsing;
 
 namespace ProcuLink.Transform.Documents;
 
@@ -50,7 +51,7 @@ public static class OutputSample
     // The inferrer only reads the header row, so that is all an xlsx needs to hand it.
     private static string? HeaderCsv(byte[] bytes)
     {
-        using var book = new XLWorkbook(new MemoryStream(bytes));
+        using var book = XlsxCompressionFallback.OpenWorkbook(new MemoryStream(bytes));
         var row = book.Worksheets.FirstOrDefault()?.FirstRowUsed();
         if (row is null) return null;
         var last = row.LastCellUsed().Address.ColumnNumber;

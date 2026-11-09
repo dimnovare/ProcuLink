@@ -45,7 +45,8 @@ public sealed record DocumentationText(string Text, bool Truncated, bool Paged =
     {
         var want = Normalise(quote ?? "", out _);
         if (want.Length < 8) return null;
-        var at = Normalise(Text, out var map).IndexOf(want, StringComparison.Ordinal);
+        var (flat, map) = _normalised ??= Normalised();
+        var at = flat.IndexOf(want, StringComparison.Ordinal);
         if (at < 0) return null;
         var pos = map[at];
         if (!Paged) return $"line {Text.Take(pos).Count(c => c == '\n') + 1}";
@@ -54,8 +55,14 @@ public sealed record DocumentationText(string Text, bool Truncated, bool Paged =
         return digits.Length == 0 ? "page 1" : $"page {digits}";
     }
 
+    // The full text is normalised once; a proposal calls Locate for every node.
+    private (string Flat, List<int> Map)? _normalised;
+    private (string, List<int>) Normalised() { var flat = Normalise(Text, out var map); return (flat, map); }
+
+    private static readonly Regex Hidden = new(@"<script\b.*?</script\s*>|<style\b.*?</style\s*>|<!--.*?-->", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+
     // EmailBodyText collapses all whitespace, so strip each block on its own to keep one line per block.
-    private static string? HtmlLines(string html) => string.Join("\n", Regex.Split(html, @"(?i)</(?:p|div|li|tr|h[1-6])>|<br\s*/?>")
+    private static string? HtmlLines(string html) => string.Join("\n", Regex.Split(Hidden.Replace(html, ""), @"(?i)</(?:p|div|li|tr|h[1-6])>|<br\s*/?>")
         .Select(c => EmailBodyText.Resolve(null, c)).Where(c => c is not null));
 
     private static string Normalise(string s, out List<int> map)

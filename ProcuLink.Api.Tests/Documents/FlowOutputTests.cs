@@ -452,6 +452,7 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         bad.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
         (await bad.Content.ReadAsStringAsync()).Should().Contain("unreadable_file");
     }
+
     [Fact]
     public async Task From_documentation_is_off_unless_switched_on()
     {
@@ -480,13 +481,15 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         factory.Designer.SetupSequence(d => d.ProposeAsync(Org, It.IsAny<string>(), It.IsAny<FlowFieldList>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProposalResult(proposal, null))
             .ReturnsAsync(new ProposalResult(null, "no_egress"))
-            .ReturnsAsync(new ProposalResult(null, "ai_usage_cap"));
+            .ReturnsAsync(new ProposalResult(null, "ai_usage_cap"))
+            .ReturnsAsync(new ProposalResult(null, "ai_error"));
         var http = factory.ClientFor(Org);
         var url = $"/api/flows/{flowId}/outputs/from-documentation";
 
         var ok = await http.PostAsync(url, Upload("spec.txt", "Send a CSV file.\nInvoice: the number\n"));
         var egress = await http.PostAsync(url, Upload("spec.txt", "x"));
         var cap = await http.PostAsync(url, Upload("spec.txt", "x"));
+        var failed = await http.PostAsync(url, Upload("spec.txt", "x"));
 
         ok.StatusCode.Should().Be(HttpStatusCode.OK);
         var draft = (await ok.Content.ReadFromJsonAsync<OutputDraftDto>(new JsonSerializerOptions(JsonSerializerDefaults.Web)))!;
@@ -495,6 +498,8 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         egress.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
         (await egress.Content.ReadAsStringAsync()).Should().Contain("no_egress");
         ((int)cap.StatusCode).Should().Be(429);
+        ((int)failed.StatusCode).Should().Be(502);
+        (await failed.Content.ReadAsStringAsync()).Should().Contain("ai_error");
         using var scope = factory.Services.CreateScope();
         scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowOutput>().Count(o => o.FlowId == flowId).Should().Be(0);
     }

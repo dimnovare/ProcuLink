@@ -1,4 +1,5 @@
 using System.Xml;
+using QuestPDF.Drawing.Exceptions;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
@@ -45,6 +46,11 @@ public static class DocumentOutputRenderer
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or TransformValidationException or XmlException)
         {
             return new(null, "output_invalid", ex.Message);
+        }
+        catch (Exception ex) when (ex is DocumentLayoutException or DocumentComposeException)
+        {
+            // QuestPDF's message is not approved copy, so no detail.
+            return new(null, "output_invalid", null);
         }
     }
 }
