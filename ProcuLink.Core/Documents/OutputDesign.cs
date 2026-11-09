@@ -30,3 +30,11 @@ public interface IOutputDesigner
 {
     Task<IReadOnlyList<SlotMatch>> BindAsync(Guid orgId, IReadOnlyList<OutputSlot> slots, FlowFieldList fields, CancellationToken ct);
 }
+
+/// <summary>The AI's strict JSON answer for "build an output from this documentation". <paramref name="Format"/> is csv, json, xml or fixed.</summary>
+public sealed record ProposedOutput(string Name, string Format, string FormatQuote, string? Delimiter, ProposedNode Root, ProposedDestination? Destination);
+
+/// <summary><paramref name="Kind"/> is object, array, field or attribute; <paramref name="FieldKey"/> is qualified as in <see cref="OutputSlot"/>.</summary>
+public sealed record ProposedNode(string Name, string Kind, string? FieldKey, bool Required, int? Width, string Quote, IReadOnlyList<ProposedNode> Children);
+
+public sealed record ProposedDestination(string Url, string Method, string AuthType, string Quote);
