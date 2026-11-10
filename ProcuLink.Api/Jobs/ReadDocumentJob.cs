@@ -131,7 +131,6 @@ public class ReadDocumentJob(
         }
 
         var config = await FlowConfigLoader.CurrentAsync(db, flow, ct);
-        doc.FlowVersion = config.VersionNo;
         var expected = config.FieldsConfirmed ? config.Fields : null;
         var keys = expected?.Fields.Select(f => f.Key).ToHashSet();
         var hints = keys is null ? [] : DocumentJson.Deserialize<List<FieldHint>>(flow.HintsJson).Where(h => keys.Contains(h.FieldKey) && SenderIdentity.Matches(h.SenderKey, text, doc.Source, doc.SourceRef)).OrderByDescending(h => h.TaughtAt).Take(MaxHints).ToList();
@@ -175,7 +174,7 @@ public class ReadDocumentJob(
             }).ToList(),
             truncated);
 
-        await rechecker.ApplyAsync(doc, flow, read, ct);
+        await rechecker.ApplyAsync(doc, flow, read, ct, config);
         doc.ReadJson = DocumentJson.Serialize(read);
         doc.ReadAt = DateTime.UtcNow;
         AddAudit(doc, "document.read", new

@@ -112,8 +112,9 @@ public sealed class FlowsController(
         var pending = await db.FlowDocuments
             .Where(d => d.OrgId == orgId && d.FlowId == id && d.Status == DocumentStatus.NeedsReview && d.ReadAt != null)
             .ToListAsync(ct);
+        var config = await FlowConfigLoader.CurrentAsync(db, flow, ct);
         foreach (var doc in pending)
-            await rechecker.ApplyAsync(doc, flow, DocumentJson.Deserialize<ReadResult>(doc.ReadJson), ct);
+            await rechecker.ApplyAsync(doc, flow, DocumentJson.Deserialize<ReadResult>(doc.ReadJson), ct, config);
 
         await db.SaveChangesAsync(ct);
         return Ok(ToDto(flow, await CountDocs(orgId, id, ct)));

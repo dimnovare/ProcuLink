@@ -222,7 +222,8 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         FlowOutput? output;
         if (published)
         {
-            var flow = await db.Flows.AsNoTracking().FirstAsync(f => f.OrgId == orgId && f.Id == doc.FlowId, ct);
+            var flow = await db.Flows.AsNoTracking().FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == doc.FlowId, ct);
+            if (flow is null) return FlowNotFound();
             output = (await FlowConfigLoader.CurrentAsync(db, flow, ct)).Outputs.FirstOrDefault(o => o.Id == outputId);
         }
         else output = await db.Set<FlowOutput>().AsNoTracking()

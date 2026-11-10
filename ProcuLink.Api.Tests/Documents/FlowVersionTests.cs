@@ -1,14 +1,14 @@
 using System.Net;
 using System.Net.Http.Json;
-using Microsoft.EntityFrameworkCore;
-using ProcuLink.Core.Services;
-using ProcuLink.Core.Services.Mapping;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using ProcuLink.Api.Services.Documents;
 using ProcuLink.Api.Tests.Integration;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using Xunit;
 
@@ -153,10 +153,26 @@ public class FlowVersionTests(DocumentEngineTestFactory factory) : IClassFixture
     {
         var (docId, _, _) = await SeedDocument(publish: false);
 
-        var (deliveries, content, doc, _) = await SendAndRead(docId);
+        var (deliveries, content, doc, audit) = await SendAndRead(docId);
 
         deliveries.Should().ContainSingle();
         content.Should().Contain("\"A\"");
         doc.FlowVersion.Should().BeNull();
+        audit.Should().Contain("\"version\":null");
+    }
+
+    [Fact]
+    public async Task Recheck_stamps_the_published_version()
+    {
+        var (docId, flow, _) = await SeedDocument(publish: true);
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        var doc = await db.FlowDocuments.SingleAsync(d => d.Id == docId);
+        var liveFlow = await db.Flows.SingleAsync(f => f.Id == flow.Id);
+
+        await scope.ServiceProvider.GetRequiredService<DocumentRechecker>()
+            .ApplyAsync(doc, liveFlow, DocumentJson.Deserialize<ReadResult>(doc.ReadJson), default);
+
+        doc.FlowVersion.Should().Be(1);
     }
 }

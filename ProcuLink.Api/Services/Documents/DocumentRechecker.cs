@@ -11,7 +11,7 @@ namespace ProcuLink.Api.Services.Documents;
 /// </summary>
 public sealed class DocumentRechecker(ProcuLinkDbContext db)
 {
-    public async Task ApplyAsync(FlowDocument doc, Flow flow, ReadResult read, CancellationToken ct)
+    public async Task ApplyAsync(FlowDocument doc, Flow flow, ReadResult read, CancellationToken ct, FlowConfig? config = null)
     {
         // Spec section 6: the document number, else the file hash.
         doc.DedupKey = DocumentChecks.DedupKeyOf(read) ?? (string.IsNullOrEmpty(doc.Sha256) ? null : $"sha256:{doc.Sha256}");
@@ -27,7 +27,8 @@ public sealed class DocumentRechecker(ProcuLinkDbContext db)
                 || (d.CreatedAt == doc.CreatedAt && d.Id.CompareTo(doc.Id) < 0));
         }
 
-        var config = await FlowConfigLoader.CurrentAsync(db, flow, ct);
+        config ??= await FlowConfigLoader.CurrentAsync(db, flow, ct);
+        doc.FlowVersion = config.VersionNo;
         var failed = DocumentChecks.Run(read, config.Fields, config.FieldsConfirmed, duplicate);
         doc.ChecksJson = DocumentJson.Serialize(failed);
         doc.Status = DocumentChecks.StatusFor(failed);
