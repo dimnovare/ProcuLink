@@ -1787,6 +1787,47 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.ToTable("memberships", (string)null);
                 });
 
+            modelBuilder.Entity("ProcuLink.Core.Entities.NotificationSetting", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime?>("LastSentAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("last_sent_at");
+
+                    b.Property<bool>("OnFailure")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("on_failure");
+
+                    b.Property<bool>("OnReview")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("on_review");
+
+                    b.Property<Guid>("OrgId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("org_id");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("OrgId", "UserId")
+                        .IsUnique();
+
+                    b.ToTable("notification_settings", (string)null);
+                });
+
             modelBuilder.Entity("ProcuLink.Core.Entities.OrderConfirmationEntity", b =>
                 {
                     b.Property<Guid>("Id")
@@ -4663,6 +4704,21 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.Navigation("Organisation");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("ProcuLink.Core.Entities.NotificationSetting", b =>
+                {
+                    b.HasOne("ProcuLink.Core.Entities.Organisation", null)
+                        .WithMany()
+                        .HasForeignKey("OrgId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("ProcuLink.Core.Entities.AppUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("ProcuLink.Core.Entities.OrderConfirmationEntity", b =>
