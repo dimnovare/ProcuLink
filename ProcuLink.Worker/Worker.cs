@@ -23,6 +23,11 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "*/5 * * * *");
 
+        _recurringJobs.AddOrUpdate<ProcuLink.Api.Jobs.DocumentNotificationJob>(
+            "document-notifications",
+            job => job.RunAsync(CancellationToken.None),
+            "*/15 * * * *");
+
         _recurringJobs.AddOrUpdate<SftpPollingJob>(
             "sftp-polling",
             job => job.ExecuteAsync(CancellationToken.None),

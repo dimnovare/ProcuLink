@@ -42,8 +42,8 @@ public sealed class NotificationSettingsController(
         if ((request.OnReview || request.OnFailure) && email is null) return Conflict(new { error = "email_unknown" });
         if (row is null)
             db.Set<NotificationSetting>().Add(row = new NotificationSetting { Id = Guid.NewGuid(), OrgId = tenant.OrganisationId, ClerkUserId = tenant.ClerkUserId });
-        // Turning a switch on starts the digest from now, so the first email never covers older events.
-        if ((request.OnReview && !row.OnReview) || (request.OnFailure && !row.OnFailure)) row.LastSentAt = DateTime.UtcNow;
+        // Turning the digest on (both switches were off) starts it from now, so the first email never covers older events.
+        if (!row.OnReview && !row.OnFailure && (request.OnReview || request.OnFailure)) row.LastSentAt = DateTime.UtcNow;
         row.OnReview = request.OnReview;
         row.OnFailure = request.OnFailure;
         row.Email = email ?? row.Email;
