@@ -379,7 +379,7 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         var output = (await created.Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
 
         var template = System.Text.Json.Nodes.JsonNode.Parse(DocumentJson.Serialize(output.Template))!;
-        Leaves(output.Template.Root).Should().OnlyContain(l => l.Rule!.Width >= 10);
+        Leaves(output.Template.Root).Should().OnlyContain(l => l.Rule!.Width >= 40);
         static System.Text.Json.Nodes.JsonObject? FirstWithWidth(System.Text.Json.Nodes.JsonNode? n) => n switch
         {
             System.Text.Json.Nodes.JsonObject o when o.ContainsKey("width") => o,
