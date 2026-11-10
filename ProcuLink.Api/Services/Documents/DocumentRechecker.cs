@@ -27,7 +27,8 @@ public sealed class DocumentRechecker(ProcuLinkDbContext db)
                 || (d.CreatedAt == doc.CreatedAt && d.Id.CompareTo(doc.Id) < 0));
         }
 
-        var failed = DocumentChecks.Run(read, DocumentJson.Deserialize<FlowFieldList>(flow.FieldsJson), flow.FieldsConfirmed, duplicate);
+        var config = await FlowConfigLoader.CurrentAsync(db, flow, ct);
+        var failed = DocumentChecks.Run(read, config.Fields, config.FieldsConfirmed, duplicate);
         doc.ChecksJson = DocumentJson.Serialize(failed);
         doc.Status = DocumentChecks.StatusFor(failed);
         doc.UpdatedAt = DateTime.UtcNow;

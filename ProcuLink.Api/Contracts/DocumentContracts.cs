@@ -13,11 +13,11 @@ public record RenameFlowRequest(string? Name = null, string? Automation = null);
 public record DocumentSummaryDto(
     Guid Id, Guid FlowId, string FlowName, string FileName, string Status, string? StatusReason,
     int? PageCount, int BillingUnits, int FailedChecks, DateTime CreatedAt,
-    string Source = "upload", string? SourceRef = null)
+    string Source = "upload", string? SourceRef = null, int? FlowVersion = null)
 {
     public static DocumentSummaryDto From(FlowDocument d, string flowName) =>
         new(d.Id, d.FlowId, flowName, d.FileName, d.Status, d.StatusReason, d.PageCount, d.BillingUnits,
-            DocumentJson.Deserialize<List<DocumentCheck>>(d.ChecksJson).Count, d.CreatedAt, d.Source, d.SourceRef);
+            DocumentJson.Deserialize<List<DocumentCheck>>(d.ChecksJson).Count, d.CreatedAt, d.Source, d.SourceRef, d.FlowVersion);
 }
 
 public record DocumentDto(DocumentSummaryDto Summary, string ContentType, ReadResult Read, IReadOnlyList<DocumentCheck> Checks,

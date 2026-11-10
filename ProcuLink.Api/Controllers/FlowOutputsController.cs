@@ -61,11 +61,13 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
     private static IActionResult FlowNotFound() => new NotFoundObjectResult(new { error = "flow_not_found" });
 
     [HttpGet("api/flows/{flowId:guid}/outputs")]
-    public async Task<IActionResult> List(Guid flowId, CancellationToken ct)
+    public async Task<IActionResult> List(Guid flowId, CancellationToken ct, [FromQuery] bool published = false)
     {
         if (Refuse() is { } refused) return refused;
         var orgId = tenant.OrganisationId;
-        if (!await db.Flows.AnyAsync(f => f.OrgId == orgId && f.Id == flowId, ct)) return FlowNotFound();
+        var flow = await db.Flows.FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == flowId, ct);
+        if (flow is null) return FlowNotFound();
+        if (published) return Ok((await FlowConfigLoader.CurrentAsync(db, flow, ct)).Outputs.Select(ToDto));
         var rows = await db.Set<FlowOutput>().Where(o => o.OrgId == orgId && o.FlowId == flowId).OrderBy(o => o.CreatedAt).ToListAsync(ct);
         return Ok(rows.Select(ToDto));
     }
@@ -209,7 +211,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
     /// <summary>Renders the document through the output (or the draft template in the body, if given) and returns the text. Nothing is sent or saved.</summary>
     [HttpPost("api/documents/{documentId:guid}/outputs/{outputId:guid}/preview")]
     public async Task<IActionResult> Preview(Guid documentId, Guid outputId,
-        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] PreviewRequest? body, CancellationToken ct,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] PreviewRequest? body, CancellationToken ct, [FromQuery] bool published = false,
         [FromQuery] bool suggest = false, [FromServices] LookupSuggester? suggester = null)
     {
         if (Refuse() is { } refused) return refused;
@@ -217,7 +219,13 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         if (suggest && !gate.LookupSuggestionsOn(orgId)) return StatusCode(403, new { error = "lookup_suggestions_off" });
         var doc = await db.FlowDocuments.AsNoTracking().FirstOrDefaultAsync(d => d.OrgId == orgId && d.Id == documentId, ct);
         if (doc is null) return NotFound(new { error = "document_not_found" });
-        var output = await db.Set<FlowOutput>().AsNoTracking()
+        FlowOutput? output;
+        if (published)
+        {
+            var flow = await db.Flows.AsNoTracking().FirstAsync(f => f.OrgId == orgId && f.Id == doc.FlowId, ct);
+            output = (await FlowConfigLoader.CurrentAsync(db, flow, ct)).Outputs.FirstOrDefault(o => o.Id == outputId);
+        }
+        else output = await db.Set<FlowOutput>().AsNoTracking()
             .FirstOrDefaultAsync(o => o.OrgId == orgId && o.FlowId == doc.FlowId && o.Id == outputId, ct);
         if (output is null) return OutputNotFound();
 

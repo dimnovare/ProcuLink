@@ -130,7 +130,9 @@ public class ReadDocumentJob(
             text = text[..MaxChars];
         }
 
-        var expected = flow.FieldsConfirmed ? DocumentJson.Deserialize<FlowFieldList>(flow.FieldsJson) : null;
+        var config = await FlowConfigLoader.CurrentAsync(db, flow, ct);
+        doc.FlowVersion = config.VersionNo;
+        var expected = config.FieldsConfirmed ? config.Fields : null;
         var keys = expected?.Fields.Select(f => f.Key).ToHashSet();
         var hints = keys is null ? [] : DocumentJson.Deserialize<List<FieldHint>>(flow.HintsJson).Where(h => keys.Contains(h.FieldKey) && SenderIdentity.Matches(h.SenderKey, text, doc.Source, doc.SourceRef)).OrderByDescending(h => h.TaughtAt).Take(MaxHints).ToList();
         var outcome = await reader.ReadAsync(new DocumentReadInput(doc.FileName, doc.ContentType, text, expected, pages, hints.Count > 0 ? hints : null), doc.OrgId, ct);
@@ -178,7 +180,7 @@ public class ReadDocumentJob(
         doc.ReadAt = DateTime.UtcNow;
         AddAudit(doc, "document.read", new
         {
-            status = doc.Status,
+            status = doc.Status, version = config.VersionNo,
             failedChecks = DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).Select(c => c.Code).ToList(),
         });
         await db.SaveChangesAsync(ct);
