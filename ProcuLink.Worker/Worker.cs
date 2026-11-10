@@ -31,7 +31,7 @@ public class Worker : BackgroundService
         _recurringJobs.AddOrUpdate<ProcuLink.Api.Jobs.NotificationMembersJob>(
             "notification-members",
             job => job.RunAsync(CancellationToken.None),
-            "0 3 * * *");
+            "7 3 * * *");
 
         _recurringJobs.AddOrUpdate<SftpPollingJob>(
             "sftp-polling",
