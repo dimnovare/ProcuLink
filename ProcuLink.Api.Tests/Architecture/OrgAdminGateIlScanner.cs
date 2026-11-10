@@ -192,6 +192,14 @@ internal static class OrgAdminGateIlScanner
             "Opens a connection from our servers to a host the organisation named, with its saved credentials "
           + "(an SFTP host key it learns is not saved by a test)."),
 
+        new("IOutputDesigner.BindAsync",
+            OnInterface<ProcuLink.Core.Documents.IOutputDesigner>(nameof(ProcuLink.Core.Documents.IOutputDesigner.BindAsync)),
+            "Sends the organisation's field names and sample headings to an external AI model and spends the monthly AI cap."),
+
+        new("IOutputDesigner.ProposeAsync",
+            OnInterface<ProcuLink.Core.Documents.IOutputDesigner>(nameof(ProcuLink.Core.Documents.IOutputDesigner.ProposeAsync)),
+            "Sends the organisation's documentation text and field names to an external AI model and spends the monthly AI cap."),
+
         new("FlowOutputsController.Apply",
             member => member is MethodBase { Name: "Apply" } m && m.DeclaringType == typeof(ProcuLink.Api.Controllers.FlowOutputsController),
             "Writes an output's template, format and destination, which decides what is rendered and where "
@@ -201,6 +209,10 @@ internal static class OrgAdminGateIlScanner
             member => member is MethodInfo { Name: "ExecuteDeleteAsync", IsGenericMethod: true } m
                 && m.GetGenericArguments()[0] == typeof(ProcuLink.Core.Entities.FlowOutput),
             "Deletes an output, so documents stop being rendered and sent through it."),
+
+        new("FlowOutput.Logo setter",
+            member => member is MethodBase { Name: "set_" + nameof(ProcuLink.Core.Entities.FlowOutput.Logo) } m && m.DeclaringType == typeof(ProcuLink.Core.Entities.FlowOutput),
+            "Sets or clears the image printed at the top of a pdf output, which every document sent through it carries."),
 
         new("Flow.Automation setter",
             member => member is MethodBase { Name: "set_" + nameof(ProcuLink.Core.Entities.Flow.Automation) } m && m.DeclaringType == typeof(ProcuLink.Core.Entities.Flow),

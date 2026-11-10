@@ -447,6 +447,24 @@ public sealed class OutputTemplateEmitter
         return CsvEncoding(dialect?.Encoding).GetBytes(sb.ToString());
     }
 
+    private static OutputNode? LineItem(OutputNodeTemplate template)
+    {
+        var arrayNode = RealChildren(template.Root).FirstOrDefault(c => c.NodeType == OutputNodeType.Array);
+        return arrayNode is null ? null : RealChildren(arrayNode).FirstOrDefault();
+    }
+
+    /// <summary>The leaves of the CSV grid: the root's Field children, then the first Array's item Field children.</summary>
+    public static (IReadOnlyList<OutputNode> Header, IReadOnlyList<OutputNode> Line) CsvColumns(OutputNodeTemplate template)
+    {
+        var headerFields = RealChildren(template.Root).Where(c => c.NodeType == OutputNodeType.Field).ToList();
+        var lineItem     = LineItem(template);
+        // Two explicit arms: `?:` binds looser than `??`, and a header-only tree (no Array) once NullReferenced here.
+        var lineFields   = lineItem is null
+                               ? new List<OutputNode>()
+                               : RealChildren(lineItem).Where(c => c.NodeType == OutputNodeType.Field).ToList();
+        return (headerFields, lineFields);
+    }
+
     /// <summary>
     /// The CSV grid with RAW, unescaped values (header null when the dialect suppresses it). CSV
     /// escapes it; xlsx writes it as text cells.
@@ -457,16 +475,8 @@ public sealed class OutputTemplateEmitter
         Func<TLine, IReadOnlyDictionary<string, string>> lineRowFor,
         IReadOnlyList<TLine> orderedLines)
     {
-        var root = template.Root;
-        var headerFields = RealChildren(root).Where(c => c.NodeType == OutputNodeType.Field).ToList();
-        var arrayNode    = RealChildren(root).FirstOrDefault(c => c.NodeType == OutputNodeType.Array);
-        var lineItem     = arrayNode is null ? null : RealChildren(arrayNode).FirstOrDefault();
-        // `?:` binds LOOSER than `??`, so folding the empty-list default into the false arm made the
-        // TRUE arm plain null — and a header-only CSV tree (no Array node at all) NullReferenced on the
-        // very next line. Two explicit arms, no precedence to get wrong.
-        var lineFields   = lineItem is null
-                               ? new List<OutputNode>()
-                               : RealChildren(lineItem).Where(c => c.NodeType == OutputNodeType.Field).ToList();
+        var (headerFields, lineFields) = CsvColumns(template);
+        var lineItem = LineItem(template);
 
         var header = (template.CsvDialect?.WriteHeaderRow ?? true)
             ? headerFields.Select(f => f.Name).Concat(lineFields.Select(f => f.Name)).ToList()

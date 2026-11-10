@@ -1185,6 +1185,14 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("text")
                         .HasColumnName("format");
 
+                    b.Property<string>("LayoutJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("layout_json");
+
+                    b.Property<byte[]>("Logo")
+                        .HasColumnType("bytea")
+                        .HasColumnName("logo");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("text")

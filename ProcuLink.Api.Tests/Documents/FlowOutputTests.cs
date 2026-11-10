@@ -6,10 +6,12 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using ProcuLink.Api.Tests.Integration;
+using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Controllers;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
@@ -334,5 +336,216 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         var off = await factory.ClientFor(DocumentEngineTestFactory.OrgB).PostAsync(url + "?suggest=true", null);
         off.StatusCode.Should().Be(HttpStatusCode.Forbidden);
         (await off.Content.ReadAsStringAsync()).Should().Contain("lookup_suggestions_off");
+    }
+
+    private static MultipartFormDataContent File(byte[] bytes)
+    {
+        var part = new ByteArrayContent(bytes);
+        part.Headers.ContentType = new("image/png");
+        return new MultipartFormDataContent { { part, "file", "logo.png" } };
+    }
+
+    private static readonly byte[] OnePixelPng = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
+
+    [Fact]
+    public async Task Pdf_output_keeps_its_layout_and_logo_and_previews_as_pdf()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, docId) = await Seed(confirmed: true);
+
+        var created = await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "PDF", format = "pdf", layout = new { title = " Order " } });
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        var output = (await created.Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+        (await http.PutAsync($"/api/flows/{flowId}/outputs/{output.Id}/logo", File(OnePixelPng))).StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var saved = (await http.GetFromJsonAsync<List<OutputDto>>($"/api/flows/{flowId}/outputs", DocumentJson.Options))!.Single(o => o.Id == output.Id);
+        saved.Layout!.Title.Should().Be("Order");
+        saved.HasLogo.Should().BeTrue();
+
+        var preview = await (await http.PostAsync($"/api/documents/{docId}/outputs/{output.Id}/preview", null)).Content.ReadFromJsonAsync<JsonElement>();
+        preview.GetProperty("base64").GetString().Should().StartWith("JVBER");
+        preview.GetProperty("content").GetString().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Fixed_output_needs_a_width_on_every_column()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, _) = await Seed(confirmed: true);
+
+        var created = await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "Fixed", format = "fixed" });
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        var output = (await created.Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+
+        var template = System.Text.Json.Nodes.JsonNode.Parse(DocumentJson.Serialize(output.Template))!;
+        Leaves(output.Template.Root).Should().OnlyContain(l => l.Rule!.Width >= 10);
+        static System.Text.Json.Nodes.JsonObject? FirstWithWidth(System.Text.Json.Nodes.JsonNode? n) => n switch
+        {
+            System.Text.Json.Nodes.JsonObject o when o.ContainsKey("width") => o,
+            System.Text.Json.Nodes.JsonObject o => o.Select(kv => FirstWithWidth(kv.Value)).FirstOrDefault(x => x is not null),
+            System.Text.Json.Nodes.JsonArray a => a.Select(FirstWithWidth).FirstOrDefault(x => x is not null),
+            _ => null,
+        };
+        FirstWithWidth(template)!.Remove("width");
+
+        var res = await http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{output.Id}", new { name = "Fixed", format = "fixed", template });
+        res.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("detail").GetString().Should().Be("widths");
+    }
+
+    [Fact]
+    public async Task Logo_that_is_not_an_image_is_refused()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, _) = await Seed(confirmed: true);
+        var output = (await (await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "PDF", format = "pdf" }))
+            .Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+
+        var res = await http.PutAsync($"/api/flows/{flowId}/outputs/{output.Id}/logo", File("hello"u8.ToArray()));
+
+        res.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await res.Content.ReadAsStringAsync()).Should().Contain("invalid_logo");
+    }
+
+    private static MultipartFormDataContent Upload(string fileName, string content) =>
+        new() { { new ByteArrayContent(System.Text.Encoding.UTF8.GetBytes(content)), "file", fileName } };
+
+    [Fact]
+    public async Task From_sample_uses_names_then_ai_and_ignores_keys_it_may_not_use()
+    {
+        var (flowId, _) = await Seed(confirmed: true);
+        using (var seedScope = factory.Services.CreateScope())
+        {
+            var db = seedScope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            (await db.Flows.SingleAsync(f => f.Id == flowId)).FieldsJson = DocumentJson.Serialize(new FlowFieldList([Field("po_number", "PO number"), Field("ship_address", "Delivery address")]));
+            await db.SaveChangesAsync();
+        }
+        IReadOnlyList<OutputSlot>? sent = null;
+        factory.Designer.Reset();
+        factory.Designer.Setup(d => d.BindAsync(Org, It.IsAny<IReadOnlyList<OutputSlot>>(), It.IsAny<FlowFieldList>(), It.IsAny<CancellationToken>()))
+            .Callback((Guid _, IReadOnlyList<OutputSlot> slots, FlowFieldList _, CancellationToken _) => sent = slots)
+            .ReturnsAsync([new SlotMatch("Ship to", "nope", 0.9f), new SlotMatch("Ship to", "ship_address", 0.8f)]);
+
+        var res = await factory.ClientFor(Org).PostAsync($"/api/flows/{flowId}/outputs/from-sample", Upload("orders.csv", "PO number,Ship to\n1,x\n"));
+
+        res.StatusCode.Should().Be(HttpStatusCode.OK);
+        var draft = (await res.Content.ReadFromJsonAsync<OutputDraftDto>(new JsonSerializerOptions(JsonSerializerDefaults.Web)))!;
+        sent!.Select(s => s.Name).Should().Equal("Ship to");
+        draft.Leaves.Single(l => l.Path == "PO number").Should().Match<DraftLeaf>(l => l.By == "name" && l.FieldKey == "po_number");
+        draft.Leaves.Single(l => l.Path == "Ship to").Should().Match<DraftLeaf>(l => l.By == "ai" && l.FieldKey == "ship_address" && l.Confidence == 0.8f);
+        using var scope = factory.Services.CreateScope();
+        scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowOutput>().Count(o => o.FlowId == flowId).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task From_sample_refuses_files_it_cannot_use()
+    {
+        var (flowId, _) = await Seed(confirmed: true);
+        var http = factory.ClientFor(Org);
+
+        var pdf = await http.PostAsync($"/api/flows/{flowId}/outputs/from-sample", Upload("a.pdf", "x"));
+        var bad = await http.PostAsync($"/api/flows/{flowId}/outputs/from-sample", Upload("a.json", "{not json"));
+
+        pdf.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await pdf.Content.ReadAsStringAsync()).Should().Contain("unsupported_format");
+        bad.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await bad.Content.ReadAsStringAsync()).Should().Contain("unreadable_file");
+    }
+
+    [Fact]
+    public async Task From_documentation_is_off_unless_switched_on()
+    {
+        var (flowId, _) = await Seed(confirmed: true);
+        var other = factory.ClientFor(DocumentEngineTestFactory.OrgB);
+        var created = (await (await other.PostAsJsonAsync("/api/flows", new CreateFlowRequest("Synthetic flow"))).Content
+            .ReadFromJsonAsync<FlowDto>(new JsonSerializerOptions(JsonSerializerDefaults.Web)))!;
+        created.DocsOutputsOn.Should().BeFalse();
+
+        var res = await other.PostAsync($"/api/flows/{created.Id}/outputs/from-documentation", Upload("spec.txt", "x"));
+
+        res.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await res.Content.ReadAsStringAsync()).Should().Contain("docs_outputs_off");
+        var flow = (await factory.ClientFor(Org).GetFromJsonAsync<FlowDto>($"/api/flows/{flowId}", new JsonSerializerOptions(JsonSerializerDefaults.Web)))!;
+        flow.DocsOutputsOn.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task From_documentation_returns_a_cited_draft_and_maps_failures()
+    {
+        var (flowId, _) = await Seed(confirmed: true);
+        factory.Designer.Reset();
+        var proposal = new ProposedOutput("Invoice import", "csv", "Send a CSV", ",",
+            new ProposedNode("document", "object", null, false, null, "", [new ProposedNode("Invoice", "field", "invoice_no", true, null, "Invoice: the number", [])]),
+            null);
+        factory.Designer.SetupSequence(d => d.ProposeAsync(Org, It.IsAny<string>(), It.IsAny<FlowFieldList>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProposalResult(proposal, null))
+            .ReturnsAsync(new ProposalResult(null, "no_egress"))
+            .ReturnsAsync(new ProposalResult(null, "ai_usage_cap"))
+            .ReturnsAsync(new ProposalResult(null, "ai_error"));
+        var http = factory.ClientFor(Org);
+        var url = $"/api/flows/{flowId}/outputs/from-documentation";
+
+        var ok = await http.PostAsync(url, Upload("spec.txt", "Send a CSV file.\nInvoice: the number\n"));
+        var egress = await http.PostAsync(url, Upload("spec.txt", "x"));
+        var cap = await http.PostAsync(url, Upload("spec.txt", "x"));
+        var failed = await http.PostAsync(url, Upload("spec.txt", "x"));
+
+        ok.StatusCode.Should().Be(HttpStatusCode.OK);
+        var draft = (await ok.Content.ReadFromJsonAsync<OutputDraftDto>(new JsonSerializerOptions(JsonSerializerDefaults.Web)))!;
+        draft.Leaves.Single().Should().Match<DraftLeaf>(l => l.FieldKey == "invoice_no" && l.Required && l.Cite!.Where == "line 2");
+        draft.FormatCite!.Where.Should().Be("line 1");
+        egress.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await egress.Content.ReadAsStringAsync()).Should().Contain("no_egress");
+        ((int)cap.StatusCode).Should().Be(429);
+        ((int)failed.StatusCode).Should().Be(502);
+        (await failed.Content.ReadAsStringAsync()).Should().Contain("ai_error");
+        using var scope = factory.Services.CreateScope();
+        scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowOutput>().Count(o => o.FlowId == flowId).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Draft_test_sends_the_rendered_document_marked_as_a_test()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, docId) = await Seed(confirmed: true);
+        var output = (await (await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "CSV", format = "csv" }))
+            .Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+        Guid Destination(Guid org)
+        {
+            using var scope = factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            var d = new FlowDestination { Id = Guid.NewGuid(), OrgId = org, Name = "d", Protocol = "http", ConfigJson = """{"url":"https://example.com/in"}""" };
+            db.Set<FlowDestination>().Add(d);
+            db.SaveChanges();
+            return d.Id;
+        }
+        string? sentName = null, sentText = null;
+        factory.Dispatcher.Setup(x => x.DispatchAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SupplierDeliveryConfig>(),
+                It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<string?>(), It.IsAny<bool>()))
+            .Callback((byte[] c, string n, string _, SupplierDeliveryConfig _, string _, CancellationToken _, string? _, bool _) =>
+                (sentName, sentText) = (n, System.Text.Encoding.UTF8.GetString(c)))
+            .ReturnsAsync(new DeliveryResult(true, null, 200));
+        var url = $"/api/documents/{docId}/outputs/test";
+
+        var res = await http.PostAsJsonAsync(url, new { format = "csv", destinationId = Destination(Org), template = output.Template });
+
+        res.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("success").GetBoolean().Should().BeTrue();
+        sentName.Should().Be("TEST_synthetic.csv");
+        sentText.Should().Contain("INV-7");
+
+        var other = await http.PostAsJsonAsync(url, new { format = "csv", destinationId = Destination(DocumentEngineTestFactory.OrgB), template = output.Template });
+        string? sentType = null;
+        factory.Dispatcher.Setup(x => x.DispatchAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<SupplierDeliveryConfig>(),
+                It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<string?>(), It.IsAny<bool>()))
+            .Callback((byte[] _, string n, string t, SupplierDeliveryConfig _, string _, CancellationToken _, string? _, bool _) => (sentName, sentType) = (n, t))
+            .ReturnsAsync(new DeliveryResult(true, null, 200));
+        var xlsx = (await (await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "Sheet", format = "xlsx" })).Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+        (await http.PostAsJsonAsync(url, new { format = "xlsx", destinationId = Destination(Org), template = xlsx.Template })).StatusCode.Should().Be(HttpStatusCode.OK);
+        sentName.Should().Be("TEST_synthetic.xlsx");
+        sentType.Should().Be("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        other.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await other.Content.ReadAsStringAsync()).Should().Contain("destination_not_found");
     }
 }

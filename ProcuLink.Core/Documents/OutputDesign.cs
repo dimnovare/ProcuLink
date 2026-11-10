@@ -1,0 +1,46 @@
+using ProcuLink.Core.Services.Mapping;
+
+namespace ProcuLink.Core.Documents;
+
+/// <summary>One place in a draft template that can take a flow value. <paramref name="Allowed"/> holds qualified keys: a header field is <c>key</c>, a table column is <c>tableKey.columnKey</c>.</summary>
+public sealed record OutputSlot(string Path, string Name, IReadOnlyList<string> Allowed);
+
+/// <summary>A proposed value for a slot. <paramref name="FieldKey"/> is qualified (see <see cref="OutputSlot"/>).</summary>
+public sealed record SlotMatch(string Path, string FieldKey, float Confidence);
+
+public sealed record DraftCite(string Where, string Quote);
+
+/// <summary>
+/// One leaf of a draft. <paramref name="FieldKey"/> is unqualified, as written into the rule.
+/// <paramref name="By"/> says who chose the value: <c>"name"</c> (matched by name), <c>"ai"</c> (matched by the AI
+/// from a sample) or <c>"docs"</c> (proposed from documentation, which carries no confidence); null when unset.
+/// </summary>
+public sealed record DraftLeaf(string Path, string? FieldKey, string? By, float? Confidence, bool Required = false, DraftCite? Cite = null);
+
+public sealed record OutputDraft(string Name, string Format, string? TableKey, OutputNodeTemplate Template, IReadOnlyList<DraftLeaf> Leaves, IReadOnlyList<string> Notes);
+
+/// <summary>A destination proposed by documentation; never created automatically.</summary>
+public sealed record DraftDestination(string Url, string Method, string AuthType, DraftCite? Cite);
+
+public sealed record OutputDraftDto(
+    string Name, string Format, string? TableKey, OutputNodeTemplate Template, IReadOnlyList<DraftLeaf> Leaves, IReadOnlyList<string> Notes,
+    DraftCite? FormatCite = null, DraftDestination? Destination = null, bool Truncated = false);
+
+public interface IOutputDesigner
+{
+    Task<IReadOnlyList<SlotMatch>> BindAsync(Guid orgId, IReadOnlyList<OutputSlot> slots, FlowFieldList fields, CancellationToken ct);
+
+    /// <summary>Asks the AI to design an output from documentation text. Never throws: a refusal or failure is in <see cref="ProposalResult.Failure"/>.</summary>
+    Task<ProposalResult> ProposeAsync(Guid orgId, string documentation, FlowFieldList fields, CancellationToken ct);
+}
+
+/// <summary><paramref name="Failure"/> is <c>no_egress</c>, <c>ai_usage_cap</c> or <c>ai_error</c>; exactly one of the two is set.</summary>
+public sealed record ProposalResult(ProposedOutput? Proposal, string? Failure);
+
+/// <summary>The AI's strict JSON answer for "build an output from this documentation". <paramref name="Format"/> is csv, json, xml or fixed.</summary>
+public sealed record ProposedOutput(string Name, string Format, string FormatQuote, string? Delimiter, ProposedNode Root, ProposedDestination? Destination);
+
+/// <summary><paramref name="Kind"/> is object, array, field or attribute; <paramref name="FieldKey"/> is qualified as in <see cref="OutputSlot"/>.</summary>
+public sealed record ProposedNode(string Name, string Kind, string? FieldKey, bool Required, int? Width, string Quote, IReadOnlyList<ProposedNode> Children);
+
+public sealed record ProposedDestination(string Url, string Method, string AuthType, string Quote);

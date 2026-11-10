@@ -122,8 +122,8 @@ public sealed class FlowDestinationService(
             ? ""
             : encryption.Decrypt(d.EncryptedCredentials, new CredentialScope(d.OrgId, Purpose, d.Id));
 
-    /// <summary>Null when the destination is not this org's. The send is real; only its content is marked as a test.</summary>
-    public async Task<DeliveryResult?> TestAsync(Guid orgId, Guid id, CancellationToken ct)
+    /// <summary>Null when the destination is not this org's. The send is real; only its content is marked as a test (a given <paramref name="payload"/> goes as <c>TEST_</c> + its file name).</summary>
+    public async Task<DeliveryResult?> TestAsync(Guid orgId, Guid id, CancellationToken ct, TestPayload? payload = null)
     {
         var d = await db.Set<FlowDestination>().FirstOrDefaultAsync(x => x.OrgId == orgId && x.Id == id, ct);
         if (d is null) return null;
@@ -136,7 +136,8 @@ public sealed class FlowDestinationService(
             try
             {
                 result = await dispatcher.DispatchAsync(
-                    Encoding.UTF8.GetBytes(TestFileContent), TestFileName, "text/plain",
+                    payload?.Content ?? Encoding.UTF8.GetBytes(TestFileContent),
+                    payload is null ? TestFileName : "TEST_" + payload.FileName, payload?.ContentType ?? "text/plain",
                     ToDeliveryConfig(d, d.Name, test: true), DecryptCredentials(d), ct, isTestFire: false);
             }
             catch (CredentialUnbindableException)
@@ -156,3 +157,5 @@ public sealed class FlowDestinationService(
         return result;
     }
 }
+
+public sealed record TestPayload(byte[] Content, string FileName, string ContentType);

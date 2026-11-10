@@ -157,7 +157,7 @@ public sealed class RbacTestFactory : WebApplicationFactory<Program>
 public sealed class OrgAdminGateRefusesNonAdminsTests : IClassFixture<RbacTestFactory>
 {
     /// <summary>Must match <c>OrgAdminGateIsRealTests.ExpectedGatedEndpointCount</c>.</summary>
-    private const int ExpectedGatedEndpointCount = 27;
+    private const int ExpectedGatedEndpointCount = 32;
 
     /// <summary>An organisation with a REAL Clerk organisation id — the modern shape.</summary>
     private const string ClerkOrg = "org_TEST_RBAC";
@@ -411,7 +411,10 @@ public sealed class OrgAdminGateRefusesNonAdminsTests : IClassFixture<RbacTestFa
 
         using var request = new HttpRequestMessage(new HttpMethod(endpoint.Method), "/" + endpoint.Url.TrimStart('/'));
         if (endpoint.Method is "POST" or "PUT" or "PATCH")
-            request.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+            // [Consumes("multipart/form-data")] answers 415 before the gate runs, so a file route needs a form body.
+            request.Content = endpoint.Url.EndsWith("/logo", StringComparison.Ordinal) || endpoint.Url.EndsWith("/from-sample", StringComparison.Ordinal) || endpoint.Url.EndsWith("/from-documentation", StringComparison.Ordinal)
+                ? new MultipartFormDataContent { { new ByteArrayContent([1]), "file", "logo.png" } }
+                : new StringContent("{}", Encoding.UTF8, "application/json");
 
         try
         {

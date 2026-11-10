@@ -106,4 +106,90 @@ public class DocumentOutputRendererTests
         // No tables in scope: the step cannot run, which is a refusal of the output, not a crash.
         DocumentOutputRenderer.Render("csv", Template("keep"), read, "items").Error.Should().Be("output_invalid");
     }
+
+    private static OutputNode Wide(string name, string field, int width) =>
+        OutputNode.FieldOf(name, new OutputFieldRule { OutputPath = name, CanonicalField = field, Width = width });
+
+    private static ReadResult TwoRows() => new("Order", [Field("po", "A1")],
+        [new ReadTable("items", "Items", [new ReadColumn("qty", "Qty", "number", null)],
+            [new ReadRow(new Dictionary<string, ReadCell> { ["qty"] = Cell("5") }),
+             new ReadRow(new Dictionary<string, ReadCell> { ["qty"] = Cell("12") })], true)]);
+
+    [Fact]
+    public void Fixed_pads_each_column_and_writes_no_header()
+    {
+        var t = Csv(new CsvDialect(), Wide("po", "po", 6), OutputNode.Arr("Lines", OutputNode.Obj("Line", Wide("qty", "qty", 3))));
+
+        Text(DocumentOutputRenderer.Render(FlowOutputFormats.Fixed, t, TwoRows(), "items")).Should().Be("A1    5  \r\nA1    12 \r\n");
+    }
+
+    [Fact]
+    public void Fixed_value_longer_than_width_fails_naming_the_column()
+    {
+        var t = Csv(new CsvDialect(), Wide("po", "po", 1));
+
+        var r = DocumentOutputRenderer.Render(FlowOutputFormats.Fixed, t, TwoRows(), null);
+
+        (r.Ok, r.Error, r.Detail).Should().Be((false, "output_invalid", "\"po\" is longer than 1 characters. Make the column wider."));
+    }
+
+    [Fact]
+    public void Text_layout_lists_fields_and_skips_the_empty_table()
+    {
+        var t = Csv(new CsvDialect(), Rule("po", "po"), OutputNode.Arr("Lines", OutputNode.Obj("Line", Rule("qty", "qty"))));
+
+        Text(DocumentOutputRenderer.Render(FlowOutputFormats.Text, t, new ReadResult("Order", [Field("po", "A1")]), null,
+            layout: new OutputLayout("Order", null, null))).Should().Be("Order\n\npo: A1\n");
+    }
+
+    private static readonly byte[] TinyPng = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==");
+
+    [Fact]
+    public void Pdf_layout_is_real_text_with_title_fields_and_rows()
+    {
+        var t = Csv(new CsvDialect(), Rule("po", "po"), OutputNode.Arr("Lines", OutputNode.Obj("Line", Rule("qty", "qty"))));
+
+        var r = DocumentOutputRenderer.Render(FlowOutputFormats.Pdf, t, TwoRows(), "items",
+            layout: new OutputLayout("Order", null, "Thanks"), logo: TinyPng);
+
+        r.Ok.Should().BeTrue(r.Detail);
+        (r.Result!.ContentType, r.Result.FileExtension).Should().Be(("application/pdf", ".pdf"));
+        using var ms = new MemoryStream();
+        r.Result.Content.CopyTo(ms);
+        var bytes = ms.ToArray();
+        System.Text.Encoding.ASCII.GetString(bytes, 0, 4).Should().Be("%PDF");
+        var text = ProcuLink.Transform.Parsing.PdfWordExtractor.Extract(bytes).Text;
+        text.Should().Contain("Order").And.Contain("A1").And.Contain("12").And.Contain("Thanks");
+        LayoutPdfWriter.IsUsableLogo(TinyPng).Should().BeTrue();
+        LayoutPdfWriter.IsUsableLogo(new byte[] { 1, 2, 3 }).Should().BeFalse();
+        // A header declaring 5000 x 5000 is refused before it is decoded.
+        var huge = TinyPng.ToArray();
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(huge.AsSpan(16), 5000);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(huge.AsSpan(20), 5000);
+        LayoutPdfWriter.IsUsableLogo(huge).Should().BeFalse();
+        // No table rows: fields only, no crash.
+        DocumentOutputRenderer.Render(FlowOutputFormats.Pdf, t, new ReadResult("Order", [Field("po", "A1")]), null).Ok.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Fixed_width_counts_encoded_bytes_and_sanitises_control_characters()
+    {
+        string Detail(string value, int width) => DocumentOutputRenderer.Render(FlowOutputFormats.Fixed,
+            Csv(new CsvDialect { Encoding = "utf-8" }, Wide("n", "n", width)), new ReadResult("O", [Field("n", value)]), null).Detail!;
+        byte[] Bytes(string value, int width)
+        {
+            var r = DocumentOutputRenderer.Render(FlowOutputFormats.Fixed, Csv(new CsvDialect { Encoding = "utf-8", LineEnding = "" },
+                Wide("n", "n", width)), new ReadResult("O", [Field("n", value)]), null);
+            r.Ok.Should().BeTrue(r.Detail);
+            using var ms = new MemoryStream();
+            r.Result!.Content.CopyTo(ms);
+            return ms.ToArray();
+        }
+
+        Detail("Mö", 2).Should().Be("\"n\" is longer than 2 characters. Make the column wider.");
+        Bytes("Mö", 3).Should().Equal(System.Text.Encoding.UTF8.GetBytes("Mö"));
+        Bytes("a" + (char)0x2028 + "b", 3).Should().Equal(System.Text.Encoding.UTF8.GetBytes("a b"));
+        Detail("x", 1001).Should().Be("Give every column a width from 1 to 1000.");
+    }
 }

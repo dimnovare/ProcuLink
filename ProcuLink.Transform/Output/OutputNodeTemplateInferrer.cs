@@ -17,7 +17,7 @@ namespace ProcuLink.Transform.Output;
 /// </summary>
 public static class OutputNodeTemplateInferrer
 {
-    public static OutputNodeTemplate FromSample(string sample, OutputFormat format)
+    public static OutputNodeTemplate FromSample(string sample, OutputFormat format, char csvDelimiter = ',')
     {
         if (string.IsNullOrWhiteSpace(sample))
             throw new ArgumentException("Sample is empty.", nameof(sample));
@@ -25,7 +25,7 @@ public static class OutputNodeTemplateInferrer
         return format switch
         {
             OutputFormat.Json => FromJson(sample),
-            OutputFormat.Csv  => FromCsv(sample),
+            OutputFormat.Csv  => FromCsv(sample, csvDelimiter),
             OutputFormat.Xml or OutputFormat.CXml or OutputFormat.Ubl => FromXml(sample, format),
             _ => throw new ArgumentException(
                      $"Sample inference supports JSON, CSV, and XML (got '{format}').", nameof(format)),
@@ -157,7 +157,7 @@ public static class OutputNodeTemplateInferrer
 
     // ── CSV ──────────────────────────────────────────────────────────────────────
 
-    private static OutputNodeTemplate FromCsv(string sample)
+    private static OutputNodeTemplate FromCsv(string sample, char delimiter)
     {
         var firstLine = sample
             .Split('\n')
@@ -165,7 +165,7 @@ public static class OutputNodeTemplateInferrer
             .FirstOrDefault(l => !string.IsNullOrWhiteSpace(l))
             ?? throw new ArgumentException("CSV sample has no header row.", nameof(sample));
 
-        var columns = SplitCsvHeader(firstLine);
+        var columns = SplitCsvHeader(firstLine, delimiter);
         // Treat each column as a per-line field (the common one-row-per-line case); the emitter repeats
         // header-level values per row anyway, so this round-trips a flat CSV.
         var lineFields = columns
@@ -177,7 +177,7 @@ public static class OutputNodeTemplateInferrer
         return new OutputNodeTemplate { Format = OutputFormat.Csv, Root = root };
     }
 
-    private static List<string> SplitCsvHeader(string line)
+    private static List<string> SplitCsvHeader(string line, char delimiter)
     {
         // Minimal RFC-4180-aware header split (handles quoted commas in column names).
         var cols = new List<string>();
@@ -193,7 +193,7 @@ public static class OutputNodeTemplateInferrer
                 else sb.Append(ch);
             }
             else if (ch == '"') inQuotes = true;
-            else if (ch == ',') { cols.Add(sb.ToString().Trim()); sb.Clear(); }
+            else if (ch == delimiter) { cols.Add(sb.ToString().Trim()); sb.Clear(); }
             else sb.Append(ch);
         }
         cols.Add(sb.ToString().Trim());

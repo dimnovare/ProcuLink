@@ -40,6 +40,9 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
     /// <summary>Set before the host first boots to run on Postgres, for the claim-first ledger (EF InMemory has neither unique indexes nor ExecuteUpdate).</summary>
     public string? PostgresConnection { get; init; }
 
+    /// <summary>Replaces <see cref="ProcuLink.Core.Documents.IOutputDesigner"/>; tests set up the AI matches.</summary>
+    public Mock<ProcuLink.Core.Documents.IOutputDesigner> Designer { get; } = new();
+
     /// <summary>Replaces <see cref="IBackgroundJobClient"/>; tests count the jobs created.</summary>
     public Mock<IBackgroundJobClient> Jobs { get; } = new();
 
@@ -47,6 +50,9 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
     public Mock<ProcuLink.Api.Services.Documents.Intake.IPickupSource> Pickup { get; } = new();
 
     public Mock<ProcuLink.Api.Services.Documents.Intake.IPickupSession> PickupSession { get; } = new();
+
+    /// <summary>The only <see cref="ProcuLink.Core.Services.Delivery.IDeliveryDispatcher"/> (protocol http) in this host; records what a destination test sends.</summary>
+    public Mock<ProcuLink.Core.Services.Delivery.IDeliveryDispatcher> Dispatcher { get; } = new();
 
     public int Enqueued<T>() =>
         Jobs.Invocations.Count(i => i.Method.Name == nameof(IBackgroundJobClient.Create)
@@ -71,6 +77,7 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             ["DocumentEngine:LookupSuggestionOrgIds:0"] = OrgA.ToString(),
             ["DocumentEngine:ScanOrgIds:0"] = OrgB.ToString(),
             ["DocumentEngine:FormatOrgIds:0"] = OrgB.ToString(),
+            ["DocumentEngine:DocsOutputOrgIds:0"] = OrgA.ToString(),
         }));
 
         builder.ConfigureServices(services =>
@@ -95,9 +102,16 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             foreach (var d in services.Where(d => d.ServiceType == typeof(ProcuLink.Api.Services.Documents.Intake.IPickupSource)).ToList())
                 services.Remove(d);
             services.AddSingleton(Pickup.Object);
+            Dispatcher.SetupGet(x => x.Protocol).Returns("http");
+            foreach (var d in services.Where(d => d.ServiceType == typeof(ProcuLink.Core.Services.Delivery.IDeliveryDispatcher)).ToList())
+                services.Remove(d);
+            services.AddSingleton(Dispatcher.Object);
             foreach (var d in services.Where(d => d.ServiceType == typeof(ProcuLink.Core.Services.Ai.IAiMappingService)).ToList())
                 services.Remove(d);
             services.AddSingleton(Ai.Object);
+            foreach (var d in services.Where(d => d.ServiceType == typeof(ProcuLink.Core.Documents.IOutputDesigner)).ToList())
+                services.Remove(d);
+            services.AddSingleton(Designer.Object);
             services.AddSingleton(Storage.Object);
             services.AddSingleton(Jobs.Object);
 

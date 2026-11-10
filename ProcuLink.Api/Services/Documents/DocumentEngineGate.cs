@@ -13,6 +13,8 @@ public sealed class DocumentEngineOptions
     public bool ScansForAll { get; set; }
     public string[] FormatOrgIds { get; set; } = [];
     public bool FormatsForAll { get; set; }
+    public string[] DocsOutputOrgIds { get; set; } = [];
+    public bool DocsOutputsForAll { get; set; }
 }
 
 /// <summary>Per-org switch for the document engine; off unless listed or enabled for all.</summary>
@@ -34,6 +36,10 @@ public sealed class DocumentEngineGate(IOptions<DocumentEngineOptions> options)
     /// <summary>Word, text, XML, JSON and EDI files: the engine must be on, then the org is listed or all are on.</summary>
     public bool FormatsOn(Guid orgId) =>
         IsEnabled(orgId) && (options.Value.FormatsForAll || Listed(options.Value.FormatOrgIds, orgId));
+
+    /// <summary>Outputs designed from documentation by the AI: the engine must be on, then the org is listed or all are on.</summary>
+    public bool DocsOutputsOn(Guid orgId) =>
+        IsEnabled(orgId) && (options.Value.DocsOutputsForAll || Listed(options.Value.DocsOutputOrgIds, orgId));
 
     public string[] AcceptedFormats(Guid orgId) => DocumentFormats.For(ScansOn(orgId), FormatsOn(orgId));
 }
