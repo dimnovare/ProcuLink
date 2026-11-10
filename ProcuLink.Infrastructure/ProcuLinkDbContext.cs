@@ -2273,9 +2273,9 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(d => d.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             b.Property(d => d.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             b.HasIndex(d => new { d.DocumentId, d.OutputId }).IsUnique();
+            b.HasIndex(d => d.OutputId);
             b.HasOne<Organisation>().WithMany().HasForeignKey(d => d.OrgId).OnDelete(DeleteBehavior.Cascade);
             b.HasOne<FlowDocument>().WithMany().HasForeignKey(d => d.DocumentId).OnDelete(DeleteBehavior.Cascade);
-            b.HasOne<FlowOutput>().WithMany().HasForeignKey(d => d.OutputId).OnDelete(DeleteBehavior.SetNull);
             b.HasOne<FlowDestination>().WithMany().HasForeignKey(d => d.DestinationId).OnDelete(DeleteBehavior.SetNull);
         });
 

@@ -93,7 +93,7 @@ public sealed class FlowsController(
         }
         flow.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
-        return Ok(ToDto(flow, await CountDocs(orgId, id, ct)));
+        return Ok(ToDto(flow, await CountDocs(orgId, id, ct), await FlowVersions.HasChangesAsync(db, flow, ct)));
     }
 
     [HttpPut("{id:guid}/fields")]

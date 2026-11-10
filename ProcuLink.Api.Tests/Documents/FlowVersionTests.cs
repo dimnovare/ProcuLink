@@ -182,11 +182,15 @@ public class FlowVersionTests(DocumentEngineTestFactory factory) : IClassFixture
     [Fact]
     public async Task Publish_then_edit_shows_changes_and_restore_clears_them()
     {
-        Guid flowId, outputId;
+        Guid flowId, outputId, secondId;
         using (var scope = factory.Services.CreateScope())
         {
-            var (_, flow, output) = await Seed(scope);
-            (flowId, outputId) = (flow.Id, output.Id);
+            var (db, flow, output) = await Seed(scope);
+            var second = Output(flow.Id, """{"b":1}""");
+            second.CreatedAt = output.CreatedAt.AddSeconds(1);
+            db.Set<FlowOutput>().Add(second);
+            await db.SaveChangesAsync();
+            (flowId, outputId, secondId) = (flow.Id, output.Id, second.Id);
         }
         var client = factory.ClientFor(Org);
 
@@ -197,7 +201,9 @@ public class FlowVersionTests(DocumentEngineTestFactory factory) : IClassFixture
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
-            (await db.Set<FlowOutput>().SingleAsync(o => o.Id == outputId)).TemplateJson = """{"a":2}""";
+            // The first output is deleted, so a restore re-inserts it after the second.
+            db.Set<FlowOutput>().Remove(await db.Set<FlowOutput>().SingleAsync(o => o.Id == outputId));
+            (await db.Set<FlowOutput>().SingleAsync(o => o.Id == secondId)).TemplateJson = """{"b":2}""";
             await db.SaveChangesAsync();
         }
         (await Body(await client.GetAsync($"/api/flows/{flowId}"))).GetProperty("hasChanges").GetBoolean().Should().BeTrue();
@@ -208,6 +214,7 @@ public class FlowVersionTests(DocumentEngineTestFactory factory) : IClassFixture
         {
             var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
             (await db.Set<FlowOutput>().AsNoTracking().SingleAsync(o => o.Id == outputId)).TemplateJson.Should().Be("""{"a":1}""");
+            (await db.Set<FlowOutput>().AsNoTracking().SingleAsync(o => o.Id == secondId)).TemplateJson.Should().Be("""{"b":1}""");
         }
         var versions = await Body(await client.GetAsync($"/api/flows/{flowId}/versions"));
         versions.GetArrayLength().Should().Be(1);

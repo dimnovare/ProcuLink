@@ -18,19 +18,22 @@ public static class FlowVersions
         return json is null ? null : DocumentJson.Deserialize<FlowSnapshot>(json);
     }
 
-    /// <summary>Compared as snapshots, never as the stored text: jsonb rewrites whitespace and key order.</summary>
-    public static async Task<bool> HasChangesAsync(ProcuLinkDbContext db, Flow flow, CancellationToken ct)
+    /// <summary>Compared as snapshots, never as the stored text: jsonb rewrites whitespace and key order. Output order does not count.</summary>
+    private static async Task<bool> ChangedAsync(ProcuLinkDbContext db, Flow flow, FlowConfig live, CancellationToken ct)
     {
         if (flow.PublishedVersionNo is not { } no || await StoredAsync(db, flow, no, ct) is not { } stored) return false;
-        var live = await FlowConfigLoader.LiveAsync(db, flow, ct);
-        return stored.Canonical() != FlowSnapshot.Of(flow, live.Outputs).Canonical();
+        static string ById(FlowSnapshot s) => (s with { Outputs = s.Outputs.OrderBy(o => o.Id).ToList() }).Canonical();
+        return ById(stored) != ById(FlowSnapshot.Of(flow, live.Outputs));
     }
+
+    public static async Task<bool> HasChangesAsync(ProcuLinkDbContext db, Flow flow, CancellationToken ct) =>
+        flow.PublishedVersionNo is not null && await ChangedAsync(db, flow, await FlowConfigLoader.LiveAsync(db, flow, ct), ct);
 
     public static async Task<(FlowVersion? Version, string? Error)> PublishAsync(ProcuLinkDbContext db, Flow flow, string? userId, CancellationToken ct)
     {
-        if (flow.PublishedVersionNo is not null && !await HasChangesAsync(db, flow, ct)) return (null, "nothing_to_publish");
-        var previous = flow.PublishedVersionNo;
         var live = await FlowConfigLoader.LiveAsync(db, flow, ct);
+        if (flow.PublishedVersionNo is not null && !await ChangedAsync(db, flow, live, ct)) return (null, "nothing_to_publish");
+        var previous = flow.PublishedVersionNo;
         var version = new FlowVersion
         {
             Id = Guid.NewGuid(), OrgId = flow.OrgId, FlowId = flow.Id, VersionNo = (previous ?? 0) + 1,
@@ -46,6 +49,7 @@ public static class FlowVersions
         {
             db.Entry(version).State = EntityState.Detached;
             flow.PublishedVersionNo = previous;
+            db.Entry(flow).Property(x => x.PublishedVersionNo).IsModified = false;
             return (null, "publish_conflict");
         }
         return (version, null);
@@ -74,12 +78,10 @@ public static class FlowVersions
             var o = live.FirstOrDefault(x => x.Id == s.Id);
             if (o is null)
             {
-                o = s.ToEntity(flow.OrgId, flow.Id);
-                o.CreatedAt = now;
+                o = new FlowOutput { Id = s.Id, OrgId = flow.OrgId, FlowId = flow.Id, CreatedAt = now };
                 db.Set<FlowOutput>().Add(o);
             }
-            (o.Name, o.Format, o.TemplateJson, o.TableKey, o.DestinationId, o.SendWhenJson, o.LayoutJson, o.Logo) =
-                (s.Name, s.Format, s.TemplateJson, s.TableKey, s.DestinationId, s.SendWhenJson, s.LayoutJson, s.Logo);
+            s.CopyTo(o);
             o.UpdatedAt = now;
         }
         await db.SaveChangesAsync(ct);
@@ -90,7 +92,7 @@ public static class FlowVersions
     public static async Task<IReadOnlyList<FlowSnapshotOutput>> LiveVersionOutputsAsync(ProcuLinkDbContext db, Guid orgId, CancellationToken ct)
     {
         var json = await db.Set<FlowVersion>().AsNoTracking()
-            .Where(v => v.OrgId == orgId && db.Flows.Any(f => f.Id == v.FlowId && f.PublishedVersionNo == v.VersionNo))
+            .Where(v => v.OrgId == orgId && db.Flows.Any(f => f.OrgId == orgId && f.Id == v.FlowId && f.PublishedVersionNo == v.VersionNo))
             .Select(v => v.SnapshotJson).ToListAsync(ct);
         return json.SelectMany(j => DocumentJson.Deserialize<FlowSnapshot>(j).Outputs).ToList();
     }

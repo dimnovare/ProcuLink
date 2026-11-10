@@ -20,9 +20,17 @@ public sealed record FlowSnapshotOutput(Guid Id, string Name, string Format, str
     Guid? DestinationId, string? SendWhenJson, string? LayoutJson, byte[]? Logo)
 {
     /// <summary>An untracked entity.</summary>
-    public FlowOutput ToEntity(Guid orgId, Guid flowId) => new()
+    public FlowOutput ToEntity(Guid orgId, Guid flowId)
     {
-        Id = Id, OrgId = orgId, FlowId = flowId, Name = Name, Format = Format, TemplateJson = TemplateJson,
-        TableKey = TableKey, DestinationId = DestinationId, SendWhenJson = SendWhenJson, LayoutJson = LayoutJson, Logo = Logo,
-    };
+        var o = new FlowOutput { Id = Id, OrgId = orgId, FlowId = flowId };
+        CopyTo(o);
+        return o;
+    }
+
+    /// <summary>The one list of the columns a version freezes.</summary>
+    public void CopyTo(FlowOutput o)
+    {
+        o.Name = Name; o.Format = Format; o.TemplateJson = TemplateJson; o.TableKey = TableKey;
+        o.DestinationId = DestinationId; o.SendWhenJson = SendWhenJson; o.LayoutJson = LayoutJson; o.Logo = Logo;
+    }
 }

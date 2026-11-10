@@ -4446,11 +4446,6 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasForeignKey("OrgId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
-
-                    b.HasOne("ProcuLink.Core.Entities.FlowOutput", null)
-                        .WithMany()
-                        .HasForeignKey("OutputId")
-                        .OnDelete(DeleteBehavior.SetNull);
                 });
 
             modelBuilder.Entity("ProcuLink.Core.Entities.FlowDestination", b =>
