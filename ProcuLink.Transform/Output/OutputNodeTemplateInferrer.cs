@@ -87,10 +87,12 @@ public static class OutputNodeTemplateInferrer
         var repeated = groups.Where(g => g.Count() > 1).ToList();
         var lineGroup = repeated.Count == 0 ? null
             : repeated.FirstOrDefault(g => IsLikelyLineName(g.Key.LocalName)) ?? repeated[^1];
-        // A sample with exactly ONE line repeats nothing: take the one line-named child that has
-        // children of its own (but never a plural wrapper such as <Items>, whose child is the line).
+        // A sample with exactly ONE line repeats nothing: take the LAST line-named child that has
+        // children of its own (lines follow the header, as above; so a header block such as
+        // <PaymentDetails> is not mistaken for the line), but never a plural wrapper such as
+        // <Items>, whose child is the line.
         if (lineGroup is null && !lineScope)
-            lineGroup = groups.FirstOrDefault(g => IsLineCandidate(g.First()) && !IsLineWrapper(g.First()));
+            lineGroup = groups.LastOrDefault(g => IsLineCandidate(g.First()) && !IsLineWrapper(g.First()));
 
         var children = new List<OutputNode>(attrs);
         foreach (var g in groups)

@@ -67,10 +67,12 @@ public class OutputNodeTemplateInferrerTests
         static string Json(string xml) => JsonSerializer.Serialize(OutputNodeTemplateInferrer.FromSample(xml, OutputFormat.Xml));
 
         Assert.Equal(Json(Sample(2)), Json(Sample(1)));
-        // Unwrapped (UBL-style) single line directly under the root.
+        // Unwrapped (UBL-style) single line directly under the root, after a line-named header block.
         var ubl = OutputNodeTemplateInferrer.FromSample(
-            "<Order><ID>1</ID><OrderLine><LineItem><ID>1</ID><Quantity>5</Quantity></LineItem></OrderLine></Order>", OutputFormat.Xml);
-        Assert.Contains(ubl.Root.Children, c => c.NodeType == OutputNodeType.Array && c.Collection == "lines");
+            "<Order><ID>1</ID><PaymentDetails><IBAN>X</IBAN></PaymentDetails>"
+            + "<OrderLine><LineItem><ID>1</ID><Quantity>5</Quantity></LineItem></OrderLine></Order>", OutputFormat.Xml);
+        var lines = Assert.Single(ubl.Root.Children, c => c.NodeType == OutputNodeType.Array && c.Collection == "lines");
+        Assert.Equal("OrderLine", Assert.Single(lines.Children).Name);
     }
 
     [Fact]
