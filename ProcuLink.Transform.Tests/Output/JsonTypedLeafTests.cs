@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -110,13 +111,10 @@ public class JsonTypedLeafTests
     /// names the two real fixes. "'' is not a number" reads like a bug in us.
     /// </summary>
     [Fact]
-    public void NumberValueType_OnAnEmptyValue_SaysWhatToDoAboutIt()
+    public void NumberValueType_OnAnEmptyValue_EmitsNull()
     {
-        var ex = Assert.Throws<InvalidOperationException>(
-            () => Emit(Tree("BuyerName", valueType: "number"), Order(buyer: null)));
-
-        Assert.Contains("has no value", ex.Message);
-        Assert.Contains("left out when empty", ex.Message);
+        var json = Emit(Tree("BuyerName", valueType: "number"), Order(buyer: null));
+        Assert.Equal(JsonValueKind.Null, JsonDocument.Parse(json).RootElement.GetProperty("value").ValueKind);
     }
 
     /// <summary>

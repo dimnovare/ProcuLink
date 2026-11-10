@@ -68,7 +68,8 @@ public static class OutputNodeTemplateInferrer
         var groups = childElements.GroupBy(c => c.Name).ToList();
 
         // Wrapped repeating group (e.g. <Lines><Line/><Line/></Lines>) → a NAMED array wrapper.
-        if (attrs.Count == 0 && groups.Count == 1 && groups[0].Count() > 1)
+        if (attrs.Count == 0 && groups.Count == 1
+            && (groups[0].Count() > 1 || (!lineScope && IsLineWrapper(el))))
         {
             return new OutputNode
             {
@@ -86,6 +87,10 @@ public static class OutputNodeTemplateInferrer
         var repeated = groups.Where(g => g.Count() > 1).ToList();
         var lineGroup = repeated.Count == 0 ? null
             : repeated.FirstOrDefault(g => IsLikelyLineName(g.Key.LocalName)) ?? repeated[^1];
+        // A sample with exactly ONE line repeats nothing: take the one line-named child that has
+        // children of its own (but never a plural wrapper such as <Items>, whose child is the line).
+        if (lineGroup is null && !lineScope)
+            lineGroup = groups.FirstOrDefault(g => IsLineCandidate(g.First()) && !IsLineWrapper(g.First()));
 
         var children = new List<OutputNode>(attrs);
         foreach (var g in groups)
@@ -102,6 +107,13 @@ public static class OutputNodeTemplateInferrer
         }
         return new OutputNode { Name = el.Name.LocalName, NodeType = OutputNodeType.Object, Namespace = ns, Prefix = prefix, Children = children };
     }
+
+    private static bool IsLineCandidate(XElement e) => e.HasElements && IsLikelyLineName(e.Name.LocalName);
+
+    /// <summary>A plural line-group wrapper (<c>Items</c>, <c>Lines</c>) whose children are all the line.</summary>
+    private static bool IsLineWrapper(XElement e) =>
+        e.Name.LocalName.EndsWith('s') && IsLikelyLineName(e.Name.LocalName)
+        && e.Elements().Select(c => c.Name).Distinct().Count() == 1 && IsLineCandidate(e.Elements().First());
 
     /// <summary>True if a repeated element's local name reads like the per-line group (UBL OrderLine, cXML ItemOut, generic line/item/detail).</summary>
     private static bool IsLikelyLineName(string localName)
@@ -150,7 +162,10 @@ public static class OutputNodeTemplateInferrer
                     Children = new() { item },
                 };
 
-            default: // string / number / bool / null → a leaf value
+            case JsonValueKind.Number: // a sample number stays a number in the output
+                return OutputNode.FieldOf(name, RuleFor(name, lineScope)) with { ValueType = "number" };
+
+            default: // string / bool / null → a leaf value
                 return OutputNode.FieldOf(name, RuleFor(name, lineScope));
         }
     }
