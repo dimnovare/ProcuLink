@@ -12,7 +12,7 @@ public static class FlowConfigLoader
 {
     public static async Task<FlowConfig> LiveAsync(ProcuLinkDbContext db, Flow flow, CancellationToken ct)
     {
-        var outputs = await db.Set<FlowOutput>().Where(o => o.FlowId == flow.Id).ToListAsync(ct);
+        var outputs = await db.Set<FlowOutput>().Where(o => o.FlowId == flow.Id && o.OrgId == flow.OrgId).ToListAsync(ct);
         return new FlowConfig(DocumentJson.Deserialize<FlowFieldList>(flow.FieldsJson), flow.FieldsConfirmed,
             outputs.OrderBy(o => o.CreatedAt).ThenBy(o => o.Id).ToList(), null);
     }
@@ -20,7 +20,7 @@ public static class FlowConfigLoader
     public static async Task<FlowConfig> CurrentAsync(ProcuLinkDbContext db, Flow flow, CancellationToken ct)
     {
         if (flow.PublishedVersionNo is not { } no) return await LiveAsync(db, flow, ct);
-        var json = await db.Set<FlowVersion>().Where(v => v.FlowId == flow.Id && v.VersionNo == no)
+        var json = await db.Set<FlowVersion>().Where(v => v.FlowId == flow.Id && v.OrgId == flow.OrgId && v.VersionNo == no)
             .Select(v => v.SnapshotJson).SingleAsync(ct);
         var snap = DocumentJson.Deserialize<FlowSnapshot>(json);
         return new FlowConfig(snap.Fields, snap.FieldsConfirmed,
