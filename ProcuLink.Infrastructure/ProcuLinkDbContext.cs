@@ -2169,13 +2169,13 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasKey(n => n.Id);
             b.Property(n => n.Id).HasColumnName("id");
             b.Property(n => n.OrgId).HasColumnName("org_id");
-            b.Property(n => n.UserId).HasColumnName("user_id");
+            b.Property(n => n.ClerkUserId).HasColumnName("clerk_user_id").IsRequired();
+            b.Property(n => n.Email).HasColumnName("email");
             b.Property(n => n.OnReview).HasColumnName("on_review").HasDefaultValue(false);
             b.Property(n => n.OnFailure).HasColumnName("on_failure").HasDefaultValue(false);
             b.Property(n => n.LastSentAt).HasColumnName("last_sent_at").HasColumnType("timestamptz");
-            b.HasIndex(n => new { n.OrgId, n.UserId }).IsUnique();
+            b.HasIndex(n => new { n.OrgId, n.ClerkUserId }).IsUnique();
             b.HasOne<Organisation>().WithMany().HasForeignKey(n => n.OrgId).OnDelete(DeleteBehavior.Cascade);
-            b.HasOne<AppUser>().WithMany().HasForeignKey(n => n.UserId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<FlowDocument>(b =>

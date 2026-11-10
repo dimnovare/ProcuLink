@@ -1794,6 +1794,15 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<string>("ClerkUserId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("clerk_user_id");
+
+                    b.Property<string>("Email")
+                        .HasColumnType("text")
+                        .HasColumnName("email");
+
                     b.Property<DateTime?>("LastSentAt")
                         .HasColumnType("timestamptz")
                         .HasColumnName("last_sent_at");
@@ -1814,15 +1823,9 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("org_id");
 
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("user_id");
-
                     b.HasKey("Id");
 
-                    b.HasIndex("UserId");
-
-                    b.HasIndex("OrgId", "UserId")
+                    b.HasIndex("OrgId", "ClerkUserId")
                         .IsUnique();
 
                     b.ToTable("notification_settings", (string)null);
@@ -4711,12 +4714,6 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.HasOne("ProcuLink.Core.Entities.Organisation", null)
                         .WithMany()
                         .HasForeignKey("OrgId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("ProcuLink.Core.Entities.AppUser", null)
-                        .WithMany()
-                        .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

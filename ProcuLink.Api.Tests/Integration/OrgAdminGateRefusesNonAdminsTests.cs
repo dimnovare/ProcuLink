@@ -44,6 +44,9 @@ public sealed class RbacTestAuthHandler : AuthenticationHandler<AuthenticationSc
     /// <summary>The Clerk user id to present.</summary>
     public const string SubHeader = "X-Test-Sub";
 
+    /// <summary>An <c>email</c> claim to present, or absent for none.</summary>
+    public const string EmailHeader = "X-Test-Email";
+
     public RbacTestAuthHandler(
         IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder)
         : base(options, logger, encoder) { }
@@ -56,6 +59,8 @@ public sealed class RbacTestAuthHandler : AuthenticationHandler<AuthenticationSc
             // Clerk's authorized-party claim — satisfies the azp validation in Program.cs.
             new("azp", "http://localhost:3000"),
         };
+
+        if (Header(EmailHeader) is { } email) claims.Add(new Claim("email", email));
 
         if (Header(OrgHeader) is { } org) claims.Add(new Claim("org_id", org));
         if (Header(RoleHeader) is { } role) claims.Add(new Claim("org_role", role));

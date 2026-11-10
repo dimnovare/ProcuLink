@@ -17,7 +17,8 @@ namespace ProcuLink.Infrastructure.Migrations
                 {
                     id = table.Column<Guid>(type: "uuid", nullable: false),
                     org_id = table.Column<Guid>(type: "uuid", nullable: false),
-                    user_id = table.Column<Guid>(type: "uuid", nullable: false),
+                    clerk_user_id = table.Column<string>(type: "text", nullable: false),
+                    email = table.Column<string>(type: "text", nullable: true),
                     on_review = table.Column<bool>(type: "boolean", nullable: false, defaultValue: false),
                     on_failure = table.Column<bool>(type: "boolean", nullable: false, defaultValue: false),
                     last_sent_at = table.Column<DateTime>(type: "timestamptz", nullable: true)
@@ -31,24 +32,13 @@ namespace ProcuLink.Infrastructure.Migrations
                         principalTable: "organisations",
                         principalColumn: "id",
                         onDelete: ReferentialAction.Cascade);
-                    table.ForeignKey(
-                        name: "FK_notification_settings_users_user_id",
-                        column: x => x.user_id,
-                        principalTable: "users",
-                        principalColumn: "id",
-                        onDelete: ReferentialAction.Cascade);
                 });
 
             migrationBuilder.CreateIndex(
-                name: "IX_notification_settings_org_id_user_id",
+                name: "IX_notification_settings_org_id_clerk_user_id",
                 table: "notification_settings",
-                columns: new[] { "org_id", "user_id" },
+                columns: new[] { "org_id", "clerk_user_id" },
                 unique: true);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_notification_settings_user_id",
-                table: "notification_settings",
-                column: "user_id");
         }
 
         /// <inheritdoc />

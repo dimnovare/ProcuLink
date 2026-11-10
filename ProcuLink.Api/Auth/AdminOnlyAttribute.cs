@@ -47,16 +47,6 @@ namespace ProcuLink.Api.Auth;
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = false)]
 public sealed class AdminOnlyAttribute : Attribute, IAuthorizationFilter
 {
-    // Clerk session tokens may surface the email under any of these claim types,
-    // depending on the JWT template. We check all of them, in this order, and use
-    // the first non-blank value (see EmailClaimTypes usage in OnAuthorization).
-    private static readonly string[] EmailClaimTypes =
-    {
-        "email",
-        "email_address",
-        ClaimTypes.Email,
-    };
-
     public void OnAuthorization(AuthorizationFilterContext context)
     {
         var user = context.HttpContext.User;
@@ -70,9 +60,7 @@ public sealed class AdminOnlyAttribute : Attribute, IAuthorizationFilter
         }
 
         var sub   = user.FindFirst("sub")?.Value;
-        var email = EmailClaimTypes
-            .Select(t => user.FindFirst(t)?.Value)
-            .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+        var email = ClerkClaims.Email(user);
 
         var allowlist = context.HttpContext.RequestServices.GetService(typeof(AdminAllowlist)) as AdminAllowlist;
         if (allowlist is null)
