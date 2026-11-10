@@ -228,19 +228,14 @@ public sealed class OutputTemplateEmitter
         switch ((node.ValueType ?? string.Empty).ToLowerInvariant())
         {
             case "number":
+                // Checks never block a send: an EMPTY numeric field is JSON null, not a failure.
+                if (string.IsNullOrWhiteSpace(value)) { w.WriteNullValue(); break; }
                 if (!decimal.TryParse(value, System.Globalization.NumberStyles.Any,
                                       System.Globalization.CultureInfo.InvariantCulture, out var num))
                     throw new InvalidOperationException(
-                        string.IsNullOrWhiteSpace(value)
-                            // An EMPTY numeric field is a different authoring mistake from a
-                            // non-numeric one, and it has a different fix, so it gets its own
-                            // sentence rather than "'' is not a number" — which reads like a bug in us.
-                            ? $"Output field '{node.Name}' is set to emit a number but has no value for " +
-                              "this order. Either bind it to a field that always has one, set it to be " +
-                              "left out when empty, or change its type back to text."
-                            : $"Output field '{node.Name}' is set to emit a number, but resolved to " +
-                              $"'{value}', which is not one. Change the field's type back to text, or " +
-                              "fix what it is bound to.");
+                        $"Output field '{node.Name}' is set to emit a number, but resolved to " +
+                        $"'{value}', which is not one. Change the field's type back to text, or " +
+                        "fix what it is bound to.");
                 w.WriteNumberValue(num);
                 break;
 

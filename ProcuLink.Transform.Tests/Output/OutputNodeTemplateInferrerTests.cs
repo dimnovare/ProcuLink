@@ -58,6 +58,32 @@ public class OutputNodeTemplateInferrerTests
     }
 
     [Fact]
+    public void Xml_OneLineSample_InfersTheSameStructureAsTwoLines()
+    {
+        static string Sample(int lines) =>
+            "<PurchaseOrder><Header><PONumber>PO-1</PONumber><Vendor>Acme</Vendor></Header><Items>"
+            + string.Concat(Enumerable.Repeat("<Item><LineNo>1</LineNo><SKU>A-1</SKU><Quantity>5</Quantity></Item>", lines))
+            + "</Items></PurchaseOrder>";
+        static string Json(string xml) => JsonSerializer.Serialize(OutputNodeTemplateInferrer.FromSample(xml, OutputFormat.Xml));
+
+        Assert.Equal(Json(Sample(2)), Json(Sample(1)));
+        // Unwrapped (UBL-style) single line directly under the root, after a line-named header block.
+        var ubl = OutputNodeTemplateInferrer.FromSample(
+            "<Order><ID>1</ID><PaymentDetails><IBAN>X</IBAN></PaymentDetails>"
+            + "<OrderLine><LineItem><ID>1</ID><Quantity>5</Quantity></LineItem></OrderLine></Order>", OutputFormat.Xml);
+        var lines = Assert.Single(ubl.Root.Children, c => c.NodeType == OutputNodeType.Array && c.Collection == "lines");
+        Assert.Equal("OrderLine", Assert.Single(lines.Children).Name);
+    }
+
+    [Fact]
+    public void Json_SampleNumber_IsTyped_AndStringIsNot()
+    {
+        var o = OutputNodeTemplateInferrer.FromSample("{\"o\":{\"n\":\"x\",\"t\":26.0}}", OutputFormat.Json).Root.Children[0].Children;
+        Assert.Equal("number", o.Single(c => c.Name == "t").ValueType);
+        Assert.Null(o.Single(c => c.Name == "n").ValueType);
+    }
+
+    [Fact]
     public void Csv_InfersColumns_AndBindsHeaderyColumnToPoNumber()
     {
         const string sample = "OrderRef,ItemCode,Qty\nPO-1,S-1,3\n";
@@ -230,6 +256,6 @@ public class OutputNodeTemplateInferrerTests
         var items = doc.RootElement.GetProperty("items");
         Assert.Equal(1, items.GetArrayLength());
         Assert.Equal("S-9", items[0].GetProperty("sku").GetString());
-        Assert.Equal("7", items[0].GetProperty("qty").GetString());
+        Assert.Equal(7m, items[0].GetProperty("qty").GetDecimal());   // sample number stays a number
     }
 }

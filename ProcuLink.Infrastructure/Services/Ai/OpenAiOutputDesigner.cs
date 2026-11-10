@@ -73,7 +73,7 @@ public sealed class OpenAiOutputDesigner : IOutputDesigner
                   "properties": {
                     "url": { "type": "string" },
                     "method": { "type": "string" },
-                    "authType": { "type": "string" },
+                    "authType": { "type": "string", "enum": ["bearer", "apikey", "basic", "none"] },
                     "quote": { "type": "string" }
                   },
                   "required": ["url", "method", "authType", "quote"],
