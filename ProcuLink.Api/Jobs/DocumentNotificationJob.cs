@@ -1,5 +1,6 @@
 using Hangfire;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -11,7 +12,7 @@ namespace ProcuLink.Api.Jobs;
 /// Hangfire recurring job (every 15 minutes, all orgs; an unscoped Worker context, so no org filter applies): emails each opted-in member one digest of the
 /// documents that need review or failed since their last email. A setting's <c>LastSentAt</c> moves only after its email is sent, so a retry never mails twice.
 /// </summary>
-public class DocumentNotificationJob(ProcuLinkDbContext db, IEmailSender email, IConfiguration config, ILogger<DocumentNotificationJob> log)
+public class DocumentNotificationJob(ProcuLinkDbContext db, IEmailSender email, DocumentEngineGate gate, IConfiguration config, ILogger<DocumentNotificationJob> log)
 {
     private static readonly string[] FailedActions = ["document.read_failed", "document.delivery_failed"];
 
@@ -23,7 +24,7 @@ public class DocumentNotificationJob(ProcuLinkDbContext db, IEmailSender email, 
         foreach (var s in settings)
         {
             if (s.LastSentAt is not { } since) { s.LastSentAt = now; continue; }
-            if (string.IsNullOrWhiteSpace(s.Email)) continue;
+            if (string.IsNullOrWhiteSpace(s.Email) || !gate.IsEnabled(s.OrgId)) continue;
 
             var events = await db.AuditEvents.AsNoTracking()
                 .Where(a => a.OrgId == s.OrgId && a.EntityType == "FlowDocument" && a.CreatedAt > since && a.CreatedAt <= now
@@ -43,6 +44,7 @@ public class DocumentNotificationJob(ProcuLinkDbContext db, IEmailSender email, 
             var total = review.Count + failed.Count;
             if (total > 0)
             {
+                if (!email.CanDeliver) { log.LogWarning("Notification email for setting {SettingId} not sent: no email sender is configured", s.Id); continue; }
                 var lines = review.Select(d => d.FlowName).Concat(failed.Select(d => d.FlowName)).Distinct().Order(StringComparer.Ordinal).Select(name =>
                 {
                     var parts = new List<string>();

@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Api.Jobs;
+using ProcuLink.Api.Services.Documents;
 using ProcuLink.Api.Tests.Integration;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Entities;
@@ -53,10 +54,10 @@ public class NotificationSettingsTests(DocumentEngineTestFactory factory) : ICla
         row.ClerkUserId.Should().Be("user_NS_A");
         row.LastSentAt.Should().NotBeNull();
     }
-    private sealed class CapturingSender(bool fail = false) : IEmailSender
+    private sealed class CapturingSender(bool fail = false, bool canDeliver = true) : IEmailSender
     {
         public List<(string To, string Subject, string Body)> Sent { get; } = [];
-        public bool CanDeliver => true;
+        public bool CanDeliver => canDeliver;
         public Task SendAsync(string to, string subject, string body, CancellationToken ct = default)
         {
             if (fail) throw new InvalidOperationException("down");
@@ -68,39 +69,68 @@ public class NotificationSettingsTests(DocumentEngineTestFactory factory) : ICla
     [Fact]
     public async Task Digest_emails_each_opted_in_member_once()
     {
-        var org = Guid.NewGuid();
+        var orgA = DocumentEngineTestFactory.OrgA;
+        var orgB = DocumentEngineTestFactory.OrgB;
+        var off = Guid.NewGuid(); // the engine is not enabled here
         var since = DateTime.UtcNow.AddHours(-1);
-        using var scope = factory.Services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
-        var flow = new Flow { Id = Guid.NewGuid(), OrgId = org, Name = "Invoices" };
-        FlowDocument Doc(string status) => new() { Id = Guid.NewGuid(), OrgId = org, FlowId = flow.Id, Status = status };
-        var failedDoc = Doc("failed");
-        var reviewDoc = Doc("needs_review");
-        db.Add(flow);
-        db.AddRange(failedDoc, reviewDoc);
-        db.AddRange(
-            new AuditEvent { Id = Guid.NewGuid(), OrgId = org, EntityType = "FlowDocument", EntityId = failedDoc.Id, Action = "document.read_failed", CreatedAt = DateTime.UtcNow.AddMinutes(-10) },
-            new AuditEvent { Id = Guid.NewGuid(), OrgId = org, EntityType = "FlowDocument", EntityId = reviewDoc.Id, Action = "document.read", CreatedAt = DateTime.UtcNow.AddMinutes(-10) });
-        NotificationSetting Setting(string user, bool on) => new()
+
+        using (var scope = factory.Services.CreateScope())
         {
-            Id = Guid.NewGuid(), OrgId = org, ClerkUserId = user, Email = $"{user}@example.test", OnReview = on, OnFailure = on, LastSentAt = since,
-        };
-        var a = Setting("user_D_A", true);
-        db.AddRange(a, Setting("user_D_B", false));
-        await db.SaveChangesAsync();
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            void Doc(Guid org, string flowName, string status, string action)
+            {
+                var flow = new Flow { Id = Guid.NewGuid(), OrgId = org, Name = flowName };
+                var doc = new FlowDocument { Id = Guid.NewGuid(), OrgId = org, FlowId = flow.Id, Status = status };
+                db.AddRange(flow, doc);
+                db.Add(new AuditEvent
+                {
+                    Id = Guid.NewGuid(), OrgId = org, EntityType = "FlowDocument", EntityId = doc.Id, Action = action, CreatedAt = DateTime.UtcNow.AddMinutes(-10),
+                });
+            }
+            Doc(orgA, "Invoices", "failed", "document.read_failed");
+            Doc(orgA, "Invoices", "needs_review", "document.read");
+            Doc(orgB, "Receipts", "failed", "document.read_failed");
+            Doc(off, "Ignored", "failed", "document.read_failed");
+            NotificationSetting Setting(string user, Guid org, bool review, bool failure) => new()
+            {
+                Id = Guid.NewGuid(), OrgId = org, ClerkUserId = user, Email = $"{user}@example.test", OnReview = review, OnFailure = failure, LastSentAt = since,
+            };
+            db.AddRange(
+                Setting("user_D_A", orgA, true, true), Setting("user_D_B", orgB, true, false),
+                Setting("user_D_C", orgB, false, true), Setting("user_D_D", off, true, true));
+            await db.SaveChangesAsync();
+        }
 
-        DocumentNotificationJob Job(IEmailSender sender) => new(db, sender, new ConfigurationBuilder().Build(), NullLogger<DocumentNotificationJob>.Instance);
+        async Task Run(IEmailSender sender)
+        {
+            using var scope = factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            await new DocumentNotificationJob(db, sender, scope.ServiceProvider.GetRequiredService<DocumentEngineGate>(),
+                new ConfigurationBuilder().Build(), NullLogger<DocumentNotificationJob>.Instance).RunAsync(CancellationToken.None);
+        }
+        async Task<DateTime?> LastSent(string user)
+        {
+            using var scope = factory.Services.CreateScope();
+            return (await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<NotificationSetting>().SingleAsync(s => s.ClerkUserId == user)).LastSentAt;
+        }
+
+        // A sender that cannot deliver, or throws, leaves every window open.
+        await Run(new CapturingSender(canDeliver: false));
+        await Run(new CapturingSender(fail: true));
+        (await LastSent("user_D_A")).Should().Be(since);
+
         var sender = new CapturingSender();
-        await Job(sender).RunAsync(CancellationToken.None);
-        await Job(sender).RunAsync(CancellationToken.None);
+        await Run(sender);
+        await Run(sender);
 
-        sender.Sent.Should().ContainSingle().Which.To.Should().Be("user_D_A@example.test");
-        sender.Sent[0].Subject.Should().Be("ProcuLink: 2 documents need you");
-        sender.Sent[0].Body.Should().Contain("Invoices: 1 waiting for review, 1 couldn't be read or sent");
-
-        a.LastSentAt = since;
-        await db.SaveChangesAsync();
-        await Job(new CapturingSender(fail: true)).RunAsync(CancellationToken.None);
-        a.LastSentAt.Should().Be(since);
+        sender.Sent.Select(m => m.To).Should().BeEquivalentTo("user_D_A@example.test", "user_D_C@example.test");
+        var a = sender.Sent.Single(m => m.To == "user_D_A@example.test");
+        a.Subject.Should().Be("ProcuLink: 2 documents need you");
+        a.Body.Should().Contain("Invoices: 1 waiting for review, 1 couldn't be read or sent");
+        var c = sender.Sent.Single(m => m.To == "user_D_C@example.test");
+        c.Subject.Should().Be("ProcuLink: 1 document needs you");
+        c.Body.Should().Contain("Receipts: 1 couldn't be read or sent");
+        (await LastSent("user_D_B")).Should().BeAfter(since); // nothing to report: the window still moves on
+        (await LastSent("user_D_D")).Should().Be(since); // org without the engine: untouched
     }
 }
