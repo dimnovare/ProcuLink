@@ -278,4 +278,27 @@ public class FlowVersionTests(DocumentEngineTestFactory factory) : IClassFixture
         restore.StatusCode.Should().Be(HttpStatusCode.Conflict);
         (await Body(restore)).GetProperty("error").GetString().Should().Be("version_references_missing");
     }
+
+    [Fact]
+    public async Task Streak_counts_sent_documents_since_the_last_correction()
+    {
+        using var scope = factory.Services.CreateScope();
+        var (db, flow, _) = await Seed(scope);
+        var empty = await FlowStreak.CountAsync(db, Org, flow.Id, default);
+        var t = DateTime.UtcNow;
+        FlowDocument Doc(string status, int minutesAgo) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, FileName = "synthetic.pdf", ContentType = "application/pdf", Status = status,
+            ReadAt = t.AddMinutes(-minutesAgo), CreatedAt = t, UpdatedAt = t,
+        };
+        var (review, plain, confirmed, edited) = (Doc(DocumentStatus.NeedsReview, 1), Doc(DocumentStatus.Sent, 2), Doc(DocumentStatus.Sent, 3), Doc(DocumentStatus.Sent, 4));
+        db.FlowDocuments.AddRange(review, plain, confirmed, edited);
+        DocumentAudit.Add(db, review, "document.value_taught", new { key = "k" }, "u");
+        DocumentAudit.Add(db, confirmed, "document.value_edited", new { target = "a", old = "x", @new = "x" }, "u");
+        DocumentAudit.Add(db, edited, "document.value_edited", new { target = "a", old = "x", @new = "y" }, "u");
+        await db.SaveChangesAsync();
+
+        empty.Should().BeNull();
+        (await FlowStreak.CountAsync(db, Org, flow.Id, default)).Should().Be(2);
+    }
 }

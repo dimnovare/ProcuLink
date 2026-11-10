@@ -22,8 +22,8 @@ public sealed class FlowsController(
 
     private static IActionResult FlowNotFound() => new NotFoundObjectResult(new { error = "flow_not_found" });
 
-    private FlowDto ToDto(Flow f, int documentCount, bool hasChanges = false) =>
-        new(f.Id, f.Name, f.FieldsConfirmed, DocumentJson.Deserialize<FlowFieldList>(f.FieldsJson), documentCount, f.CreatedAt, f.Automation, gate.ScansOn(f.OrgId), gate.FormatsOn(f.OrgId), gate.DocsOutputsOn(f.OrgId), f.PublishedVersionNo, hasChanges);
+    private FlowDto ToDto(Flow f, int documentCount, bool hasChanges = false, int? streak = null) =>
+        new(f.Id, f.Name, f.FieldsConfirmed, DocumentJson.Deserialize<FlowFieldList>(f.FieldsJson), documentCount, f.CreatedAt, f.Automation, gate.ScansOn(f.OrgId), gate.FormatsOn(f.OrgId), gate.DocsOutputsOn(f.OrgId), f.PublishedVersionNo, hasChanges, streak);
 
     private static bool TryName(string? raw, out string name)
     {
@@ -112,7 +112,7 @@ public sealed class FlowsController(
         await rechecker.RecheckPendingAsync(flow, ct);
 
         await db.SaveChangesAsync(ct);
-        return Ok(ToDto(flow, await CountDocs(orgId, id, ct), await FlowVersions.HasChangesAsync(db, flow, ct)));
+        return Ok(ToDto(flow, await CountDocs(orgId, id, ct), await FlowVersions.HasChangesAsync(db, flow, ct), await FlowStreak.CountAsync(db, orgId, id, ct)));
     }
 
     [HttpPost("{id:guid}/publish")]
