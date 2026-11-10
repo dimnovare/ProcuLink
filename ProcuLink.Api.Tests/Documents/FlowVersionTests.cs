@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using ProcuLink.Api.Services.Documents;
 using ProcuLink.Api.Tests.Integration;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -314,5 +315,38 @@ public class FlowVersionTests(DocumentEngineTestFactory factory) : IClassFixture
         (await FlowStreak.CountAsync(db, Org, flow.Id, default)).Should().Be(2);
         var dto = await factory.ClientFor(Org).GetFromJsonAsync<System.Text.Json.JsonElement>($"/api/flows/{flow.Id}");
         dto.GetProperty("noCorrectionStreak").GetInt32().Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Org_log_names_and_links_document_events()
+    {
+        using var scope = factory.Services.CreateScope();
+        var (db, flow, _) = await Seed(scope);
+        (await db.Organisations.SingleAsync(o => o.Id == Org)).Plan = PlanConstants.Operations;
+        var t = DateTime.UtcNow;
+        var doc = new FlowDocument
+        {
+            Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, FileName = "synthetic-log.pdf", ContentType = "application/pdf",
+            Status = DocumentStatus.Sent, CreatedAt = t, UpdatedAt = t,
+        };
+        db.FlowDocuments.Add(doc);
+        DocumentAudit.Add(db, doc, "document.sent", new { }, "u");
+        db.AuditEvents.Add(new AuditEvent
+        {
+            Id = Guid.NewGuid(), OrgId = Org, EntityType = "FlowDocument", EntityId = Guid.NewGuid(), Action = "document.sent",
+            CreatedAt = t.AddSeconds(-5),
+        });
+        await db.SaveChangesAsync();
+
+        var body = await factory.ClientFor(Org).GetFromJsonAsync<System.Text.Json.JsonElement>("/api/audit?pageSize=200");
+
+        var events = body.GetProperty("events").EnumerateArray().Where(e => e.GetProperty("action").GetString() == "document.sent").ToList();
+        var named = events.Single(e => e.GetProperty("documentId").GetString() == doc.Id.ToString());
+        named.GetProperty("flowId").GetString().Should().Be(flow.Id.ToString());
+        named.GetProperty("documentName").GetString().Should().Be("synthetic-log.pdf");
+        named.GetProperty("message").GetString().Should().Be("Sent · synthetic-log.pdf");
+        var orphan = events.Single(e => e.GetProperty("documentId").ValueKind == System.Text.Json.JsonValueKind.Null);
+        orphan.GetProperty("documentName").ValueKind.Should().Be(System.Text.Json.JsonValueKind.Null);
+        orphan.GetProperty("message").GetString().Should().Be("document.sent");
     }
 }
