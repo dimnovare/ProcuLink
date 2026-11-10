@@ -175,4 +175,100 @@ public class FlowVersionTests(DocumentEngineTestFactory factory) : IClassFixture
 
         doc.FlowVersion.Should().Be(1);
     }
+
+    private static async Task<System.Text.Json.JsonElement> Body(HttpResponseMessage r) =>
+        await r.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+
+    [Fact]
+    public async Task Publish_then_edit_shows_changes_and_restore_clears_them()
+    {
+        Guid flowId, outputId;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var (_, flow, output) = await Seed(scope);
+            (flowId, outputId) = (flow.Id, output.Id);
+        }
+        var client = factory.ClientFor(Org);
+
+        var published = await Body(await client.PostAsync($"/api/flows/{flowId}/publish", null));
+        published.GetProperty("publishedVersion").GetInt32().Should().Be(1);
+        published.GetProperty("hasChanges").GetBoolean().Should().BeFalse();
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            (await db.Set<FlowOutput>().SingleAsync(o => o.Id == outputId)).TemplateJson = """{"a":2}""";
+            await db.SaveChangesAsync();
+        }
+        (await Body(await client.GetAsync($"/api/flows/{flowId}"))).GetProperty("hasChanges").GetBoolean().Should().BeTrue();
+
+        var restored = await Body(await client.PostAsync($"/api/flows/{flowId}/versions/1/restore", null));
+        restored.GetProperty("hasChanges").GetBoolean().Should().BeFalse();
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            (await db.Set<FlowOutput>().AsNoTracking().SingleAsync(o => o.Id == outputId)).TemplateJson.Should().Be("""{"a":1}""");
+        }
+        var versions = await Body(await client.GetAsync($"/api/flows/{flowId}/versions"));
+        versions.GetArrayLength().Should().Be(1);
+        versions[0].GetProperty("versionNo").GetInt32().Should().Be(1);
+        versions[0].GetProperty("live").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Deleting_what_the_live_version_uses_is_refused()
+    {
+        var destination = new FlowDestination
+        {
+            Id = Guid.NewGuid(), OrgId = Org, Name = "Synthetic destination", Protocol = "http",
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        };
+        var lookupId = Guid.NewGuid();
+        Guid flowId, outputId, lookupFlowId;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var (db, flow, output) = await Seed(scope);
+            db.Set<FlowDestination>().Add(destination);
+            output.DestinationId = destination.Id;
+            db.Set<Lookup>().Add(new Lookup { Id = lookupId, OrgId = Org, Name = "Synthetic lookup", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+            await db.SaveChangesAsync();
+            (flowId, outputId) = (flow.Id, output.Id);
+
+            var (_, lookupFlow, lookupOutput) = await Seed(scope);
+            lookupOutput.TemplateJson = DocumentJson.Serialize(new OutputNodeTemplate
+            {
+                Format = OutputFormat.Json,
+                Root = OutputNode.Obj("root", OutputNode.FieldOf("A", new OutputFieldRule
+                {
+                    OutputPath = "A", CanonicalField = "invoice_no",
+                    FieldManipulators = [new ManipulatorEntry { Type = "Lookup", Params = [lookupId.ToString()] }],
+                })),
+            });
+            await db.SaveChangesAsync();
+            lookupFlowId = lookupFlow.Id;
+        }
+        var client = factory.ClientFor(Org);
+        (await client.PostAsync($"/api/flows/{flowId}/publish", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await client.PostAsync($"/api/flows/{lookupFlowId}/publish", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            (await db.Set<FlowOutput>().SingleAsync(o => o.Id == outputId)).DestinationId = null;
+            await db.SaveChangesAsync();
+        }
+        var refused = await client.DeleteAsync($"/api/destinations/{destination.Id}");
+        refused.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await Body(refused)).GetProperty("error").GetString().Should().Be("destination_in_use");
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.Set<Lookup>().Remove(await db.Set<Lookup>().SingleAsync(l => l.Id == lookupId));
+            await db.SaveChangesAsync();
+        }
+        var restore = await client.PostAsync($"/api/flows/{lookupFlowId}/versions/1/restore", null);
+        restore.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await Body(restore)).GetProperty("error").GetString().Should().Be("version_references_missing");
+    }
 }

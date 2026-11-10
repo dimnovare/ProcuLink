@@ -102,6 +102,7 @@ public sealed class LookupsController(ProcuLinkDbContext db, ICurrentTenantServi
         if (lookup is null) return NotFoundResult();
 
         var templates = await db.Set<FlowOutput>().AsNoTracking().Where(o => o.OrgId == orgId).Select(o => o.TemplateJson).ToListAsync(ct);
+        templates.AddRange((await FlowVersions.LiveVersionOutputsAsync(db, orgId, ct)).Select(o => o.TemplateJson));
         if (templates.Any(t => DocumentLookups.UsedBy(DocumentJson.Deserialize<OutputNodeTemplate>(t)).Contains(id)))
             return Conflict(new { error = "lookup_in_use" });
 

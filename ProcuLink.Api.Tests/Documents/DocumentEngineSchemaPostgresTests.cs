@@ -62,4 +62,54 @@ public sealed class DocumentEngineSchemaPostgresTests(PostgresContainerFixture p
         var ex = await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
         Assert.True(ProcuLink.Infrastructure.Services.Ingress.IngressDedupe.IsUniqueViolation(ex));
     }
+
+    [DockerRequiredFact]
+    public async Task Publish_survives_jsonb_and_refuses_a_duplicate_number()
+    {
+        var cs = await postgres.CreateDatabaseAsync("proculink_docversions");
+        var options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
+            .UseNpgsql(cs, n => n.CommandTimeout(180)).Options;
+        var orgId = Guid.NewGuid();
+        var flowId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+
+        await using (var db = new ProcuLinkDbContext(options))
+        {
+            db.Organisations.Add(new Organisation { Id = orgId, Name = "Synthetic org", Slug = "synthetic-" + orgId.ToString("N") });
+            db.Flows.Add(new Flow { Id = flowId, OrgId = orgId, Name = "Synthetic flow", FieldsJson = DocumentJson.Serialize(FlowFieldList.Empty), CreatedAt = now, UpdatedAt = now });
+            db.Set<FlowOutput>().Add(new FlowOutput
+            {
+                Id = Guid.NewGuid(), OrgId = orgId, FlowId = flowId, Name = "Synthetic output", Format = "json",
+                TemplateJson = "{\"a\":   1}", CreatedAt = now, UpdatedAt = now,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        // A fresh context, as a request has: the output's jsonb text comes back normalised.
+        await using (var db = new ProcuLinkDbContext(options))
+        {
+            var flow = await db.Flows.SingleAsync(f => f.Id == flowId);
+            var (version, error) = await ProcuLink.Api.Services.Documents.FlowVersions.PublishAsync(db, flow, null, default);
+            Assert.Null(error);
+            Assert.Equal(1, version!.VersionNo);
+        }
+
+        await using (var db = new ProcuLinkDbContext(options))
+        {
+            var flow = await db.Flows.SingleAsync(f => f.Id == flowId);
+            Assert.False(await ProcuLink.Api.Services.Documents.FlowVersions.HasChangesAsync(db, flow, default));
+
+            db.Set<FlowVersion>().Add(new FlowVersion { Id = Guid.NewGuid(), OrgId = orgId, FlowId = flowId, VersionNo = 2, PublishedAt = now });
+            await db.SaveChangesAsync();
+            (await db.Set<FlowOutput>().SingleAsync(o => o.FlowId == flowId)).TemplateJson = "{\"a\":2}";
+            await db.SaveChangesAsync();
+
+            var (version, error) = await ProcuLink.Api.Services.Documents.FlowVersions.PublishAsync(db, flow, null, default);
+            Assert.Null(version);
+            Assert.Equal("publish_conflict", error);
+        }
+
+        await using var verify = new ProcuLinkDbContext(options);
+        Assert.Equal(1, await verify.Set<FlowVersion>().CountAsync(v => v.FlowId == flowId && v.VersionNo == 2));
+    }
 }
