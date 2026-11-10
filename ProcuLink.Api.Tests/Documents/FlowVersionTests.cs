@@ -284,21 +284,35 @@ public class FlowVersionTests(DocumentEngineTestFactory factory) : IClassFixture
     {
         using var scope = factory.Services.CreateScope();
         var (db, flow, _) = await Seed(scope);
+        var (_, other, _) = await Seed(scope);
         var empty = await FlowStreak.CountAsync(db, Org, flow.Id, default);
         var t = DateTime.UtcNow;
-        FlowDocument Doc(string status, int minutesAgo) => new()
+        FlowDocument Doc(Flow f, string status, int minutesAgo, bool sample = false) => new()
         {
-            Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, FileName = "synthetic.pdf", ContentType = "application/pdf", Status = status,
-            ReadAt = t.AddMinutes(-minutesAgo), CreatedAt = t, UpdatedAt = t,
+            Id = Guid.NewGuid(), OrgId = Org, FlowId = f.Id, FileName = "synthetic.pdf", ContentType = "application/pdf", Status = status,
+            IsSample = sample, ReadAt = t.AddMinutes(-minutesAgo), CreatedAt = t, UpdatedAt = t,
         };
-        var (review, plain, confirmed, edited) = (Doc(DocumentStatus.NeedsReview, 1), Doc(DocumentStatus.Sent, 2), Doc(DocumentStatus.Sent, 3), Doc(DocumentStatus.Sent, 4));
-        db.FlowDocuments.AddRange(review, plain, confirmed, edited);
+        void Edit(FlowDocument d, string from, string to) => DocumentAudit.Add(db, d, "document.value_edited", new { target = "a", old = from, @new = to }, "u");
+        // Newest first. Each mutation of FlowStreak gives a different number, or is named where two coincide.
+        var otherFlow = Doc(other, DocumentStatus.Sent, 0);   // not filtering by flow: 0 (same as the sample)
+        var review = Doc(flow, DocumentStatus.NeedsReview, 1); // counting non-sent documents: 0
+        var sample = Doc(flow, DocumentStatus.Sent, 2, sample: true); // not skipping samples: 0
+        var plain = Doc(flow, DocumentStatus.Sent, 3);
+        var confirmed = Doc(flow, DocumentStatus.Sent, 4);     // as-is edit counted as a correction: 1
+        var mixed = Doc(flow, DocumentStatus.Sent, 5);         // as-is plus a real edit: the real one must win, ending the streak
+        var older = Doc(flow, DocumentStatus.Sent, 6);         // counting every uncorrected document: 3
+        db.FlowDocuments.AddRange(otherFlow, review, sample, plain, confirmed, mixed, older);
+        Edit(otherFlow, "x", "y");
         DocumentAudit.Add(db, review, "document.value_taught", new { key = "k" }, "u");
-        DocumentAudit.Add(db, confirmed, "document.value_edited", new { target = "a", old = "x", @new = "x" }, "u");
-        DocumentAudit.Add(db, edited, "document.value_edited", new { target = "a", old = "x", @new = "y" }, "u");
+        Edit(sample, "x", "y");
+        Edit(confirmed, "x", "x");
+        Edit(mixed, "x", "x");
+        Edit(mixed, "x", "y");
         await db.SaveChangesAsync();
 
         empty.Should().BeNull();
         (await FlowStreak.CountAsync(db, Org, flow.Id, default)).Should().Be(2);
+        var dto = await factory.ClientFor(Org).GetFromJsonAsync<System.Text.Json.JsonElement>($"/api/flows/{flow.Id}");
+        dto.GetProperty("noCorrectionStreak").GetInt32().Should().Be(2);
     }
 }

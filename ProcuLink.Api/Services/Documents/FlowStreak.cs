@@ -21,7 +21,7 @@ public static class FlowStreak
             .Where(a => a.OrgId == orgId && a.EntityType == "FlowDocument" && ids.Contains(a.EntityId)
                 && (a.Action == "document.value_taught" || a.Action == "document.value_edited"))
             .Select(a => new { a.EntityId, a.Action, a.Payload }).ToListAsync(ct);
-        var corrected = rows.Where(r => r.Action == "document.value_taught" || Changed(r.Payload.RootElement))
+        var corrected = rows.Where(r => r.Action == "document.value_taught" || r.Payload is null || Changed(r.Payload.RootElement))
             .Select(r => r.EntityId).ToHashSet();
         return ids.TakeWhile(id => !corrected.Contains(id)).Count();
     }

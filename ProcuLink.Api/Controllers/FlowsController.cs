@@ -31,6 +31,10 @@ public sealed class FlowsController(
         return name.Length is >= 1 and <= 120;
     }
 
+    /// <summary>Every single-flow response: the web app caches each one whole, so none may drop a field.</summary>
+    private async Task<FlowDto> SingleAsync(Flow flow, Guid orgId, CancellationToken ct) =>
+        ToDto(flow, await CountDocs(orgId, flow.Id, ct), await FlowVersions.HasChangesAsync(db, flow, ct), await FlowStreak.CountAsync(db, orgId, flow.Id, ct));
+
     private Task<int> CountDocs(Guid orgId, Guid flowId, CancellationToken ct) =>
         db.FlowDocuments.CountAsync(d => d.OrgId == orgId && d.FlowId == flowId, ct);
 
@@ -68,7 +72,7 @@ public sealed class FlowsController(
         if (Refuse() is { } refused) return refused;
         var orgId = tenant.OrganisationId;
         var flow = await db.Flows.FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == id, ct);
-        return flow is null ? FlowNotFound() : Ok(ToDto(flow, await CountDocs(orgId, id, ct), await FlowVersions.HasChangesAsync(db, flow, ct)));
+        return flow is null ? FlowNotFound() : Ok(await SingleAsync(flow, orgId, ct));
     }
 
     [HttpPatch("{id:guid}")]
@@ -93,7 +97,7 @@ public sealed class FlowsController(
         }
         flow.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
-        return Ok(ToDto(flow, await CountDocs(orgId, id, ct), await FlowVersions.HasChangesAsync(db, flow, ct)));
+        return Ok(await SingleAsync(flow, orgId, ct));
     }
 
     [HttpPut("{id:guid}/fields")]
@@ -112,7 +116,7 @@ public sealed class FlowsController(
         await rechecker.RecheckPendingAsync(flow, ct);
 
         await db.SaveChangesAsync(ct);
-        return Ok(ToDto(flow, await CountDocs(orgId, id, ct), await FlowVersions.HasChangesAsync(db, flow, ct), await FlowStreak.CountAsync(db, orgId, id, ct)));
+        return Ok(await SingleAsync(flow, orgId, ct));
     }
 
     [HttpPost("{id:guid}/publish")]
@@ -128,7 +132,7 @@ public sealed class FlowsController(
         // Documents waiting for review are checked against the new version.
         await rechecker.RecheckPendingAsync(flow, ct);
         await db.SaveChangesAsync(ct);
-        return Ok(ToDto(flow, await CountDocs(orgId, id, ct), false));
+        return Ok(await SingleAsync(flow, orgId, ct));
     }
 
     [HttpGet("{id:guid}/versions")]
@@ -158,7 +162,7 @@ public sealed class FlowsController(
         if (flow is null) return FlowNotFound();
         return await FlowVersions.RestoreAsync(db, flow, versionNo, ct) switch
         {
-            null => Ok(ToDto(flow, await CountDocs(orgId, id, ct), await FlowVersions.HasChangesAsync(db, flow, ct))),
+            null => Ok(await SingleAsync(flow, orgId, ct)),
             "version_not_found" => NotFound(new { error = "version_not_found" }),
             var error => Conflict(new { error }),
         };
