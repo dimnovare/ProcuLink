@@ -38,7 +38,7 @@ public sealed class NotificationSettingsController(
         if (Refuse() is { } refused) return refused;
         var row = await Row(ct);
         var email = ClerkClaims.Email(User) ?? row?.Email;
-        // The digest needs an address and only the session carries it: refuse rather than save a switch that can never send.
+        // The digest needs an address, from the session claim or the daily Clerk membership sync: refuse rather than save a switch that can never send.
         if ((request.OnReview || request.OnFailure) && email is null) return Conflict(new { error = "email_unknown" });
         if (row is null)
             db.Set<NotificationSetting>().Add(row = new NotificationSetting { Id = Guid.NewGuid(), OrgId = tenant.OrganisationId, ClerkUserId = tenant.ClerkUserId });

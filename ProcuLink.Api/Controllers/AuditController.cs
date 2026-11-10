@@ -266,7 +266,7 @@ public class AuditController : ControllerBase
         ["document.value_taught"]    = "Value taught",
         ["document.sent"]            = "Sent",
         ["document.delivered"]       = "Delivered",
-        ["document.delivery_failed"] = "Delivery failed",
+        ["document.delivery_failed"] = "Couldn't send",
     };
 
     private static string BuildMessage(string action, string? poNumber)
