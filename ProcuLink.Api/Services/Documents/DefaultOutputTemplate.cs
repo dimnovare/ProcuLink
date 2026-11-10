@@ -17,7 +17,7 @@ public static class DefaultOutputTemplate
             return OutputNode.FieldOf(name, new OutputFieldRule
             {
                 OutputPath = name, CanonicalField = f.Key,
-                Width = format == FlowOutputFormats.Fixed ? Math.Clamp(name.Length, 10, 1000) : null,
+                Width = format == FlowOutputFormats.Fixed ? Math.Clamp(name.Length, 40, 1000) : null,
             });
         }
 
