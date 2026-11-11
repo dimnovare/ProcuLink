@@ -251,7 +251,7 @@ public class OrgPlanHistoryMeteringTests
 
         var overage = await MakeService(db).ComputePeriodOverageOrdersAsync(org.Id, changedAt, changedAt.AddMonths(1));
 
-        overage.Should().Be(0,
+        overage.Units.Should().Be(0,
             "the window that the upgrade opened ran on Operations (cap 500); resolving it at its " +
             "start picked Growth (cap 150) and billed 150 orders the customer had paid to include");
     }
