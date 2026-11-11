@@ -697,7 +697,7 @@ public class BillingControllerTests
             "a redelivered event with an equal created timestamp must still apply (idempotent re-apply)");
     }
 
-    // Downgrade = strictly lower monthly list price, across both ladders (PlanRank).
+    // Downgrade = strictly lower monthly list price, across both ladders (PlanConstants.IsDowngrade).
     [Theory]
     [InlineData(PlanConstants.Growth, PlanConstants.Starter, true)]    // €149 → €35
     [InlineData(PlanConstants.Growth, PlanConstants.Business, false)]  // €149 → €149: equal is not lower

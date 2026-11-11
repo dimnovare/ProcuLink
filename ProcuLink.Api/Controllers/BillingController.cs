@@ -69,16 +69,6 @@ public sealed class BillingController : ControllerBase
         }
     }
 
-    // ── Plan rank — used to detect downgrades in HandleSubscriptionUpdatedAsync ───────────
-    // Ranked by monthly list price (Pilot lowest, Enterprise highest). Equal price is not a downgrade.
-    private static decimal PlanRank(string plan) =>
-        plan == PlanConstants.Enterprise ? decimal.MaxValue : PlanConstants.GetMonthlyPriceEur(plan);
-
-    private static bool IsPlanDowngrade(string? fromPlan, string toPlan) =>
-        PlanConstants.IsKnownPlan(fromPlan?.ToLowerInvariant())
-        && PlanConstants.IsKnownPlan(toPlan.ToLowerInvariant())
-        && PlanRank(toPlan.ToLowerInvariant()) < PlanRank(fromPlan!.ToLowerInvariant());
-
     /// <summary>
     /// True when the event is about a subscription that is not the org's current one. Orgs are
     /// found by CUSTOMER id, and a customer who upgraded before plan changes updated the live
@@ -440,7 +430,7 @@ public sealed class BillingController : ControllerBase
         // Payment recovered (past_due → active) or re-subscribed: re-drive any billing-held orders.
         await ReleaseHeldOrdersIfReactivatedAsync(org.Id, wasReadOnly, org.AccountStatus, ct);
 
-        if (!string.IsNullOrEmpty(mappedPlan) && IsPlanDowngrade(fromPlan, mappedPlan))
+        if (!string.IsNullOrEmpty(mappedPlan) && PlanConstants.IsDowngrade(fromPlan, mappedPlan))
         {
             await _billing.EmitBillingDowngradedAsync(
                 orgId:    org.Id,
@@ -450,7 +440,7 @@ public sealed class BillingController : ControllerBase
         }
         // A paid → paid upgrade now lands here (the live subscription's price changed), not in
         // checkout.session.completed, which still reports Pilot → paid.
-        else if (!string.IsNullOrEmpty(mappedPlan) && fromPlan != PlanConstants.Pilot && IsPlanDowngrade(mappedPlan, fromPlan))
+        else if (!string.IsNullOrEmpty(mappedPlan) && fromPlan != PlanConstants.Pilot && PlanConstants.IsDowngrade(mappedPlan, fromPlan))
         {
             await _billing.EmitBillingUpgradedAsync(org.Id, fromPlan, mappedPlan, sub.Id, ct);
         }
