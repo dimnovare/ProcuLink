@@ -30,6 +30,13 @@ public class DocumentLadderTests
 
         PlanConstants.GetOverageRateEur(PlanConstants.Growth).Should().Be(0.50m)
             .And.Be(PlanConstants.OveragePerOrderEur);
+
+        // A paid plan missing from OverageRatesEur would silently bill €0 overage.
+        var paid = PlanConstants.All.Concat(PlanConstants.DocumentLadder).Distinct()
+            .Where(p => PlanConstants.IsPaidPlan(p) && p != PlanConstants.Enterprise).ToList();
+        paid.Should().HaveCountGreaterThanOrEqualTo(8, "the walk must cover both ladders, not pass vacuously");
+        paid.Where(p => PlanConstants.GetOverageRateEur(p) <= 0m).Should()
+            .BeEmpty("every self-serve paid plan needs a positive overage rate");
     }
 
     [Fact]
