@@ -47,6 +47,51 @@ public class IngestPathBillingGateTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 
+    /// <summary>Reusable fake for the order-intake switch (also used by the pull-path tests).</summary>
+    internal sealed class FakeIntakeSwitch(bool retired) : IOrderIntakeSwitch
+    {
+        public bool IsRetired(Guid orgId) => retired;
+    }
+
+    [Fact]
+    public async Task LegacyUploadAndRestIngress_ForAnOrgOnTheDocumentEngine_Answer410OrdersRetired_AndCreateNoOrder()
+    {
+        var h = BuildIngress(
+            new LimitCheckResult(Allowed: true, PilotExpired: false, Plan: PlanConstants.Growth, Limit: 150),
+            new FakeIntakeSwitch(true));
+
+        var ingress = await h.Controller.ReceiveOrder(
+            "acme", OrderPayload(h.Supplier.Id), h.Orders.Object, h.ClaimedOrders.Object, CancellationToken.None);
+
+        var db = NewDb();
+        var tenant = new Mock<ICurrentTenantService>();
+        tenant.SetupGet(t => t.OrganisationId).Returns(h.OrgId);
+        var uploads = new OrdersController(
+            new Mock<IOrderService>().Object, tenant.Object, new Mock<Hangfire.IBackgroundJobClient>().Object, db,
+            NullLogger<OrdersController>.Instance, new Mock<IBillingService>().Object,
+            new Mock<IIdempotencyService>().Object, new Mock<IOrderExceptionService>().Object,
+            new Mock<ISupplierAcceptanceService>().Object,
+            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
+            new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
+            new Mock<IFileStorageService>().Object, new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
+            Array.Empty<ITransformService>(), intakeSwitch: new FakeIntakeSwitch(true));
+
+        // A null file would be a 400 on a live endpoint; a retired one must answer 410 first.
+        var upload = await uploads.Upload(null!, Guid.NewGuid(), new Mock<IStubOrderCreator>().Object);
+
+        foreach (var result in new[] { ingress, upload })
+        {
+            var refused = result.Should().BeOfType<ObjectResult>().Subject;
+            refused.StatusCode.Should().Be(410);
+            ((string)((dynamic)refused.Value!).error).Should().Be("orders_retired");
+        }
+        db.PurchaseOrders.Should().BeEmpty();
+        h.ClaimedOrders.Verify(o => o.CreateClaimedFromParsedOrderAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<Guid>(),
+            It.IsAny<ProcuLink.Core.Services.Ai.ExtractedOrder>(),
+            It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     // ── REST ingress ─────────────────────────────────────────────────────────
 
     private sealed record IngressHarness(
@@ -57,7 +102,7 @@ public class IngestPathBillingGateTests
         Mock<IClaimedOrderCreator> ClaimedOrders,
         Mock<IBillingService> Billing);
 
-    private static IngressHarness BuildIngress(LimitCheckResult limit)
+    private static IngressHarness BuildIngress(LimitCheckResult limit, IOrderIntakeSwitch? intakeSwitch = null)
     {
         var db = NewDb();
         var orgId = Guid.NewGuid();
@@ -118,7 +163,7 @@ public class IngestPathBillingGateTests
 
         var controller = new IngressController(
             db, idempotency.Object, tenant.Object, billing.Object,
-            NullLogger<IngressController>.Instance)
+            NullLogger<IngressController>.Instance, intakeSwitch)
         {
             ControllerContext = new ControllerContext
             {

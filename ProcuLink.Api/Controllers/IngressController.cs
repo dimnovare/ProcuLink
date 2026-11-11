@@ -30,6 +30,7 @@ public sealed class IngressController : ControllerBase
     private readonly ICurrentTenantService     _tenant;
     private readonly IBillingService           _billing;
     private readonly ILogger<IngressController> _logger;
+    private readonly IOrderIntakeSwitch?       _intakeSwitch;
 
     /// <summary>Max accepted length for Idempotency-Key — guards against accidental garbage.</summary>
     private const int MaxIdempotencyKeyLength = 200;
@@ -39,13 +40,15 @@ public sealed class IngressController : ControllerBase
         IIdempotencyService       idempotency,
         ICurrentTenantService     tenant,
         IBillingService           billing,
-        ILogger<IngressController> logger)
+        ILogger<IngressController> logger,
+        IOrderIntakeSwitch?       intakeSwitch = null)
     {
         _db          = db;
         _idempotency = idempotency;
         _tenant      = tenant;
         _billing     = billing;
         _logger      = logger;
+        _intakeSwitch = intakeSwitch;
     }
 
     private async Task<bool> SlugMatchesCallerAsync(string slug, CancellationToken ct)
@@ -78,10 +81,11 @@ public sealed class IngressController : ControllerBase
         if (!await SlugMatchesCallerAsync(slug, ct))
             return Forbid();
 
+        var orgId = _tenant.OrganisationId;
+        if (_intakeSwitch?.IsRetired(orgId) == true) return StatusCode(410, new { error = "orders_retired" });
+
         if (req?.Lines is null || req.Lines.Count == 0)
             return BadRequest(new { error = "Order must have at least one line." });
-
-        var orgId = _tenant.OrganisationId;
 
         // ── Idempotency: CLAIM-FIRST, not check-then-create ─────────────────
         // Zapier/Make.com deliver at-least-once, so the same logical order can POST here multiple
