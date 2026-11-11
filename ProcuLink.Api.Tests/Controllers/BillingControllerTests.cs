@@ -778,11 +778,11 @@ public class BillingControllerTests
         billing
             .Setup(b => b.ComputePeriodOverageOrdersAsync(
                 orgId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(7);
+            .ReturnsAsync(new OverageWindow(7, 0.50m));
         billing
             .Setup(b => b.BillOverageForInvoiceAsync(
-                orgId, It.IsAny<string>(), 7, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Guid o, string key, int orders, CancellationToken _) =>
+                orgId, It.IsAny<string>(), 7, 3.50m, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid o, string key, int orders, decimal _, CancellationToken _) =>
                 new OverageBillingResult(o, key, orders, orders * 50L, AlreadyBilled: false, StripeItemId: "ii_test"));
 
         var periodStart = new DateTime(2026, 5, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -809,7 +809,7 @@ public class BillingControllerTests
             orgId, periodStart, periodEnd, It.IsAny<CancellationToken>()), Times.Once,
             "invoice.created must compute overage THROUGH IBillingService");
         billing.Verify(b => b.BillOverageForInvoiceAsync(
-            orgId, expectedKey, 7, It.IsAny<CancellationToken>()), Times.Once,
+            orgId, expectedKey, 7, 3.50m, It.IsAny<CancellationToken>()), Times.Once,
             "invoice.created must bill overage THROUGH IBillingService, not a downcast");
     }
 
@@ -834,7 +834,7 @@ public class BillingControllerTests
         billing
             .Setup(b => b.ComputePeriodOverageOrdersAsync(
                 orgId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(0);
+            .ReturnsAsync(new OverageWindow(0, 0.50m));
 
         var invoice = new Stripe.Invoice
         {
@@ -854,7 +854,7 @@ public class BillingControllerTests
         billing.Verify(b => b.ComputePeriodOverageOrdersAsync(
             orgId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Once);
         billing.Verify(b => b.BillOverageForInvoiceAsync(
-            It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never,
+            It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()), Times.Never,
             "no overage must mean no billing call");
     }
 
@@ -1052,11 +1052,11 @@ public class BillingControllerTests
             .Setup(b => b.ComputePeriodOverageOrdersAsync(
                 orgId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Guid _, DateTime s, DateTime _, CancellationToken _) =>
-                s == marchStart ? 4 : 0);
+                new OverageWindow(s == marchStart ? 4 : 0, 0.50m));
         billing
             .Setup(b => b.BillOverageForInvoiceAsync(
-                orgId, It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Guid o, string key, int orders, CancellationToken _) =>
+                orgId, It.IsAny<string>(), It.IsAny<int>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid o, string key, int orders, decimal _, CancellationToken _) =>
                 new OverageBillingResult(o, key, orders, orders * 50L, AlreadyBilled: false, StripeItemId: "ii_march"));
 
         var invoice = new Stripe.Invoice
@@ -1090,10 +1090,10 @@ public class BillingControllerTests
         // Only the over-cap month is billed, keyed on ITS window start (own ledger row).
         var marchKey = BillingController.BuildPeriodBillingKey(orgId, marchStart);
         billing.Verify(b => b.BillOverageForInvoiceAsync(
-            orgId, marchKey, 4, It.IsAny<CancellationToken>()), Times.Once,
+            orgId, marchKey, 4, 2.00m, It.IsAny<CancellationToken>()), Times.Once,
             "the over-cap month is billed with its own per-month period key");
         billing.Verify(b => b.BillOverageForInvoiceAsync(
-            It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
             Times.Once, "under-cap months must not be billed at all");
     }
 
@@ -1126,7 +1126,7 @@ public class BillingControllerTests
             .Setup(b => b.ComputePeriodOverageOrdersAsync(
                 orgId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
             .Callback((Guid _, DateTime s, DateTime e, CancellationToken _) => seenWindows.Add((s, e)))
-            .ReturnsAsync(0);
+            .ReturnsAsync(new OverageWindow(0, 0.50m));
 
         var invoice = new Stripe.Invoice
         {

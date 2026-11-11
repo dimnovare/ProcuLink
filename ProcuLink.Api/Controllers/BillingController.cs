@@ -547,9 +547,12 @@ public sealed class BillingController : ControllerBase
             // the flag is ON (creation-month attribution, evaluated at invoice time —
             // late deliveries after a period's invoice are never caught up). The
             // period-based idempotency keys below are intentionally UNCHANGED.
-            var overageOrders = await _billing.ComputePeriodOverageOrdersAsync(
+            // Each window is priced at the rate of the plan IT ran on (one item per window).
+            var window = await _billing.ComputePeriodOverageOrdersAsync(
                 org.Id, windowStart, windowEnd, ct);
+            var overageOrders = window.Units;
             if (overageOrders <= 0) continue;
+            var amountEur = overageOrders * window.RateEur;
 
             // Idempotent: keyed on the BILLING PERIOD ("{orgId}:{periodStart:O}"), NOT the
             // invoice id. The same period maps to the same key, so the unique
@@ -560,9 +563,9 @@ public sealed class BillingController : ControllerBase
             // otherwise the historical customer-sweep overload, byte-identical.
             var result = attachToInvoiceId is not null
                 ? await _billing.BillOverageForInvoiceAsync(
-                    org.Id, billingKey, overageOrders, attachToInvoiceId, ct)
+                    org.Id, billingKey, overageOrders, amountEur, attachToInvoiceId, ct)
                 : await _billing.BillOverageForInvoiceAsync(
-                    org.Id, billingKey, overageOrders, ct);
+                    org.Id, billingKey, overageOrders, amountEur, ct);
 
             _logger.LogInformation(
                 "invoice.created overage for org {OrgId}: {Orders} orders, period={Period}, alreadyBilled={Already}, item={Item}",

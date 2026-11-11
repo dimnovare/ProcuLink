@@ -382,7 +382,7 @@ public class BestPriceOverageTests
         var overage = await MakeService(db).ComputePeriodOverageOrdersAsync(
             org.Id, monthStart, DateTime.UtcNow.AddDays(1));
 
-        var effectiveTotal = PlanConstants.GetMonthlyPriceEur(PlanConstants.Operations) + overage * Rate;
+        var effectiveTotal = PlanConstants.GetMonthlyPriceEur(PlanConstants.Operations) + overage.Units * Rate;
         effectiveTotal.Should().BeLessThanOrEqualTo(
             PlanConstants.GetMonthlyPriceEur(PlanConstants.Integration),
             "billed Operations overage at 1500 orders must never exceed Integration's €999");
@@ -403,7 +403,7 @@ public class BestPriceOverageTests
         var overage = await MakeService(db).ComputePeriodOverageOrdersAsync(
             org.Id, monthStart, DateTime.UtcNow.AddDays(1));
 
-        overage.Should().Be(10, "a small overage is unchanged by the best-price cap");
+        overage.Units.Should().Be(10, "a small overage is unchanged by the best-price cap");
     }
 
     // ── LADDER is config-driven (no duplicated magic numbers) ─────────────

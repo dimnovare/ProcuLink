@@ -129,7 +129,7 @@ public class OrgPlanHistoryMeteringTests
 
         var overage = await MakeService(db).ComputePeriodOverageOrdersAsync(org.Id, Mar1, Apr1);
 
-        overage.Should().Be(0,
+        overage.Units.Should().Be(0,
             "March was served on Operations (cap 500); the later downgrade to Growth must not " +
             "retroactively re-meter March at the lower cap and charge wrongful overage");
     }
@@ -147,7 +147,7 @@ public class OrgPlanHistoryMeteringTests
 
         var overage = await MakeService(db).ComputePeriodOverageOrdersAsync(org.Id, Aug1, Sep1);
 
-        overage.Should().Be(10, "August really ran on Growth (cap 150), so its overage is genuine");
+        overage.Units.Should().Be(10, "August really ran on Growth (cap 150), so its overage is genuine");
     }
 
     // ── upgrade direction: past windows keep the old LOWER cap (no under-billing) ──
@@ -166,7 +166,7 @@ public class OrgPlanHistoryMeteringTests
 
         var overage = await MakeService(db).ComputePeriodOverageOrdersAsync(org.Id, Mar1, Apr1);
 
-        overage.Should().Be(10,
+        overage.Units.Should().Be(10,
             "March was served on Growth (cap 150); the later upgrade must not retroactively " +
             "erase overage that was genuinely accrued (under-billing)");
     }
@@ -187,7 +187,7 @@ public class OrgPlanHistoryMeteringTests
 
         var overage = await MakeService(db).ComputePeriodOverageOrdersAsync(org.Id, Mar1, Apr1);
 
-        overage.Should().Be(0,
+        overage.Units.Should().Be(0,
             "the 1000-order admin override was in force in March; clearing it later must not " +
             "retroactively meter March against the plan default");
     }
@@ -206,7 +206,7 @@ public class OrgPlanHistoryMeteringTests
 
         var overage = await MakeService(db).ComputePeriodOverageOrdersAsync(org.Id, Mar1, Apr1);
 
-        overage.Should().Be(10, "a row effective AT the window start (≤) governs that window");
+        overage.Units.Should().Be(10, "a row effective AT the window start (≤) governs that window");
     }
 
     // ── no-history fallback: pre-feature orgs meter exactly as before ────────
@@ -220,7 +220,7 @@ public class OrgPlanHistoryMeteringTests
 
         var overage = await MakeService(db).ComputePeriodOverageOrdersAsync(org.Id, Mar1, Apr1);
 
-        overage.Should().Be(10,
+        overage.Units.Should().Be(10,
             "an org with no plan history must meter with its CURRENT plan — the pre-history " +
             "behaviour, keeping the monthly path byte-identical for unseeded orgs");
     }
@@ -234,6 +234,6 @@ public class OrgPlanHistoryMeteringTests
 
         var overage = await MakeService(db).ComputePeriodOverageOrdersAsync(org.Id, Mar1, Apr1);
 
-        overage.Should().Be(0, "the fallback must use the org's current override too, exactly as before");
+        overage.Units.Should().Be(0, "the fallback must use the org's current override too, exactly as before");
     }
 }

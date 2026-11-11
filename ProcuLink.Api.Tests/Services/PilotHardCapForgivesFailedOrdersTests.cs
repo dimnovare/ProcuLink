@@ -317,7 +317,7 @@ public class PilotHardCapForgivesFailedOrdersTests
         var overage = await MakeService(db).ComputePeriodOverageOrdersAsync(
             org.Id, monthStart, DateTime.UtcNow.AddDays(1));
 
-        overage.Should().Be(4,
+        overage.Units.Should().Be(4,
             "the invoiced overage window still counts all 154 orders at creation ⇒ 4 over the 150 cap");
     }
 
