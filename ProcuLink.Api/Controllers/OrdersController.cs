@@ -1957,6 +1957,12 @@ public sealed class OrdersController : ControllerBase
         if (fmt is null)
             return BadRequest(new { error = "Sample inference supports json, csv, and xml." });
 
+        // XDocument.Parse processes DTDs, so a DOCTYPE could declare entities it expands. Refused
+        // before the inferrer sees it, with the same answer as any other unreadable sample.
+        if (fmt is OutputFormat.Xml or OutputFormat.CXml or OutputFormat.Ubl
+            && request.Sample!.Contains("<!DOCTYPE", StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { error = $"Could not read that sample as {fmt.Value.ToString().ToLowerInvariant()}." });
+
         try
         {
             var tree = OutputNodeTemplateInferrer.FromSample(request.Sample!, fmt.Value);
