@@ -43,5 +43,6 @@ public class DocumentLadderTests
         PlanConstants.GetFlowLimit(PlanConstants.Enterprise).Should().BeNull();
         PlanConstants.GetFlowLimit(PlanConstants.Growth).Should().BeNull();
         PlanConstants.GetFlowLimit("nonsense").Should().Be(2);
+        PlanConstants.IsKnownPlan("Growth").Should().BeFalse("plan ids are ordinal, like IsPaidPlan");
     }
 }

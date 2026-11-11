@@ -20,10 +20,10 @@ public static class PlanConstants
     public static readonly string[] DocumentLadder = [Starter, Pro, Business, Scale];
 
     public static bool IsDocumentPlan(string? plan) =>
-        plan is not null && DocumentLadder.Contains(plan, StringComparer.OrdinalIgnoreCase);
+        plan is not null && DocumentLadder.Contains(plan);
 
     public static bool IsKnownPlan(string? plan) =>
-        plan is not null && (All.Contains(plan, StringComparer.OrdinalIgnoreCase) || IsDocumentPlan(plan));
+        plan is not null && (All.Contains(plan) || IsDocumentPlan(plan));
 
     public static readonly string[] All =
     [
