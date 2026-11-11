@@ -46,6 +46,7 @@ public sealed class EmailPollOrgJob
     private readonly IEmailSettingsService _emailSettings;
     private readonly OutboundRequestGuard _guard;
     private readonly ILogger<EmailPollOrgJob> _logger;
+    private readonly IOrderIntakeSwitch? _intakeSwitch;
 
     public EmailPollOrgJob(
         ProcuLinkDbContext db,
@@ -55,8 +56,10 @@ public sealed class EmailPollOrgJob
         IBillingService billing,
         IEmailSettingsService emailSettings,
         OutboundRequestGuard guard,
-        ILogger<EmailPollOrgJob> logger)
+        ILogger<EmailPollOrgJob> logger,
+        IOrderIntakeSwitch? intakeSwitch = null)
     {
+        _intakeSwitch = intakeSwitch;
         _db = db;
         _encryption = encryption;
         _orders = orders;
@@ -86,6 +89,13 @@ public sealed class EmailPollOrgJob
     [PerOrgDistributedMutex(orgArgumentIndex: 0, timeoutSeconds: 300)]
     public async Task ExecuteAsync(Guid orgId, CancellationToken ct)
     {
+        // Pollers never move or delete remote mail, so skipping loses nothing.
+        if (_intakeSwitch?.IsRetired(orgId) == true)
+        {
+            _logger.LogInformation("EmailPollOrgJob: legacy order intake is retired for org {OrgId}; not polling.", orgId);
+            return;
+        }
+
         // Re-read config inside the child job so the child is self-contained.
         var org = await _db.Organisations
             .AsNoTracking()

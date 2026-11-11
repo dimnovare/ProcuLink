@@ -254,6 +254,42 @@ public class IngestPathBillingGateTests
     }
 
     [Fact]
+    public async Task InboundEmail_ToTheOrderAddressOfAnOrgOnTheDocumentEngine_IsRefusedTransient_AndCreatesNoOrder()
+    {
+        var h = BuildEmail(hasEmailIngestion: true, new LimitCheckResult(
+            Allowed: true, PilotExpired: false, Plan: PlanConstants.Growth, Limit: 150),
+            intakeSwitch: new FakeIntakeSwitch(true));
+
+        var result = await h.Router.RouteAsync(EmailPayload(), CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Transient,
+            "Permanent would settle the mail as handled; Transient keeps it in Postmark's re-delivery window");
+        h.Db.PurchaseOrders.Should().BeEmpty();
+        VerifyNoOrderCreated(h, "a retired org must not get a legacy order");
+        h.Db.AuditEvents.Should().ContainSingle(a => a.Action == "inbound_email.rejected_orders_retired");
+    }
+
+    [Fact]
+    public async Task PollJobs_ForAnOrgOnTheDocumentEngine_DoNotPoll()
+    {
+        var orgId = Guid.NewGuid();
+        var billing = new Mock<IBillingService>();
+        billing.Setup(b => b.HasFeatureAsync(orgId, It.IsAny<BillingFeature>(), It.IsAny<CancellationToken>()))
+               .ReturnsAsync(true);
+        var sftp = new Mock<ISftpIngressService>();
+        var s3 = new Mock<IS3IngressService>();
+
+        await new SftpPollOrgJob(sftp.Object, billing.Object, NullLogger<SftpPollOrgJob>.Instance,
+            new FakeIntakeSwitch(true)).ExecuteAsync(orgId, CancellationToken.None);
+        await new S3PollOrgJob(s3.Object, billing.Object, NullLogger<S3PollOrgJob>.Instance,
+            new FakeIntakeSwitch(true)).ExecuteAsync(orgId, CancellationToken.None);
+
+        sftp.Verify(x => x.PollAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+        s3.Verify(x => x.PollAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task SftpPollOrgJob_WithTheFeature_StillPolls()
     {
         var orgId = Guid.NewGuid();
@@ -349,7 +385,8 @@ public class IngestPathBillingGateTests
         InboundEmailRouter Router,
         Guid OrgId,
         Mock<IClaimedOrderCreator> Orders,
-        Mock<IBillingService> Billing);
+        Mock<IBillingService> Billing,
+        ProcuLinkDbContext Db);
 
     /// <summary>
     /// A router over a seeded org with a live inbound address. Order creation ALWAYS succeeds, for
@@ -359,7 +396,8 @@ public class IngestPathBillingGateTests
     private static EmailHarness BuildEmail(
         bool hasEmailIngestion,
         LimitCheckResult limit,
-        string accountStatus = AccountStatusConstants.Active)
+        string accountStatus = AccountStatusConstants.Active,
+        IOrderIntakeSwitch? intakeSwitch = null)
     {
         var db = NewDb();
         var orgId = Guid.NewGuid();
@@ -398,9 +436,9 @@ public class IngestPathBillingGateTests
             db, orders.Object, new NoOpEnqueuer(), NoOrderBody.Instance,
             InboundAddressTestHarness.Create(db, config),
             billing.Object, config,
-            NullLogger<InboundEmailRouter>.Instance);
+            NullLogger<InboundEmailRouter>.Instance, intakeSwitch: intakeSwitch);
 
-        return new EmailHarness(router, orgId, orders, billing);
+        return new EmailHarness(router, orgId, orders, billing, db);
     }
 
     private static InboundEmailPayload EmailPayload() => new(
