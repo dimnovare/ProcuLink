@@ -254,29 +254,33 @@ public static class PlanConstants
         DocumentLadder.Select(p => (p, GetOrderLimit(p), GetMonthlyPriceEur(p))).ToArray();
 
     /// <summary>
-    /// BEST-PRICE overage: returns how many "overage orders" (at
-    /// <see cref="OveragePerOrderEur"/> each) an org on <paramref name="plan"/> with
-    /// <paramref name="effectiveLimit"/> included orders should be billed for after
-    /// processing <paramref name="ordersUsed"/> orders — WITHOUT ever charging more
-    /// than the cheapest higher self-serve tier whose included volume covers the
-    /// usage. This removes the upgrade-disincentivising "overage inversion".
+    /// BEST-PRICE overage: returns how many overage units (orders or documents, each
+    /// billed at the plan's own <see cref="GetOverageRateEur"/>) an org on
+    /// <paramref name="plan"/> with <paramref name="effectiveLimit"/> included units should
+    /// be billed for after processing <paramref name="ordersUsed"/> — WITHOUT ever charging
+    /// more than the plan's own ladder would for that volume. This removes the
+    /// upgrade-disincentivising "overage inversion".
     ///
-    /// <para><b>Formula.</b> Let r = <see cref="OveragePerOrderEur"/>, F_T = this
-    /// plan's flat price, over = max(0, used − limit), and rawEur = over × r:
+    /// <para><b>Formula.</b> The ladder is the plan's own: <see cref="DocumentSelfServeLadder"/>
+    /// for a document plan, <see cref="SelfServeLadder"/> otherwise; the cap never compares
+    /// against the other ladder. Let r = this plan's rate, F_T = its flat price,
+    /// over = max(0, used − limit), rawEur = over × r, and r_top = the top tier's rate:
     /// <code>
-    ///   topTier = the highest self-serve tier (largest included volume)
+    ///   topTier = the ladder's top tier (largest included volume)
     ///   if used ≤ topTier.Included:
     ///       capEur            = min flat price over tiers whose Included ≥ used
     ///       effectiveTotalEur = min(F_T + rawEur, capEur)      // never beat the next flat tier
     ///   else if limit ≥ topTier.Included:                       // admin headroom above the top tier:
     ///       effectiveTotalEur = F_T + (used − limit) × r        // meter only beyond the granted limit
-    ///   else:                                                   // above the TOP self-serve tier:
-    ///       effectiveTotalEur = topTier.FlatEur + (used − topTier.Included) × r
+    ///   else:                                                   // above the top tier: priced as the top tier
+    ///       effectiveTotalEur = topTier.FlatEur + (used − topTier.Included) × r_top
     ///   effectiveOverageEur   = max(0, effectiveTotalEur − F_T)
-    ///   return round(effectiveOverageEur / r)                   // back to an integer order count for Stripe
+    ///   return floor(effectiveOverageEur / r)                   // whole units for Stripe, never past the cap
     /// </code>
-    /// Because every tier flat price is a whole number of euros and r = €0.50, the
-    /// capped overage is always an exact integer number of orders.</para>
+    /// Legacy: every rate is €0.50 (r = r_top) and every flat price a whole number of euros,
+    /// so the result is exact and the floor changes nothing. Document plans: rates differ
+    /// (Starter €0.24 … Scale €0.08), so the capped total is usually not a whole number of
+    /// units; flooring bills at most the cap, never past it.</para>
     ///
     /// <para>Returns 0 for non-self-serve plans (Pilot/Enterprise) and whenever the
     /// org is within its included volume. Admin per-org limit overrides flow through
@@ -284,12 +288,6 @@ public static class PlanConstants
     /// its real limit (and a raised limit only ever shrinks the overage). The cap is
     /// applied against the PLAN's published flat price (<see cref="MonthlyPriceEur"/>),
     /// independent of any admin limit override.</para>
-    ///
-    /// <para>A document plan walks <see cref="DocumentSelfServeLadder"/> at its own
-    /// <see cref="GetOverageRateEur"/>; the cap never compares against the other ladder.
-    /// The count is floored, not rounded: at EUR 0.24 a capped total is not a whole number of
-    /// documents, and rounding up could bill past the cap. Legacy totals are exact multiples
-    /// of EUR 0.50, so flooring changes nothing there.</para>
     /// </summary>
     public static int BestPriceOverageOrders(string plan, int effectiveLimit, int ordersUsed)
     {
@@ -329,9 +327,9 @@ public static class PlanConstants
         }
         else
         {
-            // Above the top self-serve tier: charge as if on the top tier plus pure
-            // metered overage for the excess (no higher self-serve tier exists to cap).
-            effectiveTotalEur = topTier.FlatEur + (ordersUsed - topTier.Included) * rate;
+            // Above the top self-serve tier: charge as if on the top tier, excess at the top
+            // tier's rate (no higher self-serve tier exists to cap).
+            effectiveTotalEur = topTier.FlatEur + (ordersUsed - topTier.Included) * GetOverageRateEur(topTier.Plan);
         }
 
         var effectiveOverageEur = Math.Max(0m, effectiveTotalEur - flatEur);

@@ -40,6 +40,15 @@ public class DocumentLadderTests
     }
 
     [Fact]
+    public void Overage_AboveTheTopTier_BillsAtTheTopTiersRate()
+    {
+        // Scale at 10,000 = €399 + 5,000 × €0.08 = €799; Starter there must never cost more.
+        var over = PlanConstants.BestPriceOverageOrders(PlanConstants.Starter, 150, 10_000);
+        over.Should().Be(3_183);
+        (35m + over * PlanConstants.GetOverageRateEur(PlanConstants.Starter)).Should().Be(798.92m);
+    }
+
+    [Fact]
     public void FlowLimits_FollowTheLadder()
     {
         PlanConstants.GetFlowLimit(PlanConstants.Pilot).Should().Be(2);

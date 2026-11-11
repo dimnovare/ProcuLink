@@ -50,6 +50,9 @@ public class BillingControllerTests
                 ["Stripe:IntegrationYearlyPriceId"] = "price_int_yearly_test",
                 ["Stripe:DistributorPriceId"] = "price_dist_test",
                 ["Stripe:DistributorYearlyPriceId"] = "price_dist_yearly_test",
+                ["Stripe:StarterPriceId"]  = "price_starter_test",
+                ["Stripe:ProPriceId"]      = "price_pro_test",
+                ["Stripe:BusinessPriceId"] = "price_business_test",
             })
             .Build();
 
@@ -692,6 +695,28 @@ public class BillingControllerTests
         var updated = await db.Organisations.FindAsync(orgId);
         updated!.AccountStatus.Should().Be(AccountStatusConstants.PastDue,
             "a redelivered event with an equal created timestamp must still apply (idempotent re-apply)");
+    }
+
+    // Downgrade = strictly lower monthly list price, across both ladders (PlanRank).
+    [Theory]
+    [InlineData(PlanConstants.Growth, PlanConstants.Starter, true)]    // €149 → €35
+    [InlineData(PlanConstants.Growth, PlanConstants.Business, false)]  // €149 → €149: equal is not lower
+    [InlineData(PlanConstants.Starter, PlanConstants.Pro, false)]      // €35 → €69
+    public async Task HandleSubscriptionUpdated_RanksPlansByListPriceAcrossLadders(string from, string to, bool downgrade)
+    {
+        var (ctrl, billing, _, orgId, db) = Build();
+        var org = OrderGuardOrg(orgId);
+        org.Plan = from;
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+        var sub = UpdatedSub("active");
+        sub.Items.Data.Add(new Stripe.SubscriptionItem { Price = new Stripe.Price { Id = $"price_{to}_test" } });
+
+        await ctrl.HandleSubscriptionUpdatedAsync(sub, DateTime.UtcNow, CancellationToken.None);
+
+        (await db.Organisations.FindAsync(orgId))!.Plan.Should().Be(to);
+        billing.Verify(b => b.EmitBillingDowngradedAsync(orgId, from, to, It.IsAny<CancellationToken>()),
+            downgrade ? Times.Once() : Times.Never());
     }
 
     // ── Webhook calls billing events THROUGH the IBillingService interface ────
