@@ -86,15 +86,16 @@ public interface IBillingService
         CancellationToken ct = default);
 
     /// <summary>
-    /// Computes how many orders an org processed ABOVE its effective monthly cap
-    /// within the given billing window [periodStart, periodEnd). Pilot/Enterprise
-    /// and unconfigured plans return 0. The cap is resolved AS OF the window start
+    /// Computes how many units (orders plus read document units) an org processed ABOVE its
+    /// effective monthly cap within the given billing window [periodStart, periodEnd), and the
+    /// overage rate of the plan that window ran on. Pilot/Enterprise
+    /// and unconfigured plans return 0 units. The cap is resolved AS OF the window start
     /// from the org's plan history (latest row ≤ periodStart), so PAST windows of a
     /// yearly renewal invoice are metered at the plan/override in force back then —
     /// never retroactively re-priced by a later plan change. Orgs with no history
     /// meter with their current values. Used by the webhook to bill the just-closed period.
     /// </summary>
-    Task<int> ComputePeriodOverageOrdersAsync(
+    Task<OverageWindow> ComputePeriodOverageOrdersAsync(
         Guid orgId,
         DateTime periodStart,
         DateTime periodEnd,
@@ -111,10 +112,11 @@ public interface IBillingService
         Guid orgId,
         string billingKey,
         int overageOrders,
+        decimal amountEur,
         CancellationToken ct = default);
 
     /// <summary>
-    /// Same as <see cref="BillOverageForInvoiceAsync(Guid, string, int, CancellationToken)"/>
+    /// Same as <see cref="BillOverageForInvoiceAsync(Guid, string, int, decimal, CancellationToken)"/>
     /// but ATTACHES the overage invoice item to the given DRAFT Stripe invoice (the
     /// one whose <c>invoice.created</c> event is being handled), so the charge lands
     /// on the invoice that closes the period instead of floating to the next one —
@@ -127,9 +129,13 @@ public interface IBillingService
         Guid orgId,
         string billingKey,
         int overageOrders,
+        decimal amountEur,
         string stripeInvoiceId,
         CancellationToken ct = default);
 }
+
+/// <summary>One billing window's overage: <see cref="Units"/> over the cap, at <see cref="RateEur"/> each.</summary>
+public sealed record OverageWindow(int Units, decimal RateEur);
 
 /// <summary>
 /// Outcome of an overage-billing attempt. <see cref="AlreadyBilled"/> is true when

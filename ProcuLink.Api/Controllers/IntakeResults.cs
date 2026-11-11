@@ -16,7 +16,7 @@ public static class IntakeResults
         {
             "document_engine_not_enabled" => c.StatusCode(403, new { error = r.Error }),
             "flow_not_found" => c.NotFound(new { error = r.Error }),
-            "pilot_expired" or "order_limit_reached" => c.StatusCode(429, new
+            "pilot_expired" or "order_limit_reached" or "processing_paused" => c.StatusCode(429, new
             {
                 error = r.Error, plan = r.Limit?.Plan, limit = r.Limit?.Limit, upgradeUrl = "/settings",
             }),

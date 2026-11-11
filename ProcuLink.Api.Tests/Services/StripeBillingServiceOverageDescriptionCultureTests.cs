@@ -30,7 +30,7 @@ public class StripeBillingServiceOverageDescriptionCultureTests
 
             var description = StripeBillingService.BuildOverageDescription(50);
 
-            description.Should().Be("Order overage: 50 orders x EUR0.50");
+            description.Should().Be("Document overage: 50 documents");
             description.Should().NotContain("0,50");
         }
         finally

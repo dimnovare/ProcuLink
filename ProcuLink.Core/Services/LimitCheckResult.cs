@@ -11,8 +11,11 @@ public record LimitCheckResult(
     int    Limit
 )
 {
+    /// <summary>Machine code for a refused document intake. Paid plans never refuse on volume, so a non-trial refusal is a paused account.</summary>
+    public string RefusalCode => PilotExpired ? "pilot_expired" : "processing_paused";
+
     /// <summary>User-facing line a flow intake shows while a refused plan limit holds new documents back.</summary>
     public string FlowPausedMessage => PilotExpired
         ? "Paused: your trial has ended, so new documents aren't being accepted."
-        : "Paused: you've reached your plan's document limit for this month.";
+        : "Paused: processing is paused on this workspace. See Settings → Plan & billing.";
 }

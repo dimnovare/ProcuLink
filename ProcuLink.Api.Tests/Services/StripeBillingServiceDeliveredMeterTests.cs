@@ -214,8 +214,8 @@ public class StripeBillingServiceDeliveredMeterTests
         var flagOn  = await MakeService(db, "true").ComputePeriodOverageOrdersAsync(org.Id, monthStart, windowEnd);
         var flagOff = await MakeService(db, null).ComputePeriodOverageOrdersAsync(org.Id, monthStart, windowEnd);
 
-        flagOn.Should().Be(3, "only the 153 delivered orders count ⇒ 3 over the 150 cap; parsing/failed are free");
-        flagOff.Should().Be(18, "flag OFF counts all 168 orders at creation ⇒ 18 over the cap (unchanged default)");
+        flagOn.Units.Should().Be(3, "only the 153 delivered orders count ⇒ 3 over the 150 cap; parsing/failed are free");
+        flagOff.Units.Should().Be(18, "flag OFF counts all 168 orders at creation ⇒ 18 over the cap (unchanged default)");
     }
 
     [Fact]
@@ -233,7 +233,7 @@ public class StripeBillingServiceDeliveredMeterTests
         var overage = await MakeService(db, "true").ComputePeriodOverageOrdersAsync(
             org.Id, monthStart, DateTime.UtcNow.AddDays(1));
 
-        overage.Should().Be(2,
+        overage.Units.Should().Be(2,
             "rejected_by_supplier reached the supplier (work performed + delivered; rejection is the " +
             "supplier's business outcome) ⇒ 149 + 3 = 152 counted ⇒ 2 over the 150 cap");
     }
@@ -278,7 +278,7 @@ public class StripeBillingServiceDeliveredMeterTests
         var svc = MakeService(db, "true");
 
         // Counted at the period close, before the late delivery: only the 151 delivered.
-        (await svc.ComputePeriodOverageOrdersAsync(org.Id, lastMonthStart, thisMonthStart))
+        (await svc.ComputePeriodOverageOrdersAsync(org.Id, lastMonthStart, thisMonthStart)).Units
             .Should().Be(1, "151 delivered in the creation month ⇒ 1 over the 150 cap; PO-LATE is still in flight");
 
         // The order is delivered later (this month). Recounting the CREATION month now
@@ -288,11 +288,11 @@ public class StripeBillingServiceDeliveredMeterTests
         late.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync();
 
-        (await svc.ComputePeriodOverageOrdersAsync(org.Id, lastMonthStart, thisMonthStart))
+        (await svc.ComputePeriodOverageOrdersAsync(org.Id, lastMonthStart, thisMonthStart)).Units
             .Should().Be(2, "once delivered, PO-LATE counts in its CREATION month's window (152 ⇒ 2 over)");
 
         // It never leaks into the DELIVERY month's window — creation-month attribution.
-        (await svc.ComputePeriodOverageOrdersAsync(org.Id, thisMonthStart, DateTime.UtcNow.AddDays(1)))
+        (await svc.ComputePeriodOverageOrdersAsync(org.Id, thisMonthStart, DateTime.UtcNow.AddDays(1))).Units
             .Should().Be(0, "no order was CREATED this month; the late delivery must not re-enter a later window");
     }
 

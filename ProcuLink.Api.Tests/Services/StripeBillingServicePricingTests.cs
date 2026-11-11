@@ -305,13 +305,13 @@ public class StripeBillingServicePricingTests
         key.Should().Be($"{org.Id}:{periodStart:O}", "billing key = {orgId}:{periodStart:O}");
 
         // First call bills 10 orders × €0.50 = €5.00 = 500 cents.
-        var first = await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10);
+        var first = await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10, amountEur: 5.00m);
         first.AlreadyBilled.Should().BeFalse();
         first.OverageOrders.Should().Be(10);
         first.AmountCents.Should().Be(500);
 
         // Repeated webhook with the SAME period key — must be a no-op, never a second charge.
-        var second = await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10);
+        var second = await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10, amountEur: 5.00m);
         second.AlreadyBilled.Should().BeTrue("a replay of the same period key must not double-bill");
 
         db.OverageBillingRecords.Count(r => r.OrgId == org.Id && r.BillingKey == key)
@@ -337,8 +337,8 @@ public class StripeBillingServicePricingTests
         var keyFromSecondInvoice = BillingController.BuildPeriodBillingKey(org.Id, periodStart);
         keyFromFirstInvoice.Should().Be(keyFromSecondInvoice, "same period ⇒ same key, even if Stripe re-issues the invoice");
 
-        var first  = await svc.BillOverageForInvoiceAsync(org.Id, keyFromFirstInvoice,  overageOrders: 5);
-        var second = await svc.BillOverageForInvoiceAsync(org.Id, keyFromSecondInvoice, overageOrders: 5);
+        var first  = await svc.BillOverageForInvoiceAsync(org.Id, keyFromFirstInvoice,  overageOrders: 5, amountEur: 2.50m);
+        var second = await svc.BillOverageForInvoiceAsync(org.Id, keyFromSecondInvoice, overageOrders: 5, amountEur: 2.50m);
 
         first.AlreadyBilled.Should().BeFalse();
         second.AlreadyBilled.Should().BeTrue("a re-issued invoice for the same period must not double-bill");
@@ -354,8 +354,8 @@ public class StripeBillingServicePricingTests
         await db.SaveChangesAsync();
         var svc = MakeService(db);
 
-        await svc.BillOverageForInvoiceAsync(org.Id, "in_jan", overageOrders: 3);
-        await svc.BillOverageForInvoiceAsync(org.Id, "in_feb", overageOrders: 7);
+        await svc.BillOverageForInvoiceAsync(org.Id, "in_jan", overageOrders: 3, amountEur: 1.50m);
+        await svc.BillOverageForInvoiceAsync(org.Id, "in_feb", overageOrders: 7, amountEur: 3.50m);
 
         db.OverageBillingRecords.Count(r => r.OrgId == org.Id).Should().Be(2);
     }
@@ -369,7 +369,7 @@ public class StripeBillingServicePricingTests
         await db.SaveChangesAsync();
         var svc = MakeService(db);
 
-        var result = await svc.BillOverageForInvoiceAsync(org.Id, "in_zero", overageOrders: 0);
+        var result = await svc.BillOverageForInvoiceAsync(org.Id, "in_zero", overageOrders: 0, amountEur: 0.00m);
 
         result.AmountCents.Should().Be(0);
         result.AlreadyBilled.Should().BeFalse();
@@ -386,7 +386,7 @@ public class StripeBillingServicePricingTests
         await db.SaveChangesAsync();
         var svc = MakeService(db);
 
-        var result = await svc.BillOverageForInvoiceAsync(org.Id, "in_unconfig", overageOrders: 4);
+        var result = await svc.BillOverageForInvoiceAsync(org.Id, "in_unconfig", overageOrders: 4, amountEur: 2.00m);
 
         result.AmountCents.Should().Be(200);
         result.StripeItemId.Should().BeNull("Stripe unconfigured ⇒ no invoice item, but the number is recorded");
@@ -552,7 +552,7 @@ public class StripeBillingServicePricingTests
         var overage = await MakeService(db).ComputePeriodOverageOrdersAsync(
             org.Id, monthStart, DateTime.UtcNow.AddDays(1));
 
-        overage.Should().Be(3);
+        overage.Units.Should().Be(3);
     }
 
     [Fact]
@@ -584,9 +584,9 @@ public class StripeBillingServicePricingTests
         var svc = MakeService(db);
         var monthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc);
 
-        (await svc.ComputePeriodOverageOrdersAsync(pilot.Id, monthStart, DateTime.UtcNow.AddDays(1)))
+        (await svc.ComputePeriodOverageOrdersAsync(pilot.Id, monthStart, DateTime.UtcNow.AddDays(1))).Units
             .Should().Be(0, "Pilot has no metered overage");
-        (await svc.ComputePeriodOverageOrdersAsync(ent.Id, monthStart, DateTime.UtcNow.AddDays(1)))
+        (await svc.ComputePeriodOverageOrdersAsync(ent.Id, monthStart, DateTime.UtcNow.AddDays(1))).Units
             .Should().Be(0, "Enterprise is custom-contracted, no overage");
     }
 }

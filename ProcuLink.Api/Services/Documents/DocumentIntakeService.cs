@@ -36,7 +36,7 @@ public sealed class DocumentIntakeService(
         if (!await db.Flows.AnyAsync(f => f.OrgId == orgId && f.Id == flowId, ct)) return new(null, "flow_not_found", null);
 
         var limit = await billing.CheckOrderLimitAsync(orgId, ct);
-        if (!limit.Allowed) return new(null, limit.PilotExpired ? "pilot_expired" : "order_limit_reached", limit);
+        if (!limit.Allowed) return new(null, limit.RefusalCode, limit);
 
         try
         {

@@ -520,7 +520,7 @@ public sealed class AdminController : ControllerBase
 
         await _db.SaveChangesAsync(ct);
 
-        var plan = PlanConstants.All.Contains(org.Plan) ? org.Plan : PlanConstants.Pilot;
+        var plan = PlanConstants.IsKnownPlan(org.Plan) ? org.Plan : PlanConstants.Pilot;
         var effectiveOrderLimit = PlanConstants.GetEffectiveOrderLimit(plan, org.OrderLimitOverride);
         var effectiveSupplierLimit = PlanConstants.GetEffectiveSupplierLimit(plan, org.SupplierLimitOverride);
         var effectiveTrialEnd = org.TrialEndsAtOverride

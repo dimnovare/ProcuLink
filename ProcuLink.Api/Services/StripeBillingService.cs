@@ -184,7 +184,7 @@ public sealed class StripeBillingService : IBillingService
         var overageOrders = chargesOverage
             ? PlanConstants.BestPriceOverageOrders(plan, orderLimit, ordersUsed)
             : 0;
-        var overageAmountEur = overageOrders * PlanConstants.OveragePerOrderEur;
+        var overageAmountEur = overageOrders * PlanConstants.GetOverageRateEur(plan);
         var nearLimit = orderLimit > 0 && ordersUsed >= (int)Math.Ceiling(orderLimit * 0.8);
         var atLimit = ordersUsed >= orderLimit;
 
@@ -226,13 +226,8 @@ public sealed class StripeBillingService : IBillingService
 
     // Config keys whose values are the YEARLY Stripe price ids. A persisted
     // org.StripePriceId matching any of these means the subscription is annual.
-    private static readonly string[] YearlyPriceConfigKeys =
-    {
-        "Stripe:GrowthYearlyPriceId",
-        "Stripe:OperationsYearlyPriceId",
-        "Stripe:IntegrationYearlyPriceId",
-        "Stripe:DistributorYearlyPriceId",
-    };
+    private static readonly IEnumerable<string> YearlyPriceConfigKeys =
+        StripeBillingMapping.PriceConfigKeys.Values.Select(k => k.Yearly);
 
     /// <summary>
     /// Maps a persisted Stripe price id to a billing interval: null when no price is
@@ -295,18 +290,9 @@ public sealed class StripeBillingService : IBillingService
     {
         plan = plan.ToLowerInvariant();
         var interval = NormalizeBillingInterval(billingInterval);
-        var priceId = (plan, interval) switch
-        {
-            (PlanConstants.Growth, "yearly") => _config["Stripe:GrowthYearlyPriceId"],
-            (PlanConstants.Operations, "yearly") => _config["Stripe:OperationsYearlyPriceId"],
-            (PlanConstants.Integration, "yearly") => _config["Stripe:IntegrationYearlyPriceId"],
-            (PlanConstants.Distributor, "yearly") => _config["Stripe:DistributorYearlyPriceId"],
-            (PlanConstants.Growth, _) => _config["Stripe:GrowthPriceId"],
-            (PlanConstants.Operations, _) => _config["Stripe:OperationsPriceId"],
-            (PlanConstants.Integration, _) => _config["Stripe:IntegrationPriceId"],
-            (PlanConstants.Distributor, _) => _config["Stripe:DistributorPriceId"],
-            _ => throw new ArgumentException($"No Stripe Checkout for plan '{plan}'.")
-        };
+        if (!StripeBillingMapping.PriceConfigKeys.TryGetValue(plan, out var keys))
+            throw new ArgumentException($"No Stripe Checkout for plan '{plan}'.");
+        var priceId = _config[interval == "yearly" ? keys.Yearly : keys.Monthly];
 
         if (string.IsNullOrWhiteSpace(priceId))
             throw new InvalidOperationException($"Stripe {interval} price ID not configured for plan '{plan}'.");
@@ -557,8 +543,9 @@ public sealed class StripeBillingService : IBillingService
         Guid orgId,
         string billingKey,
         int overageOrders,
+        decimal amountEur,
         CancellationToken ct = default) =>
-        BillOverageCoreAsync(orgId, billingKey, overageOrders, stripeInvoiceId: null, ct);
+        BillOverageCoreAsync(orgId, billingKey, overageOrders, amountEur, stripeInvoiceId: null, ct);
 
     /// <summary>
     /// Attach variant: identical money path, but the created invoice item carries
@@ -572,18 +559,20 @@ public sealed class StripeBillingService : IBillingService
         Guid orgId,
         string billingKey,
         int overageOrders,
+        decimal amountEur,
         string stripeInvoiceId,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(stripeInvoiceId))
             throw new ArgumentException("stripeInvoiceId is required on the attach overload.", nameof(stripeInvoiceId));
-        return BillOverageCoreAsync(orgId, billingKey, overageOrders, stripeInvoiceId, ct);
+        return BillOverageCoreAsync(orgId, billingKey, overageOrders, amountEur, stripeInvoiceId, ct);
     }
 
     private async Task<OverageBillingResult> BillOverageCoreAsync(
         Guid orgId,
         string billingKey,
         int overageOrders,
+        decimal amountEur,
         string? stripeInvoiceId,
         CancellationToken ct)
     {
@@ -591,7 +580,7 @@ public sealed class StripeBillingService : IBillingService
             throw new ArgumentException("billingKey is required.", nameof(billingKey));
 
         var clamped = Math.Max(0, overageOrders);
-        var amountCents = (long)Math.Round(clamped * PlanConstants.OveragePerOrderEur * 100m);
+        var amountCents = (long)Math.Round(Math.Max(0m, amountEur) * 100m, MidpointRounding.AwayFromZero);
 
         // Nothing to bill — still idempotent (record a zero so repeats are no-ops),
         // but skip Stripe entirely.
@@ -761,15 +750,12 @@ public sealed class StripeBillingService : IBillingService
     }
 
     /// <summary>
-    /// Customer-facing Stripe invoice-item description for an order-overage charge.
-    /// The amount is deliberately formatted with the invariant culture: the string
-    /// lands on customers' real invoices, so its shape must not depend on the host
-    /// OS culture (a comma-decimal server rendered "EUR0,50" on live invoices).
+    /// Customer-facing Stripe invoice-item description for an overage charge (Copy C10, every plan).
+    /// Formatted with the invariant culture: the string lands on customers' real invoices, so its
+    /// shape must not depend on the host OS culture.
     /// </summary>
-    internal static string BuildOverageDescription(int orderCount) =>
-        string.Create(
-            CultureInfo.InvariantCulture,
-            $"Order overage: {orderCount} orders x EUR{PlanConstants.OveragePerOrderEur:0.00}");
+    internal static string BuildOverageDescription(int units) =>
+        string.Create(CultureInfo.InvariantCulture, $"Document overage: {units} documents");
 
     /// <summary>
     /// Finding #9: locate an overage invoice item this org already has for the given period
@@ -966,9 +952,9 @@ public sealed class StripeBillingService : IBillingService
     }
 
     /// <summary>Flow documents count their billing units once read (<c>ReadAt</c>); the delivered-only flag does not apply.</summary>
-    private async Task<int> CountDocumentUnitsAsync(Guid orgId, DateTime since, CancellationToken ct) =>
+    private async Task<int> CountDocumentUnitsAsync(Guid orgId, DateTime since, CancellationToken ct, DateTime? until = null) =>
         await _db.FlowDocuments
-            .Where(d => d.OrgId == orgId && !d.IsSample && d.ReadAt != null && d.ReadAt >= since)
+            .Where(d => d.OrgId == orgId && !d.IsSample && d.ReadAt != null && d.ReadAt >= since && (until == null || d.ReadAt < until))
             .SumAsync(d => d.BillingUnits, ct);
 
     /// <summary>
@@ -989,8 +975,10 @@ public sealed class StripeBillingService : IBillingService
         _db.Suppliers.CountAsync(s => s.OrgId == orgId && s.DeletedAt == null && !s.IsSample, ct);
 
     /// <summary>
-    /// Computes how many BILLABLE overage orders an org processed ABOVE its effective
-    /// monthly cap within the given billing window [periodStart, periodEnd). Uses the
+    /// Computes how many BILLABLE overage units (orders plus read document units, counted as
+    /// <see cref="CountDocumentUnitsAsync"/> does) an org processed ABOVE its effective monthly
+    /// cap within the given billing window [periodStart, periodEnd), and the overage rate of the
+    /// plan that window ran on (<see cref="PlanConstants.GetOverageRateEur"/>). Uses the
     /// BEST-PRICE cap (see <see cref="PlanConstants.BestPriceOverageOrders"/>) so the
     /// billed overage never makes a lower tier + overage cost more than the cheapest
     /// higher self-serve tier that would have covered the volume — pure per-order
@@ -1015,7 +1003,7 @@ public sealed class StripeBillingService : IBillingService
     /// is additionally blocked by the period-based idempotency key in
     /// <c>BillingController.HandleInvoiceCreatedAsync</c>, which is unchanged.)</para>
     /// </summary>
-    public async Task<int> ComputePeriodOverageOrdersAsync(
+    public async Task<OverageWindow> ComputePeriodOverageOrdersAsync(
         Guid orgId,
         DateTime periodStart,
         DateTime periodEnd,
@@ -1050,15 +1038,18 @@ public sealed class StripeBillingService : IBillingService
 
         var plan = NormalizePlan(asOf?.Plan ?? org.Plan);
         var orderLimitOverride = asOf is not null ? asOf.OrderLimitOverride : org.OrderLimitOverride;
+        var rate = PlanConstants.GetOverageRateEur(plan);
         if (!PlanConstants.IsPaidPlan(plan) || plan == PlanConstants.Enterprise)
-            return 0;
+            return new OverageWindow(0, rate);
 
         var limit = PlanConstants.GetEffectiveOrderLimit(plan, orderLimitOverride);
         var windowOrders = _db.PurchaseOrders
             .Where(o => o.OrgId == orgId && !o.IsSample &&
                         o.CreatedAt >= periodStart && o.CreatedAt < periodEnd);
-        var used = await ApplyMeterStatusFilter(windowOrders).CountAsync(ct);
-        return PlanConstants.BestPriceOverageOrders(plan, limit, used);
+        // Units are added on top of the order count whatever the delivered-only flag says.
+        var used = await ApplyMeterStatusFilter(windowOrders).CountAsync(ct)
+                   + await CountDocumentUnitsAsync(orgId, periodStart, ct, until: periodEnd);
+        return new OverageWindow(PlanConstants.BestPriceOverageOrders(plan, limit, used), rate);
     }
 
     private static DateTime GetTrialEndsAt(Core.Entities.Organisation org) =>
@@ -1066,7 +1057,7 @@ public sealed class StripeBillingService : IBillingService
         org.TrialEndsAtOverride ?? org.TrialEndsAt ?? org.TrialStartedAt.Add(PlanConstants.PilotDuration);
 
     private static string NormalizePlan(string plan) =>
-        PlanConstants.All.Contains(plan) ? plan : PlanConstants.Pilot;
+        PlanConstants.IsKnownPlan(plan) ? plan : PlanConstants.Pilot;
 
     private static string NormalizeBillingInterval(string? billingInterval)
     {

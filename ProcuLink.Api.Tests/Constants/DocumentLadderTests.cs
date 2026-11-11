@@ -1,0 +1,64 @@
+using FluentAssertions;
+using ProcuLink.Core.Constants;
+using Xunit;
+
+namespace ProcuLink.Api.Tests.Constants;
+
+/// <summary>The document ladder (Starter/Pro/Business/Scale) beside the legacy one.</summary>
+public class DocumentLadderTests
+{
+    [Fact]
+    public void DocumentPlans_HaveEveryFeatureButSso()
+    {
+        var wrong = (from plan in PlanConstants.DocumentLadder
+                     from feature in Enum.GetValues<BillingFeature>()
+                     where PlanConstants.PlanHasFeature(plan, feature) != (feature != BillingFeature.Sso)
+                     select $"{plan} / {feature}").ToList();
+        wrong.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Overage_IsPerPlanAndCappedWithinTheLadder()
+    {
+        PlanConstants.BestPriceOverageOrders(PlanConstants.Starter, 150, 150).Should().Be(0);
+        PlanConstants.BestPriceOverageOrders(PlanConstants.Starter, 150, 151).Should().Be(1);
+
+        // 400 documents: capped at Pro's price (it covers 400), never Business's.
+        var over = PlanConstants.BestPriceOverageOrders(PlanConstants.Starter, 150, 400);
+        var total = over * PlanConstants.GetOverageRateEur(PlanConstants.Starter) + 35m;
+        total.Should().BeLessThanOrEqualTo(69m).And.BeGreaterThan(68.75m);
+
+        PlanConstants.GetOverageRateEur(PlanConstants.Growth).Should().Be(0.50m)
+            .And.Be(PlanConstants.OveragePerOrderEur);
+
+        // A paid plan missing from OverageRatesEur would silently bill €0 overage.
+        var paid = PlanConstants.All.Concat(PlanConstants.DocumentLadder).Distinct()
+            .Where(p => PlanConstants.IsPaidPlan(p) && p != PlanConstants.Enterprise).ToList();
+        paid.Should().HaveCountGreaterThanOrEqualTo(8, "the walk must cover both ladders, not pass vacuously");
+        paid.Where(p => PlanConstants.GetOverageRateEur(p) <= 0m).Should()
+            .BeEmpty("every self-serve paid plan needs a positive overage rate");
+    }
+
+    [Fact]
+    public void Overage_AboveTheTopTier_BillsAtTheTopTiersRate()
+    {
+        // Scale at 10,000 = €399 + 5,000 × €0.08 = €799; Starter there must never cost more.
+        var over = PlanConstants.BestPriceOverageOrders(PlanConstants.Starter, 150, 10_000);
+        over.Should().Be(3_183);
+        (35m + over * PlanConstants.GetOverageRateEur(PlanConstants.Starter)).Should().Be(798.92m);
+    }
+
+    [Fact]
+    public void FlowLimits_FollowTheLadder()
+    {
+        PlanConstants.GetFlowLimit(PlanConstants.Pilot).Should().Be(2);
+        PlanConstants.GetFlowLimit(PlanConstants.Starter).Should().Be(5);
+        PlanConstants.GetFlowLimit(PlanConstants.Pro).Should().Be(20);
+        PlanConstants.GetFlowLimit(PlanConstants.Business).Should().Be(100);
+        PlanConstants.GetFlowLimit(PlanConstants.Scale).Should().BeNull();
+        PlanConstants.GetFlowLimit(PlanConstants.Enterprise).Should().BeNull();
+        PlanConstants.GetFlowLimit(PlanConstants.Growth).Should().BeNull();
+        PlanConstants.GetFlowLimit("nonsense").Should().Be(2);
+        PlanConstants.IsKnownPlan("Growth").Should().BeFalse("plan ids are ordinal, like IsPaidPlan");
+    }
+}

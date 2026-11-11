@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Auth;
 using ProcuLink.Api.Services;
+using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
@@ -23,6 +24,7 @@ public sealed class BillingController : ControllerBase
     private readonly ProcuLinkDbContext                 _db;
     private readonly IAiUsageTracker                    _aiUsage;
     private readonly Core.Services.Delivery.IDeliveryService _delivery;
+    private readonly DocumentEngineGate                 _engine;
 
     public BillingController(
         IBillingService            billing,
@@ -31,7 +33,8 @@ public sealed class BillingController : ControllerBase
         ILogger<BillingController> logger,
         ProcuLinkDbContext         db,
         IAiUsageTracker            aiUsage,
-        Core.Services.Delivery.IDeliveryService delivery)
+        Core.Services.Delivery.IDeliveryService delivery,
+        DocumentEngineGate         engine)
     {
         _billing = billing;
         _tenant  = tenant;
@@ -40,6 +43,7 @@ public sealed class BillingController : ControllerBase
         _db      = db;
         _aiUsage = aiUsage;
         _delivery = delivery;
+        _engine   = engine;
     }
 
     /// <summary>
@@ -66,21 +70,14 @@ public sealed class BillingController : ControllerBase
     }
 
     // ── Plan rank — used to detect downgrades in HandleSubscriptionUpdatedAsync ───────────
-    private static readonly Dictionary<string, int> PlanRank = new(StringComparer.OrdinalIgnoreCase)
-    {
-        [PlanConstants.Pilot]       = 0,
-        [PlanConstants.Growth]      = 1,
-        [PlanConstants.Operations]  = 2,
-        [PlanConstants.Integration] = 3,
-        [PlanConstants.Distributor] = 4,
-        [PlanConstants.Enterprise]  = 5,
-    };
+    // Ranked by monthly list price (Pilot lowest, Enterprise highest). Equal price is not a downgrade.
+    private static decimal PlanRank(string plan) =>
+        plan == PlanConstants.Enterprise ? decimal.MaxValue : PlanConstants.GetMonthlyPriceEur(plan);
 
     private static bool IsPlanDowngrade(string? fromPlan, string toPlan) =>
-        !string.IsNullOrEmpty(fromPlan)
-        && PlanRank.TryGetValue(fromPlan, out var fromRank)
-        && PlanRank.TryGetValue(toPlan,   out var toRank)
-        && toRank < fromRank;
+        PlanConstants.IsKnownPlan(fromPlan?.ToLowerInvariant())
+        && PlanConstants.IsKnownPlan(toPlan.ToLowerInvariant())
+        && PlanRank(toPlan.ToLowerInvariant()) < PlanRank(fromPlan!.ToLowerInvariant());
 
     /// <summary>
     /// True when the event is about a subscription that is not the org's current one. Orgs are
@@ -126,9 +123,11 @@ public sealed class BillingController : ControllerBase
         [FromBody] CheckoutRequest request,
         CancellationToken ct)
     {
-        var validPlans = new[] { PlanConstants.Growth, PlanConstants.Operations, PlanConstants.Integration, PlanConstants.Distributor };
-        if (!validPlans.Contains(request.Plan, StringComparer.OrdinalIgnoreCase))
-            return BadRequest(new { error = $"Invalid plan '{request.Plan}'. Valid: growth, operations, integration, distributor." });
+        var keys = StripeBillingMapping.PriceConfigKeys.Keys;
+        if (!keys.Contains(request.Plan, StringComparer.OrdinalIgnoreCase))
+            return BadRequest(new { error = $"Invalid plan '{request.Plan}'. Valid: {string.Join(", ", keys)}." });
+        if (PlanConstants.IsDocumentPlan(request.Plan.ToLowerInvariant()) && !_engine.IsEnabled(_tenant.OrganisationId))
+            return BadRequest(new { error = "plan_not_available" });
 
         var frontendUrl = GetPrimaryFrontendUrl();
         var billingInterval = NormalizeBillingInterval(request.BillingInterval);
@@ -570,9 +569,12 @@ public sealed class BillingController : ControllerBase
             // the flag is ON (creation-month attribution, evaluated at invoice time —
             // late deliveries after a period's invoice are never caught up). The
             // period-based idempotency keys below are intentionally UNCHANGED.
-            var overageOrders = await _billing.ComputePeriodOverageOrdersAsync(
+            // Each window is priced at the rate of the plan IT ran on (one item per window).
+            var window = await _billing.ComputePeriodOverageOrdersAsync(
                 org.Id, windowStart, windowEnd, ct);
+            var overageOrders = window.Units;
             if (overageOrders <= 0) continue;
+            var amountEur = overageOrders * window.RateEur;
 
             // Idempotent: keyed on the BILLING PERIOD ("{orgId}:{periodStart:O}"), NOT the
             // invoice id. The same period maps to the same key, so the unique
@@ -583,9 +585,9 @@ public sealed class BillingController : ControllerBase
             // otherwise the historical customer-sweep overload, byte-identical.
             var result = attachToInvoiceId is not null
                 ? await _billing.BillOverageForInvoiceAsync(
-                    org.Id, billingKey, overageOrders, attachToInvoiceId, ct)
+                    org.Id, billingKey, overageOrders, amountEur, attachToInvoiceId, ct)
                 : await _billing.BillOverageForInvoiceAsync(
-                    org.Id, billingKey, overageOrders, ct);
+                    org.Id, billingKey, overageOrders, amountEur, ct);
 
             _logger.LogInformation(
                 "invoice.created overage for org {OrgId}: {Orders} orders, period={Period}, alreadyBilled={Already}, item={Item}",

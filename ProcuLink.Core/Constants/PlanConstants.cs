@@ -10,6 +10,21 @@ public static class PlanConstants
     public const string Distributor = "distributor";
     public const string Enterprise  = "enterprise";
 
+    // ── Document ladder (plan 11): sold to workspaces that have the document engine ──
+    public const string Starter  = "starter";
+    public const string Pro      = "pro";
+    public const string Business = "business";
+    public const string Scale    = "scale";
+
+    /// <summary>The document ladder, cheapest first. Deliberately NOT part of <see cref="All"/>.</summary>
+    public static readonly string[] DocumentLadder = [Starter, Pro, Business, Scale];
+
+    public static bool IsDocumentPlan(string? plan) =>
+        plan is not null && DocumentLadder.Contains(plan);
+
+    public static bool IsKnownPlan(string? plan) =>
+        plan is not null && (All.Contains(plan) || IsDocumentPlan(plan));
+
     public static readonly string[] All =
     [
         Pilot,
@@ -41,7 +56,46 @@ public static class PlanConstants
             [Integration] = (1_500,            20),
             [Distributor] = (2_500,            30),
             [Enterprise]  = (int.MaxValue,     int.MaxValue),
+            // Document ladder: documents/month; no supplier cap.
+            [Starter]     = (150,              int.MaxValue),
+            [Pro]         = (400,              int.MaxValue),
+            [Business]    = (1_500,            int.MaxValue),
+            [Scale]       = (5_000,            int.MaxValue),
         };
+
+    // ── Flows per workspace (absent = unlimited). Legacy plans have no flow cap. ──
+    public static readonly IReadOnlyDictionary<string, int> FlowLimits =
+        new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            [Pilot]    = 2,
+            [Starter]  = 5,
+            [Pro]      = 20,
+            [Business] = 100,
+        };
+
+    /// <summary>Flow cap for a plan; null for a known plan without one. An unknown plan gets Pilot's cap.</summary>
+    public static int? GetFlowLimit(string? plan) =>
+        plan is not null && FlowLimits.TryGetValue(plan, out var n) ? n
+        : IsKnownPlan(plan) ? null
+        : FlowLimits[Pilot];
+
+    // ── Billed overage rate per order/document (EUR). Legacy rows are literals so the
+    // frontend mirror can parse them; a test pins them to OveragePerOrderEur. ──
+    public static readonly IReadOnlyDictionary<string, decimal> OverageRatesEur =
+        new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase)
+        {
+            [Growth]      = 0.50m,
+            [Operations]  = 0.50m,
+            [Integration] = 0.50m,
+            [Distributor] = 0.50m,
+            [Starter]     = 0.24m,
+            [Pro]         = 0.18m,
+            [Business]    = 0.10m,
+            [Scale]       = 0.08m,
+        };
+
+    public static decimal GetOverageRateEur(string? plan) =>
+        plan is not null && OverageRatesEur.TryGetValue(plan, out var rate) ? rate : 0m;
 
     // ── Per-plan monthly AI token limits ───────────────────────────────────
     // ONE shared monthly OpenAI token budget per org across ALL AI features
@@ -61,6 +115,10 @@ public static class PlanConstants
             [Integration] = 5_000_000,
             [Distributor] = 5_000_000,
             [Enterprise]  = 10_000_000,
+            [Starter]     = 1_000_000,
+            [Pro]         = 2_500_000,
+            [Business]    = 5_000_000,
+            [Scale]       = 10_000_000,
         };
 
     /// <summary>
@@ -155,6 +213,10 @@ public static class PlanConstants
             [Integration] = 999m,
             [Distributor] = 1_499m,
             [Enterprise]  = 0m,   // custom — not a fixed list price
+            [Starter]     = 35m,
+            [Pro]         = 69m,
+            [Business]    = 149m,
+            [Scale]       = 399m,
         };
 
     /// <summary>
@@ -165,7 +227,8 @@ public static class PlanConstants
         MonthlyPriceEur.TryGetValue(plan ?? string.Empty, out var price) ? price : 0m;
 
     public static bool IsPaidPlan(string plan) =>
-        plan is Growth or Operations or Integration or Distributor or Enterprise;
+        plan is Growth or Operations or Integration or Distributor or Enterprise
+            or Starter or Pro or Business or Scale;
 
     // ── Best-price overage (fixes the upgrade-disincentivising inversion) ──
     /// <summary>
@@ -186,30 +249,38 @@ public static class PlanConstants
         (Distributor, GetOrderLimit(Distributor), GetMonthlyPriceEur(Distributor)),
     ];
 
+    /// <summary>The document ladder's rows, built the same way as <see cref="SelfServeLadder"/>.</summary>
+    public static readonly IReadOnlyList<(string Plan, int Included, decimal FlatEur)> DocumentSelfServeLadder =
+        DocumentLadder.Select(p => (p, GetOrderLimit(p), GetMonthlyPriceEur(p))).ToArray();
+
     /// <summary>
-    /// BEST-PRICE overage: returns how many "overage orders" (at
-    /// <see cref="OveragePerOrderEur"/> each) an org on <paramref name="plan"/> with
-    /// <paramref name="effectiveLimit"/> included orders should be billed for after
-    /// processing <paramref name="ordersUsed"/> orders — WITHOUT ever charging more
-    /// than the cheapest higher self-serve tier whose included volume covers the
-    /// usage. This removes the upgrade-disincentivising "overage inversion".
+    /// BEST-PRICE overage: returns how many overage units (orders or documents, each
+    /// billed at the plan's own <see cref="GetOverageRateEur"/>) an org on
+    /// <paramref name="plan"/> with <paramref name="effectiveLimit"/> included units should
+    /// be billed for after processing <paramref name="ordersUsed"/> — WITHOUT ever charging
+    /// more than the plan's own ladder would for that volume. This removes the
+    /// upgrade-disincentivising "overage inversion".
     ///
-    /// <para><b>Formula.</b> Let r = <see cref="OveragePerOrderEur"/>, F_T = this
-    /// plan's flat price, over = max(0, used − limit), and rawEur = over × r:
+    /// <para><b>Formula.</b> The ladder is the plan's own: <see cref="DocumentSelfServeLadder"/>
+    /// for a document plan, <see cref="SelfServeLadder"/> otherwise; the cap never compares
+    /// against the other ladder. Let r = this plan's rate, F_T = its flat price,
+    /// over = max(0, used − limit), rawEur = over × r, and r_top = the top tier's rate:
     /// <code>
-    ///   topTier = the highest self-serve tier (largest included volume)
+    ///   topTier = the ladder's top tier (largest included volume)
     ///   if used ≤ topTier.Included:
     ///       capEur            = min flat price over tiers whose Included ≥ used
     ///       effectiveTotalEur = min(F_T + rawEur, capEur)      // never beat the next flat tier
     ///   else if limit ≥ topTier.Included:                       // admin headroom above the top tier:
     ///       effectiveTotalEur = F_T + (used − limit) × r        // meter only beyond the granted limit
-    ///   else:                                                   // above the TOP self-serve tier:
-    ///       effectiveTotalEur = topTier.FlatEur + (used − topTier.Included) × r
+    ///   else:                                                   // above the top tier: priced as the top tier
+    ///       effectiveTotalEur = topTier.FlatEur + (used − topTier.Included) × r_top
     ///   effectiveOverageEur   = max(0, effectiveTotalEur − F_T)
-    ///   return round(effectiveOverageEur / r)                   // back to an integer order count for Stripe
+    ///   return floor(effectiveOverageEur / r)                   // whole units for Stripe, never past the cap
     /// </code>
-    /// Because every tier flat price is a whole number of euros and r = €0.50, the
-    /// capped overage is always an exact integer number of orders.</para>
+    /// Legacy: every rate is €0.50 (r = r_top) and every flat price a whole number of euros,
+    /// so the result is exact and the floor changes nothing. Document plans: rates differ
+    /// (Starter €0.24 … Scale €0.08), so the capped total is usually not a whole number of
+    /// units; flooring bills at most the cap, never past it.</para>
     ///
     /// <para>Returns 0 for non-self-serve plans (Pilot/Enterprise) and whenever the
     /// org is within its included volume. Admin per-org limit overrides flow through
@@ -226,13 +297,14 @@ public static class PlanConstants
         var over = Math.Max(0, ordersUsed - effectiveLimit);
         if (over == 0) return 0;
 
-        var rate    = OveragePerOrderEur;
+        var ladder  = IsDocumentPlan(plan) ? DocumentSelfServeLadder : SelfServeLadder;
+        var rate    = GetOverageRateEur(plan);
         var flatEur = GetMonthlyPriceEur(plan);
         var rawEur  = over * rate;
 
         // The top self-serve tier (largest included volume) — above its inclusion
         // there is no higher tier to cap against, so pure metered overage applies.
-        var topTier = SelfServeLadder[^1];
+        var topTier = ladder[^1];
 
         decimal effectiveTotalEur;
         if (ordersUsed <= topTier.Included)
@@ -240,7 +312,7 @@ public static class PlanConstants
             // Cap the monthly total at the cheapest tier whose inclusion covers usage
             // (always exists here because used ≤ topTier.Included). Never charge more
             // than that flat price — this is the upgrade-incentive guarantee.
-            var capEur = SelfServeLadder
+            var capEur = ladder
                 .Where(t => t.Included >= ordersUsed)
                 .Min(t => t.FlatEur);
             effectiveTotalEur = Math.Min(flatEur + rawEur, capEur);
@@ -255,13 +327,13 @@ public static class PlanConstants
         }
         else
         {
-            // Above the top self-serve tier: charge as if on the top tier plus pure
-            // metered overage for the excess (no higher self-serve tier exists to cap).
-            effectiveTotalEur = topTier.FlatEur + (ordersUsed - topTier.Included) * rate;
+            // Above the top self-serve tier: charge as if on the top tier, excess at the top
+            // tier's rate (no higher self-serve tier exists to cap).
+            effectiveTotalEur = topTier.FlatEur + (ordersUsed - topTier.Included) * GetOverageRateEur(topTier.Plan);
         }
 
         var effectiveOverageEur = Math.Max(0m, effectiveTotalEur - flatEur);
-        return (int)Math.Round(effectiveOverageEur / rate, MidpointRounding.AwayFromZero);
+        return (int)Math.Floor(effectiveOverageEur / rate);
     }
 
     // ── Feature gate: minimum plan required per feature ───────────────────
@@ -305,6 +377,8 @@ public static class PlanConstants
 
     public static bool PlanHasFeature(string plan, BillingFeature feature)
     {
+        // Document plans carry everything but Sso (nothing sells it; Enterprise-only).
+        if (IsDocumentPlan(plan)) return feature != BillingFeature.Sso;
         if (!MinimumPlan.TryGetValue(feature, out var minPlan)) return false;
         var planIdx = PlanOrder.IndexOf(plan);
         var minIdx  = PlanOrder.IndexOf(minPlan);

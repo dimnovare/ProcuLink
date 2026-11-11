@@ -6,7 +6,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using Microsoft.Extensions.Options;
 using ProcuLink.Api.Controllers;
+using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -48,6 +50,9 @@ public class BillingControllerTests
                 ["Stripe:IntegrationYearlyPriceId"] = "price_int_yearly_test",
                 ["Stripe:DistributorPriceId"] = "price_dist_test",
                 ["Stripe:DistributorYearlyPriceId"] = "price_dist_yearly_test",
+                ["Stripe:StarterPriceId"]  = "price_starter_test",
+                ["Stripe:ProPriceId"]      = "price_pro_test",
+                ["Stripe:BusinessPriceId"] = "price_business_test",
             })
             .Build();
 
@@ -57,7 +62,7 @@ public class BillingControllerTests
         Mock<IAiUsageTracker>   AiUsage,
         Guid                    OrgId,
         ProcuLinkDbContext      Db)
-    Build(ProcuLinkDbContext? db = null, string? webhookSecret = null)
+    Build(ProcuLinkDbContext? db = null, string? webhookSecret = null, bool engine = false)
     {
         db ??= MakeDb();
         var orgId = Guid.NewGuid();
@@ -76,7 +81,8 @@ public class BillingControllerTests
             NullLogger<BillingController>.Instance,
             db,
             aiUsage.Object,
-            delivery.Object);
+            delivery.Object,
+            new DocumentEngineGate(Options.Create(new DocumentEngineOptions { EnabledForAll = engine })));
 
         return (ctrl, billing, aiUsage, orgId, db);
     }
@@ -298,6 +304,23 @@ public class BillingControllerTests
 
         var ok = result.Should().BeOfType<OkObjectResult>().Subject;
         ok.Value.Should().BeEquivalentTo(new { url = "https://checkout.stripe.com/yearly" });
+    }
+
+    [Fact]
+    public async Task Checkout_RefusesADocumentPlanWithoutTheEngine()
+    {
+        var (off, offBilling, _, _, _) = Build(engine: false);
+        var refused = await off.CreateCheckout(new CheckoutRequest(PlanConstants.Starter), CancellationToken.None);
+        refused.Should().BeOfType<BadRequestObjectResult>().Which.Value.Should().BeEquivalentTo(new { error = "plan_not_available" });
+        offBilling.VerifyNoOtherCalls();
+
+        var (on, onBilling, _, orgId, _) = Build(engine: true);
+        onBilling
+            .Setup(b => b.CreateCheckoutSessionAsync(orgId, PlanConstants.Starter, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("https://checkout.stripe.com/starter");
+        var allowed = await on.CreateCheckout(new CheckoutRequest(PlanConstants.Starter), CancellationToken.None);
+        allowed.Should().BeOfType<OkObjectResult>();
+        onBilling.Verify(b => b.CreateCheckoutSessionAsync(orgId, PlanConstants.Starter, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // ── Webhook handler unit tests ────────────────────────────────────────────
@@ -674,6 +697,28 @@ public class BillingControllerTests
             "a redelivered event with an equal created timestamp must still apply (idempotent re-apply)");
     }
 
+    // Downgrade = strictly lower monthly list price, across both ladders (PlanRank).
+    [Theory]
+    [InlineData(PlanConstants.Growth, PlanConstants.Starter, true)]    // €149 → €35
+    [InlineData(PlanConstants.Growth, PlanConstants.Business, false)]  // €149 → €149: equal is not lower
+    [InlineData(PlanConstants.Starter, PlanConstants.Pro, false)]      // €35 → €69
+    public async Task HandleSubscriptionUpdated_RanksPlansByListPriceAcrossLadders(string from, string to, bool downgrade)
+    {
+        var (ctrl, billing, _, orgId, db) = Build();
+        var org = OrderGuardOrg(orgId);
+        org.Plan = from;
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+        var sub = UpdatedSub("active");
+        sub.Items.Data.Add(new Stripe.SubscriptionItem { Price = new Stripe.Price { Id = $"price_{to}_test" } });
+
+        await ctrl.HandleSubscriptionUpdatedAsync(sub, DateTime.UtcNow, CancellationToken.None);
+
+        (await db.Organisations.FindAsync(orgId))!.Plan.Should().Be(to);
+        billing.Verify(b => b.EmitBillingDowngradedAsync(orgId, from, to, It.IsAny<CancellationToken>()),
+            downgrade ? Times.Once() : Times.Never());
+    }
+
     // ── Webhook calls billing events THROUGH the IBillingService interface ────
     // Regression guard for the removed runtime downcast (IBillingService ->
     // StripeBillingService). The controller now resolves a Moq IBillingService
@@ -778,11 +823,11 @@ public class BillingControllerTests
         billing
             .Setup(b => b.ComputePeriodOverageOrdersAsync(
                 orgId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(7);
+            .ReturnsAsync(new OverageWindow(7, 0.50m));
         billing
             .Setup(b => b.BillOverageForInvoiceAsync(
-                orgId, It.IsAny<string>(), 7, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Guid o, string key, int orders, CancellationToken _) =>
+                orgId, It.IsAny<string>(), 7, 3.50m, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid o, string key, int orders, decimal _, CancellationToken _) =>
                 new OverageBillingResult(o, key, orders, orders * 50L, AlreadyBilled: false, StripeItemId: "ii_test"));
 
         var periodStart = new DateTime(2026, 5, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -809,7 +854,7 @@ public class BillingControllerTests
             orgId, periodStart, periodEnd, It.IsAny<CancellationToken>()), Times.Once,
             "invoice.created must compute overage THROUGH IBillingService");
         billing.Verify(b => b.BillOverageForInvoiceAsync(
-            orgId, expectedKey, 7, It.IsAny<CancellationToken>()), Times.Once,
+            orgId, expectedKey, 7, 3.50m, It.IsAny<CancellationToken>()), Times.Once,
             "invoice.created must bill overage THROUGH IBillingService, not a downcast");
     }
 
@@ -834,7 +879,7 @@ public class BillingControllerTests
         billing
             .Setup(b => b.ComputePeriodOverageOrdersAsync(
                 orgId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(0);
+            .ReturnsAsync(new OverageWindow(0, 0.50m));
 
         var invoice = new Stripe.Invoice
         {
@@ -854,7 +899,7 @@ public class BillingControllerTests
         billing.Verify(b => b.ComputePeriodOverageOrdersAsync(
             orgId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()), Times.Once);
         billing.Verify(b => b.BillOverageForInvoiceAsync(
-            It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never,
+            It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()), Times.Never,
             "no overage must mean no billing call");
     }
 
@@ -1052,11 +1097,11 @@ public class BillingControllerTests
             .Setup(b => b.ComputePeriodOverageOrdersAsync(
                 orgId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Guid _, DateTime s, DateTime _, CancellationToken _) =>
-                s == marchStart ? 4 : 0);
+                new OverageWindow(s == marchStart ? 4 : 0, 0.50m));
         billing
             .Setup(b => b.BillOverageForInvoiceAsync(
-                orgId, It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Guid o, string key, int orders, CancellationToken _) =>
+                orgId, It.IsAny<string>(), It.IsAny<int>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid o, string key, int orders, decimal _, CancellationToken _) =>
                 new OverageBillingResult(o, key, orders, orders * 50L, AlreadyBilled: false, StripeItemId: "ii_march"));
 
         var invoice = new Stripe.Invoice
@@ -1090,10 +1135,10 @@ public class BillingControllerTests
         // Only the over-cap month is billed, keyed on ITS window start (own ledger row).
         var marchKey = BillingController.BuildPeriodBillingKey(orgId, marchStart);
         billing.Verify(b => b.BillOverageForInvoiceAsync(
-            orgId, marchKey, 4, It.IsAny<CancellationToken>()), Times.Once,
+            orgId, marchKey, 4, 2.00m, It.IsAny<CancellationToken>()), Times.Once,
             "the over-cap month is billed with its own per-month period key");
         billing.Verify(b => b.BillOverageForInvoiceAsync(
-            It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
             Times.Once, "under-cap months must not be billed at all");
     }
 
@@ -1126,7 +1171,7 @@ public class BillingControllerTests
             .Setup(b => b.ComputePeriodOverageOrdersAsync(
                 orgId, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
             .Callback((Guid _, DateTime s, DateTime e, CancellationToken _) => seenWindows.Add((s, e)))
-            .ReturnsAsync(0);
+            .ReturnsAsync(new OverageWindow(0, 0.50m));
 
         var invoice = new Stripe.Invoice
         {

@@ -1,7 +1,12 @@
 using System.Net;
 using System.Net.Http.Json;
+using Microsoft.Extensions.Options;
 using ProcuLink.Api.Contracts;
+using ProcuLink.Api.Services.Documents;
+using Microsoft.Extensions.DependencyInjection;
 using ProcuLink.Core.Documents;
+using ProcuLink.Core.Entities;
+using ProcuLink.Infrastructure;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Documents;
@@ -60,5 +65,44 @@ public class FlowsApiTests(DocumentEngineTestFactory factory) : IClassFixture<Do
         var off = await factory.ClientFor(DocumentEngineTestFactory.OrgOff).GetAsync("/api/flows");
         Assert.Equal(HttpStatusCode.Forbidden, off.StatusCode);
         Assert.Contains("document_engine_not_enabled", await off.Content.ReadAsStringAsync());
+    }
+
+    /// <summary>A fresh enabled org on <paramref name="plan"/> that already owns <paramref name="flows"/> flows.</summary>
+    private HttpClient OrgOnPlan(string plan, int flows)
+    {
+        var org = Guid.NewGuid();
+        var http = factory.ClientFor(org);
+        using var scope = factory.Services.CreateScope();
+        var on = scope.ServiceProvider.GetRequiredService<IOptions<DocumentEngineOptions>>().Value;
+        on.EnabledOrgIds = [.. on.EnabledOrgIds, org.ToString()];
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        db.Organisations.Single(o => o.Id == org).Plan = plan;
+        for (var n = 0; n < flows; n++)
+            db.Flows.Add(new Flow { Id = Guid.NewGuid(), OrgId = org, Name = $"F{n}", FieldsJson = DocumentJson.Serialize(FlowFieldList.Empty), CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+        db.SaveChanges();
+        return http;
+    }
+
+    [Fact]
+    public async Task Create_IsRefusedAtTheTrialsTwoFlows()
+    {
+        var http = OrgOnPlan("pilot", 2);
+
+        var res = await http.PostAsJsonAsync("/api/flows", new CreateFlowRequest("Third"));
+
+        Assert.Equal((HttpStatusCode)429, res.StatusCode);
+        var body = await res.Content.ReadAsStringAsync();
+        Assert.Contains("\"error\":\"flow_limit_reached\"", body);
+        Assert.Contains("\"limit\":2", body);
+        Assert.Contains("\"plan\":\"pilot\"", body);
+        Assert.Equal(2, (await http.GetFromJsonAsync<List<FlowDto>>("/api/flows", DocumentJson.Options))!.Count);
+    }
+
+    [Fact]
+    public async Task Create_HasNoCapOnScale()
+    {
+        var res = await OrgOnPlan("scale", 30).PostAsJsonAsync("/api/flows", new CreateFlowRequest("Thirty-first"));
+
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
     }
 }

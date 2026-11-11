@@ -111,7 +111,7 @@ public class OverageInvoiceAttachTests
         var svc = MakeService(db, stripe);
         var key = $"{org.Id}:2026-01-01T00:00:00.0000000Z";
 
-        var result = await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 5, stripeInvoiceId: "in_draft_123");
+        var result = await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 5, amountEur: 2.50m, stripeInvoiceId: "in_draft_123");
 
         var req = stripe.Requests.Should().ContainSingle("exactly one invoice-item create call").Subject;
         var options = req.Options.Should().BeOfType<InvoiceItemCreateOptions>().Subject;
@@ -136,8 +136,8 @@ public class OverageInvoiceAttachTests
         var svc = MakeService(db, stripe);
         var key = $"{org.Id}:2026-02-01T00:00:00.0000000Z";
 
-        var first  = await svc.BillOverageForInvoiceAsync(org.Id, key, 5, "in_draft_456");
-        var second = await svc.BillOverageForInvoiceAsync(org.Id, key, 5, "in_draft_456");
+        var first  = await svc.BillOverageForInvoiceAsync(org.Id, key, 5, 2.50m, "in_draft_456");
+        var second = await svc.BillOverageForInvoiceAsync(org.Id, key, 5, 2.50m, "in_draft_456");
 
         first.AlreadyBilled.Should().BeFalse();
         second.AlreadyBilled.Should().BeTrue("the (orgId, billingKey) ledger blocks the replay");
@@ -151,7 +151,7 @@ public class OverageInvoiceAttachTests
         var org = await AddPaidOrgAsync(db);
         var svc = MakeService(db, new CapturingStripeClient());
 
-        var act = () => svc.BillOverageForInvoiceAsync(org.Id, "key", 5, stripeInvoiceId: " ");
+        var act = () => svc.BillOverageForInvoiceAsync(org.Id, "key", 5, 2.50m, stripeInvoiceId: " ");
 
         await act.Should().ThrowAsync<ArgumentException>("the attach overload requires a real invoice id");
     }
@@ -167,7 +167,7 @@ public class OverageInvoiceAttachTests
         var svc = MakeService(db, stripe);
         var key = $"{org.Id}:2026-03-01T00:00:00.0000000Z";
 
-        var result = await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 4);
+        var result = await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 4, amountEur: 2.00m);
 
         var req = stripe.Requests.Should().ContainSingle().Subject;
         var options = req.Options.Should().BeOfType<InvoiceItemCreateOptions>().Subject;
@@ -176,6 +176,78 @@ public class OverageInvoiceAttachTests
         options.Customer.Should().Be("cus_attach_test");
         req.RequestOptions.IdempotencyKey.Should().Be(key);
         result.AmountCents.Should().Be(200);
+    }
+
+    // ── invoice.created end to end: document units, each window at its plan's rate ──
+
+    private static readonly DateTime Jan1 = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime Feb1 = new(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime Mar1 = new(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    private static Task HandleDraftInvoiceAsync(ProcuLinkDbContext db, IStripeClient stripe, DateTime start, DateTime end) =>
+        new ProcuLink.Api.Controllers.BillingController(
+                MakeService(db, stripe), Moq.Mock.Of<ICurrentTenantService>(), new ConfigurationBuilder().Build(),
+                NullLogger<ProcuLink.Api.Controllers.BillingController>.Instance, db,
+                Moq.Mock.Of<ProcuLink.Core.Services.Ai.IAiUsageTracker>(), Moq.Mock.Of<ProcuLink.Core.Services.Delivery.IDeliveryService>(),
+                new ProcuLink.Api.Services.Documents.DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new ProcuLink.Api.Services.Documents.DocumentEngineOptions())))
+            .HandleInvoiceCreatedAsync(new Invoice
+            {
+                Id = "in_draft_units", CustomerId = "cus_attach_test", Status = "draft", PeriodStart = start, PeriodEnd = end,
+                Parent = new InvoiceParent { SubscriptionDetails = new InvoiceParentSubscriptionDetails { SubscriptionId = "sub_units" } },
+            }, CancellationToken.None);
+
+    private static async Task SeedAsync(ProcuLinkDbContext db, Guid orgId, DateTime at, int orders, int readUnits)
+    {
+        for (var i = 0; i < orders; i++)
+            db.PurchaseOrders.Add(new PurchaseOrderEntity
+            {
+                Id = Guid.NewGuid(), OrgId = orgId, PoNumber = $"PO-{at:yyyyMM}-{i}", Status = "delivered",
+                Currency = "EUR", CreatedAt = at, UpdatedAt = at,
+            });
+        if (readUnits > 0)
+            db.FlowDocuments.Add(new FlowDocument
+            {
+                Id = Guid.NewGuid(), OrgId = orgId, FlowId = Guid.NewGuid(), BillingUnits = readUnits,
+                CreatedAt = at, UpdatedAt = at, ReadAt = at,
+            });
+        await db.SaveChangesAsync();
+    }
+
+    private static IEnumerable<(long, string)> Items(CapturingStripeClient stripe) =>
+        stripe.Requests.Select(r => (InvoiceItemCreateOptions)r.Options).Select(o => (o.Amount ?? 0, o.Description));
+
+    [Fact]
+    public async Task InvoiceOverage_IncludesDocumentUnits()
+    {
+        var db = MakeDb();
+        var org = await AddPaidOrgAsync(db); // Growth, 150 included
+        await SeedAsync(db, org.Id, Jan1.AddDays(1), orders: 150, readUnits: 4);
+        var stripe = new CapturingStripeClient();
+
+        await HandleDraftInvoiceAsync(db, stripe, Jan1, Feb1);
+
+        Items(stripe).Should().Equal(new[] { (200L, "Document overage: 4 documents") },
+            "150 orders fill Growth's allowance, so the 4 read units are billed at €0.50");
+    }
+
+    [Fact]
+    public async Task InvoiceOverage_BillsEachWindowAtItsPlansRate()
+    {
+        var db = MakeDb();
+        var org = await AddPaidOrgAsync(db);
+        db.OrgPlanHistories.AddRange(
+            new OrgPlanHistory { Id = Guid.NewGuid(), OrgId = org.Id, Plan = PlanConstants.Growth,  EffectiveFrom = Jan1 },
+            new OrgPlanHistory { Id = Guid.NewGuid(), OrgId = org.Id, Plan = PlanConstants.Starter, EffectiveFrom = Feb1 });
+        await db.SaveChangesAsync();
+        await SeedAsync(db, org.Id, Jan1.AddDays(1), orders: 152, readUnits: 0); // Growth: 2 over
+        await SeedAsync(db, org.Id, Feb1.AddDays(1), orders: 0, readUnits: 160); // Starter: 10 over
+        var stripe = new CapturingStripeClient();
+
+        await HandleDraftInvoiceAsync(db, stripe, Jan1, Mar1); // two monthly windows
+
+        Items(stripe).Should().Equal(
+            new[] { (100L, "Document overage: 2 documents"), (240L, "Document overage: 10 documents") },
+            "January is billed at Growth's €0.50 and February at Starter's €0.24; February's units never count in January");
     }
 
     // ── poison-ledger recovery: a Stripe failure AFTER the ledger row is ─────
@@ -227,7 +299,7 @@ public class OverageInvoiceAttachTests
         var key = $"{org.Id}:2026-04-01T00:00:00.0000000Z";
 
         // ── Attempt 1: ledger row commits, then the Stripe call throws ──────
-        var attempt1 = async () => await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10, stripeInvoiceId: "in_draft_poison");
+        var attempt1 = async () => await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10, amountEur: 5.00m, stripeInvoiceId: "in_draft_poison");
         await attempt1.Should().ThrowAsync<StripeException>(
             "the Stripe call fails AFTER the ledger row is committed — the webhook would 500 and Stripe retries");
 
@@ -238,7 +310,7 @@ public class OverageInvoiceAttachTests
 
         // ── Attempt 2 (Stripe healthy): the retry MUST re-attempt Stripe ─────
         // and NOT report AlreadyBilled — otherwise the €5.00 is lost forever.
-        var attempt2 = await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10, stripeInvoiceId: "in_draft_poison");
+        var attempt2 = await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10, amountEur: 5.00m, stripeInvoiceId: "in_draft_poison");
         attempt2.AlreadyBilled.Should().BeFalse(
             "a NULL-item ledger row must not suppress the retry while Stripe is the billing authority");
         attempt2.StripeItemId.Should().Be("ii_recovered_1", "the retry created the real Stripe item");
@@ -254,7 +326,7 @@ public class OverageInvoiceAttachTests
             .Should().Be(1, "still exactly one ledger row — no duplicate, no double-bill");
 
         // ── Attempt 3: a normal replay (row now HAS an item id) is a no-op ───
-        var attempt3 = await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10, stripeInvoiceId: "in_draft_poison");
+        var attempt3 = await svc.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10, amountEur: 5.00m, stripeInvoiceId: "in_draft_poison");
         attempt3.AlreadyBilled.Should().BeTrue("once the item id is set, replays are clean idempotent no-ops");
         stripe.CallCount.Should().Be(3, "the no-op replay makes no further Stripe call (terminal ledger row)");
     }
@@ -378,7 +450,7 @@ public class OverageInvoiceAttachTests
         {
             using var ctx1 = new FailItemPersistOnceDbContext(Opts(), failOnce);
             var svc1 = MakeService(ctx1, stripe);
-            await svc1.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10, stripeInvoiceId: "in_draft_persistfail");
+            await svc1.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10, amountEur: 5.00m, stripeInvoiceId: "in_draft_persistfail");
         };
         await attempt1.Should().ThrowAsync<DbUpdateException>(
             "the item-id persist fails AFTER the Stripe item is created — the webhook 500s and Stripe retries");
@@ -396,7 +468,7 @@ public class OverageInvoiceAttachTests
         using (var ctx2 = new FailItemPersistOnceDbContext(Opts(), failOnce))
         {
             var svc2 = MakeService(ctx2, stripe);
-            result = await svc2.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10, stripeInvoiceId: "in_draft_persistfail");
+            result = await svc2.BillOverageForInvoiceAsync(org.Id, key, overageOrders: 10, amountEur: 5.00m, stripeInvoiceId: "in_draft_persistfail");
         }
 
         // THE FINDING: no duplicate — the retry reused the item created in attempt 1.
