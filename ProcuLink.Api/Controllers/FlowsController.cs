@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Auth;
 using ProcuLink.Api.Services.Documents;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -54,11 +55,15 @@ public sealed class FlowsController(
     public async Task<IActionResult> Create([FromBody] CreateFlowRequest request, CancellationToken ct)
     {
         if (Refuse() is { } refused) return refused;
+        var orgId = tenant.OrganisationId;
+        var plan = await db.Organisations.Where(o => o.Id == orgId).Select(o => o.Plan).FirstOrDefaultAsync(ct) ?? PlanConstants.Pilot;
+        if (PlanConstants.GetFlowLimit(plan) is int cap && await db.Flows.CountAsync(f => f.OrgId == orgId, ct) >= cap)
+            return StatusCode(429, new { error = "flow_limit_reached", plan, limit = cap, upgradeUrl = "/settings" });
         if (!TryName(request.Name, out var name)) return BadRequest(new { error = "invalid_name" });
         var now = DateTime.UtcNow;
         var flow = new Flow
         {
-            Id = Guid.NewGuid(), OrgId = tenant.OrganisationId, Name = name,
+            Id = Guid.NewGuid(), OrgId = orgId, Name = name,
             FieldsJson = DocumentJson.Serialize(FlowFieldList.Empty), CreatedAt = now, UpdatedAt = now,
         };
         db.Flows.Add(flow);
