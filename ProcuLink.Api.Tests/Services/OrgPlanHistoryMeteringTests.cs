@@ -243,16 +243,16 @@ public class OrgPlanHistoryMeteringTests
     public async Task FirstWindowAfterAnUpgrade_IsMeteredAtTheNewPlan()
     {
         var db = MakeDb();
-        var org = await AddOrgWithCleanHistoryAsync(db, PlanConstants.Operations);
+        var org = await AddOrgWithCleanHistoryAsync(db, PlanConstants.Pro);
         var changedAt = new DateTime(2026, 6, 10, 9, 0, 0, DateTimeKind.Utc); // the new period's start
-        await AddHistoryAsync(db, org.Id, PlanConstants.Growth,     null, Jan1);
-        await AddHistoryAsync(db, org.Id, PlanConstants.Operations, null, changedAt.AddSeconds(5)); // webhook time
+        await AddHistoryAsync(db, org.Id, PlanConstants.Starter, null, Jan1);
+        await AddHistoryAsync(db, org.Id, PlanConstants.Pro,     null, changedAt.AddSeconds(5)); // webhook time
         await SeedOrdersInWindowAsync(db, org.Id, changedAt, 300);
 
         var overage = await MakeService(db).ComputePeriodOverageOrdersAsync(org.Id, changedAt, changedAt.AddMonths(1));
 
         overage.Units.Should().Be(0,
-            "the window that the upgrade opened ran on Operations (cap 500); resolving it at its " +
-            "start picked Growth (cap 150) and billed 150 orders the customer had paid to include");
+            "the window that the upgrade opened ran on Pro (cap 400); resolving it at its " +
+            "start picked Starter (cap 150) and billed 150 documents the customer had paid to include");
     }
 }
