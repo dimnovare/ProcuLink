@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
@@ -53,6 +54,23 @@ public class DocumentSubmitTests : IClassFixture<DocumentEngineTestFactory>
         var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
         Assert.False(await db.FlowDocuments.AnyAsync(d => d.FlowId == flowId));
     }
+
+    [Fact]
+    public async Task Submit_PausedPaidWorkspace_IsProcessingPaused()
+    {
+        var paused = new LimitCheckResult(false, false, "growth", 150);
+        var (scope, flowId) = await ScopeWithFlow(paused);
+        using var _ = scope;
+
+        var result = await Submit(scope, flowId, "email", "a@example.test");
+
+        var response = Assert.IsType<ObjectResult>(ProcuLink.Api.Controllers.IntakeResults.From(new StubController(), result, "Synthetic flow", []));
+        Assert.Equal(429, response.StatusCode);
+        Assert.Equal("processing_paused", result.Error);
+        Assert.DoesNotContain("limit", paused.FlowPausedMessage);
+    }
+
+    private sealed class StubController : ControllerBase;
 
     [Fact]
     public async Task Submit_records_the_source()
