@@ -226,13 +226,8 @@ public sealed class StripeBillingService : IBillingService
 
     // Config keys whose values are the YEARLY Stripe price ids. A persisted
     // org.StripePriceId matching any of these means the subscription is annual.
-    private static readonly string[] YearlyPriceConfigKeys =
-    {
-        "Stripe:GrowthYearlyPriceId",
-        "Stripe:OperationsYearlyPriceId",
-        "Stripe:IntegrationYearlyPriceId",
-        "Stripe:DistributorYearlyPriceId",
-    };
+    private static readonly IEnumerable<string> YearlyPriceConfigKeys =
+        StripeBillingMapping.PriceConfigKeys.Values.Select(k => k.Yearly);
 
     /// <summary>
     /// Maps a persisted Stripe price id to a billing interval: null when no price is
@@ -295,18 +290,9 @@ public sealed class StripeBillingService : IBillingService
     {
         plan = plan.ToLowerInvariant();
         var interval = NormalizeBillingInterval(billingInterval);
-        var priceId = (plan, interval) switch
-        {
-            (PlanConstants.Growth, "yearly") => _config["Stripe:GrowthYearlyPriceId"],
-            (PlanConstants.Operations, "yearly") => _config["Stripe:OperationsYearlyPriceId"],
-            (PlanConstants.Integration, "yearly") => _config["Stripe:IntegrationYearlyPriceId"],
-            (PlanConstants.Distributor, "yearly") => _config["Stripe:DistributorYearlyPriceId"],
-            (PlanConstants.Growth, _) => _config["Stripe:GrowthPriceId"],
-            (PlanConstants.Operations, _) => _config["Stripe:OperationsPriceId"],
-            (PlanConstants.Integration, _) => _config["Stripe:IntegrationPriceId"],
-            (PlanConstants.Distributor, _) => _config["Stripe:DistributorPriceId"],
-            _ => throw new ArgumentException($"No Stripe Checkout for plan '{plan}'.")
-        };
+        if (!StripeBillingMapping.PriceConfigKeys.TryGetValue(plan, out var keys))
+            throw new ArgumentException($"No Stripe Checkout for plan '{plan}'.");
+        var priceId = _config[interval == "yearly" ? keys.Yearly : keys.Monthly];
 
         if (string.IsNullOrWhiteSpace(priceId))
             throw new InvalidOperationException($"Stripe {interval} price ID not configured for plan '{plan}'.");

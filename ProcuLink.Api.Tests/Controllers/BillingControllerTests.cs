@@ -6,7 +6,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using Microsoft.Extensions.Options;
 using ProcuLink.Api.Controllers;
+using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -57,7 +59,7 @@ public class BillingControllerTests
         Mock<IAiUsageTracker>   AiUsage,
         Guid                    OrgId,
         ProcuLinkDbContext      Db)
-    Build(ProcuLinkDbContext? db = null, string? webhookSecret = null)
+    Build(ProcuLinkDbContext? db = null, string? webhookSecret = null, bool engine = false)
     {
         db ??= MakeDb();
         var orgId = Guid.NewGuid();
@@ -76,7 +78,8 @@ public class BillingControllerTests
             NullLogger<BillingController>.Instance,
             db,
             aiUsage.Object,
-            delivery.Object);
+            delivery.Object,
+            new DocumentEngineGate(Options.Create(new DocumentEngineOptions { EnabledForAll = engine })));
 
         return (ctrl, billing, aiUsage, orgId, db);
     }
@@ -298,6 +301,23 @@ public class BillingControllerTests
 
         var ok = result.Should().BeOfType<OkObjectResult>().Subject;
         ok.Value.Should().BeEquivalentTo(new { url = "https://checkout.stripe.com/yearly" });
+    }
+
+    [Fact]
+    public async Task Checkout_RefusesADocumentPlanWithoutTheEngine()
+    {
+        var (off, offBilling, _, _, _) = Build(engine: false);
+        var refused = await off.CreateCheckout(new CheckoutRequest(PlanConstants.Starter), CancellationToken.None);
+        refused.Should().BeOfType<BadRequestObjectResult>().Which.Value.Should().BeEquivalentTo(new { error = "plan_not_available" });
+        offBilling.VerifyNoOtherCalls();
+
+        var (on, onBilling, _, orgId, _) = Build(engine: true);
+        onBilling
+            .Setup(b => b.CreateCheckoutSessionAsync(orgId, PlanConstants.Starter, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("https://checkout.stripe.com/starter");
+        var allowed = await on.CreateCheckout(new CheckoutRequest(PlanConstants.Starter), CancellationToken.None);
+        allowed.Should().BeOfType<OkObjectResult>();
+        onBilling.Verify(b => b.CreateCheckoutSessionAsync(orgId, PlanConstants.Starter, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // ── Webhook handler unit tests ────────────────────────────────────────────

@@ -188,7 +188,8 @@ public class OverageInvoiceAttachTests
         new ProcuLink.Api.Controllers.BillingController(
                 MakeService(db, stripe), Moq.Mock.Of<ICurrentTenantService>(), new ConfigurationBuilder().Build(),
                 NullLogger<ProcuLink.Api.Controllers.BillingController>.Instance, db,
-                Moq.Mock.Of<ProcuLink.Core.Services.Ai.IAiUsageTracker>(), Moq.Mock.Of<ProcuLink.Core.Services.Delivery.IDeliveryService>())
+                Moq.Mock.Of<ProcuLink.Core.Services.Ai.IAiUsageTracker>(), Moq.Mock.Of<ProcuLink.Core.Services.Delivery.IDeliveryService>(),
+                new ProcuLink.Api.Services.Documents.DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new ProcuLink.Api.Services.Documents.DocumentEngineOptions())))
             .HandleInvoiceCreatedAsync(new Invoice
             {
                 Id = "in_draft_units", CustomerId = "cus_attach_test", Status = "draft", PeriodStart = start, PeriodEnd = end,

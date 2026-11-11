@@ -39,6 +39,20 @@ public class StripeBillingMappingTests
     public void MapPriceIdToPlan_MapsKnownPrices(string priceId, string expected) =>
         StripeBillingMapping.MapPriceIdToPlan(Config(), priceId).Should().Be(expected);
 
+    [Fact]
+    public void MapPriceIdToPlan_KnowsTheDocumentLadder()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Stripe:StarterPriceId"] = "price_s_m",
+            ["Stripe:StarterYearlyPriceId"] = "price_s_y",
+        }).Build();
+
+        StripeBillingMapping.MapPriceIdToPlan(config, "price_s_m").Should().Be(PlanConstants.Starter);
+        StripeBillingMapping.MapPriceIdToPlan(config, "price_s_y").Should().Be(PlanConstants.Starter);
+        StripeBillingMapping.MapPriceIdToPlan(config, "price_unknown").Should().BeNull();
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

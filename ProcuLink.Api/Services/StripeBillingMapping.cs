@@ -17,6 +17,20 @@ namespace ProcuLink.Api.Services;
 /// </summary>
 public static class StripeBillingMapping
 {
+    /// <summary>Every self-serve plan's monthly and yearly Stripe price config keys: the one table checkout, webhook mapping and interval detection read.</summary>
+    public static readonly IReadOnlyDictionary<string, (string Monthly, string Yearly)> PriceConfigKeys =
+        new Dictionary<string, (string Monthly, string Yearly)>
+        {
+            [PlanConstants.Growth]      = ("Stripe:GrowthPriceId", "Stripe:GrowthYearlyPriceId"),
+            [PlanConstants.Operations]  = ("Stripe:OperationsPriceId", "Stripe:OperationsYearlyPriceId"),
+            [PlanConstants.Integration] = ("Stripe:IntegrationPriceId", "Stripe:IntegrationYearlyPriceId"),
+            [PlanConstants.Distributor] = ("Stripe:DistributorPriceId", "Stripe:DistributorYearlyPriceId"),
+            [PlanConstants.Starter]     = ("Stripe:StarterPriceId", "Stripe:StarterYearlyPriceId"),
+            [PlanConstants.Pro]         = ("Stripe:ProPriceId", "Stripe:ProYearlyPriceId"),
+            [PlanConstants.Business]    = ("Stripe:BusinessPriceId", "Stripe:BusinessYearlyPriceId"),
+            [PlanConstants.Scale]       = ("Stripe:ScalePriceId", "Stripe:ScaleYearlyPriceId"),
+        };
+
     /// <summary>
     /// Maps a Stripe price id to a ProcuLink plan constant using the configured price ids, or
     /// null when the price is blank/unrecognised (the caller keeps the org's existing plan —
@@ -25,14 +39,8 @@ public static class StripeBillingMapping
     public static string? MapPriceIdToPlan(IConfiguration config, string? priceId)
     {
         if (string.IsNullOrWhiteSpace(priceId)) return null;
-        if (priceId == config["Stripe:GrowthPriceId"]) return PlanConstants.Growth;
-        if (priceId == config["Stripe:GrowthYearlyPriceId"]) return PlanConstants.Growth;
-        if (priceId == config["Stripe:OperationsPriceId"]) return PlanConstants.Operations;
-        if (priceId == config["Stripe:OperationsYearlyPriceId"]) return PlanConstants.Operations;
-        if (priceId == config["Stripe:IntegrationPriceId"]) return PlanConstants.Integration;
-        if (priceId == config["Stripe:IntegrationYearlyPriceId"]) return PlanConstants.Integration;
-        if (priceId == config["Stripe:DistributorPriceId"]) return PlanConstants.Distributor;
-        if (priceId == config["Stripe:DistributorYearlyPriceId"]) return PlanConstants.Distributor;
+        foreach (var (plan, keys) in PriceConfigKeys)
+            if (priceId == config[keys.Monthly] || priceId == config[keys.Yearly]) return plan;
         return null;
     }
 
