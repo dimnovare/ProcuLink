@@ -274,7 +274,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // baseline is healed in alongside a change, the baseline's EffectiveFrom is
             // strictly BEFORE the change row's. The as-of metering reader
             // (StripeBillingService.ComputePeriodOverageOrdersAsync) picks the latest
-            // row with EffectiveFrom ≤ windowStart; if a healed baseline tied the change
+            // row with EffectiveFrom < windowEnd; if a healed baseline tied the change
             // row at the same instant, that pick would be ambiguous (plan/override could
             // flip between meterings of the same window). The 1 ms guard below keeps the
             // two strictly ordered even in the degenerate CreatedAt==default case.

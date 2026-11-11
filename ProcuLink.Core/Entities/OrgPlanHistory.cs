@@ -13,9 +13,9 @@ namespace ProcuLink.Core.Entities;
 /// each metered for per-order overage. Metering those windows with TODAY's plan
 /// would retroactively re-price history: a mid-year DOWNGRADE would re-meter the
 /// old months at the new lower cap (wrongful overage charges); an upgrade would
-/// under-bill. Overage metering therefore resolves the plan + override AS OF each
-/// window's start — the latest history row with
-/// <see cref="EffectiveFrom"/> ≤ windowStart — falling back to the org's current
+/// under-bill. Overage metering therefore resolves the plan + override in force in each
+/// window — the latest history row with <see cref="EffectiveFrom"/> &lt; windowEnd, because
+/// a plan change opens a new window and its row is written seconds later — falling back to the org's current
 /// values only when the org has no history at all (pre-feature orgs meter exactly
 /// as before this table existed).</para>
 /// </summary>

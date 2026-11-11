@@ -236,4 +236,23 @@ public class OrgPlanHistoryMeteringTests
 
         overage.Should().Be(0, "the fallback must use the org's current override too, exactly as before");
     }
+
+    // ── a plan change opens a window; its row is written seconds into it ──
+
+    [Fact]
+    public async Task FirstWindowAfterAnUpgrade_IsMeteredAtTheNewPlan()
+    {
+        var db = MakeDb();
+        var org = await AddOrgWithCleanHistoryAsync(db, PlanConstants.Operations);
+        var changedAt = new DateTime(2026, 6, 10, 9, 0, 0, DateTimeKind.Utc); // the new period's start
+        await AddHistoryAsync(db, org.Id, PlanConstants.Growth,     null, Jan1);
+        await AddHistoryAsync(db, org.Id, PlanConstants.Operations, null, changedAt.AddSeconds(5)); // webhook time
+        await SeedOrdersInWindowAsync(db, org.Id, changedAt, 300);
+
+        var overage = await MakeService(db).ComputePeriodOverageOrdersAsync(org.Id, changedAt, changedAt.AddMonths(1));
+
+        overage.Should().Be(0,
+            "the window that the upgrade opened ran on Operations (cap 500); resolving it at its " +
+            "start picked Growth (cap 150) and billed 150 orders the customer had paid to include");
+    }
 }
