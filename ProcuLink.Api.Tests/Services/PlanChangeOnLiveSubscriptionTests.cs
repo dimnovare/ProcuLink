@@ -111,7 +111,8 @@ public class PlanChangeOnLiveSubscriptionTests
         var (db, orgId) = await PaidGrowthOrgAsync();
         var ctrl = new BillingController(new Mock<IBillingService>().Object, new Mock<ICurrentTenantService>().Object,
             Config(), NullLogger<BillingController>.Instance, db, new Mock<IAiUsageTracker>().Object,
-            new Mock<ProcuLink.Core.Services.Delivery.IDeliveryService>().Object);
+            new Mock<ProcuLink.Core.Services.Delivery.IDeliveryService>().Object,
+            new ProcuLink.Api.Services.Documents.DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new ProcuLink.Api.Services.Documents.DocumentEngineOptions())));
         var leftover = LiveSubscription("price_ops_test", id: "sub_leftover");
 
         await ctrl.HandleSubscriptionUpdatedAsync(leftover, DateTime.UtcNow, CancellationToken.None);
