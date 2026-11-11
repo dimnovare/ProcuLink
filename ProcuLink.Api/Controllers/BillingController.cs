@@ -82,6 +82,21 @@ public sealed class BillingController : ControllerBase
         && PlanRank.TryGetValue(toPlan,   out var toRank)
         && toRank < fromRank;
 
+    /// <summary>
+    /// True when the event is about a subscription that is not the org's current one. Orgs are
+    /// found by CUSTOMER id, and a customer who upgraded before plan changes updated the live
+    /// subscription has a second one: its renewal must not set the plan back, its invoice must
+    /// not bill overage again, and cancelling it must not revert the org to Pilot.
+    /// </summary>
+    private bool IsOtherSubscription(Core.Entities.Organisation org, string? subscriptionId, string eventType)
+    {
+        if (string.IsNullOrEmpty(org.StripeSubscriptionId) || org.StripeSubscriptionId == subscriptionId)
+            return false;
+        _logger.LogWarning("{EventType} for org {OrgId} IGNORED: subscription {SubId} is not the org's current {CurrentSubId}.",
+            eventType, org.Id, subscriptionId, org.StripeSubscriptionId);
+        return true;
+    }
+
     // ── GET /api/billing/status ───────────────────────────────────────────
 
     [HttpGet("status")]
@@ -98,6 +113,8 @@ public sealed class BillingController : ControllerBase
     /// <summary>
     /// Administrators only: this commits the organisation to a recurring charge on a card the
     /// organisation already has on file. Money is the reason, not risk of data loss.
+    /// An org with a live subscription is not sent to Checkout: its subscription moves to the new
+    /// price at once (charged now, unused time credited) and the URL returned is the welcome page.
     /// </summary>
     [HttpPost("checkout")]
     [Authorize]
@@ -383,7 +400,7 @@ public sealed class BillingController : ControllerBase
 
         var org = await _db.Organisations
             .FirstOrDefaultAsync(o => o.StripeCustomerId == sub.CustomerId, ct);
-        if (org is null) return;
+        if (org is null || IsOtherSubscription(org, sub.Id, "customer.subscription.updated")) return;
 
         // ── Event-ordering guard ─────────────────────────────────────────────
         // Stripe does not guarantee webhook delivery order. Ignore any updated event whose
@@ -432,6 +449,12 @@ public sealed class BillingController : ControllerBase
                 toPlan:   mappedPlan,
                 ct:       ct);
         }
+        // A paid → paid upgrade now lands here (the live subscription's price changed), not in
+        // checkout.session.completed, which still reports Pilot → paid.
+        else if (!string.IsNullOrEmpty(mappedPlan) && fromPlan != PlanConstants.Pilot && IsPlanDowngrade(mappedPlan, fromPlan))
+        {
+            await _billing.EmitBillingUpgradedAsync(org.Id, fromPlan, mappedPlan, sub.Id, ct);
+        }
     }
 
     internal async Task HandleSubscriptionDeletedAsync(Stripe.Subscription? sub, CancellationToken ct)
@@ -440,7 +463,7 @@ public sealed class BillingController : ControllerBase
 
         var org = await _db.Organisations
             .FirstOrDefaultAsync(o => o.StripeCustomerId == sub.CustomerId, ct);
-        if (org is null) return;
+        if (org is null || IsOtherSubscription(org, sub.Id, "customer.subscription.deleted")) return;
 
         if (org.Plan == PlanConstants.Pilot && org.StripeSubscriptionId is null) return;
 
@@ -500,7 +523,7 @@ public sealed class BillingController : ControllerBase
 
         var org = await _db.Organisations
             .FirstOrDefaultAsync(o => o.StripeCustomerId == invoice.CustomerId, ct);
-        if (org is null) return;
+        if (org is null || IsOtherSubscription(org, subscriptionId, "invoice.created")) return;
 
         // Window of the period that just closed. Fall back to the current calendar
         // month if Stripe didn't populate the period fields.

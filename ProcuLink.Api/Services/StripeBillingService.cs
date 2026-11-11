@@ -313,6 +313,13 @@ public sealed class StripeBillingService : IBillingService
 
         var org = await LoadOrgAsync(orgId, asTracking: false, ct);
 
+        // An org that already pays changes plan ON its live subscription. Checkout always opens a
+        // NEW subscription, and nothing cancelled the old one, so an upgrade billed both plans.
+        // Checkout stays for an org with nothing live (Pilot, or a subscription that has ended).
+        var live = await GetLiveSubscriptionAsync(org.StripeSubscriptionId, ct);
+        if (live is not null)
+            return await ChangeSubscriptionPriceAsync(live, priceId, plan, interval, frontendUrl, ct);
+
         // success_url routes to /welcome so the frontend can show the upgraded banner.
         // {CHECKOUT_SESSION_ID} is a Stripe substitution token — C# {{ }} escaping produces
         // the literal braces that Stripe requires at runtime.
@@ -345,9 +352,63 @@ public sealed class StripeBillingService : IBillingService
         if (org.StripeCustomerId is not null)
             options.Customer = org.StripeCustomerId;
 
-        var service = new SessionService();
+        var service = _stripeClient is null ? new SessionService() : new SessionService(_stripeClient);
         var session = await service.CreateAsync(options, cancellationToken: ct);
         return session.Url;
+    }
+
+    private SubscriptionService Subscriptions() =>
+        _stripeClient is null ? new SubscriptionService() : new SubscriptionService(_stripeClient);
+
+    /// <summary>The org's subscription if Stripe still bills it; null when there is none to change.</summary>
+    private async Task<Subscription?> GetLiveSubscriptionAsync(string? subscriptionId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(subscriptionId)) return null;
+        try
+        {
+            var sub = await Subscriptions().GetAsync(subscriptionId, cancellationToken: ct);
+            return sub.Status is "canceled" or "incomplete_expired" ? null : sub;
+        }
+        catch (StripeException ex) when (ex.HttpStatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Moves the live subscription to <paramref name="priceId"/>. The billing period restarts now
+    /// and the unused part of the old plan is credited on an immediate invoice, so a plan change
+    /// always starts a fresh metering window, as Checkout did. That invoice's period is zero
+    /// length (seen live in test mode, 2026-11-11), so overage accrued on the old plan earlier in
+    /// the cut-short period is never billed — in the customer's favour, as with Checkout.
+    /// <c>pending_if_incomplete</c>: if that invoice cannot be paid, the plan does not change and
+    /// the customer is sent to the invoice to pay it. The org's plan itself is written by the
+    /// <c>customer.subscription.updated</c> webhook, as for every other subscription change.
+    /// </summary>
+    private async Task<string> ChangeSubscriptionPriceAsync(
+        Subscription sub, string priceId, string plan, string interval, string frontendUrl, CancellationToken ct)
+    {
+        var successUrl = $"{frontendUrl}/welcome?upgraded={plan}&interval={interval}";
+        var item = sub.Items.Data.First();
+        // Already on this price: a repeat would restart the billing period for nothing.
+        if (item.Price?.Id == priceId) return successUrl;
+
+        var updated = await Subscriptions().UpdateAsync(sub.Id, new SubscriptionUpdateOptions
+        {
+            Items = new List<SubscriptionItemOptions> { new() { Id = item.Id, Price = priceId } },
+            ProrationBehavior  = "always_invoice",
+            BillingCycleAnchor = SubscriptionBillingCycleAnchor.Now,
+            PaymentBehavior    = "pending_if_incomplete",
+            Expand = new List<string> { "latest_invoice" },
+        },
+        // A double click sends the same change twice; the key makes Stripe apply it once. The
+        // period start moves with every applied change, so a later change never reuses a key.
+        new RequestOptions { IdempotencyKey = $"plan-change:{sub.Id}:{item.Price?.Id}:{item.CurrentPeriodStart:O}:{priceId}" },
+        ct);
+
+        return updated.PendingUpdate is null
+            ? successUrl
+            : updated.LatestInvoice?.HostedInvoiceUrl ?? successUrl;
     }
 
     // ── Admin: MRR reconciliation against Stripe ──────────────────────────
@@ -964,19 +1025,25 @@ public sealed class StripeBillingService : IBillingService
 
         // ── AS-OF plan/override resolution (yearly-billing correctness) ──────
         // A yearly renewal invoice decomposes into ~12 PAST monthly windows; each
-        // must be metered at the plan + admin order-limit override in force AT THAT
-        // window's start, never at today's values — otherwise a mid-year DOWNGRADE
+        // must be metered at the plan + admin order-limit override in force IN THAT
+        // window, never at today's values — otherwise a mid-year DOWNGRADE
         // retroactively re-meters old months at the new lower cap (wrongful overage
-        // charges) and an upgrade under-bills. The latest org_plan_history row at or
-        // before the window start wins; an org with NO row at or before the window
-        // (pre-feature orgs whose boot baseline seed has not run, or a window that
+        // charges) and an upgrade under-bills. An org with NO row before the window
+        // ends (pre-feature orgs whose boot baseline seed has not run, or a window that
         // somehow precedes the org's first row) falls back to the org's CURRENT
         // values — exactly the pre-history behaviour, documented and pinned by tests.
-        var windowStart = new DateTimeOffset(
-            periodStart.Kind == DateTimeKind.Utc ? periodStart : DateTime.SpecifyKind(periodStart, DateTimeKind.Utc));
+        //
+        // The row that wins is the latest one BEFORE THE WINDOW ENDS, not the latest at its start:
+        // a plan change opens a new window (Checkout starts a subscription; a plan change on a
+        // live one restarts its period), but the history row is written when the webhook is
+        // processed — seconds after that window started. Read at the start, the first window after
+        // every change resolved to the PREVIOUS plan: an upgrade was billed its first month at the
+        // old cap, and Pilot → paid billed no overage at all in month one.
+        var windowEnd = new DateTimeOffset(
+            periodEnd.Kind == DateTimeKind.Utc ? periodEnd : DateTime.SpecifyKind(periodEnd, DateTimeKind.Utc));
         var asOf = await _db.OrgPlanHistories
             .AsNoTracking()
-            .Where(h => h.OrgId == orgId && h.EffectiveFrom <= windowStart)
+            .Where(h => h.OrgId == orgId && h.EffectiveFrom < windowEnd)
             .OrderByDescending(h => h.EffectiveFrom)
             .ThenByDescending(h => h.Id) // deterministic tie-break (same-instant rows)
             .FirstOrDefaultAsync(ct);
