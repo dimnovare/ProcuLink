@@ -184,7 +184,7 @@ public sealed class StripeBillingService : IBillingService
         var overageOrders = chargesOverage
             ? PlanConstants.BestPriceOverageOrders(plan, orderLimit, ordersUsed)
             : 0;
-        var overageAmountEur = overageOrders * PlanConstants.OveragePerOrderEur;
+        var overageAmountEur = overageOrders * PlanConstants.GetOverageRateEur(plan);
         var nearLimit = orderLimit > 0 && ordersUsed >= (int)Math.Ceiling(orderLimit * 0.8);
         var atLimit = ordersUsed >= orderLimit;
 
@@ -999,7 +999,7 @@ public sealed class StripeBillingService : IBillingService
         org.TrialEndsAtOverride ?? org.TrialEndsAt ?? org.TrialStartedAt.Add(PlanConstants.PilotDuration);
 
     private static string NormalizePlan(string plan) =>
-        PlanConstants.All.Contains(plan) ? plan : PlanConstants.Pilot;
+        PlanConstants.IsKnownPlan(plan) ? plan : PlanConstants.Pilot;
 
     private static string NormalizeBillingInterval(string? billingInterval)
     {
