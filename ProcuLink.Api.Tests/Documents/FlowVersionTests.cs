@@ -1,0 +1,352 @@
+using System.Net;
+using System.Net.Http.Json;
+using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using ProcuLink.Api.Services.Documents;
+using ProcuLink.Api.Tests.Integration;
+using ProcuLink.Core.Constants;
+using ProcuLink.Core.Documents;
+using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Mapping;
+using ProcuLink.Infrastructure;
+using Xunit;
+
+namespace ProcuLink.Api.Tests.Documents;
+
+[Collection("postgres-container")]
+public class FlowVersionTests(DocumentEngineTestFactory factory) : IClassFixture<DocumentEngineTestFactory>
+{
+    private static readonly Guid Org = DocumentEngineTestFactory.OrgA;
+
+    private static FlowOutput Output(Guid flowId, string template) => new()
+    {
+        Id = Guid.NewGuid(), OrgId = Org, FlowId = flowId, Name = "Synthetic output", Format = "json",
+        TemplateJson = template, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+    };
+
+    private async Task<(ProcuLinkDbContext Db, Flow Flow, FlowOutput Output)> Seed(IServiceScope scope)
+    {
+        factory.ClientFor(Org);
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        var flow = new Flow
+        {
+            Id = Guid.NewGuid(), OrgId = Org, Name = "Synthetic flow", FieldsConfirmed = true,
+            FieldsJson = DocumentJson.Serialize(FlowFieldList.Empty), CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        };
+        var output = Output(flow.Id, """{"a":1}""");
+        db.Flows.Add(flow);
+        db.Set<FlowOutput>().Add(output);
+        await db.SaveChangesAsync();
+        return (db, flow, output);
+    }
+
+    [Fact]
+    public async Task Current_config_is_the_live_setup_until_first_publish()
+    {
+        using var scope = factory.Services.CreateScope();
+        var (db, flow, output) = await Seed(scope);
+
+        var config = await FlowConfigLoader.CurrentAsync(db, flow, default);
+
+        config.VersionNo.Should().BeNull();
+        config.Outputs.Should().ContainSingle().Which.Id.Should().Be(output.Id);
+    }
+
+    [Fact]
+    public async Task Current_config_ignores_live_edits_after_publish()
+    {
+        using var scope = factory.Services.CreateScope();
+        var (db, flow, output) = await Seed(scope);
+        db.Set<FlowVersion>().Add(new FlowVersion
+        {
+            Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, VersionNo = 1, PublishedAt = DateTime.UtcNow,
+            SnapshotJson = FlowSnapshot.Of(flow, [output]).Canonical(),
+        });
+        flow.PublishedVersionNo = 1;
+        output.TemplateJson = """{"b":2}""";
+        db.Set<FlowOutput>().Add(Output(flow.Id, """{"c":3}"""));
+        await db.SaveChangesAsync();
+
+        var config = await FlowConfigLoader.CurrentAsync(db, flow, default);
+
+        config.VersionNo.Should().Be(1);
+        config.Outputs.Should().ContainSingle().Which.TemplateJson.Should().Be("""{"a":1}""");
+    }
+
+    private static string Template(string column) => DocumentJson.Serialize(new OutputNodeTemplate
+    {
+        Format = OutputFormat.Json,
+        Root = OutputNode.Obj("root", OutputNode.FieldOf(column, new OutputFieldRule { OutputPath = column, CanonicalField = "invoice_no" })),
+    });
+
+    /// <summary>A flow with one output and one ready document; optionally published as v1 first.</summary>
+    private async Task<(Guid DocId, Flow Flow, FlowOutput Output)> SeedDocument(bool publish)
+    {
+        using var scope = factory.Services.CreateScope();
+        var (db, flow, output) = await Seed(scope);
+        output.TemplateJson = Template("A");
+        if (publish)
+        {
+            db.Set<FlowVersion>().Add(new FlowVersion
+            {
+                Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, VersionNo = 1, PublishedAt = DateTime.UtcNow,
+                SnapshotJson = FlowSnapshot.Of(flow, [output]).Canonical(),
+            });
+            flow.PublishedVersionNo = 1;
+        }
+        var doc = new FlowDocument
+        {
+            Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, FileName = "synthetic.pdf", ContentType = "application/pdf", Status = DocumentStatus.Ready,
+            ReadJson = DocumentJson.Serialize(new ReadResult("Invoice",
+                [new ReadField("invoice_no", "Invoice number", "INV-7", FieldTypes.Text, null, 1, null, false, true, false)], [])),
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        };
+        db.FlowDocuments.Add(doc);
+        await db.SaveChangesAsync();
+        return (doc.Id, flow, output);
+    }
+
+    private async Task<(List<FlowDelivery> Deliveries, string Content, FlowDocument Doc, string AuditPayload)> SendAndRead(Guid docId)
+    {
+        (await factory.ClientFor(Org).PostAsync($"/api/documents/{docId}/send", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        var deliveries = await db.Set<FlowDelivery>().AsNoTracking().Where(d => d.DocumentId == docId).ToListAsync();
+        // Storage is a mock: read back the bytes handed to UploadAsync for this delivery's key.
+        var upload = factory.Storage.Invocations.Last(i => i.Method.Name == "UploadAsync" && (string)i.Arguments[1] == deliveries[0].ArtifactKey);
+        var body = (Stream)upload.Arguments[0];
+        body.Position = 0;
+        var content = await new StreamReader(body).ReadToEndAsync();
+        var doc = await db.FlowDocuments.AsNoTracking().SingleAsync(d => d.Id == docId);
+        var audit = await db.AuditEvents.AsNoTracking().Where(a => a.EntityId == docId && a.Action == "document.sent").Select(a => a.Payload).SingleAsync();
+        return (deliveries, content, doc, audit.RootElement.ToString());
+    }
+
+    [Fact]
+    public async Task Send_uses_the_live_version_not_the_changes()
+    {
+        var (docId, flow, output) = await SeedDocument(publish: true);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.Set<FlowOutput>().Add(Output(flow.Id, Template("C")));
+            var live = await db.Set<FlowOutput>().SingleAsync(o => o.Id == output.Id);
+            live.TemplateJson = Template("B");
+            await db.SaveChangesAsync();
+            db.Set<FlowOutput>().Remove(live);
+            await db.SaveChangesAsync();
+        }
+
+        var (deliveries, content, doc, audit) = await SendAndRead(docId);
+
+        deliveries.Should().ContainSingle().Which.OutputId.Should().Be(output.Id);
+        content.Should().Contain("\"A\"").And.NotContain("\"B\"");
+        doc.FlowVersion.Should().Be(1);
+        audit.Should().Contain("\"version\":1");
+        var dto = await factory.ClientFor(Org).GetFromJsonAsync<System.Text.Json.JsonElement>($"/api/documents/{docId}");
+        dto.GetProperty("summary").GetProperty("flowVersion").GetInt32().Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Unpublished_flow_sends_its_live_outputs()
+    {
+        var (docId, _, _) = await SeedDocument(publish: false);
+
+        var (deliveries, content, doc, audit) = await SendAndRead(docId);
+
+        deliveries.Should().ContainSingle();
+        content.Should().Contain("\"A\"");
+        doc.FlowVersion.Should().BeNull();
+        audit.Should().Contain("\"version\":null");
+    }
+
+    [Fact]
+    public async Task Recheck_stamps_the_published_version()
+    {
+        var (docId, flow, _) = await SeedDocument(publish: true);
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        var doc = await db.FlowDocuments.SingleAsync(d => d.Id == docId);
+        var liveFlow = await db.Flows.SingleAsync(f => f.Id == flow.Id);
+
+        await scope.ServiceProvider.GetRequiredService<DocumentRechecker>()
+            .ApplyAsync(doc, liveFlow, DocumentJson.Deserialize<ReadResult>(doc.ReadJson), default);
+
+        doc.FlowVersion.Should().Be(1);
+    }
+
+    private static async Task<System.Text.Json.JsonElement> Body(HttpResponseMessage r) =>
+        await r.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+
+    [Fact]
+    public async Task Publish_then_edit_shows_changes_and_restore_clears_them()
+    {
+        Guid flowId, outputId, secondId;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var (db, flow, output) = await Seed(scope);
+            var second = Output(flow.Id, """{"b":1}""");
+            second.CreatedAt = output.CreatedAt.AddSeconds(1);
+            db.Set<FlowOutput>().Add(second);
+            await db.SaveChangesAsync();
+            (flowId, outputId, secondId) = (flow.Id, output.Id, second.Id);
+        }
+        var client = factory.ClientFor(Org);
+
+        var published = await Body(await client.PostAsync($"/api/flows/{flowId}/publish", null));
+        published.GetProperty("publishedVersion").GetInt32().Should().Be(1);
+        published.GetProperty("hasChanges").GetBoolean().Should().BeFalse();
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            // The first output is deleted, so a restore re-inserts it after the second.
+            db.Set<FlowOutput>().Remove(await db.Set<FlowOutput>().SingleAsync(o => o.Id == outputId));
+            (await db.Set<FlowOutput>().SingleAsync(o => o.Id == secondId)).TemplateJson = """{"b":2}""";
+            await db.SaveChangesAsync();
+        }
+        (await Body(await client.GetAsync($"/api/flows/{flowId}"))).GetProperty("hasChanges").GetBoolean().Should().BeTrue();
+
+        var restored = await Body(await client.PostAsync($"/api/flows/{flowId}/versions/1/restore", null));
+        restored.GetProperty("hasChanges").GetBoolean().Should().BeFalse();
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            (await db.Set<FlowOutput>().AsNoTracking().SingleAsync(o => o.Id == outputId)).TemplateJson.Should().Be("""{"a":1}""");
+            (await db.Set<FlowOutput>().AsNoTracking().SingleAsync(o => o.Id == secondId)).TemplateJson.Should().Be("""{"b":1}""");
+        }
+        var versions = await Body(await client.GetAsync($"/api/flows/{flowId}/versions"));
+        versions.GetArrayLength().Should().Be(1);
+        versions[0].GetProperty("versionNo").GetInt32().Should().Be(1);
+        versions[0].GetProperty("live").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Deleting_what_the_live_version_uses_is_refused()
+    {
+        var destination = new FlowDestination
+        {
+            Id = Guid.NewGuid(), OrgId = Org, Name = "Synthetic destination", Protocol = "http",
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        };
+        var lookupId = Guid.NewGuid();
+        Guid flowId, outputId, lookupFlowId;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var (db, flow, output) = await Seed(scope);
+            db.Set<FlowDestination>().Add(destination);
+            output.DestinationId = destination.Id;
+            db.Set<Lookup>().Add(new Lookup { Id = lookupId, OrgId = Org, Name = "Synthetic lookup", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+            await db.SaveChangesAsync();
+            (flowId, outputId) = (flow.Id, output.Id);
+
+            var (_, lookupFlow, lookupOutput) = await Seed(scope);
+            lookupOutput.TemplateJson = DocumentJson.Serialize(new OutputNodeTemplate
+            {
+                Format = OutputFormat.Json,
+                Root = OutputNode.Obj("root", OutputNode.FieldOf("A", new OutputFieldRule
+                {
+                    OutputPath = "A", CanonicalField = "invoice_no",
+                    FieldManipulators = [new ManipulatorEntry { Type = "Lookup", Params = [lookupId.ToString()] }],
+                })),
+            });
+            await db.SaveChangesAsync();
+            lookupFlowId = lookupFlow.Id;
+        }
+        var client = factory.ClientFor(Org);
+        (await client.PostAsync($"/api/flows/{flowId}/publish", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await client.PostAsync($"/api/flows/{lookupFlowId}/publish", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            (await db.Set<FlowOutput>().SingleAsync(o => o.Id == outputId)).DestinationId = null;
+            await db.SaveChangesAsync();
+        }
+        var refused = await client.DeleteAsync($"/api/destinations/{destination.Id}");
+        refused.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await Body(refused)).GetProperty("error").GetString().Should().Be("destination_in_use");
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.Set<Lookup>().Remove(await db.Set<Lookup>().SingleAsync(l => l.Id == lookupId));
+            await db.SaveChangesAsync();
+        }
+        var restore = await client.PostAsync($"/api/flows/{lookupFlowId}/versions/1/restore", null);
+        restore.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await Body(restore)).GetProperty("error").GetString().Should().Be("version_references_missing");
+    }
+
+    [Fact]
+    public async Task Streak_counts_sent_documents_since_the_last_correction()
+    {
+        using var scope = factory.Services.CreateScope();
+        var (db, flow, _) = await Seed(scope);
+        var (_, other, _) = await Seed(scope);
+        var empty = await FlowStreak.CountAsync(db, Org, flow.Id, default);
+        var t = DateTime.UtcNow;
+        FlowDocument Doc(Flow f, string status, int minutesAgo, bool sample = false) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = Org, FlowId = f.Id, FileName = "synthetic.pdf", ContentType = "application/pdf", Status = status,
+            IsSample = sample, ReadAt = t.AddMinutes(-minutesAgo), CreatedAt = t, UpdatedAt = t,
+        };
+        void Edit(FlowDocument d, string from, string to) => DocumentAudit.Add(db, d, "document.value_edited", new { target = "a", old = from, @new = to }, "u");
+        // Newest first. Each mutation of FlowStreak gives a different number, or is named where two coincide.
+        var otherFlow = Doc(other, DocumentStatus.Sent, 0);   // not filtering by flow: 0 (same as the sample)
+        var review = Doc(flow, DocumentStatus.NeedsReview, 1); // counting non-sent documents: 0
+        var sample = Doc(flow, DocumentStatus.Sent, 2, sample: true); // not skipping samples: 0
+        var plain = Doc(flow, DocumentStatus.Sent, 3);
+        var confirmed = Doc(flow, DocumentStatus.Sent, 4);     // as-is edit counted as a correction: 1
+        var mixed = Doc(flow, DocumentStatus.Sent, 5);         // as-is plus a real edit: the real one must win, ending the streak
+        var older = Doc(flow, DocumentStatus.Sent, 6);         // counting every uncorrected document: 3
+        db.FlowDocuments.AddRange(otherFlow, review, sample, plain, confirmed, mixed, older);
+        Edit(otherFlow, "x", "y");
+        DocumentAudit.Add(db, review, "document.value_taught", new { key = "k" }, "u");
+        Edit(sample, "x", "y");
+        Edit(confirmed, "x", "x");
+        Edit(mixed, "x", "x");
+        Edit(mixed, "x", "y");
+        await db.SaveChangesAsync();
+
+        empty.Should().BeNull();
+        (await FlowStreak.CountAsync(db, Org, flow.Id, default)).Should().Be(2);
+        var dto = await factory.ClientFor(Org).GetFromJsonAsync<System.Text.Json.JsonElement>($"/api/flows/{flow.Id}");
+        dto.GetProperty("noCorrectionStreak").GetInt32().Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Org_log_names_and_links_document_events()
+    {
+        using var scope = factory.Services.CreateScope();
+        var (db, flow, _) = await Seed(scope);
+        (await db.Organisations.SingleAsync(o => o.Id == Org)).Plan = PlanConstants.Operations;
+        var t = DateTime.UtcNow;
+        var doc = new FlowDocument
+        {
+            Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, FileName = "synthetic-log.pdf", ContentType = "application/pdf",
+            Status = DocumentStatus.Sent, CreatedAt = t, UpdatedAt = t,
+        };
+        db.FlowDocuments.Add(doc);
+        DocumentAudit.Add(db, doc, "document.sent", new { }, "u");
+        db.AuditEvents.Add(new AuditEvent
+        {
+            Id = Guid.NewGuid(), OrgId = Org, EntityType = "FlowDocument", EntityId = Guid.NewGuid(), Action = "document.sent",
+            CreatedAt = t.AddSeconds(-5),
+        });
+        await db.SaveChangesAsync();
+
+        var body = await factory.ClientFor(Org).GetFromJsonAsync<System.Text.Json.JsonElement>("/api/audit?pageSize=200");
+
+        var events = body.GetProperty("events").EnumerateArray().Where(e => e.GetProperty("action").GetString() == "document.sent").ToList();
+        var named = events.Single(e => e.GetProperty("documentId").GetString() == doc.Id.ToString());
+        named.GetProperty("flowId").GetString().Should().Be(flow.Id.ToString());
+        named.GetProperty("documentName").GetString().Should().Be("synthetic-log.pdf");
+        named.GetProperty("message").GetString().Should().Be("Sent · synthetic-log.pdf");
+        var orphan = events.Single(e => e.GetProperty("documentId").ValueKind == System.Text.Json.JsonValueKind.Null);
+        orphan.GetProperty("documentName").ValueKind.Should().Be(System.Text.Json.JsonValueKind.Null);
+        orphan.GetProperty("message").GetString().Should().Be("document.sent");
+    }
+}

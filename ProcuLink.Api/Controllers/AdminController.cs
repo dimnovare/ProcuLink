@@ -883,9 +883,7 @@ public sealed class AdminController : ControllerBase
         try
         {
             var sub = User.FindFirst("sub")?.Value;
-            var email = new[] { "email", "email_address", ClaimTypes.Email }
-                .Select(t => User.FindFirst(t)?.Value)
-                .FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+            var email = ClerkClaims.Email(User);
 
             var payload = new { actor = new { sub, email }, detail };
             _db.AuditEvents.Add(new AuditEvent

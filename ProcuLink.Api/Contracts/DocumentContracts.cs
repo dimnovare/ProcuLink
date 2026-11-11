@@ -4,7 +4,10 @@ using ProcuLink.Core.Entities;
 
 namespace ProcuLink.Api.Contracts;
 
-public record FlowDto(Guid Id, string Name, bool FieldsConfirmed, FlowFieldList Fields, int DocumentCount, DateTime CreatedAt, string Automation = "review", bool ScansOn = false, bool FormatsOn = false, bool DocsOutputsOn = false);
+public record FlowDto(Guid Id, string Name, bool FieldsConfirmed, FlowFieldList Fields, int DocumentCount, DateTime CreatedAt, string Automation = "review", bool ScansOn = false, bool FormatsOn = false, bool DocsOutputsOn = false,
+    int? PublishedVersion = null, bool HasChanges = false, int? NoCorrectionStreak = null);
+
+public record FlowVersionDto(int VersionNo, DateTime PublishedAt, string? PublishedBy, bool Live);
 
 public record CreateFlowRequest(string Name);
 
@@ -13,11 +16,11 @@ public record RenameFlowRequest(string? Name = null, string? Automation = null);
 public record DocumentSummaryDto(
     Guid Id, Guid FlowId, string FlowName, string FileName, string Status, string? StatusReason,
     int? PageCount, int BillingUnits, int FailedChecks, DateTime CreatedAt,
-    string Source = "upload", string? SourceRef = null)
+    string Source = "upload", string? SourceRef = null, int? FlowVersion = null)
 {
     public static DocumentSummaryDto From(FlowDocument d, string flowName) =>
         new(d.Id, d.FlowId, flowName, d.FileName, d.Status, d.StatusReason, d.PageCount, d.BillingUnits,
-            DocumentJson.Deserialize<List<DocumentCheck>>(d.ChecksJson).Count, d.CreatedAt, d.Source, d.SourceRef);
+            DocumentJson.Deserialize<List<DocumentCheck>>(d.ChecksJson).Count, d.CreatedAt, d.Source, d.SourceRef, d.FlowVersion);
 }
 
 public record DocumentDto(DocumentSummaryDto Summary, string ContentType, ReadResult Read, IReadOnlyList<DocumentCheck> Checks,

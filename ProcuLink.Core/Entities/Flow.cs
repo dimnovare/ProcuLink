@@ -11,6 +11,8 @@ public class Flow
     /// <summary>A JSON list of <see cref="Documents.FieldHint"/>.</summary>
     public string HintsJson { get; set; } = "[]";
     public string Automation { get; set; } = Documents.FlowAutomation.Review;
+    /// <summary>The published <see cref="FlowVersion.VersionNo"/>; null means setup mode.</summary>
+    public int? PublishedVersionNo { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }

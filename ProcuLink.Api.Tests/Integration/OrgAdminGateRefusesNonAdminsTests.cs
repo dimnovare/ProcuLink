@@ -44,6 +44,9 @@ public sealed class RbacTestAuthHandler : AuthenticationHandler<AuthenticationSc
     /// <summary>The Clerk user id to present.</summary>
     public const string SubHeader = "X-Test-Sub";
 
+    /// <summary>An <c>email</c> claim to present, or absent for none.</summary>
+    public const string EmailHeader = "X-Test-Email";
+
     public RbacTestAuthHandler(
         IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder)
         : base(options, logger, encoder) { }
@@ -56,6 +59,8 @@ public sealed class RbacTestAuthHandler : AuthenticationHandler<AuthenticationSc
             // Clerk's authorized-party claim — satisfies the azp validation in Program.cs.
             new("azp", "http://localhost:3000"),
         };
+
+        if (Header(EmailHeader) is { } email) claims.Add(new Claim("email", email));
 
         if (Header(OrgHeader) is { } org) claims.Add(new Claim("org_id", org));
         if (Header(RoleHeader) is { } role) claims.Add(new Claim("org_role", role));
@@ -157,7 +162,7 @@ public sealed class RbacTestFactory : WebApplicationFactory<Program>
 public sealed class OrgAdminGateRefusesNonAdminsTests : IClassFixture<RbacTestFactory>
 {
     /// <summary>Must match <c>OrgAdminGateIsRealTests.ExpectedGatedEndpointCount</c>.</summary>
-    private const int ExpectedGatedEndpointCount = 32;
+    private const int ExpectedGatedEndpointCount = 34;
 
     /// <summary>An organisation with a REAL Clerk organisation id — the modern shape.</summary>
     private const string ClerkOrg = "org_TEST_RBAC";

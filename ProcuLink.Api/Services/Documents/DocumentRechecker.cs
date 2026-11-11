@@ -11,7 +11,18 @@ namespace ProcuLink.Api.Services.Documents;
 /// </summary>
 public sealed class DocumentRechecker(ProcuLinkDbContext db)
 {
-    public async Task ApplyAsync(FlowDocument doc, Flow flow, ReadResult read, CancellationToken ct)
+    /// <summary>Rechecks the flow's documents waiting for review against its current config. Does not save.</summary>
+    public async Task RecheckPendingAsync(Flow flow, CancellationToken ct)
+    {
+        var pending = await db.FlowDocuments
+            .Where(d => d.OrgId == flow.OrgId && d.FlowId == flow.Id && d.Status == DocumentStatus.NeedsReview && d.ReadAt != null)
+            .ToListAsync(ct);
+        var config = await FlowConfigLoader.CurrentAsync(db, flow, ct);
+        foreach (var doc in pending)
+            await ApplyAsync(doc, flow, DocumentJson.Deserialize<ReadResult>(doc.ReadJson), ct, config);
+    }
+
+    public async Task ApplyAsync(FlowDocument doc, Flow flow, ReadResult read, CancellationToken ct, FlowConfig? config = null)
     {
         // Spec section 6: the document number, else the file hash.
         doc.DedupKey = DocumentChecks.DedupKeyOf(read) ?? (string.IsNullOrEmpty(doc.Sha256) ? null : $"sha256:{doc.Sha256}");
@@ -27,7 +38,9 @@ public sealed class DocumentRechecker(ProcuLinkDbContext db)
                 || (d.CreatedAt == doc.CreatedAt && d.Id.CompareTo(doc.Id) < 0));
         }
 
-        var failed = DocumentChecks.Run(read, DocumentJson.Deserialize<FlowFieldList>(flow.FieldsJson), flow.FieldsConfirmed, duplicate);
+        config ??= await FlowConfigLoader.CurrentAsync(db, flow, ct);
+        doc.FlowVersion = config.VersionNo;
+        var failed = DocumentChecks.Run(read, config.Fields, config.FieldsConfirmed, duplicate);
         doc.ChecksJson = DocumentJson.Serialize(failed);
         doc.Status = DocumentChecks.StatusFor(failed);
         doc.UpdatedAt = DateTime.UtcNow;

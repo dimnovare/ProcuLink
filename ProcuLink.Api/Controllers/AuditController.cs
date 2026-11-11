@@ -118,6 +118,15 @@ public class AuditController : ControllerBase
             }
         }
 
+        // Load document names in one query (FileName is what DocumentSummaryDto shows)
+        var docIds = rawEvents.Where(e => e.EntityType == "FlowDocument").Select(e => e.EntityId).Distinct().ToList();
+        var docMeta = docIds.Count == 0
+            ? new Dictionary<Guid, (Guid FlowId, string FileName)>()
+            : (await _db.FlowDocuments.AsNoTracking()
+                .Where(d => d.OrgId == orgId && docIds.Contains(d.Id))
+                .Select(d => new { d.Id, d.FlowId, d.FileName })
+                .ToListAsync(ct)).ToDictionary(d => d.Id, d => (d.FlowId, d.FileName));
+
         // Map to DTO
         var dtos = rawEvents.Select(e =>
         {
@@ -172,8 +181,21 @@ public class AuditController : ControllerBase
                 buyerName    = ExtractBuyerName(meta.CanonicalJson);
             }
 
+            // ── Document enrichment ─────────────────────────────────────────
+            Guid? documentId = null;
+            Guid? flowId = null;
+            string? documentName = null;
+            if (e.EntityType == "FlowDocument" && docMeta.TryGetValue(e.EntityId, out var doc))
+            {
+                documentId   = e.EntityId;
+                flowId       = doc.FlowId;
+                documentName = doc.FileName;
+            }
+
             // ── Human-readable message ──────────────────────────────────────
-            var message = BuildMessage(action, poNumber);
+            var message = documentName is not null && DocumentMessages.TryGetValue(action, out var label)
+                ? $"{label} · {documentName}"
+                : BuildMessage(action, poNumber);
 
             return new
             {
@@ -184,6 +206,9 @@ public class AuditController : ControllerBase
                 buyerName,
                 supplierName,
                 format,
+                documentId,
+                flowId,
+                documentName,
                 action        = action,
                 actorType,
                 actorName,
@@ -230,6 +255,19 @@ public class AuditController : ControllerBase
             _      => ext.ToUpperInvariant(),
         };
     }
+
+    private static readonly Dictionary<string, string> DocumentMessages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["document.received"]        = "Document received",
+        ["document.read"]            = "Document read",
+        ["document.read_failed"]     = "Couldn't read",
+        ["document.retry_read"]      = "Read again",
+        ["document.value_edited"]    = "Value changed",
+        ["document.value_taught"]    = "Value taught",
+        ["document.sent"]            = "Sent",
+        ["document.delivered"]       = "Delivered",
+        ["document.delivery_failed"] = "Couldn't send",
+    };
 
     private static string BuildMessage(string action, string? poNumber)
     {

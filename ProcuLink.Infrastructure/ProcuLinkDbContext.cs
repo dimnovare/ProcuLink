@@ -2139,10 +2139,43 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(f => f.FieldsConfirmed).HasColumnName("fields_confirmed");
             b.Property(f => f.HintsJson).HasColumnName("hints_json").HasColumnType("jsonb").HasDefaultValue("[]");
             b.Property(f => f.Automation).HasColumnName("automation").HasDefaultValue("review");
+            b.Property(f => f.PublishedVersionNo).HasColumnName("published_version_no");
             b.Property(f => f.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             b.Property(f => f.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             b.HasIndex(f => f.OrgId);
             b.HasOne<Organisation>().WithMany().HasForeignKey(f => f.OrgId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<FlowVersion>(b =>
+        {
+            b.ToTable("flow_versions");
+            b.HasKey(v => v.Id);
+            b.Property(v => v.Id).HasColumnName("id");
+            b.Property(v => v.OrgId).HasColumnName("org_id");
+            b.Property(v => v.FlowId).HasColumnName("flow_id");
+            b.Property(v => v.VersionNo).HasColumnName("version_no");
+            b.Property(v => v.SnapshotJson).HasColumnName("snapshot_json").HasColumnType("jsonb").HasDefaultValue("{}");
+            b.Property(v => v.PublishedAt).HasColumnName("published_at").HasColumnType("timestamptz");
+            b.Property(v => v.PublishedBy).HasColumnName("published_by");
+            b.HasIndex(v => new { v.FlowId, v.VersionNo }).IsUnique();
+            b.HasIndex(v => v.OrgId);
+            b.HasOne<Organisation>().WithMany().HasForeignKey(v => v.OrgId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne<Flow>().WithMany().HasForeignKey(v => v.FlowId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<NotificationSetting>(b =>
+        {
+            b.ToTable("notification_settings");
+            b.HasKey(n => n.Id);
+            b.Property(n => n.Id).HasColumnName("id");
+            b.Property(n => n.OrgId).HasColumnName("org_id");
+            b.Property(n => n.ClerkUserId).HasColumnName("clerk_user_id").IsRequired();
+            b.Property(n => n.Email).HasColumnName("email");
+            b.Property(n => n.OnReview).HasColumnName("on_review").HasDefaultValue(false);
+            b.Property(n => n.OnFailure).HasColumnName("on_failure").HasDefaultValue(false);
+            b.Property(n => n.LastSentAt).HasColumnName("last_sent_at").HasColumnType("timestamptz");
+            b.HasIndex(n => new { n.OrgId, n.ClerkUserId }).IsUnique();
+            b.HasOne<Organisation>().WithMany().HasForeignKey(n => n.OrgId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<FlowDocument>(b =>
@@ -2166,6 +2199,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(d => d.SourceRef).HasColumnName("source_ref");
             b.Property(d => d.DedupKey).HasColumnName("dedup_key");
             b.Property(d => d.IsSample).HasColumnName("is_sample");
+            b.Property(d => d.FlowVersion).HasColumnName("flow_version");
             b.Property(d => d.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             b.Property(d => d.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             b.Property(d => d.ReadAt).HasColumnName("read_at").HasColumnType("timestamptz");
@@ -2254,9 +2288,9 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(d => d.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             b.Property(d => d.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             b.HasIndex(d => new { d.DocumentId, d.OutputId }).IsUnique();
+            b.HasIndex(d => d.OutputId);
             b.HasOne<Organisation>().WithMany().HasForeignKey(d => d.OrgId).OnDelete(DeleteBehavior.Cascade);
             b.HasOne<FlowDocument>().WithMany().HasForeignKey(d => d.DocumentId).OnDelete(DeleteBehavior.Cascade);
-            b.HasOne<FlowOutput>().WithMany().HasForeignKey(d => d.OutputId).OnDelete(DeleteBehavior.SetNull);
             b.HasOne<FlowDestination>().WithMany().HasForeignKey(d => d.DestinationId).OnDelete(DeleteBehavior.SetNull);
         });
 

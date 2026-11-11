@@ -80,7 +80,8 @@ public sealed class FlowDestinationService(
     {
         var d = await db.Set<FlowDestination>().FirstOrDefaultAsync(x => x.OrgId == orgId && x.Id == id, ct);
         if (d is null) return null;
-        if (await db.Set<FlowOutput>().AnyAsync(o => o.OrgId == orgId && o.DestinationId == id, ct)) return false;
+        if (await db.Set<FlowOutput>().AnyAsync(o => o.OrgId == orgId && o.DestinationId == id, ct)
+            || (await FlowVersions.LiveVersionOutputsAsync(db, orgId, ct)).Any(o => o.DestinationId == id)) return false;
         db.Set<FlowDestination>().Remove(d);
         await db.SaveChangesAsync(ct);
         return true;

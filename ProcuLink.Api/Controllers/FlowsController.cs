@@ -22,14 +22,18 @@ public sealed class FlowsController(
 
     private static IActionResult FlowNotFound() => new NotFoundObjectResult(new { error = "flow_not_found" });
 
-    private FlowDto ToDto(Flow f, int documentCount) =>
-        new(f.Id, f.Name, f.FieldsConfirmed, DocumentJson.Deserialize<FlowFieldList>(f.FieldsJson), documentCount, f.CreatedAt, f.Automation, gate.ScansOn(f.OrgId), gate.FormatsOn(f.OrgId), gate.DocsOutputsOn(f.OrgId));
+    private FlowDto ToDto(Flow f, int documentCount, bool hasChanges = false, int? streak = null) =>
+        new(f.Id, f.Name, f.FieldsConfirmed, DocumentJson.Deserialize<FlowFieldList>(f.FieldsJson), documentCount, f.CreatedAt, f.Automation, gate.ScansOn(f.OrgId), gate.FormatsOn(f.OrgId), gate.DocsOutputsOn(f.OrgId), f.PublishedVersionNo, hasChanges, streak);
 
     private static bool TryName(string? raw, out string name)
     {
         name = raw?.Trim() ?? "";
         return name.Length is >= 1 and <= 120;
     }
+
+    /// <summary>Every single-flow response: the web app caches each one whole, so none may drop a field.</summary>
+    private async Task<FlowDto> SingleAsync(Flow flow, Guid orgId, CancellationToken ct) =>
+        ToDto(flow, await CountDocs(orgId, flow.Id, ct), await FlowVersions.HasChangesAsync(db, flow, ct), await FlowStreak.CountAsync(db, orgId, flow.Id, ct));
 
     private Task<int> CountDocs(Guid orgId, Guid flowId, CancellationToken ct) =>
         db.FlowDocuments.CountAsync(d => d.OrgId == orgId && d.FlowId == flowId, ct);
@@ -68,7 +72,7 @@ public sealed class FlowsController(
         if (Refuse() is { } refused) return refused;
         var orgId = tenant.OrganisationId;
         var flow = await db.Flows.FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == id, ct);
-        return flow is null ? FlowNotFound() : Ok(ToDto(flow, await CountDocs(orgId, id, ct)));
+        return flow is null ? FlowNotFound() : Ok(await SingleAsync(flow, orgId, ct));
     }
 
     [HttpPatch("{id:guid}")]
@@ -93,7 +97,7 @@ public sealed class FlowsController(
         }
         flow.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
-        return Ok(ToDto(flow, await CountDocs(orgId, id, ct)));
+        return Ok(await SingleAsync(flow, orgId, ct));
     }
 
     [HttpPut("{id:guid}/fields")]
@@ -109,14 +113,59 @@ public sealed class FlowsController(
         flow.FieldsConfirmed = true;
         flow.UpdatedAt = DateTime.UtcNow;
 
-        var pending = await db.FlowDocuments
-            .Where(d => d.OrgId == orgId && d.FlowId == id && d.Status == DocumentStatus.NeedsReview && d.ReadAt != null)
-            .ToListAsync(ct);
-        foreach (var doc in pending)
-            await rechecker.ApplyAsync(doc, flow, DocumentJson.Deserialize<ReadResult>(doc.ReadJson), ct);
+        await rechecker.RecheckPendingAsync(flow, ct);
 
         await db.SaveChangesAsync(ct);
-        return Ok(ToDto(flow, await CountDocs(orgId, id, ct)));
+        return Ok(await SingleAsync(flow, orgId, ct));
+    }
+
+    [HttpPost("{id:guid}/publish")]
+    [RequireOrgAdmin]
+    public async Task<IActionResult> Publish(Guid id, CancellationToken ct)
+    {
+        if (Refuse() is { } refused) return refused;
+        var orgId = tenant.OrganisationId;
+        var flow = await db.Flows.FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == id, ct);
+        if (flow is null) return FlowNotFound();
+        var (_, error) = await FlowVersions.PublishAsync(db, flow, tenant.ClerkUserId, ct);
+        if (error is not null) return Conflict(new { error });
+        // Documents waiting for review are checked against the new version.
+        await rechecker.RecheckPendingAsync(flow, ct);
+        await db.SaveChangesAsync(ct);
+        return Ok(await SingleAsync(flow, orgId, ct));
+    }
+
+    [HttpGet("{id:guid}/versions")]
+    public async Task<IActionResult> Versions(Guid id, CancellationToken ct)
+    {
+        if (Refuse() is { } refused) return refused;
+        var orgId = tenant.OrganisationId;
+        var flow = await db.Flows.AsNoTracking().FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == id, ct);
+        if (flow is null) return FlowNotFound();
+        var versions = await db.Set<FlowVersion>().AsNoTracking().Where(v => v.OrgId == orgId && v.FlowId == id)
+            .OrderByDescending(v => v.VersionNo)
+            .Select(v => new { v.VersionNo, v.PublishedAt, v.PublishedBy }).ToListAsync(ct);
+        var ids = versions.Select(v => v.PublishedBy).OfType<string>().Distinct().ToList();
+        var emails = await db.Set<AppUser>().AsNoTracking().Where(u => ids.Contains(u.ClerkUserId))
+            .ToDictionaryAsync(u => u.ClerkUserId, u => u.Email, ct);
+        return Ok(versions.Select(v => new FlowVersionDto(v.VersionNo, v.PublishedAt,
+            v.PublishedBy is { } by ? emails.GetValueOrDefault(by) : null, v.VersionNo == flow.PublishedVersionNo)));
+    }
+
+    [HttpPost("{id:guid}/versions/{versionNo:int}/restore")]
+    [RequireOrgAdmin]
+    public async Task<IActionResult> Restore(Guid id, int versionNo, CancellationToken ct)
+    {
+        if (Refuse() is { } refused) return refused;
+        var orgId = tenant.OrganisationId;
+        var flow = await db.Flows.FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == id, ct);
+        if (flow is null) return FlowNotFound();
+        return await FlowVersions.RestoreAsync(db, flow, versionNo, ct) switch
+        {
+            null => Ok(await SingleAsync(flow, orgId, ct)),
+            "version_not_found" => NotFound(new { error = "version_not_found" }),
+            var error => Conflict(new { error }),
+        };
     }
 
     /// <summary>The first problem found in a field list, or null when it is valid.</summary>

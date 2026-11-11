@@ -47,8 +47,9 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
         if (!DocumentStatus.IsEditable(observed, doc.StatusReason)) return Refuse("not_ready");
         if (!await billing.CanProcessOrdersAsync(doc.OrgId, ct)) return Refuse("processing_paused");
 
-        var outputs = await db.Set<FlowOutput>().Where(o => o.OrgId == doc.OrgId && o.FlowId == doc.FlowId)
-            .OrderBy(o => o.CreatedAt).ToListAsync(ct);
+        var flow = await db.Flows.FirstAsync(f => f.OrgId == doc.OrgId && f.Id == doc.FlowId, ct);
+        var config = await FlowConfigLoader.CurrentAsync(db, flow, ct);
+        var outputs = config.Outputs.ToList();
         if (outputs.Count == 0) return Refuse("no_outputs");
 
         // Render everything first: one bad output means nothing is stored or sent.
@@ -84,7 +85,7 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
         SendOutcome outcome;
         try
         {
-            (outcome, queued) = await StoreAsync(doc, mode, userId, rendered, ct);
+            (outcome, queued) = await StoreAsync(doc, mode, userId, rendered, config.VersionNo, ct);
         }
         catch
         {
@@ -100,7 +101,7 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
         return outcome;
     }
 
-    private async Task<(SendOutcome, IReadOnlyList<FlowDelivery>)> StoreAsync(FlowDocument doc, SendMode mode, string? userId, List<Rendered> rendered, CancellationToken ct)
+    private async Task<(SendOutcome, IReadOnlyList<FlowDelivery>)> StoreAsync(FlowDocument doc, SendMode mode, string? userId, List<Rendered> rendered, int? version, CancellationToken ct)
     {
         var existing = await db.Set<FlowDelivery>().Where(d => d.OrgId == doc.OrgId && d.DocumentId == doc.Id).ToListAsync(ct);
         var destinationIds = rendered.Select(r => r.Output.DestinationId).OfType<Guid>().Distinct().ToList();
@@ -151,9 +152,10 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
 
         doc.Status = FlowDeliveryStatus.DocumentStatusFor(existing.Where(d => FlowDeliveryStatus.CountsTowardDocument(d.OutputId, d.Status)).Select(d => d.Status));
         doc.StatusReason = null;
+        doc.FlowVersion = version;
         doc.UpdatedAt = now;
         DocumentAudit.Add(db, doc, "document.sent",
-            new { mode = mode.ToString().ToLowerInvariant(), outputs = sent.Select(d => d.OutputName).ToList() }, userId);
+            new { mode = mode.ToString().ToLowerInvariant(), outputs = sent.Select(d => d.OutputName).ToList(), version }, userId);
         await db.SaveChangesAsync(ct);
 
         return (new SendOutcome(null, null, existing), sent.Where(d => d.Status == FlowDeliveryStatus.Queued).ToList());

@@ -70,7 +70,8 @@ public sealed class FlowDeliveryModelTests(PostgresContainerFixture postgres)
         await db.Set<FlowOutput>().Where(o => o.Id == output.Id).ExecuteDeleteAsync();
         await db.Entry(delivery).ReloadAsync();
 
-        delivery.OutputId.Should().BeNull();
+        // No FK any more: a published version may still send through the deleted output.
+        delivery.OutputId.Should().Be(output.Id);
         delivery.OutputName.Should().Be("Accounting CSV");
     }
 

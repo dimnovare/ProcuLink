@@ -214,6 +214,15 @@ internal static class OrgAdminGateIlScanner
             member => member is MethodBase { Name: "set_" + nameof(ProcuLink.Core.Entities.FlowOutput.Logo) } m && m.DeclaringType == typeof(ProcuLink.Core.Entities.FlowOutput),
             "Sets or clears the image printed at the top of a pdf output, which every document sent through it carries."),
 
+        new("FlowVersions.PublishAsync",
+            member => member is MethodBase { Name: "PublishAsync" } m && m.DeclaringType == typeof(ProcuLink.Api.Services.Documents.FlowVersions),
+            "Makes a flow's changes the live version, which decides how every document from then on is read, "
+          + "checked, rendered and where it is sent."),
+
+        new("FlowVersions.RestoreAsync",
+            member => member is MethodBase { Name: "RestoreAsync" } m && m.DeclaringType == typeof(ProcuLink.Api.Services.Documents.FlowVersions),
+            "Overwrites a flow's fields and outputs, discarding the changes not yet published."),
+
         new("Flow.Automation setter",
             member => member is MethodBase { Name: "set_" + nameof(ProcuLink.Core.Entities.Flow.Automation) } m && m.DeclaringType == typeof(ProcuLink.Core.Entities.Flow),
             "Switches a flow between review and automatic sending; automatic sending releases documents to "

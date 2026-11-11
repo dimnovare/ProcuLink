@@ -33,6 +33,9 @@ public class FlowDocument
     public string? DedupKey { get; set; }
     public bool IsSample { get; set; }
 
+    /// <summary>The flow version this document was processed under; null if the flow was never published.</summary>
+    public int? FlowVersion { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
     public DateTime? ReadAt { get; set; }

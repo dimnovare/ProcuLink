@@ -201,6 +201,16 @@ builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSou
 builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowPickupJob>();
 builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowWebhookJob>();
 builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowPickupDispatchJob>();
+builder.Services.AddScoped<ProcuLink.Api.Jobs.DocumentNotificationJob>();
+builder.Services.AddScoped<ProcuLink.Api.Jobs.NotificationMembersJob>();
+builder.Services.AddHttpClient("clerk", c => { c.BaseAddress = new Uri("https://api.clerk.com/v1/"); c.Timeout = TimeSpan.FromSeconds(30); });
+// Notification digest email: Postmark, else SMTP, else log-only (same choice as the API).
+if (!string.IsNullOrWhiteSpace(builder.Configuration["Email:Postmark:ServerToken"]))
+    builder.Services.AddScoped<IEmailSender, PostmarkEmailSender>();
+else if (!string.IsNullOrWhiteSpace(builder.Configuration["Smtp:Host"]))
+    builder.Services.AddScoped<IEmailSender, MailKitEmailSender>();
+else
+    builder.Services.AddScoped<IEmailSender, ConsoleEmailSender>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.FlowDestinationService>();
 builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
