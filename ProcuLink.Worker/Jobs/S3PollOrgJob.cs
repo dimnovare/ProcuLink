@@ -17,12 +17,15 @@ public sealed class S3PollOrgJob
     private readonly IS3IngressService _s3Ingress;
     private readonly IBillingService _billing;
     private readonly ILogger<S3PollOrgJob> _logger;
+    private readonly IOrderIntakeSwitch? _intakeSwitch;
 
     public S3PollOrgJob(
         IS3IngressService s3Ingress,
         IBillingService billing,
-        ILogger<S3PollOrgJob> logger)
+        ILogger<S3PollOrgJob> logger,
+        IOrderIntakeSwitch? intakeSwitch = null)
     {
+        _intakeSwitch = intakeSwitch;
         _s3Ingress = s3Ingress;
         _billing = billing;
         _logger = logger;
@@ -42,6 +45,13 @@ public sealed class S3PollOrgJob
     [PerOrgDistributedMutex(orgArgumentIndex: 0, timeoutSeconds: 300)]
     public async Task ExecuteAsync(Guid orgId, CancellationToken ct)
     {
+        // Pollers never move or delete remote files, so skipping loses nothing.
+        if (_intakeSwitch?.IsRetired(orgId) == true)
+        {
+            _logger.LogInformation("S3PollOrgJob: legacy order intake is retired for org {OrgId}; not polling.", orgId);
+            return;
+        }
+
         // Billing gate FIRST — before any network work. Mirrors EmailPollOrgJob; S3/R2
         // polling skipped the check entirely, so an org whose plan does not include S3
         // ingestion (or one that is frozen — HasFeatureAsync is false for every read-only

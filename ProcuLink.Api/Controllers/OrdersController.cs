@@ -54,6 +54,7 @@ public sealed class OrdersController : ControllerBase
     private readonly IConfidenceCalibrationService? _calibration;
     private readonly ICxmlCredentialResolver?      _cxmlResolver;
     private readonly IAcceptanceGate               _acceptanceGate;
+    private readonly IOrderIntakeSwitch?           _intakeSwitch;
 
     private const long MaxUploadBytes = 10 * 1024 * 1024; // 10 MB
 
@@ -92,7 +93,8 @@ public sealed class OrdersController : ControllerBase
         IEffectiveConnectionConfigResolver? effectiveConfig = null,
         IConfidenceCalibrationService? calibration = null,
         ICxmlCredentialResolver?       cxmlResolver = null,
-        IAcceptanceGate?               acceptanceGate = null)
+        IAcceptanceGate?               acceptanceGate = null,
+        IOrderIntakeSwitch?            intakeSwitch = null)
     {
         _orders           = orders;
         _tenant           = tenant;
@@ -140,6 +142,7 @@ public sealed class OrdersController : ControllerBase
         // DbContext and the same ISupplierAcceptanceService — so the fallback is the real thing,
         // not a permissive stub.
         _acceptanceGate   = acceptanceGate ?? new AcceptanceGate(db, acceptance);
+        _intakeSwitch     = intakeSwitch;
     }
 
     // ── WP-17 — the acceptance gate on the MANUAL SEND endpoints ──────────────
@@ -314,6 +317,9 @@ public sealed class OrdersController : ControllerBase
         CancellationToken ct = default,
         [FromForm] bool holdForReview = false)
     {
+        var orgId = _tenant.OrganisationId;
+        if (_intakeSwitch?.IsRetired(orgId) == true) return StatusCode(410, new { error = "orders_retired" });
+
         if (file is null || file.Length == 0)
             return BadRequest(new { error = "File is required." });
 
@@ -333,8 +339,6 @@ public sealed class OrdersController : ControllerBase
 
         if (supplierId == Guid.Empty)
             return BadRequest(new { error = "supplierId is required." });
-
-        var orgId = _tenant.OrganisationId;
 
         // ── Idempotency: CLAIM-FIRST, not check-then-create ─────────────────
         // The browser upload is the path a pilot actually uses, and a 60-second client timeout

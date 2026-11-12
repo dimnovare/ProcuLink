@@ -124,6 +124,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
     private readonly IBillingService _billing;
     private readonly IConfiguration _config;
     private readonly IFlowDocumentSubmitter? _flows;
+    private readonly IOrderIntakeSwitch? _intakeSwitch;
     private readonly ILogger<InboundEmailRouter> _logger;
 
     public InboundEmailRouter(
@@ -140,9 +141,12 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         ILogger<InboundEmailRouter> logger,
         // Registered in both hosts that run the router. Optional only so non-flow callers need not
         // supply it; a flow address with none defers (Transient) rather than dropping the mail.
-        IFlowDocumentSubmitter? flows = null)
+        IFlowDocumentSubmitter? flows = null,
+        // Null = not retired, so a host or test that does not wire it keeps today's behaviour.
+        IOrderIntakeSwitch? intakeSwitch = null)
     {
         _flows = flows;
+        _intakeSwitch = intakeSwitch;
         _db = db;
         _orders = orders;
         _enqueuer = enqueuer;
@@ -247,6 +251,20 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                 // minutes, and Postmark keeps re-delivering for ~10.5 hours before filing
                 // the mail under Failed, where it stays re-fireable by hand. Refusing the
                 // retries here would turn a reversible freeze into a lost purchase order.
+                InboundEmailRejectionKind.Transient);
+        }
+
+        // ── 2a. Orders retired ───────────────────────────────────────────────
+        // An org on the document engine no longer receives legacy purchase orders; its documents
+        // arrive at a flow's own address (branched off above). Transient, never Permanent: a
+        // Permanent answer settles the mail as handled, which here would be silent loss — Transient
+        // keeps it in Postmark's re-delivery window and then its Failed list, re-fireable by hand.
+        if (_intakeSwitch?.IsRetired(org.Id) == true)
+        {
+            _logger.LogInformation("Inbound email for org {OrgId} refused: legacy order intake is retired.", org.Id);
+            await WriteAuditAsync(org.Id, "inbound_email.rejected_orders_retired", payload, ct);
+            return new InboundEmailResult(false, OrgId: orgId, Array.Empty<Guid>(),
+                "Organisation now receives documents through flows.",
                 InboundEmailRejectionKind.Transient);
         }
 
