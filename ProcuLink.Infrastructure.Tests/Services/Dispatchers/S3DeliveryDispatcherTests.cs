@@ -50,6 +50,7 @@ public class S3DeliveryDispatcherTests
         sent!.BucketName.Should().Be("b");
         sent.Key.Should().Be(key);
         sent.ContentType.Should().Be("text/csv");
+        sent.UseChunkEncoding.Should().BeFalse(); // R2 rejects aws-chunked trailer uploads
     }
 
     [Fact]
@@ -69,9 +70,28 @@ public class S3DeliveryDispatcherTests
         s3.Verify(c => c.PutObjectAsync(It.IsAny<PutObjectRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    [Fact]
+    public async Task A_resolver_failure_is_retryable_but_a_policy_refusal_is_not()
+    {
+        var (dispatcher, s3) = Build();
+        var config = new SupplierDeliveryConfig
+        {
+            Protocol = "s3",
+            ConfigJson = "{\"bucket\":\"b\",\"region\":\"auto\",\"accessKeyId\":\"k\",\"serviceUrl\":\"https://no-such-host.invalid\"}",
+        };
+
+        var result = await dispatcher.DispatchAsync([1], "a.csv", "text/csv", config, Creds, default);
+
+        result.Success.Should().BeFalse();
+        result.Outcome.Should().NotBe(DeliveryOutcome.NotRetryable);
+        s3.Verify(c => c.PutObjectAsync(It.IsAny<PutObjectRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.Forbidden, "AccessDenied", DeliveryOutcome.NotRetryable)]
     [InlineData(HttpStatusCode.NotFound, "NoSuchBucket", DeliveryOutcome.NotRetryable)]
+    [InlineData(HttpStatusCode.MovedPermanently, "PermanentRedirect", DeliveryOutcome.NotRetryable)]
+    [InlineData(HttpStatusCode.BadRequest, "AuthorizationHeaderMalformed", DeliveryOutcome.NotRetryable)]
     [InlineData(HttpStatusCode.ServiceUnavailable, "SlowDown", DeliveryOutcome.Dispatched)]
     public async Task Maps_a_refusal_to_a_result_without_throwing(HttpStatusCode status, string errorCode, DeliveryOutcome outcome)
     {

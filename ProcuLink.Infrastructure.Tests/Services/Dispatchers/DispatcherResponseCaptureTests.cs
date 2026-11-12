@@ -42,6 +42,8 @@ public class DispatcherResponseCaptureTests
         // classification's 400 branch is unreachable and there is nothing to capture.
         { "sftp", false },
         { "ftps", false },
+        // S3 results do carry status codes (403, 503, ...); the error body is reduced to an
+        // ErrorCode and flows do not route on it, so there is nothing to capture.
         { "s3", false },
         { "smtp", false },
     };
