@@ -110,7 +110,7 @@ public sealed class DocumentChecksTests
     }
 
     [Fact]
-    public void Arithmetic_overflow_skips_the_rule_instead_of_throwing()
+    public void Arithmetic_overflow_goes_to_review_instead_of_throwing()
     {
         var big = "79000000000000000000000000000";
         var read = new ReadResult("I", [M("net", big, FieldMeanings.TotalNet), M("tax", big, FieldMeanings.TotalTax), M("g", "1", FieldMeanings.TotalGross)],
@@ -118,7 +118,8 @@ public sealed class DocumentChecksTests
         IReadOnlyList<DocumentCheck>? result = null;
         var run = () => result = Arith(read);
         run.Should().NotThrow();
-        result.Should().BeEmpty();
+        result.Should().ContainSingle().Which.Should().Be(
+            new DocumentCheck(DocumentChecks.ArithmeticMismatch, false, "g", "An amount is too large to check."));
     }
 
     [Fact]

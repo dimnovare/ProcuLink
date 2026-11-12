@@ -44,8 +44,12 @@ public static class DocumentChecks
                 Fail(TypeInvalid, field.Key, $"{field.Label} is not {Describe(type)} we can read.");
         }
 
-        // Values come from documents: a product that overflows decimal skips the rule rather than abort the read.
-        try { Arithmetic(read, Fail); } catch (OverflowException) { }
+        // Values come from documents: an amount too large for decimal cannot be checked, so a person looks rather than the read aborting.
+        try { Arithmetic(read, Fail); }
+        catch (OverflowException)
+        {
+            Fail(ArithmeticMismatch, read.Fields.FirstOrDefault(f => f.Meaning == FieldMeanings.TotalGross)?.Key, "An amount is too large to check.");
+        }
 
         if (duplicate) Fail(Duplicate, null, "A document with this number was already received.");
         if (read.Truncated) Fail(TextTruncated, null, "The document was too long to read in full.");
