@@ -43,9 +43,6 @@ public sealed class RateLimitPolicyAppliedTests : IClassFixture<HardeningTestFac
     // (debounced) → generous "preview" policy (120/min), NOT the tight "ai" cap.
     [InlineData(typeof(OrdersController), nameof(OrdersController.GetMappingPreview), "preview")]
     [InlineData(typeof(OrdersController), nameof(OrdersController.PreviewMappingOverride), "preview")]
-    [InlineData(typeof(SchemaInferenceController), nameof(SchemaInferenceController.Infer), "ai")]
-    [InlineData(typeof(SchemaInferenceController), nameof(SchemaInferenceController.ProposeMapping), "ai")]
-    [InlineData(typeof(MappingSuggestionsController), nameof(MappingSuggestionsController.SuggestFields), "ai")]
     // Signed-URL / file-download surfaces → "signed-url" (60/min).
     [InlineData(typeof(OrdersController), nameof(OrdersController.Download), "signed-url")]
     [InlineData(typeof(InvoiceController), nameof(InvoiceController.Download), "signed-url")]

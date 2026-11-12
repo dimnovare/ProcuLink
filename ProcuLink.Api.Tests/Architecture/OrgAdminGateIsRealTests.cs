@@ -40,14 +40,12 @@ public sealed class OrgAdminGateIsRealTests
     /// <para>Changing this number is the deliberate act of widening or narrowing what an
     /// organisation reserves to its administrators, and it should never move on its own.</para>
     /// </summary>
-    private const int ExpectedGatedEndpointCount = 34;
+    private const int ExpectedGatedEndpointCount = 30;
 
     /// <summary>
-    /// How many operations are declared destructive. Every gated endpoint reaches a declared primitive;
-    /// <c>UpsertDeliveryConfig</c> reaches two, since it writes the delivery row and republishes the
-    /// live connection revision.
+    /// How many operations are declared destructive. Every gated endpoint reaches a declared primitive.
     /// </summary>
-    private const int ExpectedDestructivePrimitiveCount = 33;
+    private const int ExpectedDestructivePrimitiveCount = 28;
 
     /// <summary>
     /// Endpoints that gate only PART of a request, in-method: resolve (an invoice's IBAN, number and
@@ -86,14 +84,14 @@ public sealed class OrgAdminGateIsRealTests
     [Fact]
     public void Scanner_Control_ReadsThroughTheAsyncStateMachine()
     {
-        var method = typeof(SuppliersController).GetMethod(nameof(SuppliersController.UpsertDeliveryConfig))!;
+        var method = typeof(BillingController).GetMethod(nameof(BillingController.CreatePortal))!;
 
         method.GetCustomAttribute<System.Runtime.CompilerServices.AsyncStateMachineAttribute>()
             .Should().NotBeNull("this control is only meaningful while the action is genuinely async");
 
-        Destructive(typeof(SuppliersController), nameof(SuppliersController.UpsertDeliveryConfig))
+        Destructive(typeof(BillingController), nameof(BillingController.CreatePortal))
             .Select(p => p.Describe)
-            .Should().Contain("IDeliveryConfigService.UpsertAsync");
+            .Should().Contain("IBillingService.CreatePortalSessionAsync");
     }
 
     /// <summary>

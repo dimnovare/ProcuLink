@@ -224,54 +224,6 @@ public sealed class SupplierCatalogDeletePostgresTests(PostgresContainerFixture 
         Assert.Equal(0, materialised);
     }
 
-    // ── endpoint contract (moved from SuppliersControllerCatalogTests, InMemory) ──
-
-    [DockerRequiredFact]
-    public async Task ClearCatalogEndpoint_DeletesAll_ForThatSupplier()
-    {
-        // DELETE /api/suppliers/{id}/catalog end-to-end through the controller. Moved off the
-        // InMemory provider for the same reason as the service tests. The 404 half of the
-        // endpoint contract (ClearCatalog_ForeignSupplier_Returns404) stays on InMemory — it
-        // returns before reaching the service.
-        var org = NewOrg();
-        var supplier = NewSupplier(org.Id);
-
-        await SeedAsync(
-            org, supplier,
-            NewProduct(org.Id, supplier.Id, "A"),
-            NewProduct(org.Id, supplier.Id, "B"));
-
-        await using var db = new ProcuLinkDbContext(_options!);
-
-        var tenant = new Mock<ICurrentTenantService>();
-        tenant.SetupGet(t => t.OrganisationId).Returns(org.Id);
-
-        var controller = new SuppliersController(
-            new Mock<ISupplierProfileRepository>().Object,
-            new Mock<IItemMappingService>().Object,
-            db,
-            tenant.Object,
-            new Mock<IBillingService>().Object,
-            new Mock<IPoMappingService>().Object,
-            new Mock<IDeliveryConfigService>().Object,
-            new Mock<IDeliveryService>().Object,
-            new TestDoubles.FakeAnalyticsService(),
-            new Mock<IFileStorageService>().Object,
-            new SourceColumnExtractor(),
-            new ProcuLink.Api.Services.StarterTemplates.StarterTemplateService(),
-            new SupplierCatalogService(db), // real — persists to the container
-            new Mock<ISupplierConnectionService>().Object);
-
-        var result = await controller.ClearCatalog(supplier.Id, CancellationToken.None);
-
-        var ok = Assert.IsType<OkObjectResult>(result);
-        int deleted = ((dynamic)ok.Value!).deleted;
-        Assert.Equal(2, deleted);
-
-        await using var verify = new ProcuLinkDbContext(_options!);
-        Assert.Equal(0, await verify.SupplierProducts.AsNoTracking().CountAsync());
-    }
-
     [DockerRequiredFact]
     public async Task DeleteAsync_DoesNotFlushTheCallersUnrelatedPendingChanges()
     {
@@ -280,7 +232,7 @@ public sealed class SupplierCatalogDeletePostgresTests(PostgresContainerFixture 
         // SaveChanges shape: SaveChanges flushed whatever else the caller happened to have
         // tracked, committing edits the caller had not asked to persist yet.
         //
-        // The only production caller (SuppliersController.ClearCatalog) tracks nothing across
+        // The only production caller tracked nothing across
         // the call — SupplierExistsAsync is a read-only AnyAsync and CurrentTenantService
         // never touches the DbContext — so neither shape can half-apply its intent today.
         // This test pins the contract so a future caller cannot be surprised silently.

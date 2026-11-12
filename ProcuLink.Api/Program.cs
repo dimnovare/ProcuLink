@@ -16,7 +16,6 @@ using ProcuLink.Api.Middleware;
 using ProcuLink.Api.Services;
 using ProcuLink.Api.Startup;
 using ProcuLink.Api.Telemetry;
-using ProcuLink.Api.Services.StarterTemplates;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
@@ -665,7 +664,6 @@ else
 builder.Services.AddScoped<ISupportContactService, SupportContactService>();
 
 // ── Starter PO mapping templates — static, read-only, cached ─────────────
-builder.Services.AddSingleton<IStarterTemplateService, StarterTemplateService>();
 
 // ── Analytics (PostHog) — no-op when key absent ──────────────────────────
 builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Analytics:PostHog"));

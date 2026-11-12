@@ -48,13 +48,6 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "*/5 * * * *");
 
-        // Supplier-catalog pull sync (SFTP/FTP/FTPS): hourly dispatcher fanning out one
-        // child job per DUE source (per-supplier isolation; soft lock prevents overlap).
-        _recurringJobs.AddOrUpdate<ProcuLink.Infrastructure.Jobs.CatalogSyncDispatcherJob>(
-            "catalog-sync",
-            job => job.ExecuteAsync(CancellationToken.None),
-            "0 * * * *");
-
         // P0 reliability: detect orders stuck in parsing/transforming (every 15 min).
         _recurringJobs.AddOrUpdate<StuckOrderDetectionJob>(
             "stuck-order-detection",
@@ -146,7 +139,7 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "*/5 * * * *");
 
-        _logger.LogInformation("Registered recurring jobs: document-delivery-sweep (every 5 min), worker-heartbeat (every 2 min), email-polling, sftp-polling, s3-polling, flow-pickup (every 5 min), worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep + stuck-delivery-detection + stranded-ready-delivery-detection (every 15 min), catalog-sync + stranded-failed-delivery-detection (hourly), billing-reconciliation (daily 02:00 UTC), data-retention-sweep (daily 03:30 UTC), blob-retention-sweep (daily 04:15 UTC), disposable-org-sweep (daily 05:00 UTC).");
+        _logger.LogInformation("Registered recurring jobs: document-delivery-sweep (every 5 min), worker-heartbeat (every 2 min), email-polling, sftp-polling, s3-polling, flow-pickup (every 5 min), worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep + stuck-delivery-detection + stranded-ready-delivery-detection (every 15 min), stranded-failed-delivery-detection (hourly), billing-reconciliation (daily 02:00 UTC), data-retention-sweep (daily 03:30 UTC), blob-retention-sweep (daily 04:15 UTC), disposable-org-sweep (daily 05:00 UTC).");
         return base.StartAsync(cancellationToken);
     }
 

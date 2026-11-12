@@ -76,30 +76,6 @@ internal static class OrgAdminGateIlScanner
     /// </summary>
     public static readonly IReadOnlyList<Primitive> DestructivePrimitives =
     [
-        new("IDeliveryConfigService.UpsertAsync",
-            OnInterface<IDeliveryConfigService>(nameof(IDeliveryConfigService.UpsertAsync)),
-            "Writes the endpoint, protocol and credentials every future order for a supplier is "
-          + "sent to — the definition of silently redirecting where documents go."),
-
-        new("IDeliveryConfigService.DeleteAsync",
-            OnInterface<IDeliveryConfigService>(nameof(IDeliveryConfigService.DeleteAsync)),
-            "Destroys that route and its credentials; every subsequent send for the supplier fails."),
-
-        new("ISupplierConnectionService.PublishAsync",
-            OnInterface<ISupplierConnectionService>(nameof(ISupplierConnectionService.PublishAsync)),
-            "Moves the connection's ACTIVE pointer — from here the revision is what pinned orders "
-          + "deliver through."),
-
-        new("ISupplierConnectionService.RollbackAsync",
-            OnInterface<ISupplierConnectionService>(nameof(ISupplierConnectionService.RollbackAsync)),
-            "Publishes a previously-archived bundle nobody re-approved and moves the active pointer "
-          + "to it: a redirection expressed as an undo."),
-
-        new("ISupplierConnectionService.RepublishLiveDeliveryAsync",
-            OnInterface<ISupplierConnectionService>(nameof(ISupplierConnectionService.RepublishLiveDeliveryAsync)),
-            "Snapshots a delivery edit into a NEW published revision, which is how a live-row edit "
-          + "reaches revision-governed orders."),
-
         new("IApiKeyService.CreateAsync",
             OnInterface<IApiKeyService>(nameof(IApiKeyService.CreateAsync)),
             "Mints a bearer credential with org-wide machine access, shown once, and attributed to "

@@ -64,8 +64,7 @@ public class OrgPlanHistoryWritePointTests
             new Mock<IBillingService>().Object,
             MakeConfig(),
             NullLogger<AdminController>.Instance,
-            new Mock<IDataErasureService>().Object,
-            new ProcuLink.Infrastructure.Services.ItemMappingService(db));
+            new Mock<IDataErasureService>().Object);
 
     private static async Task<Organisation> AddOrgAsync(
         ProcuLinkDbContext db, string plan, string status, string? stripeCustomerId = null)

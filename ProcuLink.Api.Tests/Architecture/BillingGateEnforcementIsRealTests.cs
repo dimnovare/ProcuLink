@@ -55,23 +55,10 @@ public sealed class BillingGateEnforcementIsRealTests
     private static readonly IReadOnlyDictionary<BillingFeature, Site> Sites =
         new Dictionary<BillingFeature, Site>
         {
-            [BillingFeature.BulkMapping] = new(
-                typeof(SuppliersController), nameof(SuppliersController.ImportMappings), Kind.ServerRefusal,
-                "The bulk lever is the differentiator; single-mapping edits stay open on every plan."),
-
-            [BillingFeature.Cxml] = new(
-                typeof(SuppliersController), nameof(SuppliersController.UpsertDeliveryConfig), Kind.ServerRefusal,
-                "Reached through DeliveryCapabilityGate, which is why this scanner follows calls "
-              + "rather than looking for HasFeatureAsync in the method body itself."),
-
             [BillingFeature.AdvancedAudit] = new(
                 typeof(AuditController), nameof(AuditController.GetAuditLog), Kind.ServerRefusal,
                 "The org-wide trail. The per-order audit stays open — gating it would take away "
               + "something Growth already pays for."),
-
-            [BillingFeature.WebhookDelivery] = new(
-                typeof(SuppliersController), nameof(SuppliersController.UpsertDeliveryConfig), Kind.ServerRefusal,
-                "Protocol = http, via DeliveryCapabilityGate."),
 
             [BillingFeature.EmailIngestion] = new(
                 typeof(SettingsController), nameof(SettingsController.UpdateEmail), Kind.ServerRefusal,
@@ -84,15 +71,6 @@ public sealed class BillingGateEnforcementIsRealTests
             [BillingFeature.S3Ingestion] = new(
                 typeof(SettingsController), nameof(SettingsController.UpdateS3), Kind.ServerRefusal,
                 "Enabling S3/R2 pull. S3PollOrgJob re-checks every cycle."),
-
-            [BillingFeature.ErpConnectors] = new(
-                typeof(SuppliersController), nameof(SuppliersController.UpsertDeliveryConfig), Kind.ServerRefusal,
-                "Protocol = erp_erply | erp_directo, via DeliveryCapabilityGate."),
-
-            [BillingFeature.CustomSupplierRules] = new(
-                typeof(SupplierAcceptanceController), nameof(SupplierAcceptanceController.CreateVersion),
-                Kind.ServerRefusal,
-                "Authoring a rule version. Activate is gated too; reading versions stays open."),
 
             [BillingFeature.Sso] = new(
                 typeof(StripeBillingService), nameof(StripeBillingService.GetStatusAsync),
@@ -123,23 +101,6 @@ public sealed class BillingGateEnforcementIsRealTests
     }
 
     /// <summary>
-    /// POSITIVE CONTROL, INDIRECT. The delivery gates reach the primitive two calls away
-    /// (UpsertDeliveryConfig → DeliveryCapabilityGate.FirstUnmetAsync → HasFeatureAsync). A scanner
-    /// that only read the method's own body would report these unenforced and demand a duplicated
-    /// gate — undoing the single-decision design WP-11 landed.
-    /// </summary>
-    [Fact]
-    public void Scanner_Control_FollowsCallsIntoTheSharedDeliveryGate()
-    {
-        var features = FeaturesGatedBy(
-            Resolve(typeof(SuppliersController), nameof(SuppliersController.UpsertDeliveryConfig)),
-            GatePrimitive.ServerRefusal);
-
-        features.Should().Contain(BillingFeature.WebhookDelivery,
-            "the http gate lives in DeliveryCapabilityGate, one call away from the controller");
-    }
-
-    /// <summary>
     /// NEGATIVE CONTROL. A scanner that answered "yes, gated" for everything would pass every test
     /// here while proving nothing. This pins a real endpoint that is deliberately NOT feature-gated.
     /// </summary>
@@ -147,10 +108,10 @@ public sealed class BillingGateEnforcementIsRealTests
     public void Scanner_Control_DoesNotInventAGateWhereThereIsNone()
     {
         ReachesGatePrimitive(
-            Resolve(typeof(OrdersController), nameof(OrdersController.GetAudit)),
+            Resolve(typeof(DocumentsController), nameof(DocumentsController.History)),
             GatePrimitive.ServerRefusal)
             .Should().BeFalse(
-                "the per-order audit trail is deliberately open on every paid plan. If the scanner "
+                "a document's history is deliberately open on every plan. If the scanner "
               + "reports a gate here, it is reporting gates everywhere and proves nothing.");
     }
 

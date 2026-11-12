@@ -103,14 +103,6 @@ public sealed class EndpointReachabilityGuardTests
     private static readonly IReadOnlyList<AccountedEndpoint> MachineFacing =
     [
         // ── Machine-to-machine ingress, sold as an integration surface ────────────────────
-        new("POST /api/ingress/{}/catalog/{}",
-            "2026-08-13 — machine-to-machine catalog push. IngressController carries "
-            + "[Authorize(AuthenticationSchemes = \"ApiKey\")], not Clerk. The URL is RENDERED for "
-            + "the customer to paste into their own system at "
-            + "project-proculink/src/components/bridge/SupplierDockProfile.tsx:1243 — this app never "
-            + "posts to it, and a frontend caller would be the bug. Its sibling POST "
-            + "/api/ingress/{slug}/orders needs no entry: scripts/live-matrix/ingest-harness.mjs:97 "
-            + "really calls it."),
         new("POST /api/v1/flows/{}/documents",
             "2026-11-07 — machine-to-machine file API. ProcuLink.Api/Controllers/FlowFilesController.cs carries "
             + "[Authorize(AuthenticationSchemes = \"ApiKey\")], not Clerk: the customer's own system "
@@ -171,18 +163,6 @@ public sealed class EndpointReachabilityGuardTests
             + "download link, so the caller is a browser following a URL this service built. R2 is "
             + "used in every deployed environment, so it has no production caller either."),
 
-        // ── Called through a computed final segment, which the matcher refuses to credit ──
-        new("POST /api/connections/{}/revisions/{}/publish",
-            "2026-08-13 — genuinely called, through a segment the matcher will not credit: "
-            + "project-proculink/src/lib/api-client.ts builds "
-            + "`/api/connections/${connectionId}/revisions/${revisionId}/${action}` where `action` "
-            + "is the union \"publish\" | \"archive\". Crediting a computed segment against a "
-            + "literal route segment would let one template mark a whole controller reachable — see "
-            + "EndpointReachabilityScanner.Matches for why that refusal is deliberate."),
-        new("POST /api/connections/{}/revisions/{}/archive",
-            "2026-08-13 — the other half of the same computed-segment call in "
-            + "project-proculink/src/lib/api-client.ts; see the publish entry directly above for why "
-            + "the matcher refuses to credit it structurally."),
     ];
 
     /// <summary>
@@ -206,12 +186,6 @@ public sealed class EndpointReachabilityGuardTests
             + "with a required reason and a recorded identity — and no screen offers it. The GET "
             + "beside it IS called, so an operator can see exactly why an order is blocked and has "
             + "no way to act on it. Build the control or delete the endpoint."),
-        new("DELETE /api/suppliers/{}/po-mapping/output-tree",
-            "PENDING A DECISION, 2026-08-13 — the second recovery door named by the v2 audit. Its "
-            + "own docstring at ProcuLink.Api/Controllers/SuppliersController.cs:583-587 calls it "
-            + "\"the recovery door for a layout that cannot deliver this supplier's format\", and "
-            + "the mapper offers no way to un-promote a layout. A door with no handle, in its own "
-            + "words."),
 
         // ── Operator diagnostics that exist and cannot be looked at ──────────────────────
         new("GET /api/auto-send/dry-runs",
@@ -264,39 +238,6 @@ public sealed class EndpointReachabilityGuardTests
             + "never saw it; it makes the confirmation gap a whole feature rather than two writes."),
 
         // ── Engine surfaces the product never adopted ────────────────────────────────────
-        new("POST /api/schema/infer",
-            "PENDING A DECISION, 2026-08-13 — schema inference over an uploaded sample. No caller in "
-            + "project-proculink/src/lib/api-client.ts; the mapper's suggestion path uses the "
-            + "mapper-enrichment endpoints instead. Either the mapper adopts it or it is dead engine "
-            + "surface."),
-        new("POST /api/schema/propose-mapping",
-            "PENDING A DECISION, 2026-08-13 — the second half of the inference pair above, uncalled "
-            + "for the same reason (SchemaInferenceController.cs:96)."),
-        new("POST /api/suppliers/{}/po-mapping/test",
-            "PENDING A DECISION, 2026-08-13 — dry-runs a mapping against a sample without saving. "
-            + "project-proculink/src/lib/api/mapping.ts calls PUT and DELETE on /po-mapping and "
-            + "never /test, so the mapper's preview does not use it."),
-        new("POST /api/suppliers/{}/profiles",
-            "PENDING A DECISION, 2026-08-13 — upserts a supplier profile. "
-            + "project-proculink/src/lib/api-client.ts:1300 documents the route in a COMMENT beside "
-            + "two GET callers and never posts to it, which is precisely how a comment comes to look "
-            + "like a caller. Decide whether profiles are editable in-product."),
-        new("GET /api/rule-definitions",
-            "PENDING A DECISION, 2026-08-13 — the org-wide validation-rule catalog. "
-            + "project-proculink/src/lib/api-client.ts:3169 says so outright: \"No client for GET "
-            + "/api/rule-definitions: the org-wide catalog page it fed had…\" — the page was deleted "
-            + "(see src/lib/retired-routes.ts) and the endpoint was not. Delete it or give it a "
-            + "page."),
-        new("GET /api/rule-definitions/{}",
-            "PENDING A DECISION, 2026-08-13 — one definition from the catalog above "
-            + "(ProcuLink.Api/Controllers/RuleDefinitionsController.cs:42); same decision. The "
-            + "supplier-scoped bindings endpoint at RuleDefinitionsController.cs:52 is separate and "
-            + "IS called."),
-        new("GET /api/suppliers/{}/acceptance-profile/versions",
-            "PENDING A DECISION, 2026-08-13 — the version history of a supplier's acceptance "
-            + "profile. api-client.ts calls GET and POST on /acceptance-profile and POST on "
-            + "/{versionNo}/activate, so a user can create and activate a version and cannot list "
-            + "what exists. Either the supplier screen grows a history panel or this goes."),
         new("GET /api/invoices/{}/validate-peppol",
             "PENDING A DECISION, 2026-08-13 — Peppol conformance for one invoice. The invoices "
             + "screen (project-proculink/src/app/(app)/inbound/invoices/page.tsx) offers no control "
@@ -343,8 +284,6 @@ public sealed class EndpointReachabilityGuardTests
         new HashSet<string>(StringComparer.Ordinal)
         {
             "DELETE /api/admin/organisations/{}/orders/{}",
-            "DELETE /api/suppliers/{}/po-mapping/output-tree",
-            "GET /api/admin/item-mapping-twins",
             "GET /api/admin/job-failures",
             // Moved into the baseline on 2026-08-20, deliberately and in the open, exactly as the
             // failure text asks: the support PO-number → org lookup's caller is the founder's hand,
@@ -370,26 +309,16 @@ public sealed class EndpointReachabilityGuardTests
             "GET /api/orders/{}/ai-decisions",
             "GET /api/orders/{}/delivery-attempts",
             "GET /api/orders/{}/status",
-            "GET /api/rule-definitions",
-            "GET /api/rule-definitions/{}",
-            "GET /api/suppliers/{}/acceptance-profile/versions",
             "GET /health",
             "POST /api/admin/organisations/{}/account-status",
             "POST /api/admin/organisations/{}/orders/bulk-erase",
             "POST /api/admin/organisations/{}/retention",
             "POST /api/billing/pilot/request-extension",
             "POST /api/billing/webhook",
-            "POST /api/connections/{}/revisions/{}/archive",
-            "POST /api/connections/{}/revisions/{}/publish",
-            "POST /api/ingress/{}/catalog/{}",
             "POST /api/orders/{}/acceptance-gate/override",
             "POST /api/orders/{}/confirmation",
             "POST /api/orders/{}/confirmation/upload",
             "POST /api/orders/{}/mark-rejected",
-            "POST /api/schema/infer",
-            "POST /api/schema/propose-mapping",
-            "POST /api/suppliers/{}/po-mapping/test",
-            "POST /api/suppliers/{}/profiles",
         };
 
     /// <summary>
@@ -476,7 +405,6 @@ public sealed class EndpointReachabilityGuardTests
         var unreachable = Scan.Value.Unreachable.Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
 
         Assert.Contains("POST /api/orders/{}/acceptance-gate/override", unreachable);
-        Assert.Contains("DELETE /api/suppliers/{}/po-mapping/output-tree", unreachable);
     }
 
     /// <summary>
