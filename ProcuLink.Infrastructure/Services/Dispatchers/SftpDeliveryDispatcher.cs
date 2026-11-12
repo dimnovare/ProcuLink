@@ -625,12 +625,28 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
         }
     }
 
+    private static readonly System.Text.RegularExpressions.Regex OneLineKey = new(
+        @"^(?<begin>-----BEGIN [A-Z0-9 ]+-----)(?<body>[A-Za-z0-9+/=\s]+)(?<end>-----END [A-Z0-9 ]+-----)$");
+
+    /// <summary>
+    /// A key pasted into a single-line box loses its line breaks, and SSH.NET's PEM/OpenSSH parser
+    /// needs them. An armoured key with no newline is re-wrapped (header, base64 body in 64-char
+    /// lines, footer); anything else passes through untouched.
+    /// </summary>
+    internal static string NormalizePrivateKey(string key)
+    {
+        var m = OneLineKey.Match(key.Trim());
+        if (key.Contains('\n') || !m.Success) return key;
+        var body = string.Concat(m.Groups["body"].Value.Where(c => !char.IsWhiteSpace(c)));
+        return string.Join('\n', [m.Groups["begin"].Value, .. body.Chunk(64).Select(c => new string(c)), m.Groups["end"].Value]) + "\n";
+    }
+
     private static ConnectionInfo BuildConnectionInfo(string host, int port, SftpCredentials creds)
     {
         // Prefer key-based auth if a private key is configured; fall back to password.
         if (!string.IsNullOrWhiteSpace(creds.PrivateKey))
         {
-            using var keyStream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(creds.PrivateKey));
+            using var keyStream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(NormalizePrivateKey(creds.PrivateKey)));
             var keyFile = string.IsNullOrEmpty(creds.PrivateKeyPassphrase)
                 ? new PrivateKeyFile(keyStream)
                 : new PrivateKeyFile(keyStream, creds.PrivateKeyPassphrase);

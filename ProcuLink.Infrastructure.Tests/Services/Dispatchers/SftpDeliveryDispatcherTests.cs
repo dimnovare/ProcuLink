@@ -158,4 +158,35 @@ public class SftpDeliveryDispatcherTests
     {
         SftpDeliveryDispatcher.GetDirectoryPath(remotePath).Should().Be(expected);
     }
+
+    // ── Private key pasted into a single-line box ─────────────────────────────
+
+    [Theory]
+    [InlineData("openssh")]
+    [InlineData("pem")]
+    public void A_private_key_pasted_on_one_line_still_loads(string format)
+    {
+        // Throwaway keys generated here; no real key is ever committed.
+        string key;
+        if (format == "pem")
+        {
+            using var rsa = System.Security.Cryptography.RSA.Create(2048);
+            key = rsa.ExportRSAPrivateKeyPem();
+        }
+        else
+        {
+            var gen = new Org.BouncyCastle.Crypto.Generators.Ed25519KeyPairGenerator();
+            gen.Init(new Org.BouncyCastle.Crypto.Parameters.Ed25519KeyGenerationParameters(new Org.BouncyCastle.Security.SecureRandom()));
+            var blob = Org.BouncyCastle.Crypto.Utilities.OpenSshPrivateKeyUtilities.EncodePrivateKey(gen.GenerateKeyPair().Private);
+            key = "-----BEGIN OPENSSH PRIVATE KEY-----\n" + Convert.ToBase64String(blob, Base64FormattingOptions.InsertLineBreaks)
+                + "\n-----END OPENSSH PRIVATE KEY-----\n";
+        }
+        var oneLine = key.Replace("\r", "").Replace("\n", ""); // what a single-line browser input keeps
+
+        Load(oneLine).Should().Throw<Exception>(); // the defect: SSH.NET needs the line breaks
+        Load(SftpDeliveryDispatcher.NormalizePrivateKey(oneLine)).Should().NotThrow();
+        SftpDeliveryDispatcher.NormalizePrivateKey(key).Should().Be(key); // a well-formed key is untouched
+
+        static Action Load(string k) => () => new Renci.SshNet.PrivateKeyFile(new MemoryStream(Encoding.UTF8.GetBytes(k))).Dispose();
+    }
 }
