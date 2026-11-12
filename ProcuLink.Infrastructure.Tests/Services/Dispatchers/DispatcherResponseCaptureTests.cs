@@ -42,6 +42,7 @@ public class DispatcherResponseCaptureTests
         // classification's 400 branch is unreachable and there is nothing to capture.
         { "sftp", false },
         { "ftps", false },
+        { "s3", false },
         { "smtp", false },
     };
 
@@ -176,6 +177,7 @@ public class DispatcherResponseCaptureTests
     {
         new SftpDeliveryDispatcher(NullLogger<SftpDeliveryDispatcher>.Instance, Guard()),
         new FtpsDeliveryDispatcher(NullLogger<FtpsDeliveryDispatcher>.Instance, Guard()),
+        new S3DeliveryDispatcher(new Moq.Mock<ProcuLink.Core.Services.Ingress.IAmazonS3ClientFactory>().Object, Guard(), NullLogger<S3DeliveryDispatcher>.Instance),
         new HttpDeliveryDispatcher(new StubHttpClientFactory(), Guard(), NullLogger<HttpDeliveryDispatcher>.Instance),
         new EmailApiDeliveryDispatcher(new FakeEmailApiClient(), NullLogger<EmailApiDeliveryDispatcher>.Instance),
         new SmtpDeliveryDispatcher(NullLogger<SmtpDeliveryDispatcher>.Instance, Guard()),

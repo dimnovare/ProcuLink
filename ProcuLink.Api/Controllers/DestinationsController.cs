@@ -74,7 +74,7 @@ public sealed class DestinationsController(
     }
 
     private IActionResult Rejected(DestinationException ex) =>
-        UnprocessableEntity(new { error = ex.Code, detail = ex.Code == "invalid_destination" ? ex.Message : null });
+        UnprocessableEntity(new { error = ex.Code, detail = ex.Code == "unsupported_destination" ? null : ex.Message });
 
     [HttpDelete("{id:guid}")]
     [RequireOrgAdmin]

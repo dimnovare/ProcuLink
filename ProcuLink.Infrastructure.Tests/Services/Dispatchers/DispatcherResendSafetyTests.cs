@@ -25,6 +25,7 @@ public class DispatcherResendSafetyTests
         // Deterministic overwrite filename — re-sending overwrites the same file.
         { "sftp", ResendSafety.Safe },
         { "ftps", ResendSafety.Safe },
+        { "s3", ResendSafety.Safe },
         // Sends Idempotency-Key + X-Message-Id; honouring them is the supplier's choice.
         { "http", ResendSafety.BestEffort },
         // Message-ID dedup by a receiving MTA is best-effort and rarely applied.
@@ -66,6 +67,7 @@ public class DispatcherResendSafetyTests
     {
         new SftpDeliveryDispatcher(NullLogger<SftpDeliveryDispatcher>.Instance, Guard()),
         new FtpsDeliveryDispatcher(NullLogger<FtpsDeliveryDispatcher>.Instance, Guard()),
+        new S3DeliveryDispatcher(new Moq.Mock<ProcuLink.Core.Services.Ingress.IAmazonS3ClientFactory>().Object, Guard(), NullLogger<S3DeliveryDispatcher>.Instance),
         new HttpDeliveryDispatcher(new FakeHttpClientFactory(), Guard(), NullLogger<HttpDeliveryDispatcher>.Instance),
         new EmailApiDeliveryDispatcher(new FakeEmailApiClient(), NullLogger<EmailApiDeliveryDispatcher>.Instance),
         new SmtpDeliveryDispatcher(NullLogger<SmtpDeliveryDispatcher>.Instance, Guard()),
