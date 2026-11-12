@@ -92,8 +92,9 @@ public sealed class FlowDestinationService(
         var json = JsonNode.Parse(d.ConfigJson) as JsonObject ?? new JsonObject();
         if (d.Protocol == DeliveryProtocolConstants.Email)
         {
-            json["subjectTemplate"] = (test ? "[TEST] " : "") + $"{flowName} — {{fileName}}";
-            json["bodyTemplate"] = "Attached: {fileName}. Sent by ProcuLink.";
+            // The user's subject and message win; a blank or absent one falls back to a neutral default.
+            json["subjectTemplate"] = (test ? "[TEST] " : "") + (Text(json, "subjectTemplate") ?? $"{flowName} — {{fileName}}");
+            json["bodyTemplate"] = Text(json, "bodyTemplate") ?? "Attached: {fileName}. Sent by ProcuLink.";
             json.Remove("attachmentFileName"); // the delivery's own file name (or the TEST_ name) wins
         }
         else if (test && d.Protocol == DeliveryProtocolConstants.Http)
@@ -109,6 +110,9 @@ public sealed class FlowDestinationService(
             ConfigJson = json.ToJsonString(),
         };
     }
+
+    private static string? Text(JsonObject json, string key) =>
+        json[key] is JsonValue v && v.TryGetValue<string>(out var s) && !string.IsNullOrWhiteSpace(s) ? s : null;
 
     /// <summary>Pins the host key a dispatcher learned on first contact into the destination's config. Does not save.</summary>
     public static void RecordLearnedHostKey(FlowDestination d, DeliveryResult result)
