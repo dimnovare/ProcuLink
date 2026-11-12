@@ -32,6 +32,30 @@ public static class DraftBinder
         return matches;
     }
 
+    /// <summary>
+    /// Matches a leaf whose plain name is an alias of a meaning to the one field or column carrying that meaning.
+    /// A meaning carried by several fields is ambiguous and binds nothing. Confidence 0.9.
+    /// </summary>
+    public static IReadOnlyList<SlotMatch> ByMeaning(IReadOnlyList<OutputSlot> slots, FlowFieldList fields)
+    {
+        var carriers = fields.Fields.Select(f => (Key: f.Key, f.Meaning))
+            .Concat(fields.Tables.SelectMany(tb => tb.Columns.Select(c => (Key: $"{tb.Key}.{c.Key}", c.Meaning))))
+            .Where(x => x.Meaning is not null).ToList();
+        var matches = new List<SlotMatch>();
+        foreach (var slot in slots)
+        {
+            var name = Plain(slot.Name);
+            foreach (var meaning in FieldMeanings.Aliases.Where(a => a.Value.Contains(name)).Select(a => a.Key))
+            {
+                var keys = carriers.Where(x => x.Meaning == meaning && slot.Allowed.Contains(x.Key)).Select(x => x.Key).ToList();
+                if (keys.Count != 1) continue;
+                matches.Add(new SlotMatch(slot.Path, keys[0], 0.9f));
+                break;
+            }
+        }
+        return matches;
+    }
+
     public static OutputDraft Apply(string name, string format, OutputNodeTemplate t, IReadOnlyList<(SlotMatch Match, string By)> matches, FlowFieldList fields)
     {
         var leaves = OutputLeafPaths.Of(t);

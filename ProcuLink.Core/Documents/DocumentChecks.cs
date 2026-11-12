@@ -15,6 +15,7 @@ public static class DocumentChecks
     public const string NotOnPage = "not_on_page";
     public const string Duplicate = "duplicate";
     public const string TextTruncated = "text_truncated";
+    public const string ArithmeticMismatch = "arithmetic_mismatch";
 
     /// <summary>Failed checks only; an empty list means the document passed.</summary>
     public static IReadOnlyList<DocumentCheck> Run(ReadResult read, FlowFieldList fields, bool fieldsConfirmed, bool duplicate)
@@ -43,10 +44,63 @@ public static class DocumentChecks
                 Fail(TypeInvalid, field.Key, $"{field.Label} is not {Describe(type)} we can read.");
         }
 
+        Arithmetic(read, Fail);
+
         if (duplicate) Fail(Duplicate, null, "A document with this number was already received.");
         if (read.Truncated) Fail(TextTruncated, null, "The document was too long to read in full.");
         return failed;
     }
+
+    // Only rules whose every meaning is on the read and parses fire; a flow without money meanings never fails here.
+    private static void Arithmetic(ReadResult read, Action<string, string?, string> fail)
+    {
+        var dp = DecimalPlaces(read.Fields.FirstOrDefault(f => f.Meaning == FieldMeanings.Currency)?.Value);
+        var unit = (decimal)Math.Pow(10, -dp);
+        decimal R(decimal v) => Math.Round(v, dp, MidpointRounding.AwayFromZero);
+        bool Header(string meaning, out decimal v, out string key)
+        {
+            var f = read.Fields.FirstOrDefault(x => x.Meaning == meaning);
+            key = f?.Key ?? "";
+            v = 0;
+            return f is not null && FieldValueParser.TryNumber(f.Value, out v);
+        }
+
+        var haveNet = Header(FieldMeanings.TotalNet, out var net, out var netKey);
+        if (haveNet && Header(FieldMeanings.TotalTax, out var tax, out _) && Header(FieldMeanings.TotalGross, out var gross, out var grossKey)
+            && R(net) + R(tax) != R(gross))
+            fail(ArithmeticMismatch, grossKey, "Net plus tax doesn't equal the total.");
+
+        var table = read.Tables.FirstOrDefault(t => t.Columns.Any(c => c.Meaning == FieldMeanings.LineAmount));
+        if (table is null || table.Rows.Count == 0) return;
+        string? Col(string meaning) => table.Columns.FirstOrDefault(c => c.Meaning == meaning)?.Key;
+        decimal? Cell(ReadRow row, string? key) =>
+            key is not null && row.Cells.TryGetValue(key, out var c) && FieldValueParser.TryNumber(c.Value, out var v) ? v : null;
+
+        var amountKey = Col(FieldMeanings.LineAmount);
+        var amounts = table.Rows.Select(r => Cell(r, amountKey)).ToList();
+        if (haveNet && amounts.All(a => a is not null) && Math.Abs(amounts.Sum(a => R(a!.Value)) - R(net)) > unit)
+            fail(ArithmeticMismatch, table.Key, "The lines don't add up to the net total.");
+
+        var qtyKey = Col(FieldMeanings.LineQuantity);
+        var priceKey = Col(FieldMeanings.LineUnitPrice);
+        for (var i = 0; i < table.Rows.Count; i++)
+        {
+            if (Cell(table.Rows[i], qtyKey) is { } q && Cell(table.Rows[i], priceKey) is { } p && amounts[i] is { } a
+                && Math.Abs(R(q * p) - R(a)) > unit)
+            {
+                fail(ArithmeticMismatch, table.Key, $"Line {i + 1}: quantity × price doesn't equal the amount.");
+                break;
+            }
+        }
+    }
+
+    // ISO 4217 minor units; absent or unknown currency means 2.
+    private static int DecimalPlaces(string? currency) => currency?.Trim().ToUpperInvariant() switch
+    {
+        "JPY" or "KRW" or "CLP" or "ISK" or "VND" => 0,
+        "BHD" or "KWD" or "OMR" or "JOD" or "TND" or "IQD" or "LYD" => 3,
+        _ => 2,
+    };
 
     /// <summary>The document number, trimmed, upper-cased and without whitespace; null when there is none.</summary>
     public static string? DedupKeyOf(ReadResult read)
