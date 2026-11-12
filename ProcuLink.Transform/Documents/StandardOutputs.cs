@@ -29,7 +29,7 @@ public static class StandardOutputs
 
     /// <summary>
     /// The standard file, or <c>output_invalid</c>: with the needs sentence when the read lacks a need, without a detail
-    /// for an unknown id or anything a writer still refuses (its messages are not approved copy). Never throws for either.
+    /// for an unknown id or anything a writer still refuses, an amount too large for its arithmetic included (its messages are not approved copy). Never throws for either.
     /// </summary>
     public static async Task<DocumentRender> RenderAsync(string id, ReadResult read, FlowFieldList fields, string? tableKey, Guid orgId, CancellationToken ct)
     {
@@ -45,7 +45,7 @@ public static class StandardOutputs
             var writer = OutputTransformRegistry.All.First(w => w.CanTransform(standard.Writer));
             return new(await writer.TransformAsync(order, standard.Writer, ct), null, null);
         }
-        catch (Exception ex) when (ex is TransformValidationException or ArgumentException or InvalidOperationException or XmlException)
+        catch (Exception ex) when (ex is TransformValidationException or ArgumentException or InvalidOperationException or XmlException or OverflowException)
         {
             return new(null, "output_invalid", null);
         }

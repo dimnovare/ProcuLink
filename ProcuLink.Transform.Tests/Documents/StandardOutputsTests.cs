@@ -18,7 +18,7 @@ public class StandardOutputsTests
         ("Unit", FieldMeanings.LineUnit), ("Price", FieldMeanings.LineUnitPrice), ("No", FieldMeanings.LineNumber),
     ];
 
-    private static ReadResult Read(string poNumber = "PO-1", string qty1 = "3", string code2 = "B-2", string no2 = "20")
+    private static ReadResult Read(string poNumber = "PO-1", string qty1 = "3", string price1 = "9,99", string code2 = "B-2", string no2 = "20")
     {
         ReadRow Row(params string[] values) => new(Columns.Select((c, i) => (c, i))
             .ToDictionary(x => FieldKey.Normalise(x.c.Label), x => new ReadCell(values[x.i], 1, null, false, false)));
@@ -27,7 +27,7 @@ public class StandardOutputsTests
              Field("Currency", "eur", FieldMeanings.Currency), Field("Buyer", "Buyer Co", FieldMeanings.SenderName),
              Field("Seller", "Seller Co", FieldMeanings.ReceiverName)],
             [new ReadTable("lines", "Lines", Columns.Select(c => new ReadColumn(FieldKey.Normalise(c.Label), c.Label, "text", c.Meaning)).ToList(),
-                [Row("A-1", "Bolt", qty1, "EA", "9,99", "10"), Row(code2, "Nut", "2", "EA", "0,50", no2)], true)]);
+                [Row("A-1", "Bolt", qty1, "EA", price1, "10"), Row(code2, "Nut", "2", "EA", "0,50", no2)], true)]);
     }
 
     private static Task<DocumentRender> Render(string id, ReadResult read) =>
@@ -63,6 +63,10 @@ public class StandardOutputsTests
 
         var unknown = await Render("nope", Read());
         (unknown.Error, unknown.Detail).Should().Be(("output_invalid", (string?)null));
+
+        // An amount too large for a writer's arithmetic is a file that cannot be written, not a throw.
+        var overflow = await Render("cxml-1-2", Read(qty1: "100000000000000000", price1: "1000000000000"));
+        (overflow.Error, overflow.Detail).Should().Be(("output_invalid", (string?)null));
     }
 
     [Fact]
