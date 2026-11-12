@@ -45,7 +45,6 @@ public sealed class RateLimitPolicyAppliedTests : IClassFixture<HardeningTestFac
     [InlineData(typeof(OrdersController), nameof(OrdersController.PreviewMappingOverride), "preview")]
     // Signed-URL / file-download surfaces → "signed-url" (60/min).
     [InlineData(typeof(OrdersController), nameof(OrdersController.Download), "signed-url")]
-    [InlineData(typeof(InvoiceController), nameof(InvoiceController.Download), "signed-url")]
     // The source document is STREAMED rather than signed, but it is the same surface — a
     // document download — and shares the same budget deliberately, so one cap governs document
     // egress instead of two that drift apart.

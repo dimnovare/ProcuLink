@@ -447,20 +447,6 @@ builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISupplierSuggestion
 // ParseOrderJob lives in ProcuLink.Api but is enqueued on "default" — Worker executes it.
 builder.Services.AddScoped<ParseOrderJob>();
 
-// ── Wave 3: Invoice parse pipeline (executed HERE — the Worker is the sole Hangfire executor) ──
-// DI foot-gun precedent 4607d6d: these were Api-only. InvoiceController enqueues ParseInvoiceJob,
-// but the Worker (not the API) runs Hangfire jobs, so without these registrations the activator
-// can't construct ParseInvoiceJob → it never executes and the invoice is stranded in "parsing"
-// forever (no status=failed, no stuck-order sweep covers invoices). Mirrors API/Program.cs.
-builder.Services.AddSingleton<IInvoiceParser, UblInvoiceParser>();
-builder.Services.AddSingleton<IInvoiceParser, EdifactInvoiceParser>();
-builder.Services.AddSingleton<InvoiceParserFactory>();
-builder.Services.AddSingleton<IInvoiceTransformService, CsvInvoiceTransformService>();
-builder.Services.AddSingleton<IInvoiceTransformService, XmlInvoiceTransformService>();
-builder.Services.AddSingleton<IInvoiceTransformService, JsonInvoiceTransformService>();
-builder.Services.AddScoped<IInvoiceService, InvoiceService>();
-// ParseInvoiceJob lives in ProcuLink.Api, enqueued on "critical" — Worker executes it.
-builder.Services.AddScoped<ParseInvoiceJob>();
 builder.Services.AddScoped<ReadDocumentJob>();
 builder.Services.AddScoped<DeliverDocumentJob>();
 builder.Services.AddScoped<SendDocumentJob>();

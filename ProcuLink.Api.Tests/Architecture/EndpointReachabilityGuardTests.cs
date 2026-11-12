@@ -178,7 +178,7 @@ public sealed class EndpointReachabilityGuardTests
     /// </summary>
     private static readonly IReadOnlyList<AccountedEndpoint> UncalledPendingDecision =
     [
-        // ── The two recovery doors the audit named. See Guard_SeesTheTwoRecoveryDoors… ────
+        // ── The recovery door the audit named. See Guard_SeesTheRecoveryDoorTheAuditNamed ────
         new("POST /api/orders/{}/acceptance-gate/override",
             "PENDING A DECISION, 2026-08-13 — named by the v2 audit as a caller-less recovery door. "
             + "ProcuLink.Api/Controllers/OrderAcceptanceGateController.cs:70-78 documents it as the "
@@ -238,11 +238,6 @@ public sealed class EndpointReachabilityGuardTests
             + "never saw it; it makes the confirmation gap a whole feature rather than two writes."),
 
         // ── Engine surfaces the product never adopted ────────────────────────────────────
-        new("GET /api/invoices/{}/validate-peppol",
-            "PENDING A DECISION, 2026-08-13 — Peppol conformance for one invoice. The invoices "
-            + "screen (project-proculink/src/app/(app)/inbound/invoices/page.tsx) offers no control "
-            + "for it. This is adjacent to audit finding P0-3 on circular conformance claims: the "
-            + "one endpoint that could answer the question honestly is the one nothing asks."),
         new("GET /api/billing/ai-usage",
             "PENDING A DECISION, 2026-08-13 — per-organisation AI spend "
             + "(ProcuLink.Api/Controllers/BillingController.cs:187). "
@@ -304,7 +299,6 @@ public sealed class EndpointReachabilityGuardTests
             // failure text asks: the Postmark bounce webhook is caller-less BY CONSTRUCTION — the
             // caller is the mail provider. It is the second provider webhook here, beside Stripe's.
             "POST /api/inbound-email/postmark-bounce",
-            "GET /api/invoices/{}/validate-peppol",
             "GET /api/order-confirmations/{}",
             "GET /api/orders/{}/ai-decisions",
             "GET /api/orders/{}/delivery-attempts",
@@ -394,13 +388,14 @@ public sealed class EndpointReachabilityGuardTests
     }
 
     /// <summary>
-    /// The audit's own finding, pinned. These are the two endpoints §3 pointed at when it said "two
-    /// documented recovery doors have zero callers", and they are the reason this file exists. If
-    /// either gains a control, delete its declaration AND its line here — the deletion is the win.
-    /// If the DETECTOR stops seeing them, the guard has regressed to the false green it replaced.
+    /// The audit's own finding, pinned. This is the endpoint that remains of the two §3 pointed at
+    /// when it said "two documented recovery doors have zero callers" (the other, order resolve-hold
+    /// release, was deleted with the legacy order screens), and it is the reason this file exists. If
+    /// it gains a control, delete its declaration AND its line here — the deletion is the win.
+    /// If the DETECTOR stops seeing it, the guard has regressed to the false green it replaced.
     /// </summary>
     [Fact]
-    public void Guard_SeesTheTwoRecoveryDoorsTheAuditNamed()
+    public void Guard_SeesTheRecoveryDoorTheAuditNamed()
     {
         var unreachable = Scan.Value.Unreachable.Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
 

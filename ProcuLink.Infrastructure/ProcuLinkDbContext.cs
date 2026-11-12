@@ -157,11 +157,9 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<ImportedS3Object> ImportedS3Objects => Set<ImportedS3Object>();
     public DbSet<EmailImportRecord> EmailImportRecords => Set<EmailImportRecord>();
     public DbSet<Buyer> Buyers => Set<Buyer>();
-    public DbSet<InvoiceEntity>                Invoices                  => Set<InvoiceEntity>();
-    public DbSet<InvoiceLineEntity>            InvoiceLines              => Set<InvoiceLineEntity>();
-    public DbSet<AdvanceShippingNoticeEntity>  AdvanceShippingNotices    => Set<AdvanceShippingNoticeEntity>();
-    public DbSet<AsnPackageEntity>             AsnPackages               => Set<AsnPackageEntity>();
-    public DbSet<AsnPackageLineEntity>         AsnPackageLines           => Set<AsnPackageLineEntity>();
+    // Invoice and ASN tables (InvoiceEntity, InvoiceLineEntity, AdvanceShippingNoticeEntity, AsnPackageEntity,
+    // AsnPackageLineEntity) have no DbSet since plan 13b: nothing reads them. The entities stay mapped below,
+    // so the tables and migrations are untouched; reach one with Set<T>() if a reader is ever needed.
     public DbSet<TenantApiKey>            TenantApiKeys            => Set<TenantApiKey>();
     public DbSet<IntegrationSubscription> IntegrationSubscriptions => Set<IntegrationSubscription>();
     public DbSet<SchemaFingerprint>       SchemaFingerprints       => Set<SchemaFingerprint>();

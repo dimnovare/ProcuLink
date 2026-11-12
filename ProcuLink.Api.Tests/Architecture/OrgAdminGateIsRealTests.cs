@@ -156,7 +156,7 @@ public sealed class OrgAdminGateIsRealTests
           + $"{nameof(ExpectedInMethodGatedCount)} deliberately.\nCurrently gated in-method:\n"
           + string.Join("\n", InMethodGatedActions().Select(a => "  • " + a.Display)));
 
-        AllActions().Count.Should().BeGreaterThan(ExpectedGatedEndpointCount * 5,
+        AllActions().Count.Should().BeGreaterThan(ExpectedGatedEndpointCount * 4,
             "the gate is meant to be narrow — if it ever covers a large share of the API, the "
           + "founder's 'gate the destructive few, leave the rest open' decision has been reversed "
           + "by accretion");

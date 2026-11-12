@@ -72,7 +72,6 @@ namespace ProcuLink.Api.Tests.Integration;
 //   5b    assign-supplier    order already routed (ready)                rejected 409, untouched
 //   6a    learning           assign then re-parse binds the layout       fingerprint bound
 //   6b    learning           2nd same-layout doc, supplier-less          parked unrouted (no auto-bind)
-//   7a    ASN / DESADV       EDIFACT DESADV has no ingress route         no order (no endpoint)
 //
 //  WHY REAL POSTGRES. Three of these cells cannot be answered anywhere else:
 //  2b is a case-insensitive name match that EF translates to Postgres <c>lower()</c>;
@@ -240,10 +239,6 @@ public sealed class SupplierRoutingMatrixPostgresTests
 
         new("6a", "learning",        "assign then re-parse binds the layout",     RoutingOutcome.Routed,         200),
         new("6b", "learning",        "2nd same-layout doc, supplier-less",        RoutingOutcome.ParkedUnrouted),
-
-        // No ExpectedHttpStatus: there is no longer an ASN ingress endpoint to answer one. See
-        // DesadvCellAsync — the refusal is now structural rather than a 501.
-        new("7a", "ASN / DESADV",    "EDIFACT DESADV has no ingress route",       RoutingOutcome.Rejected),
     };
 
     public static TheoryData<string> CellIds
@@ -265,8 +260,8 @@ public sealed class SupplierRoutingMatrixPostgresTests
         // The matrix IS the test: a theory runs once per ROW, so a row deleted from the table takes
         // its channel's whole routing proof away and the suite reports green — one fewer case simply
         // never runs, and nothing says so. Pinning the size makes a deletion deliberate.
-        Matrix.Should().HaveCount(27,
-            "the routing story documented at the top of this file is 27 cells; a row quietly dropped "
+        Matrix.Should().HaveCount(26,
+            "the routing story documented at the top of this file is 26 cells; a row quietly dropped "
             + "removes a channel's only routing proof and every remaining case still passes");
 
         var cell = Matrix.Single(c => c.Id == cellId);
@@ -369,8 +364,6 @@ public sealed class SupplierRoutingMatrixPostgresTests
 
         "6a" => LearningBindsOnAssignCellAsync(cell),
         "6b" => LearningDoesNotAutoRouteCellAsync(cell),
-
-        "7a" => DesadvCellAsync(cell),
 
         _ => throw new InvalidOperationException($"{cell.Label} has no act — add one or drop the row."),
     };
@@ -866,54 +859,6 @@ public sealed class SupplierRoutingMatrixPostgresTests
 
         // Only the second order is the cell's subject; the first is arranged history.
         return (new CellActual(reloaded.SupplierId, parked, null, OrderCount: 1), null);
-    }
-
-    // ── Cell 7: the untested format stays refused ───────────────────────────────────────
-
-    /// <summary>
-    /// Routing must never be the reason a document is accepted. ASN / EDIFACT DESADV has no parser
-    /// (offer ⇔ works), so an EDIFACT ASN must not be able to produce an order — least of all one
-    /// pointed at a supplier nothing resolved.
-    ///
-    /// <para><b>The guarantee is unchanged; the way it holds got stronger.</b> Until 2026-08-26 this
-    /// cell called <c>DesadvController.Upload</c> and pinned its 501: the door said no. That endpoint
-    /// has since been deleted — it answered nothing but 501 and no caller in either repository named
-    /// it — so the cell now proves there is no door. It reads the REAL MVC route table, the same
-    /// inventory <c>EndpointReachabilityGuardTests</c> builds, and asserts the entire
-    /// <c>/api/asns</c> surface is read-only. Nothing can hand an ASN to this product, so nothing
-    /// can mis-route one.</para>
-    ///
-    /// <para>The org is still seeded WITH a supplier on purpose: the claim is not merely "no order
-    /// appeared", it is "no order appeared even though a supplier was sitting right there to be
-    /// mis-routed to".</para>
-    ///
-    /// <para><b>This cell is meant to re-light.</b> The day the EDI licence lands and an ASN ingress
-    /// endpoint comes back, this assertion fails — deliberately. That is the prompt to answer the
-    /// matrix's question for the ASN channel (which supplier, and what happens when none can be
-    /// determined) before the endpoint ships, rather than after.</para>
-    /// </summary>
-    private async Task<(CellActual, Guid?)> DesadvCellAsync(RoutingCell cell)
-    {
-        // Seeded but unused: a supplier that exists and must still not be reached.
-        var (orgId, _) = await SeedOrgWithSupplierAsync(cell.Id);
-
-        var asnRoutes = EndpointReachabilityScanner
-            .Endpoints(typeof(DesadvController).Assembly)
-            .Where(e => e.Path.StartsWith("/api/asns", StringComparison.Ordinal))
-            .ToList();
-
-        // Anti-vacuity: "no writing route" is trivially true of a route table that resolved
-        // nothing, which is how this cell would go green by having looked at nothing at all.
-        asnRoutes.Should().NotBeEmpty(
-            "{0} reads the real route table, and finding NO /api/asns route means the MVC inventory "
-            + "broke — not that the ingress door is gone", cell.Label);
-
-        asnRoutes.Where(e => e.Method != "GET").Should().BeEmpty(
-            "{0}: /api/asns is read-only. A writing ASN route is an ingress path for a format this "
-            + "product cannot parse, and it must answer this matrix's routing question before it "
-            + "ships", cell.Label);
-
-        return (await ObserveAsync(orgId, null), null);
     }
 
     // ── Observation ─────────────────────────────────────────────────────────────────────
