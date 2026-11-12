@@ -44,7 +44,8 @@ public static class DocumentChecks
                 Fail(TypeInvalid, field.Key, $"{field.Label} is not {Describe(type)} we can read.");
         }
 
-        Arithmetic(read, Fail);
+        // Values come from documents: a product that overflows decimal skips the rule rather than abort the read.
+        try { Arithmetic(read, Fail); } catch (OverflowException) { }
 
         if (duplicate) Fail(Duplicate, null, "A document with this number was already received.");
         if (read.Truncated) Fail(TextTruncated, null, "The document was too long to read in full.");
@@ -88,7 +89,7 @@ public static class DocumentChecks
             if (Cell(table.Rows[i], qtyKey) is { } q && Cell(table.Rows[i], priceKey) is { } p && amounts[i] is { } a
                 && Math.Abs(R(q * p) - R(a)) > unit)
             {
-                fail(ArithmeticMismatch, table.Key, $"Line {i + 1}: quantity × price doesn't equal the amount.");
+                fail(ArithmeticMismatch, table.Key, $"Line {i + 1}: quantity Ã— price doesn't equal the amount.");
                 break;
             }
         }

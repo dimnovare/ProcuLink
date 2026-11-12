@@ -110,6 +110,18 @@ public sealed class DocumentChecksTests
     }
 
     [Fact]
+    public void Arithmetic_overflow_skips_the_rule_instead_of_throwing()
+    {
+        var big = "79000000000000000000000000000";
+        var read = new ReadResult("I", [M("net", big, FieldMeanings.TotalNet), M("tax", big, FieldMeanings.TotalTax), M("g", "1", FieldMeanings.TotalGross)],
+            [Lines(("100000000000000000000", "100000000000000000000", "5"), (big, big, big))]);
+        IReadOnlyList<DocumentCheck>? result = null;
+        var run = () => result = Arith(read);
+        run.Should().NotThrow();
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
     public void Arithmetic_checks_totals_lines_and_minor_units()
     {
         Money("100", "20", "121").Should().ContainSingle().Which.Message.Should().Be("Net plus tax doesn't equal the total.");
