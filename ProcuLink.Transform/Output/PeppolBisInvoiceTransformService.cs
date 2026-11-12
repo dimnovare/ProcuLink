@@ -86,7 +86,7 @@ namespace ProcuLink.Transform.Output;
 public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
 {
     /// <summary>
-    /// Format token routed by InvoiceService.ForwardAsync. "peppol" is the public
+    /// Format token routed by the since-removed InvoiceService.ForwardAsync. "peppol" is the public
     /// name; the document produced is BIS Billing 3.0 UBL 2.1.
     /// </summary>
     public string Format => "peppol";

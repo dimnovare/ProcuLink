@@ -156,10 +156,10 @@ public sealed class OrgAdminGateIsRealTests
           + $"{nameof(ExpectedInMethodGatedCount)} deliberately.\nCurrently gated in-method:\n"
           + string.Join("\n", InMethodGatedActions().Select(a => "  • " + a.Display)));
 
-        AllActions().Count.Should().BeGreaterThan(ExpectedGatedEndpointCount * 4,
-            "the gate is meant to be narrow — if it ever covers a large share of the API, the "
-          + "founder's 'gate the destructive few, leave the rest open' decision has been reversed "
-          + "by accretion");
+        // Narrowness is carried by the structural checks below (EveryDestructiveAction_CarriesTheGate,
+        // EveryGatedAction_ReachesADeclaredDestructivePrimitive) plus the exact pins above, not by a share of the API.
+        AllActions().Count.Should().BeGreaterThan(gated.Count,
+            "the scanner must see ungated actions too, or the gated set proves nothing about narrowness");
     }
 
     /// <summary>

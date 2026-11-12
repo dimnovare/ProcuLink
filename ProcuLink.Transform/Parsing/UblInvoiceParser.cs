@@ -179,7 +179,7 @@ public sealed class UblInvoiceParser : IInvoiceParser
     //
     // The invoice path has no per-line review flag to raise (ParsedInvoiceLine has no
     // NeedsReview, and InvoiceLineEntity has no column for one), so the honest option here is
-    // an explicit parse failure. ParseInvoiceJob already catches InvoiceParseException, marks
+    // an explicit parse failure. The invoice job (since removed) caught InvoiceParseException, marked
     // the invoice "failed", and surfaces it — so a document that cannot be read stops, loudly,
     // instead of being delivered wrong. The message carries the element AND the offending
     // token, because that message is what reaches the operator.

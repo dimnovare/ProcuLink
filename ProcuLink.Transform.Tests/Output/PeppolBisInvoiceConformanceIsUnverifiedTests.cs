@@ -20,7 +20,7 @@ namespace ProcuLink.Transform.Tests.Output;
 ///     else if (profile       != PeppolBisInvoiceTransformService.ProfileId)
 ///
 /// The only production caller builds the document with that emitter and validates it on the next
-/// line (<c>InvoiceController.ValidatePeppol</c>), so both comparisons could not fail, and their
+/// line (the since-removed invoice validate-peppol endpoint), so both comparisons could not fail, and their
 /// passing was folded into an <c>isValid</c> returned beside the declared identifiers. A caller
 /// reading that response saw a conformance claim backed by a check of itself.
 ///

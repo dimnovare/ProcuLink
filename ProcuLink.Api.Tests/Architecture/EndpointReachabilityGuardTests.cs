@@ -389,8 +389,8 @@ public sealed class EndpointReachabilityGuardTests
 
     /// <summary>
     /// The audit's own finding, pinned. This is the endpoint that remains of the two §3 pointed at
-    /// when it said "two documented recovery doors have zero callers" (the other, order resolve-hold
-    /// release, was deleted with the legacy order screens), and it is the reason this file exists. If
+    /// when it said "two documented recovery doors have zero callers" (the other, the un-promote-layout
+    /// door `DELETE /api/suppliers/{}/po-mapping/output-tree`, went with the supplier mapping endpoints), and it is the reason this file exists. If
     /// it gains a control, delete its declaration AND its line here — the deletion is the win.
     /// If the DETECTOR stops seeing it, the guard has regressed to the false green it replaced.
     /// </summary>

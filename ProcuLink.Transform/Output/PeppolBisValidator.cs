@@ -49,7 +49,7 @@ public sealed record PeppolValidationResult(
 ///   <see cref="PeppolBisInvoiceTransformService.CustomizationId"/> and
 ///   <see cref="PeppolBisInvoiceTransformService.ProfileId"/> — the emitter's own constants.
 ///
-///   The only production caller (<c>InvoiceController.ValidatePeppol</c>) builds the document
+///   The only production caller (the since-removed invoice validate-peppol endpoint) builds the document
 ///   with that same emitter and hands it straight to this validator, so both comparisons read
 ///   back a string the emitter had just written from the same constant. They could not fail.
 ///   An assertion that cannot fail is not evidence, and this one was reported to the caller as
