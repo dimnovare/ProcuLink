@@ -40,6 +40,22 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
     }
 
     [Fact]
+    public void Email_keeps_the_users_subject_and_message_and_falls_back_when_blank()
+    {
+        var d = Dest("email");
+        d.ConfigJson = """{"toAddresses":["a@example.com"],"subjectTemplate":"Invoice {fileName}","bodyTemplate":"Hi","attachmentFileName":"x.csv"}""";
+        var kept = ToDeliveryConfig(d, "Flow", test: true);
+        Subject(kept).Should().Be("[TEST] Invoice {fileName}");
+        Body(kept).Should().Be("Hi");
+        Json(kept).TryGetProperty("attachmentFileName", out _).Should().BeFalse();
+
+        d.ConfigJson = """{"toAddresses":["a@example.com"],"subjectTemplate":"  ","bodyTemplate":""}""";
+        var blank = ToDeliveryConfig(d, "Flow", test: false);
+        Subject(blank).Should().Be("Flow — {fileName}");
+        Body(blank).Should().Be("Attached: {fileName}. Sent by ProcuLink.");
+    }
+
+    [Fact]
     public async Task Credentials_are_bound_to_their_destination_and_never_returned()
     {
         var http = factory.ClientFor(DocumentEngineTestFactory.OrgA);
