@@ -77,5 +77,13 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
 
         var ftp = await http.PostAsJsonAsync("/api/destinations", new { name = "x", protocol = "ftp", config = new { } });
         ftp.StatusCode.Should().Be((HttpStatusCode)422);
+
+        var s3 = await http.PostAsJsonAsync("/api/destinations", new
+        {
+            name = "Bucket", protocol = "s3", credentials = new { secretKey = "s" },
+            config = new { bucket = "b", region = "auto", accessKeyId = "k", serviceUrl = "http://169.254.169.254" },
+        });
+        s3.StatusCode.Should().Be((HttpStatusCode)422);
+        (await s3.Content.ReadAsStringAsync()).Should().Contain("url_requires_tls");
     }
 }

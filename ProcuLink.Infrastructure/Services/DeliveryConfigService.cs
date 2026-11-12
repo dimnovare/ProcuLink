@@ -21,7 +21,7 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
     };
 
     private static readonly HashSet<string> AllowedProtocols = new(
-        DeliveryProtocolConstants.All,
+        DeliveryProtocolConstants.All.Where(p => p != DeliveryProtocolConstants.S3),
         StringComparer.OrdinalIgnoreCase);
 
     private static readonly HashSet<string> UrlBasedProtocols = new(

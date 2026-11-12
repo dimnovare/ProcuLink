@@ -214,6 +214,12 @@ public sealed class FlowIntakeService(
             if (!verdict.Allowed) throw new IntakeException("invalid_intake", verdict.Message);
         }
 
+        if (kind == IntakeKind.S3 && result["serviceUrl"]!.GetValue<string>() is { Length: > 0 } endpoint)
+        {
+            var verdict = OutboundUrlPolicy.Inspect(endpoint, "Endpoint URL");
+            if (!verdict.Allowed) throw new IntakeException("invalid_intake", verdict.Message);
+        }
+
         return result.ToJsonString();
     }
 

@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Security;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
@@ -29,7 +30,7 @@ public sealed class FlowDestinationService(
     private const string Purpose = CredentialPurpose.FlowDestinationCredentials;
 
     private static readonly string[] Allowed =
-        [DeliveryProtocolConstants.Http, DeliveryProtocolConstants.Sftp, DeliveryProtocolConstants.Ftps, DeliveryProtocolConstants.Email];
+        [DeliveryProtocolConstants.Http, DeliveryProtocolConstants.Sftp, DeliveryProtocolConstants.Ftps, DeliveryProtocolConstants.S3, DeliveryProtocolConstants.Email];
 
     public async Task<FlowDestination> SaveAsync(Guid orgId, Guid? id, DestinationRequest req, CancellationToken ct)
     {
@@ -55,6 +56,14 @@ public sealed class FlowDestinationService(
         catch (ArgumentException ex)
         {
             throw new DestinationException("invalid_destination", ex.Message);
+        }
+
+        // An S3 endpoint is a tenant-supplied URL outside the url-bearing protocols, so it is policed here (and again at dispatch).
+        if (protocol == DeliveryProtocolConstants.S3 && req.Config.TryGetProperty("serviceUrl", out var endpoint)
+            && endpoint.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(endpoint.GetString()))
+        {
+            var verdict = OutboundUrlPolicy.Inspect(endpoint.GetString(), "Endpoint URL");
+            if (!verdict.Allowed) throw new DestinationException(verdict.ErrorCode!, verdict.Message);
         }
 
         var now = DateTime.UtcNow;
