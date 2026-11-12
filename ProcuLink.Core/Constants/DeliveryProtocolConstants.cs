@@ -7,6 +7,9 @@ public static class DeliveryProtocolConstants
     public const string Ftp = "ftp";
     public const string Ftps = "ftps";
 
+    /// <summary>S3-compatible bucket (AWS S3, R2, MinIO). Its optional serviceUrl is policed at save by FlowDestinationService, so it is not in UrlBased.</summary>
+    public const string S3 = "s3";
+
     /// <summary>
     /// Legacy raw-SMTP delivery (per-supplier relay host/port/credentials). RETIRED from offered
     /// channels: outbound SMTP ports (25/465/587) are blocked on the cloud host (Railway), so this
@@ -39,6 +42,7 @@ public static class DeliveryProtocolConstants
         Sftp,
         Ftp,
         Ftps,
+        S3,
         Smtp,   // accepted for legacy/self-host configs; not offered (see Email)
         Email,
         ErpErply,

@@ -112,6 +112,8 @@ public class FlowIntakesApiTests(DocumentEngineTestFactory factory) : IClassFixt
 
         (await http.PostAsJsonAsync(url, new { kind = "sftp", config = new { host = "h" } })).StatusCode.Should().Be((HttpStatusCode)422);
         (await http.PostAsJsonAsync(url, new { kind = "email", config = new { } })).StatusCode.Should().Be((HttpStatusCode)422);
+        (await http.PostAsJsonAsync(url, new { kind = "s3", config = new { bucket = "b", accessKeyId = "k", serviceUrl = "http://169.254.169.254" }, credentials = new { secretKey = "s" } }))
+            .StatusCode.Should().Be((HttpStatusCode)422);
         (await http.PostAsJsonAsync(url, new { kind = "api", config = new { webhookUrl = "http://example.test/hook" } }))
             .StatusCode.Should().Be((HttpStatusCode)422);
 
