@@ -380,21 +380,32 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         (output.Format, output.Standard, output.Layout).Should().Be(("xml", "cxml-1-2", (OutputLayout?)null));
         output.Needs.Should().Contain(FieldMeanings.LineItemCode);
 
-        // An update can never turn a standard output into a template output.
-        var put = await http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{output.Id}", new { name = "Orders 2", format = "csv", standard = (string?)null });
+        // An update can never turn a standard output into a template output, nor give it a template.
+        var csv = new OutputNodeTemplate { Format = OutputFormat.Csv };
+        var put = await http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{output.Id}", new { name = "Orders 2", format = "csv", standard = (string?)null, template = csv });
         put.StatusCode.Should().Be(HttpStatusCode.OK);
         var updated = (await put.Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
         (updated.Name, updated.Format, updated.Standard).Should().Be(("Orders 2", "xml", "cxml-1-2"));
+        using (var scope = factory.Services.CreateScope())
+            (await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowOutput>().AsNoTracking().SingleAsync(o => o.Id == output.Id))
+                .TemplateJson.Should().Be("{}");
 
         var unknown = await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "Orders", format = "", standard = "nope" });
         unknown.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
         (await unknown.Content.ReadAsStringAsync()).Should().Contain("unsupported_format");
 
+        // A test send through the standard is refused the same way, never sent as the request's csv template.
+        // The render refuses before any destination is looked up, so none needs to exist.
         var preview = await http.PostAsync($"/api/documents/{docId}/outputs/{output.Id}/preview", null);
-        preview.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
-        var refused = await preview.Content.ReadFromJsonAsync<JsonElement>();
-        refused.GetProperty("error").GetString().Should().Be("output_invalid");
-        refused.GetProperty("detail").GetString().Should().StartWith("This standard needs");
+        var testSend = await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/test",
+            new { format = "csv", tableKey = (string?)null, destinationId = Guid.NewGuid(), template = csv, standard = "cxml-1-2" });
+        foreach (var res in new[] { preview, testSend })
+        {
+            res.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+            var refused = await res.Content.ReadFromJsonAsync<JsonElement>();
+            refused.GetProperty("error").GetString().Should().Be("output_invalid");
+            refused.GetProperty("detail").GetString().Should().StartWith("This standard needs");
+        }
     }
 
     [Fact]

@@ -27,7 +27,7 @@ public sealed record OutputDto(
 
 public sealed record PreviewRequest(OutputNodeTemplate? Template);
 
-public sealed record TestOutputRequest(string Format, string? TableKey, Guid DestinationId, OutputNodeTemplate Template, OutputLayout? Layout = null);
+public sealed record TestOutputRequest(string Format, string? TableKey, Guid DestinationId, OutputNodeTemplate Template, OutputLayout? Layout = null, string? Standard = null);
 
 [Authorize]
 [ApiController]
@@ -281,13 +281,24 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         var orgId = tenant.OrganisationId;
         var doc = await db.FlowDocuments.AsNoTracking().FirstOrDefaultAsync(d => d.OrgId == orgId && d.Id == documentId, ct);
         if (doc is null) return NotFound(new { error = "document_not_found" });
-        if (!FlowOutputFormats.All.Contains(request.Format)) return UnprocessableEntity(new { error = "unsupported_format" });
-        if (await CheckTemplate(request.Template, request.Format, ct) is { } badTemplate) return badTemplate;
-
-        var lookups = await DocumentLookups.LoadAsync(db, orgId, [request.Template], ct);
         var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
-        var render = DocumentOutputRenderer.Render(request.Format,
-            request.Template, read, request.TableKey, lookups, request.Layout);
+        DocumentRender render;
+        // A standard is filled by meaning from the live fields: the request's format, template and layout are ignored.
+        if (request.Standard is { } standard)
+        {
+            var flow = await db.Flows.AsNoTracking().FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == doc.FlowId, ct);
+            if (flow is null) return FlowNotFound();
+            render = await StandardOutputs.RenderAsync(standard, read, (await FlowConfigLoader.LiveAsync(db, flow, ct)).Fields, request.TableKey, orgId, ct);
+        }
+        else
+        {
+            if (!FlowOutputFormats.All.Contains(request.Format)) return UnprocessableEntity(new { error = "unsupported_format" });
+            if (await CheckTemplate(request.Template, request.Format, ct) is { } badTemplate) return badTemplate;
+
+            var lookups = await DocumentLookups.LoadAsync(db, orgId, [request.Template], ct);
+            render = DocumentOutputRenderer.Render(request.Format,
+                request.Template, read, request.TableKey, lookups, request.Layout);
+        }
         if (!render.Ok) return UnprocessableEntity(new { error = render.Error, detail = render.Detail });
 
         using var content = new MemoryStream();
