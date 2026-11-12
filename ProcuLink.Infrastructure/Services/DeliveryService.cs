@@ -8,6 +8,7 @@ using ProcuLink.Core.Security;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Security;
+using ProcuLink.Infrastructure.Services.Delivery;
 using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services;
@@ -417,7 +418,7 @@ public sealed class DeliveryService : IDeliveryService
         if (reAdopted && dispatcher.ResendSafety == ResendSafety.Unsafe)
             return await ParkUnconfirmedAsync(order, attempt, config, ParkReasonCannotDeduplicate, ct);
 
-        if (reAdopted && CannotRepairItsOwnFile(config))
+        if (reAdopted && DeliveryRepair.CannotRepairItsOwnFile(config))
             return await ParkUnconfirmedAsync(order, attempt, config, ParkReasonCannotRepairOwnFile, ct);
 
         DeliveryResult result;
@@ -1177,37 +1178,11 @@ public sealed class DeliveryService : IDeliveryService
         var media = DeliveryMediaTypes.ForTokenOrUnknown(artifact.Format);
         var stem  = SanitizeFileToken(order.PoNumber);
 
-        if (IsFileDropProtocol(protocol))
+        if (DeliveryRepair.IsFileDropProtocol(protocol))
             stem = $"{stem}-{OrderFileQualifier(order.Id)}";
 
         return stem + media.FileExtension;
     }
-
-    /// <summary>
-    /// Channels whose destination is a directory of files, where the filename alone decides whether
-    /// two documents collide.
-    /// </summary>
-    private static bool IsFileDropProtocol(string protocol) =>
-        protocol.Equals(DeliveryProtocolConstants.Sftp, StringComparison.OrdinalIgnoreCase)
-        || protocol.Equals(DeliveryProtocolConstants.Ftps, StringComparison.OrdinalIgnoreCase)
-        || protocol.Equals(DeliveryProtocolConstants.Ftp, StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// True when a crash-recovery re-drive on this connection would be unable to replace the file
-    /// its own predecessor may have written — a file-drop channel whose operator turned
-    /// <c>overwriteExisting</c> off.
-    ///
-    /// <para>
-    /// The re-send cannot duplicate (the path is per-order), which is why the dispatcher still
-    /// declares <see cref="ResendSafety.Safe"/>; what it cannot do is finish. Re-driving it produces
-    /// a refusal, then a retry, then a dead-lettered order — while the supplier may already hold the
-    /// complete document, or a truncated one that every subsequent retry declines to repair. Neither
-    /// "delivered" nor "failed" is a claim this process can make, so it parks for a human.
-    /// </para>
-    /// </summary>
-    public static bool CannotRepairItsOwnFile(SupplierDeliveryConfig config) =>
-        IsFileDropProtocol(config.Protocol)
-        && !Dispatchers.SftpDeliveryDispatcher.OverwriteExistingFromConfig(config.ConfigJson);
 
     /// <summary>Short, stable, collision-free-in-practice per-order token for a filename.</summary>
     internal static string OrderFileQualifier(Guid orderId) => orderId.ToString("N")[..8];
