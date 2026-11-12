@@ -67,8 +67,10 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
         var rendered = new List<Rendered>();
         foreach (var (o, template) in outputs.Zip(templates))
         {
-            var render = DocumentOutputRenderer.Render(o.Format, template, read, o.TableKey, lookups,
-                o.LayoutJson is null ? null : DocumentJson.Deserialize<OutputLayout>(o.LayoutJson), o.Logo);
+            var render = o.Standard is { } standard
+                ? await StandardOutputs.RenderAsync(standard, read, config.Fields, o.TableKey, doc.OrgId, ct)
+                : DocumentOutputRenderer.Render(o.Format, template, read, o.TableKey, lookups,
+                    o.LayoutJson is null ? null : DocumentJson.Deserialize<OutputLayout>(o.LayoutJson), o.Logo);
             if (!render.Ok)
             {
                 if (mode == SendMode.Automatic) await HoldAsync(doc, render.Error!, ct);

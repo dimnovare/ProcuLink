@@ -2240,6 +2240,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(o => o.SendWhenJson).HasColumnName("send_when_json").HasColumnType("jsonb");
             b.Property(o => o.LayoutJson).HasColumnName("layout_json").HasColumnType("jsonb");
             b.Property(o => o.Logo).HasColumnName("logo").HasColumnType("bytea");
+            b.Property(o => o.Standard).HasColumnName("standard");
             b.Property(o => o.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             b.Property(o => o.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             b.HasIndex(o => o.FlowId);

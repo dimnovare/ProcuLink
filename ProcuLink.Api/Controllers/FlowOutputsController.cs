@@ -17,11 +17,13 @@ using ProcuLink.Transform.Output;
 
 namespace ProcuLink.Api.Controllers;
 
-public sealed record OutputRequest(string Name, string Format, string? TableKey, Guid? DestinationId, OutputNodeTemplate? Template, SendWhen? SendWhen = null, OutputLayout? Layout = null);
+public sealed record OutputRequest(string Name, string Format, string? TableKey, Guid? DestinationId, OutputNodeTemplate? Template, SendWhen? SendWhen = null, OutputLayout? Layout = null, string? Standard = null);
 
+/// <summary><paramref name="Needs"/> lists the meanings a standard output needs; null for a template output.</summary>
 public sealed record OutputDto(
     Guid Id, Guid FlowId, string Name, string Format, string? TableKey, Guid? DestinationId,
-    OutputNodeTemplate Template, DateTime CreatedAt, SendWhen? SendWhen, OutputLayout? Layout, bool HasLogo);
+    OutputNodeTemplate Template, DateTime CreatedAt, SendWhen? SendWhen, OutputLayout? Layout, bool HasLogo,
+    string? Standard = null, IReadOnlyList<string>? Needs = null);
 
 public sealed record PreviewRequest(OutputNodeTemplate? Template);
 
@@ -38,7 +40,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         new(o.Id, o.FlowId, o.Name, o.Format, o.TableKey, o.DestinationId,
             DocumentJson.Deserialize<OutputNodeTemplate>(o.TemplateJson), o.CreatedAt,
             o.SendWhenJson is null ? null : DocumentJson.Deserialize<SendWhen>(o.SendWhenJson),
-            LayoutOf(o), o.Logo is not null);
+            LayoutOf(o), o.Logo is not null, o.Standard, StandardOutputs.Find(o.Standard)?.Needs);
 
     private const int MaxLogoBytes = 262_144;
 
@@ -77,7 +79,8 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
     public async Task<IActionResult> Create(Guid flowId, [FromBody] OutputRequest request, CancellationToken ct)
     {
         if (Refuse() is { } refused) return refused;
-        var output = new FlowOutput { Id = Guid.NewGuid(), OrgId = tenant.OrganisationId, FlowId = flowId, CreatedAt = DateTime.UtcNow };
+        // The standard is set here only: an update can never turn a standard output into a template output, or back.
+        var output = new FlowOutput { Id = Guid.NewGuid(), OrgId = tenant.OrganisationId, FlowId = flowId, CreatedAt = DateTime.UtcNow, Standard = request.Standard };
         if (await Apply(output, request, ct) is { } rejected) return rejected;
         db.Set<FlowOutput>().Add(output);
         await db.SaveChangesAsync(ct);
@@ -220,26 +223,28 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         if (suggest && !gate.LookupSuggestionsOn(orgId)) return StatusCode(403, new { error = "lookup_suggestions_off" });
         var doc = await db.FlowDocuments.AsNoTracking().FirstOrDefaultAsync(d => d.OrgId == orgId && d.Id == documentId, ct);
         if (doc is null) return NotFound(new { error = "document_not_found" });
-        FlowOutput? output;
-        if (published)
-        {
-            var flow = await db.Flows.AsNoTracking().FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == doc.FlowId, ct);
-            if (flow is null) return FlowNotFound();
-            output = (await FlowConfigLoader.CurrentAsync(db, flow, ct)).Outputs.FirstOrDefault(o => o.Id == outputId);
-        }
-        else output = await db.Set<FlowOutput>().AsNoTracking()
-            .FirstOrDefaultAsync(o => o.OrgId == orgId && o.FlowId == doc.FlowId && o.Id == outputId, ct);
+        var flow = await db.Flows.AsNoTracking().FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == doc.FlowId, ct);
+        if (flow is null) return FlowNotFound();
+        var config = published ? await FlowConfigLoader.CurrentAsync(db, flow, ct) : await FlowConfigLoader.LiveAsync(db, flow, ct);
+        var output = config.Outputs.FirstOrDefault(o => o.Id == outputId);
         if (output is null) return OutputNotFound();
 
-        var template = body?.Template ?? DocumentJson.Deserialize<OutputNodeTemplate>(output.TemplateJson);
-        if (body?.Template is not null && !FitsFormat(template, output.Format)) return WrongFormat(output.Format);
-        // A workbook is binary; its preview is the CSV text of the same grid (xlsx renders from the csv template).
-        var format = output.Format == FlowOutputFormats.Xlsx ? FlowOutputFormats.Csv : output.Format;
-        if (HasNullHole(template.Root)) return Invalid("template");
-
-        var lookups = await DocumentLookups.LoadAsync(db, orgId, [template], ct);
         var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
-        var render = DocumentOutputRenderer.Render(format, template, read, output.TableKey, lookups, LayoutOf(output), output.Logo);
+        DocumentRender render;
+        // A standard is filled by meaning: no template (a draft one included), no lookups.
+        if (output.Standard is { } standard)
+            render = await StandardOutputs.RenderAsync(standard, read, config.Fields, output.TableKey, orgId, ct);
+        else
+        {
+            var template = body?.Template ?? DocumentJson.Deserialize<OutputNodeTemplate>(output.TemplateJson);
+            if (body?.Template is not null && !FitsFormat(template, output.Format)) return WrongFormat(output.Format);
+            // A workbook is binary; its preview is the CSV text of the same grid (xlsx renders from the csv template).
+            var format = output.Format == FlowOutputFormats.Xlsx ? FlowOutputFormats.Csv : output.Format;
+            if (HasNullHole(template.Root)) return Invalid("template");
+
+            var lookups = await DocumentLookups.LoadAsync(db, orgId, [template], ct);
+            render = DocumentOutputRenderer.Render(format, template, read, output.TableKey, lookups, LayoutOf(output), output.Logo);
+        }
         if (!render.Ok) return UnprocessableEntity(new { error = render.Error, detail = render.Detail });
 
         var misses = render.Misses ?? [];
@@ -303,7 +308,10 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
 
         var name = request.Name?.Trim() ?? "";
         if (name.Length is < 1 or > 120) return BadRequest(new { error = "invalid_name" });
-        if (!FlowOutputFormats.All.Contains(request.Format)) return UnprocessableEntity(new { error = "unsupported_format" });
+        // A standard decides its own format and has no template or layout: the request's are ignored.
+        var standard = StandardOutputs.Find(output.Standard);
+        var format = output.Standard is null ? request.Format : standard?.Format;
+        if (format is null || !FlowOutputFormats.All.Contains(format)) return UnprocessableEntity(new { error = "unsupported_format" });
         if (!flow.FieldsConfirmed) return Conflict(new { error = "fields_unconfirmed" });
 
         var fields = DocumentJson.Deserialize<FlowFieldList>(flow.FieldsJson);
@@ -317,11 +325,16 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
             && (fields.Fields.All(f => f.Key != rule.Field) || !SendWhenOps.All.Contains(rule.Op) || rule.Value?.Trim().Length is not (>= 1 and <= 200)))
             return Invalid("send_when");
 
-        var template = request.Template ?? DefaultOutputTemplate.For(fields, request.Format, request.TableKey);
-        if (await CheckTemplate(template, request.Format, ct) is { } badTemplate) return badTemplate;
+        var templateJson = "{}";
+        if (standard is null)
+        {
+            var template = request.Template ?? DefaultOutputTemplate.For(fields, format, request.TableKey);
+            if (await CheckTemplate(template, format, ct) is { } badTemplate) return badTemplate;
+            templateJson = DocumentJson.Serialize(template);
+        }
 
         OutputLayout? layout = null;
-        if (request.Format is FlowOutputFormats.Pdf or FlowOutputFormats.Text && request.Layout is { } l)
+        if (standard is null && format is FlowOutputFormats.Pdf or FlowOutputFormats.Text && request.Layout is { } l)
         {
             static string? Clean(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
             layout = new OutputLayout(Clean(l.Title), Clean(l.Header), Clean(l.Footer));
@@ -329,10 +342,10 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         }
 
         output.Name = name;
-        output.Format = request.Format;
+        output.Format = format;
         output.TableKey = request.TableKey;
         output.DestinationId = request.DestinationId;
-        output.TemplateJson = DocumentJson.Serialize(template);
+        output.TemplateJson = templateJson;
         output.SendWhenJson = request.SendWhen is { } sw ? DocumentJson.Serialize(sw with { Value = sw.Value.Trim() }) : null;
         output.LayoutJson = layout is null ? null : DocumentJson.Serialize(layout);
         output.UpdatedAt = DateTime.UtcNow;
