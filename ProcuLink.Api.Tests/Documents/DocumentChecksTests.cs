@@ -142,4 +142,16 @@ public sealed class DocumentChecksTests
         Arith(new ReadResult("I", [F("x", "X", "5"), M("net", "abc", FieldMeanings.TotalNet), M("tax", "1", FieldMeanings.TotalTax), M("g", "9", FieldMeanings.TotalGross)]))
             .Should().BeEmpty();
     }
+
+    [Fact]
+    public void Flow_meaning_drives_arithmetic_and_ambiguous_numbers_skip()
+    {
+        var read = new ReadResult("I", [M("net", "100", FieldMeanings.TotalNet), M("tax", "20", FieldMeanings.TotalTax), M("g", "999", FieldMeanings.TotalGross)]);
+        var cleared = new FlowFieldList([new FlowField("net", "Net", FieldTypes.Money, FieldMeanings.TotalNet, false),
+            new FlowField("tax", "Tax", FieldTypes.Money, FieldMeanings.TotalTax, false), new FlowField("g", "Gross", FieldTypes.Money, null, false)]);
+        DocumentChecks.Run(read, cleared, true, false).Should().NotContain(c => c.Code == DocumentChecks.ArithmeticMismatch);
+        Arith(read).Should().ContainSingle();
+
+        Arith(new ReadResult("I", [F("cur", "Currency", "EUR", meaning: FieldMeanings.Currency)], [Lines(("1.000", "0,50", "500,00"))])).Should().BeEmpty();
+    }
 }

@@ -94,6 +94,13 @@ public class OpenAiDocumentReaderTests
         var result = OpenAiDocumentReader.Map(dto, listed);
         result.Fields.Select(f => f.Key).Should().Equal("invoice_no", "iban");
         result.Fields[1].Value.Should().BeNull();
+
+        // A listed key takes the flow's meaning when it has one; a null flow meaning keeps the AI's.
+        var ai = new OpenAiDocumentReader.ReadDto("Invoice",
+            [new("invoice_no", "Invoice no", "7", "text", FieldMeanings.DocumentNumber, 1), new("iban", "IBAN", "x", "text", FieldMeanings.Currency, 1)], []);
+        var pinned = OpenAiDocumentReader.Map(ai, new FlowFieldList([
+            new FlowField("invoice_no", "No", FieldTypes.Text, FieldMeanings.OrderReference, true), new FlowField("iban", "IBAN", FieldTypes.Text, null, true)]));
+        pinned.Fields.Select(f => f.Meaning).Should().Equal(FieldMeanings.OrderReference, FieldMeanings.Currency);
     }
 
     [Fact]

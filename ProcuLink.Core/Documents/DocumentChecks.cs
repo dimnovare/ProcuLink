@@ -45,7 +45,7 @@ public static class DocumentChecks
         }
 
         // Values come from documents: an amount too large for decimal cannot be checked, so a person looks rather than the read aborting.
-        try { Arithmetic(read, Fail); }
+        try { Arithmetic(read, fields, Fail); }
         catch (OverflowException)
         {
             Fail(ArithmeticMismatch, read.Fields.FirstOrDefault(f => f.Meaning == FieldMeanings.TotalGross)?.Key, "An amount is too large to check.");
@@ -57,17 +57,25 @@ public static class DocumentChecks
     }
 
     // Only rules whose every meaning is on the read and parses fire; a flow without money meanings never fails here.
-    private static void Arithmetic(ReadResult read, Action<string, string?, string> fail)
+    // Once the flow lists fields its meanings decide (a listed key's, null included; unlisted extras are ignored);
+    // before that the read's own meanings stand.
+    private static void Arithmetic(ReadResult read, FlowFieldList flow, Action<string, string?, string> fail)
     {
-        var dp = DecimalPlaces(read.Fields.FirstOrDefault(f => f.Meaning == FieldMeanings.Currency)?.Value);
+        string? FieldMeaning(ReadField f) => flow.Fields.Count == 0 ? f.Meaning : flow.Fields.FirstOrDefault(x => x.Key == f.Key)?.Meaning;
+        ReadField? Find(string meaning) => read.Fields.FirstOrDefault(f => FieldMeaning(f) == meaning);
+        // An ambiguous reading ("1.000": one or a thousand) cannot be checked, so the rule skips.
+        static decimal? Num(string? s) => FieldValueParser.NumberCandidates(s) is [var only] ? only : null;
+
+        var dp = DecimalPlaces(Find(FieldMeanings.Currency)?.Value);
         var unit = (decimal)Math.Pow(10, -dp);
         decimal R(decimal v) => Math.Round(v, dp, MidpointRounding.AwayFromZero);
         bool Header(string meaning, out decimal v, out string key)
         {
-            var f = read.Fields.FirstOrDefault(x => x.Meaning == meaning);
+            var f = Find(meaning);
             key = f?.Key ?? "";
-            v = 0;
-            return f is not null && FieldValueParser.TryNumber(f.Value, out v);
+            var n = f is null ? null : Num(f.Value);
+            v = n ?? 0;
+            return n is not null;
         }
 
         var haveNet = Header(FieldMeanings.TotalNet, out var net, out var netKey);
@@ -75,11 +83,14 @@ public static class DocumentChecks
             && R(net) + R(tax) != R(gross))
             fail(ArithmeticMismatch, grossKey, "Net plus tax doesn't equal the total.");
 
-        var table = read.Tables.FirstOrDefault(t => t.Columns.Any(c => c.Meaning == FieldMeanings.LineAmount));
+        string? ColumnMeaning(ReadTable t, ReadColumn c) => flow.Tables.Count == 0
+            ? c.Meaning
+            : flow.Tables.FirstOrDefault(x => x.Key == t.Key)?.Columns.FirstOrDefault(x => x.Key == c.Key)?.Meaning;
+        var table = read.Tables.FirstOrDefault(t => t.Columns.Any(c => ColumnMeaning(t, c) == FieldMeanings.LineAmount));
         if (table is null || table.Rows.Count == 0) return;
-        string? Col(string meaning) => table.Columns.FirstOrDefault(c => c.Meaning == meaning)?.Key;
+        string? Col(string meaning) => table.Columns.FirstOrDefault(c => ColumnMeaning(table, c) == meaning)?.Key;
         decimal? Cell(ReadRow row, string? key) =>
-            key is not null && row.Cells.TryGetValue(key, out var c) && FieldValueParser.TryNumber(c.Value, out var v) ? v : null;
+            key is not null && row.Cells.TryGetValue(key, out var c) ? Num(c.Value) : null;
 
         var amountKey = Col(FieldMeanings.LineAmount);
         var amounts = table.Rows.Select(r => Cell(r, amountKey)).ToList();
