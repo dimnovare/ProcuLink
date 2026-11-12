@@ -83,4 +83,75 @@ public sealed class DocumentChecksTests
         DocumentChecks.DedupKeyOf(numbered).Should().Be("INV1");
         DocumentChecks.DedupKeyOf(read).Should().BeNull();
     }
+
+    private static ReadField M(string key, string value, string meaning) => F(key, key, value, FieldTypes.Money, meaning: meaning);
+
+    private static ReadTable Lines(params (string Qty, string Price, string Amount)[] rows) => new("lines", "Lines",
+        [new ReadColumn("q", "Qty", FieldTypes.Number, FieldMeanings.LineQuantity),
+         new ReadColumn("p", "Price", FieldTypes.Money, FieldMeanings.LineUnitPrice),
+         new ReadColumn("a", "Amount", FieldTypes.Money, FieldMeanings.LineAmount)],
+        rows.Select(r => new ReadRow(new Dictionary<string, ReadCell>
+        {
+            ["q"] = new(r.Qty, 0.9, null, false, false), ["p"] = new(r.Price, 0.9, null, false, false), ["a"] = new(r.Amount, 0.9, null, false, false),
+        })).ToList(), true);
+
+    private static IReadOnlyList<DocumentCheck> Arith(ReadResult read) =>
+        DocumentChecks.Run(read, FlowFieldList.Empty, fieldsConfirmed: true, duplicate: false)
+            .Where(c => c.Code == DocumentChecks.ArithmeticMismatch).ToList();
+
+    private static IReadOnlyList<DocumentCheck> Money(string net, string tax, string gross, string? currency = null)
+    {
+        var fields = new List<ReadField>
+        {
+            M("net", net, FieldMeanings.TotalNet), M("tax", tax, FieldMeanings.TotalTax), M("gross", gross, FieldMeanings.TotalGross),
+        };
+        if (currency is not null) fields.Add(F("cur", "Currency", currency, meaning: FieldMeanings.Currency));
+        return Arith(new ReadResult("I", fields));
+    }
+
+    [Fact]
+    public void Arithmetic_overflow_goes_to_review_instead_of_throwing()
+    {
+        var big = "79000000000000000000000000000";
+        var read = new ReadResult("I", [M("net", big, FieldMeanings.TotalNet), M("tax", big, FieldMeanings.TotalTax), M("g", "1", FieldMeanings.TotalGross)],
+            [Lines(("100000000000000000000", "100000000000000000000", "5"), (big, big, big))]);
+        IReadOnlyList<DocumentCheck>? result = null;
+        var run = () => result = Arith(read);
+        run.Should().NotThrow();
+        result.Should().ContainSingle().Which.Should().Be(
+            new DocumentCheck(DocumentChecks.ArithmeticMismatch, false, "g", "An amount is too large to check."));
+    }
+
+    [Fact]
+    public void Arithmetic_checks_totals_lines_and_minor_units()
+    {
+        Money("100", "20", "121").Should().ContainSingle().Which.Message.Should().Be("Net plus tax doesn't equal the total.");
+        Money("100", "20", "120").Should().BeEmpty();
+        Money("100", "10", "110", "JPY").Should().BeEmpty();
+        Money("1.234,50", "100", "1.334,50").Should().BeEmpty();
+
+        var net = M("net", "100", FieldMeanings.TotalNet);
+        Arith(new ReadResult("I", [net], [Lines(("1", "50", "50"), ("1", "50.01", "50.01"))])).Should().BeEmpty();
+        Arith(new ReadResult("I", [net], [Lines(("1", "50", "50"), ("1", "49", "49"))])).Should().ContainSingle()
+            .Which.Message.Should().Be("The lines don't add up to the net total.");
+
+        Arith(new ReadResult("I", [], [Lines(("1", "5", "5"), ("3", "9.99", "29.97"))])).Should().BeEmpty();
+        Arith(new ReadResult("I", [], [Lines(("3", "9.99", "30.00"))])).Should().ContainSingle()
+            .Which.Message.Should().Be("Line 1: quantity × price doesn't equal the amount.");
+
+        Arith(new ReadResult("I", [F("x", "X", "5"), M("net", "abc", FieldMeanings.TotalNet), M("tax", "1", FieldMeanings.TotalTax), M("g", "9", FieldMeanings.TotalGross)]))
+            .Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Flow_meaning_drives_arithmetic_and_ambiguous_numbers_skip()
+    {
+        var read = new ReadResult("I", [M("net", "100", FieldMeanings.TotalNet), M("tax", "20", FieldMeanings.TotalTax), M("g", "999", FieldMeanings.TotalGross)]);
+        var cleared = new FlowFieldList([new FlowField("net", "Net", FieldTypes.Money, FieldMeanings.TotalNet, false),
+            new FlowField("tax", "Tax", FieldTypes.Money, FieldMeanings.TotalTax, false), new FlowField("g", "Gross", FieldTypes.Money, null, false)]);
+        DocumentChecks.Run(read, cleared, true, false).Should().NotContain(c => c.Code == DocumentChecks.ArithmeticMismatch);
+        Arith(read).Should().ContainSingle();
+
+        Arith(new ReadResult("I", [F("cur", "Currency", "EUR", meaning: FieldMeanings.Currency)], [Lines(("1.000", "0,50", "500,00"))])).Should().BeEmpty();
+    }
 }

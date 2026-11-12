@@ -189,6 +189,8 @@ public sealed class OpenAiDocumentReader : IDocumentReader
         var tableKeys = expected?.Tables.Select(t => t.Key).ToHashSet();
         static string Type(string? t) => t is not null && FieldTypes.All.Contains(t) ? t : FieldTypes.Text;
         static string? Meaning(string? m) => m is not null && FieldMeanings.All.Contains(m) ? m : null;
+        // A listed key keeps the flow's meaning when it has one; otherwise the AI's stands.
+        static string? Pinned(string? flowMeaning, string? ai) => flowMeaning ?? Meaning(ai);
         static double Clamp(double c) => double.IsNaN(c) ? 0 : Math.Clamp(c, 0, 1);
 
         var seenFields = new HashSet<string>();
@@ -196,7 +198,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
         var fields = (dto.Fields ?? []).Where(f => !string.IsNullOrWhiteSpace(f.Value) || fieldKeys?.Contains(FieldKey.Normalise(f.Key)) == true).Select(f =>
         {
             var key = FieldKey.Unique(seenFields, f.Key);
-            return new ReadField(key, f.Label, f.Value, Type(f.Type), Meaning(f.Meaning), Clamp(f.Confidence),
+            return new ReadField(key, f.Label, f.Value, Type(f.Type), Pinned(expected?.Fields.FirstOrDefault(x => x.Key == key)?.Meaning, f.Meaning), Clamp(f.Confidence),
                 Location: null, NotOnPage: false, Listed: fieldKeys?.Contains(key) ?? true, Edited: false);
         }).ToList();
 
@@ -210,7 +212,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
             {
                 var columnKey = FieldKey.Unique(seenColumns, c.Key);
                 columnKeys.TryAdd(c.Key, columnKey);
-                return new ReadColumn(columnKey, c.Label, Type(c.Type), Meaning(c.Meaning));
+                return new ReadColumn(columnKey, c.Label, Type(c.Type), Pinned(expected?.Tables.FirstOrDefault(x => x.Key == key)?.Columns.FirstOrDefault(x => x.Key == columnKey)?.Meaning, c.Meaning));
             }).ToList();
             var rows = (t.Rows ?? []).Select(r => new ReadRow((r.Cells ?? [])
                 .GroupBy(c => columnKeys.GetValueOrDefault(c.Column) ?? FieldKey.Normalise(c.Column)).ToDictionary(

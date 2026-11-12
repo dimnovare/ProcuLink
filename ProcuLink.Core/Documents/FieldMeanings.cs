@@ -14,6 +14,12 @@ public static class FieldMeanings
     public const string TotalGross = "total_gross";
     public const string Iban = "iban";
     public const string PaymentReference = "payment_reference";
+    public const string ReceiverVatId = "receiver_vat_id";
+    public const string BuyerReference = "buyer_reference";
+    public const string OrderReference = "order_reference";
+    public const string DeliveryDate = "delivery_date";
+    public const string SenderCountry = "sender_country";
+    public const string ReceiverCountry = "receiver_country";
 
     public const string LineDescription = "line_description";
     public const string LineQuantity = "line_quantity";
@@ -22,11 +28,44 @@ public static class FieldMeanings
     public const string LineAmount = "line_amount";
     public const string LineTaxRate = "line_tax_rate";
     public const string LineItemCode = "line_item_code";
+    public const string LineNumber = "line_number";
 
     public static readonly IReadOnlyList<string> All =
     [
         DocumentNumber, IssueDate, DueDate, SenderName, SenderVatId, ReceiverName, Currency,
         TotalNet, TotalTax, TotalGross, Iban, PaymentReference,
-        LineDescription, LineQuantity, LineUnit, LineUnitPrice, LineAmount, LineTaxRate, LineItemCode,
+        ReceiverVatId, BuyerReference, OrderReference, DeliveryDate, SenderCountry, ReceiverCountry,
+        LineDescription, LineQuantity, LineUnit, LineUnitPrice, LineAmount, LineTaxRate, LineItemCode, LineNumber,
     ];
+
+    /// <summary>Plain names (lower-case letters and digits only) that a column or output leaf is commonly called, per meaning. Data for auto-binding.</summary>
+    public static readonly IReadOnlyDictionary<string, string[]> Aliases = new Dictionary<string, string[]>
+    {
+        [DocumentNumber] = ["documentnumber", "invoicenumber", "invoiceno", "ordernumber", "ponumber", "docnumber", "rechnungsnummer", "arvenumber"],
+        [IssueDate] = ["issuedate", "invoicedate", "orderdate", "documentdate", "rechnungsdatum", "kuupaev"],
+        [DueDate] = ["duedate", "paymentdue", "payby", "faelligkeitsdatum", "maksetahtaeg"],
+        [SenderName] = ["sendername", "sellername", "suppliername", "vendorname", "seller", "lieferant"],
+        [SenderVatId] = ["sendervatid", "sellervatid", "suppliervatid", "vendorvatid", "ustidnr"],
+        [ReceiverName] = ["receivername", "buyername", "customername", "customer", "buyer", "kaeufer", "ostja"],
+        [Currency] = ["currency", "currencycode", "waehrung", "valuuta"],
+        [TotalNet] = ["totalnet", "netamount", "nettotal", "subtotal", "netto", "summakmita"],
+        [TotalTax] = ["totaltax", "taxamount", "vatamount", "tax", "vat", "mwst", "kaibemaks"],
+        [TotalGross] = ["totalgross", "grossamount", "grosstotal", "total", "totalamount", "amountdue", "brutto"],
+        [Iban] = ["iban", "bankaccount", "payeriban"],
+        [PaymentReference] = ["paymentreference", "paymentref", "remittanceinformation", "viitenumber"],
+        [ReceiverVatId] = ["receivervatid", "buyervatid", "customervatid", "customervatnumber", "buyervat"],
+        [BuyerReference] = ["buyerreference", "buyerref", "yourreference", "customerreference", "leitwegid"],
+        [OrderReference] = ["orderreference", "orderref", "purchaseorder", "purchaseorderreference", "customerponumber"],
+        [DeliveryDate] = ["deliverydate", "shipdate", "requesteddeliverydate", "lieferdatum", "tarnekuupaev"],
+        [SenderCountry] = ["sendercountry", "sellercountry", "suppliercountry", "vendorcountry"],
+        [ReceiverCountry] = ["receivercountry", "buyercountry", "customercountry", "shiptocountry"],
+        [LineDescription] = ["description", "itemdescription", "linedescription", "productname", "item", "artikelbezeichnung", "nimetus"],
+        [LineQuantity] = ["quantity", "qty", "amountordered", "menge", "kogus"],
+        [LineUnit] = ["unit", "uom", "unitofmeasure", "einheit", "uhik"],
+        [LineUnitPrice] = ["unitprice", "price", "priceperunit", "netprice", "einzelpreis", "uhikuhind"],
+        [LineAmount] = ["lineamount", "linetotal", "amount", "extendedprice", "gesamtpreis", "summa"],
+        [LineTaxRate] = ["taxrate", "vatrate", "vatpercent", "taxpercent", "mwstsatz"],
+        [LineItemCode] = ["itemcode", "sku", "partnumber", "articlenumber", "productcode", "artikelnummer", "tootekood"],
+        [LineNumber] = ["linenumber", "lineno", "position", "pos", "positionsnummer"],
+    };
 }
