@@ -4,6 +4,7 @@ using Amazon.S3.Model;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Security;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Security;
@@ -48,6 +49,8 @@ public sealed class S3DeliveryDispatcher(
 
             if (serviceUrl is not null)
             {
+                var verdict = OutboundUrlPolicy.Inspect(serviceUrl, "Endpoint URL");
+                if (!verdict.Allowed) return Permanent($"S3 delivery blocked: {verdict.Message}");
                 var guarded = await guard.ValidateAsync(serviceUrl, ct);
                 if (!guarded.Allowed) return Permanent($"S3 delivery blocked: {guarded.Reason}");
             }

@@ -52,6 +52,23 @@ public class S3DeliveryDispatcherTests
         sent.ContentType.Should().Be("text/csv");
     }
 
+    [Fact]
+    public async Task Refuses_a_non_https_endpoint_without_calling_the_bucket()
+    {
+        var (dispatcher, s3) = Build();
+        var config = new SupplierDeliveryConfig
+        {
+            Protocol = "s3",
+            ConfigJson = "{\"bucket\":\"b\",\"region\":\"auto\",\"accessKeyId\":\"k\",\"serviceUrl\":\"http://169.254.169.254\"}",
+        };
+
+        var result = await dispatcher.DispatchAsync([1], "a.csv", "text/csv", config, Creds, default);
+
+        result.Success.Should().BeFalse();
+        result.Outcome.Should().Be(DeliveryOutcome.NotRetryable);
+        s3.Verify(c => c.PutObjectAsync(It.IsAny<PutObjectRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.Forbidden, "AccessDenied", DeliveryOutcome.NotRetryable)]
     [InlineData(HttpStatusCode.NotFound, "NoSuchBucket", DeliveryOutcome.NotRetryable)]
