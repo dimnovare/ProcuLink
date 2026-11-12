@@ -355,8 +355,8 @@ builder.Services.AddSingleton<ISftpClientFactory, RenciSftpClientFactory>();
 builder.Services.AddSingleton<IAmazonS3ClientFactory, AmazonS3ClientFactory>();
 
 // ── Catalog import channels: SFTP/FTP(S) pull (plan 2026-06-12) ────────────
-// DI foot-gun precedent 4607d6d: ISupplierCatalogService was Api-only — the Worker
-// executes CatalogSyncSourceJob, so the sink + pull pipeline must resolve here too.
+// DI foot-gun precedent 4607d6d: ISupplierCatalogService was Api-only. No Worker job calls the catalog
+// sink + pull pipeline today; it stays registered here so it resolves if one ever does.
 builder.Services.AddScoped<ISupplierCatalogService, SupplierCatalogService>();
 builder.Services.AddSingleton<IFtpFetchClientFactory, FluentFtpFetchClientFactory>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogPullService,

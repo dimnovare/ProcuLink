@@ -1,4 +1,4 @@
-﻿using Amazon.S3;
+using Amazon.S3;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;

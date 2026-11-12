@@ -119,15 +119,14 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
             return await RouteToFlowAsync(payload, lookup.OrgId!.Value, flowId, ct);
 
         // An organisation-level address no longer receives anything: documents arrive at a flow's own
-        // address. Transient, never Permanent: a Permanent answer settles the mail as handled, which
-        // here would be silent loss — Transient keeps it in Postmark's re-delivery window and then its
-        // Failed list, re-fireable by hand.
+        // address, and no org address can be minted any more, so a retry can never change the
+        // answer: Permanent (the controller answers 200 "ignored"), with one audit row per mail.
         var orgId = lookup.OrgId!.Value;
         _logger.LogInformation("Inbound email for org {OrgId} refused: the address is not a flow's address.", orgId);
         await WriteAuditAsync(orgId, "inbound_email.rejected_orders_retired", payload, ct);
         return new InboundEmailResult(false, OrgId: orgId, Array.Empty<Guid>(),
             "Organisation now receives documents through flows.",
-            InboundEmailRejectionKind.Transient);
+            InboundEmailRejectionKind.Permanent);
     }
 
     /// <summary>Mail sent to one flow's own address: each attachment the flow accepts becomes a document in that flow.</summary>

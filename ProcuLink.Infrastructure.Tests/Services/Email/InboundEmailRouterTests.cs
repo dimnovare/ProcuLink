@@ -1,4 +1,4 @@
-using ProcuLink.TestSupport;
+﻿using ProcuLink.TestSupport;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -66,7 +66,7 @@ public class InboundEmailRouterTests
         var result = await router.RouteAsync(payload, default);
 
         result.Success.Should().BeFalse("an organisation-level address no longer receives documents");
-        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Transient);
+        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Permanent);
         result.OrgId.Should().Be(orgId);
     }
 
@@ -92,7 +92,7 @@ public class InboundEmailRouterTests
         var result = await router.RouteAsync(payload, default);
 
         result.Success.Should().BeFalse("an organisation-level address no longer receives documents");
-        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Transient);
+        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Permanent);
         result.OrgId.Should().Be(orgId);
     }
 
@@ -119,7 +119,7 @@ public class InboundEmailRouterTests
         var result = await router.RouteAsync(payload, default);
 
         result.Success.Should().BeFalse("an organisation-level address no longer receives documents");
-        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Transient);
+        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Permanent);
         result.OrgId.Should().Be(orgId);
     }
 
@@ -349,7 +349,7 @@ public class InboundEmailRouterTests
     }
 
     [Fact]
-    public async Task OrganisationAddress_IsRefusedTransient_AndAuditedSoTheMailStaysRefireable()
+    public async Task OrganisationAddress_IsRefusedPermanent_AndAudited()
     {
         await using var db = CreateDb();
         var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
@@ -364,8 +364,8 @@ public class InboundEmailRouterTests
 
         result.Success.Should().BeFalse();
         result.OrgId.Should().Be(orgId);
-        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Transient,
-            "Permanent would settle the mail as handled, which here would be silent loss");
+        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Permanent,
+            "no org address can be minted any more, so a retry can never change the answer");
         db.AuditEvents.Should().ContainSingle(a => a.OrgId == orgId && a.Action == "inbound_email.rejected_orders_retired");
     }
 

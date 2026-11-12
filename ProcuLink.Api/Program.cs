@@ -403,7 +403,7 @@ builder.Services.AddHangfire(cfg => cfg
     .UsePostgreSqlStorage(c => c.UseNpgsqlConnection(connectionString)));
 // No AddHangfireServer here — the Worker process is the sole Hangfire executor.
 // The API only enqueues jobs; running a server here would cause it to try to
-// deserialize ProcuLink.Worker types (e.g. EmailPollingJob) that it can't load.
+// deserialize ProcuLink.Worker types (e.g. WorkerHeartbeatJob) that it can't load.
 
 // Register the Hangfire monitoring API so OpsHealthService can read server heartbeats.
 // JobStorage is registered as a singleton by AddHangfire; we expose IMonitoringApi

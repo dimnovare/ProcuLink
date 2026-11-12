@@ -12,7 +12,7 @@ public sealed record ExtractedOrderLine(
     decimal Quantity,
     string? Unit,
     decimal? UnitPrice,
-    // Phase 4 enrichment (optional ā€” additive, defaulted so existing callers are unaffected).
+    // Phase 4 enrichment (optional — additive, defaulted so existing callers are unaffected).
     decimal? LineAmount = null,
     decimal? TaxRate = null,
     // Per-line VAT amount as printed (e.g. 25% VAT on an ex-VAT unit price). Additive, defaulted.
@@ -70,7 +70,7 @@ public sealed record ExtractedOrder(
     string? PaymentTerms = null,
     string? DocumentType = null,
     // V5 deepen-canonical: requested delivery date (header-level).
-    // Mirrors ParsedOrder.RequestedDeliveryDate ā€” null when absent.
+    // Mirrors ParsedOrder.RequestedDeliveryDate — null when absent.
     DateOnly? RequestedDeliveryDate = null,
     // Phase 1 lossless capture (additive, defaulted).
     IReadOnlyList<ExtractedParty>? Parties = null,
