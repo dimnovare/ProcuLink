@@ -14,14 +14,19 @@ public class Worker : BackgroundService
         _recurringJobs = recurringJobs;
     }
 
+    /// <summary>
+    /// Recurring-job ids whose job class was deleted. Hangfire keeps a recurring job's row until it is removed, and a row
+    /// naming a class that no longer exists fails on every tick, so each id is removed on startup.
+    /// </summary>
+    public static readonly IReadOnlyList<string> RetiredRecurringJobIds =
+        ["email-polling", "sftp-polling", "s3-polling", "catalog-sync"];
+
     public override Task StartAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("ProcuLink Worker starting up...");
 
-        _recurringJobs.AddOrUpdate<EmailPollingJob>(
-            "email-polling",
-            job => job.ExecuteAsync(CancellationToken.None),
-            "*/5 * * * *");
+        foreach (var id in RetiredRecurringJobIds)
+            _recurringJobs.RemoveIfExists(id);
 
         _recurringJobs.AddOrUpdate<ProcuLink.Api.Jobs.DocumentNotificationJob>(
             "document-notifications",
@@ -32,16 +37,6 @@ public class Worker : BackgroundService
             "notification-members",
             job => job.RunAsync(CancellationToken.None),
             "7 3 * * *");
-
-        _recurringJobs.AddOrUpdate<SftpPollingJob>(
-            "sftp-polling",
-            job => job.ExecuteAsync(CancellationToken.None),
-            "*/5 * * * *");
-
-        _recurringJobs.AddOrUpdate<S3PollingJob>(
-            "s3-polling",
-            job => job.ExecuteAsync(CancellationToken.None),
-            "*/5 * * * *");
 
         _recurringJobs.AddOrUpdate<ProcuLink.Api.Jobs.FlowPickupDispatchJob>(
             "flow-pickup",
@@ -139,7 +134,7 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "*/5 * * * *");
 
-        _logger.LogInformation("Registered recurring jobs: document-delivery-sweep (every 5 min), worker-heartbeat (every 2 min), email-polling, sftp-polling, s3-polling, flow-pickup (every 5 min), worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep + stuck-delivery-detection + stranded-ready-delivery-detection (every 15 min), stranded-failed-delivery-detection (hourly), billing-reconciliation (daily 02:00 UTC), data-retention-sweep (daily 03:30 UTC), blob-retention-sweep (daily 04:15 UTC), disposable-org-sweep (daily 05:00 UTC).");
+        _logger.LogInformation("Registered recurring jobs: document-delivery-sweep (every 5 min), worker-heartbeat (every 2 min), flow-pickup (every 5 min), worker-health-alert (every 5 min), stuck-order-detection + delivery-sla-sweep + stuck-delivery-detection + stranded-ready-delivery-detection (every 15 min), stranded-failed-delivery-detection (hourly), billing-reconciliation (daily 02:00 UTC), data-retention-sweep (daily 03:30 UTC), blob-retention-sweep (daily 04:15 UTC), disposable-org-sweep (daily 05:00 UTC).");
         return base.StartAsync(cancellationToken);
     }
 

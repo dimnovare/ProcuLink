@@ -94,31 +94,6 @@ internal static class OrgAdminGateIlScanner
             OnInterface<IAcceptanceGate>(nameof(IAcceptanceGate.RecordOverrideAsync)),
             "Overrules the supplier's own stated terms; what follows cannot be recalled."),
 
-        new("IEmailSettingsService.UpdateAsync",
-            OnInterface<IEmailSettingsService>(nameof(IEmailSettingsService.UpdateAsync)),
-            "Stores IMAP host and credentials and names the supplier arriving documents are "
-          + "attributed to — the inbound mirror of redirecting deliveries."),
-
-        new("IPullIngressSettingsService.UpdateSftpAsync",
-            OnInterface<IPullIngressSettingsService>(nameof(IPullIngressSettingsService.UpdateSftpAsync)),
-            "Repoints the SFTP poller at an external host, with credentials."),
-
-        new("IPullIngressSettingsService.UpdateS3Async",
-            OnInterface<IPullIngressSettingsService>(nameof(IPullIngressSettingsService.UpdateS3Async)),
-            "Repoints the S3/R2 poller at an external bucket, with access keys."),
-
-        new("IInboundAddressService.MintPrimaryAsync",
-            OnInterface<IInboundAddressService>(nameof(IInboundAddressService.MintPrimaryAsync)),
-            "Issues a bearer credential that authorises inbound purchase orders into this "
-          + "organisation. It is the inbound twin of minting an API key, and rotating is how an "
-          + "organisation's ingest identity changes."),
-
-        new("IInboundAddressService.RevokeAsync",
-            OnInterface<IInboundAddressService>(nameof(IInboundAddressService.RevokeAsync)),
-            "Switches off an address buyers are actively sending to. Their mail stops being "
-          + "accepted from the next message, and nothing tells them — a silent redirection of "
-          + "where an organisation's documents can arrive."),
-
         new("OrderIngestionService.ApplyInvoiceProblemsAsync",
             OnInternalStatic("ProcuLink.Api.Services.OrderIngestionService", "ApplyInvoiceProblemsAsync"),
             "Releases an invoice held by its checks into the send flow, closing the checks that held it "
@@ -204,12 +179,6 @@ internal static class OrgAdminGateIlScanner
             "Switches a flow between review and automatic sending; automatic sending releases documents to "
           + "the vendor's destination with nobody checking them first. Its caller gates in-method, because "
           + "every member may still rename the flow."),
-
-        new("new IntegrationSubscription / DbSet<IntegrationSubscription>.Add",
-            CreatesIntegrationSubscription,
-            "Stands up an outbound subscription that ships the payload of every matching order to "
-          + "an arbitrary URL. There is no service seam here, so the primitive is the entity being "
-          + "minted and persisted."),
     ];
 
     /// <summary>
@@ -244,25 +213,6 @@ internal static class OrgAdminGateIlScanner
         if (type.GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public) is null)
             throw new InvalidOperationException($"{typeName}.{name} does not exist — update OrgAdminGateIlScanner.");
         return member => member is MethodBase method && method.Name == name && method.DeclaringType == type;
-    }
-
-    /// <summary>
-    /// Matches either half of "mint a webhook subscription": constructing the entity, or adding it
-    /// to its <see cref="DbSet{TEntity}"/>. Both are accepted because this is the one primitive with
-    /// no service interface to name, and either IL shape is conclusive on its own.
-    /// </summary>
-    private static bool CreatesIntegrationSubscription(MemberInfo member)
-    {
-        if (member is ConstructorInfo ctor)
-            return ctor.DeclaringType == typeof(IntegrationSubscription);
-
-        if (member is not MethodBase { Name: nameof(DbSet<IntegrationSubscription>.Add) } add)
-            return false;
-
-        var declaring = add.DeclaringType;
-        return declaring is { IsGenericType: true }
-            && declaring.GetGenericTypeDefinition() == typeof(DbSet<>)
-            && declaring.GetGenericArguments()[0] == typeof(IntegrationSubscription);
     }
 
     // ── The two computed sets ─────────────────────────────────────────────────

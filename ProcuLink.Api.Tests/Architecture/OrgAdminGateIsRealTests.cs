@@ -40,12 +40,12 @@ public sealed class OrgAdminGateIsRealTests
     /// <para>Changing this number is the deliberate act of widening or narrowing what an
     /// organisation reserves to its administrators, and it should never move on its own.</para>
     /// </summary>
-    private const int ExpectedGatedEndpointCount = 30;
+    private const int ExpectedGatedEndpointCount = 24;
 
     /// <summary>
     /// How many operations are declared destructive. Every gated endpoint reaches a declared primitive.
     /// </summary>
-    private const int ExpectedDestructivePrimitiveCount = 28;
+    private const int ExpectedDestructivePrimitiveCount = 22;
 
     /// <summary>
     /// Endpoints that gate only PART of a request, in-method: resolve (an invoice's IBAN, number and
@@ -92,24 +92,6 @@ public sealed class OrgAdminGateIsRealTests
         Destructive(typeof(BillingController), nameof(BillingController.CreatePortal))
             .Select(p => p.Describe)
             .Should().Contain("IBillingService.CreatePortalSessionAsync");
-    }
-
-    /// <summary>
-    /// POSITIVE CONTROL, NON-INTERFACE PRIMITIVE. The webhook subscription is the one destructive
-    /// operation with no service seam — the controller mints the entity and adds it to the DbSet
-    /// inline. That match resolves a constructed generic (<c>DbSet&lt;IntegrationSubscription&gt;</c>)
-    /// or a constructor token, neither of which the interface-shaped matches exercise, so it gets its
-    /// own control.
-    /// </summary>
-    [Fact]
-    public void Scanner_Control_SeesTheEntityLevelPrimitiveToo()
-    {
-        Destructive(typeof(IntegrationController), nameof(IntegrationController.Create))
-            .Select(p => p.Describe)
-            .Should().Contain(
-                d => d.Contains("IntegrationSubscription"),
-                "IntegrationController.Create is the redirection primitive with no interface to name; "
-              + "if this match stops resolving, the endpoint quietly leaves the destructive set");
     }
 
     /// <summary>

@@ -148,16 +148,6 @@ public class RetiredSubsystemsStayRetiredTests
         HttpActionCount(inboundEmail).Should().BeGreaterThan(0,
             "a controller with no HTTP action answers 404 for every inbound delivery");
 
-        // ── The org's OUTBOUND webhook subscriptions — LIVE, and the subsystem most at risk of
-        //    being confused with the retired INBOUND ingress.
-        var integrations = LiveType("ProcuLink.Api", "ProcuLink.Api.Controllers.IntegrationController",
-            "the org's OUTBOUND webhook subscriptions (events fired at THEIR systems) are LIVE — only the " +
-            "INBOUND ingress was retired");
-        RouteTemplateOf(integrations).Should().Be("api/integrations",
-            "the outbound-subscription endpoints are what the subscriptions UI calls");
-        HttpActionCount(integrations).Should().BeGreaterThan(2,
-            "list / create / delete are the minimum the subscriptions UI calls");
-
         // ── The entities behind the LIVE subsystems, asserted against the EF MODEL rather than the
         //    source text: an entity class that survives but is no longer mapped is a silent
         //    retirement, which is precisely the failure mode this file exists to catch.

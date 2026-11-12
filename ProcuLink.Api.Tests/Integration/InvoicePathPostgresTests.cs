@@ -184,7 +184,7 @@ public sealed class InvoicePathPostgresTests(PostgresContainerFixture postgres) 
             var tenant = new Mock<ICurrentTenantService>();
             tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
             tenant.SetupGet(t => t.ClerkUserId).Returns("user_admin");
-            var settings = new SettingsController(tenant.Object, null!, null!, new OrganisationSettingsService(db), null!, null!, db, null!, null!)
+            var settings = new SettingsController(tenant.Object, new OrganisationSettingsService(db), db)
             {
                 ControllerContext = new() { HttpContext = new DefaultHttpContext { Items = { [ClerkOrgRole.ItemsKey] = role } } },
             };

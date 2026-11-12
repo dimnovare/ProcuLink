@@ -113,13 +113,6 @@ public sealed class EndpointReachabilityGuardTests
             + "[Authorize(AuthenticationSchemes = \"ApiKey\")], not Clerk: after posting a file the "
             + "customer's own system fetches the result by id with an org API key, and no browser "
             + "screen calls it, so a frontend caller would be the bug. Permanent entry."),
-        new("GET /api/ingress/{}/ping",
-            "2026-08-13 — the reachability probe a customer runs while wiring the ingress API up, "
-            + "documented for them at "
-            + "project-proculink/src/app/(marketing)/help/api-and-integrations/page.mdx:29 as "
-            + "`GET /api/ingress/{your-slug}/ping`. Being callable by someone who is not us IS the "
-            + "feature. Permanent entry."),
-
         // ── Provider webhooks. The caller is Stripe. ──────────────────────────────────────
         new("POST /api/billing/webhook",
             "2026-08-13 — Stripe calls this, not the browser. [AllowAnonymous] with signature "
@@ -289,7 +282,6 @@ public sealed class EndpointReachabilityGuardTests
             "GET /api/auto-send/dry-runs/summary",
             "GET /api/billing/ai-usage",
             "GET /api/dev/files/{**}",
-            "GET /api/ingress/{}/ping",
             // Moved into the baseline on 2026-11-07, deliberately and in the open: the file API is a
             // machine-facing ingress (ProcuLink.Api/Controllers/FlowFilesController.cs) whose only caller is the
             // customer's own system, with an org API key.
@@ -363,7 +355,7 @@ public sealed class EndpointReachabilityGuardTests
     // count of something the DETECTOR itself produced — not a count of files on disk. A prior
     // packet in this repo re-pointed a sweep at a project with no matches and its file-count floor
     // passed anyway; a file-count floor proves the directory exists, not that anything was found.
-    private const int MinimumEndpoints = 140;          // 165 today
+    private const int MinimumEndpoints = 125;          // 131 today
     private const int MinimumControllers = 30;         // 37 today
     private const int MinimumCallerFiles = 300;        // 418 today
     private const long MinimumCallerBytes = 2_000_000; // 3.30 MB today

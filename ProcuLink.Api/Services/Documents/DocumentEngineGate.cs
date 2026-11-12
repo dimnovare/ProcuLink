@@ -18,14 +18,11 @@ public sealed class DocumentEngineOptions
 }
 
 /// <summary>Per-org switch for the document engine; off unless listed or enabled for all.</summary>
-public sealed class DocumentEngineGate(IOptions<DocumentEngineOptions> options) : ProcuLink.Core.Services.IOrderIntakeSwitch
+public sealed class DocumentEngineGate(IOptions<DocumentEngineOptions> options)
 {
     private static bool Listed(string[] ids, Guid orgId) => ids.Any(s => Guid.TryParse(s, out var g) && g == orgId);
 
     public bool IsEnabled(Guid orgId) => options.Value.EnabledForAll || Listed(options.Value.EnabledOrgIds, orgId);
-
-    /// <summary>An org on the document engine no longer creates legacy purchase orders.</summary>
-    public bool IsRetired(Guid orgId) => IsEnabled(orgId);
 
     /// <summary>AI-suggested lookup matches: the engine must be on, then the org is listed or all are on.</summary>
     public bool LookupSuggestionsOn(Guid orgId) =>

@@ -531,32 +531,3 @@ public sealed class InboundEmailController : ControllerBase
         [JsonPropertyName("ContentID")] public string? ContentID { get; set; }
     }
 }
-
-/// <summary>
-/// Hangfire adapter for <see cref="IParseJobEnqueuer"/>. Sits in
-/// <c>ProcuLink.Api</c> because Hangfire and <c>ParseOrderJob</c> live here;
-/// the router itself stays in <c>ProcuLink.Infrastructure</c> with no
-/// Hangfire dependency.
-/// </summary>
-/// <remarks>
-/// Register in <c>Program.cs</c>:
-/// <code>
-/// builder.Services.AddScoped&lt;IParseJobEnqueuer, HangfireParseJobEnqueuer&gt;();
-/// builder.Services.AddScoped&lt;IInboundEmailRouter, InboundEmailRouter&gt;();
-/// </code>
-/// </remarks>
-public sealed class HangfireParseJobEnqueuer : IParseJobEnqueuer
-{
-    private readonly IBackgroundJobClient _jobs;
-
-    public HangfireParseJobEnqueuer(IBackgroundJobClient jobs)
-    {
-        _jobs = jobs;
-    }
-
-    public Task EnqueueAsync(Guid orderId, Guid orgId, CancellationToken ct)
-    {
-        ParseOrderJob.Enqueue(_jobs, orderId, orgId);
-        return Task.CompletedTask;
-    }
-}

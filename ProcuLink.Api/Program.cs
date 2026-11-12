@@ -355,18 +355,6 @@ builder.Services.AddRateLimiter(options =>
     // more than a handful of tickets a minute — keep this tight.
     options.AddPolicy("support", ctx => Window(ctx, "support", permit: 5, seconds: 60));
 
-    // The practice-order endpoint persists a CALLER-SUPPLIED recipient address, and
-    // the user's next send mails a CSV to it from ProcuLink's verified Postmark
-    // sender. That is the support form's amplification shape without its one
-    // mitigation: support posts to a fixed inbox we own, so its bounces land on us
-    // by design, whereas here the recipient is chosen by the caller and every bounce
-    // or complaint is charged to our sender reputation. Same 5/60s cap, own
-    // partition so a burst here cannot consume the support budget or vice versa.
-    // NOT "upload" (60/min) — that is sized for a daily batch of POs, each costing
-    // one parse job against the caller's own org, and would permit 60 emails a
-    // minute to addresses we have never verified.
-    options.AddPolicy("sample-order", ctx => Window(ctx, "sample-order", permit: 5, seconds: 60));
-
     // Global backstop: every request (including ones with no named policy) is
     // bounded per partition. Generous so it never bites normal usage, but it
     // closes the "endpoint with no [EnableRateLimiting]" gap.
@@ -631,14 +619,12 @@ builder.Services.AddScoped<IReplayService, ReplayService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 // Same scoped OrderService also serves the pull-ingress stub-creation seam (explicit order id).
 builder.Services.AddScoped<IStubOrderCreator>(sp => (OrderService)sp.GetRequiredService<IOrderService>());
-builder.Services.AddScoped<IClaimedOrderCreator>(sp => (OrderService)sp.GetRequiredService<IOrderService>());
 builder.Services.AddScoped<IPassportService, PassportService>();
 builder.Services.AddScoped<IOrderConfirmationService, OrderConfirmationService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
 // Parity with the Worker (which runs the daily reconciliation sweep); keeps Development DI
 // validation consistent across both hosts even though only the Worker executes the job.
 builder.Services.AddScoped<IBillingReconciliationService, StripeSubscriptionReconciliationService>();
-builder.Services.AddScoped<ISampleOrderService, SampleOrderService>();
 
 // ── Email API (Postmark over HTTPS) ──────────────────────────────────────
 // Sends mail via a managed HTTP API (port 443), so it works on hosts that block outbound SMTP
@@ -669,7 +655,6 @@ builder.Services.AddScoped<ISupportContactService, SupportContactService>();
 builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Analytics:PostHog"));
 builder.Services.Configure<ProcuLink.Api.Services.Documents.DocumentEngineOptions>(builder.Configuration.GetSection("DocumentEngine"));
 builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.DocumentEngineGate>();
-builder.Services.AddSingleton<ProcuLink.Core.Services.IOrderIntakeSwitch>(sp => sp.GetRequiredService<ProcuLink.Api.Services.Documents.DocumentEngineGate>());
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentRechecker>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentSender>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.LookupSuggester>();
@@ -693,9 +678,7 @@ builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowPickupDispatchJob>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.FlowDestinationService>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.FlowIntakeService>();
 builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
-builder.Services.AddScoped<IEmailSettingsService, EmailSettingsService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Organisation.IOrganisationSettingsService, ProcuLink.Infrastructure.Services.OrganisationSettingsService>();
-builder.Services.AddScoped<ProcuLink.Core.Services.Ingress.IPullIngressSettingsService, ProcuLink.Infrastructure.Services.PullIngressSettingsService>();
 builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
 builder.Services.AddSingleton<ProcuLink.Core.Documents.IOutputDesigner, ProcuLink.Infrastructure.Services.Ai.OpenAiOutputDesigner>();
 // T4 — external web/product-code grounding. No-op unless Ai:OpenAI:ProductSearch:Enabled=true
@@ -704,19 +687,15 @@ builder.Services.AddSingleton<IProductCodeSearch, OpenAiProductCodeSearch>();
 builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
 builder.Services.AddScoped<IIdempotencyService, IdempotencyService>();
 builder.Services.AddScoped<ISchemaInferencer, OpenAiSchemaInferencer>();
-builder.Services.AddScoped<IEmailBodyOrderExtractor, OpenAiEmailBodyOrderExtractor>();
 builder.Services.AddScoped<IInboundAddressService, InboundAddressService>();
 builder.Services.AddScoped<IInboundEmailRouter, InboundEmailRouter>();
 // Outbound direction of the same provider relationship: Postmark's bounce / spam-complaint
 // webhook. Without it a mistyped supplier address leaves the order reading 'delivered' forever.
 builder.Services.AddScoped<IDeliveryBounceHandler, ProcuLink.Infrastructure.Services.Delivery.DeliveryBounceHandler>();
-builder.Services.AddScoped<IParseJobEnqueuer, ProcuLink.Api.Controllers.HangfireParseJobEnqueuer>();
 
 // ── Wave 2: pull-ingress (SFTP / S3-R2) + OCR fallback ────────────────────
 builder.Services.AddSingleton<ISftpClientFactory, RenciSftpClientFactory>();
-builder.Services.AddScoped<ISftpIngressService, SftpIngressService>();
 builder.Services.AddSingleton<IAmazonS3ClientFactory, AmazonS3ClientFactory>();
-builder.Services.AddScoped<IS3IngressService, S3IngressService>();
 
 // ── Catalog import channels: SFTP/FTP(S) pull + settings (plan 2026-06-12) ─
 // FluentFTP fetch seam is hardened (PASVEX + mandatory FTPS data encryption + 30 s
@@ -725,8 +704,6 @@ builder.Services.AddSingleton<ProcuLink.Infrastructure.Services.Ingress.IFtpFetc
                               ProcuLink.Infrastructure.Services.Ingress.FluentFtpFetchClientFactory>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogPullService,
                            ProcuLink.Infrastructure.Services.Catalog.CatalogPullService>();
-builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogSourceSettingsService,
-                           ProcuLink.Infrastructure.Services.Catalog.CatalogSourceSettingsService>();
 // Vendor catalog fetchers (plan 2026-07-02 D4) — resolved by protocol inside CatalogPullService.
 builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogVendorFetcher,
                            ProcuLink.Infrastructure.Services.Catalog.Aes2faSignedCatalogFetcher>();

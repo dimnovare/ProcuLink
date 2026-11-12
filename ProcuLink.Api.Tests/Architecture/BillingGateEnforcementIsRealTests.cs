@@ -60,18 +60,6 @@ public sealed class BillingGateEnforcementIsRealTests
                 "The org-wide trail. The per-order audit stays open — gating it would take away "
               + "something Growth already pays for."),
 
-            [BillingFeature.EmailIngestion] = new(
-                typeof(SettingsController), nameof(SettingsController.UpdateEmail), Kind.ServerRefusal,
-                "Enabling IMAP. EmailPollOrgJob re-checks every cycle so a downgrade stops the poll."),
-
-            [BillingFeature.SftpIngestion] = new(
-                typeof(SettingsController), nameof(SettingsController.UpdateSftp), Kind.ServerRefusal,
-                "Enabling SFTP pull. SftpPollOrgJob re-checks every cycle."),
-
-            [BillingFeature.S3Ingestion] = new(
-                typeof(SettingsController), nameof(SettingsController.UpdateS3), Kind.ServerRefusal,
-                "Enabling S3/R2 pull. S3PollOrgJob re-checks every cycle."),
-
             [BillingFeature.Sso] = new(
                 typeof(StripeBillingService), nameof(StripeBillingService.GetStatusAsync),
                 Kind.PresentationOnly,
@@ -92,11 +80,11 @@ public sealed class BillingGateEnforcementIsRealTests
     [Fact]
     public void Scanner_Control_FindsAGateThatIsDefinitelyThere()
     {
-        var features = FeaturesGatedBy(Resolve(typeof(SettingsController), nameof(SettingsController.UpdateSftp)),
+        var features = FeaturesGatedBy(Resolve(typeof(AuditController), nameof(AuditController.GetAuditLog)),
             GatePrimitive.ServerRefusal);
 
-        features.Should().Contain(BillingFeature.SftpIngestion,
-            "SettingsController.UpdateSftp calls HasFeatureAsync(SftpIngestion) directly. If this "
+        features.Should().Contain(BillingFeature.AdvancedAudit,
+            "AuditController.GetAuditLog calls HasFeatureAsync(AdvancedAudit) directly. If this "
           + "fails, the scanner is broken and every other assertion in this file is worthless.");
     }
 
@@ -224,25 +212,6 @@ public sealed class BillingGateEnforcementIsRealTests
 
         var serverRefusals = Sites.Where(kv => kv.Value.Kind == Kind.ServerRefusal).Select(kv => kv.Key).ToArray();
         serverRefusals.Should().NotBeEmpty("the ladder must refuse something, or it is not a ladder");
-    }
-
-    /// <summary>
-    /// The pull jobs are the only gates that re-check AFTER the org was allowed to configure the
-    /// channel, which is what makes a downgrade actually stop the ingest rather than merely stop
-    /// re-enabling it. They are easy to "simplify" away, and nothing else would notice.
-    /// </summary>
-    [Theory]
-    [InlineData(typeof(SftpPollOrgJob), BillingFeature.SftpIngestion)]
-    [InlineData(typeof(S3PollOrgJob), BillingFeature.S3Ingestion)]
-    [InlineData(typeof(EmailPollOrgJob), BillingFeature.EmailIngestion)]
-    public void ThePullJobs_ReCheckTheGateOnEveryCycle(Type jobType, BillingFeature feature)
-    {
-        var execute = Resolve(jobType, "ExecuteAsync");
-
-        FeaturesGatedBy(execute, GatePrimitive.ServerRefusal).Should().Contain(feature,
-            $"{jobType.Name} must re-check {feature} every cycle. Gating only the settings write "
-          + "would let an org that downgrades keep ingesting for as long as its stored config "
-          + "survives — the configuration gate and the runtime gate are different guarantees.");
     }
 
     private static MethodBase Resolve(Type type, string method) =>

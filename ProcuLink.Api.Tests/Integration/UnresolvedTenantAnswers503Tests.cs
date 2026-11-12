@@ -94,6 +94,7 @@ public sealed class TenantClaimShapeFactory : WebApplicationFactory<Program>
                 ["Sentry:Dsn"] = "",
                 ["Storage:R2AccessKeyId"] = "",
                 ["Frontend:Url"] = "http://localhost:3000",
+                ["DocumentEngine:EnabledForAll"] = "true",
             });
         });
 
@@ -274,11 +275,9 @@ public sealed class UnresolvedTenantAnswers503Tests : IClassFixture<TenantClaimS
 
         var client = ClientWith(sub: null, org: clerkOrgId);
 
-        // POST /api/onboarding/sample-order reads OrganisationId (resolves fine) and then
-        // ClerkUserId (throws) while evaluating its arguments, so nothing downstream runs.
-        var response = await client.PostAsync(
-            "/api/onboarding/sample-order",
-            new StringContent("{}", Encoding.UTF8, "application/json"));
+        // GET /api/notification-settings reads OrganisationId (resolves fine) and then
+        // ClerkUserId (throws) while building its query, so nothing downstream runs.
+        var response = await client.GetAsync("/api/notification-settings");
 
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
         Assert.NotEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);

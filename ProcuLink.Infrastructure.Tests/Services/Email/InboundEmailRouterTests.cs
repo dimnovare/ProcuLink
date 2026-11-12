@@ -1,148 +1,32 @@
-﻿using ProcuLink.TestSupport;
-using System.Text;
+using ProcuLink.TestSupport;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
-using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Email;
-using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Email;
 
 namespace ProcuLink.Infrastructure.Tests.Services.Email;
 
 /// <summary>
-/// Verifies that the inbound-email router routes attachments to the right
-/// tenant, skips unsupported types, gates on account status, and creates
-/// one order stub + parse job per accepted attachment.
+/// Verifies that the inbound-email router resolves the tenant from the recipient address, answers
+/// each refusal with the retry kind the mail provider needs, and refuses an organisation-level
+/// address. Delivery to a flow's own address is covered by <c>InboundEmailFlowPostgresTests</c>.
 /// </summary>
 public class InboundEmailRouterTests
 {
     private const string Slug = "acme";
-
-    // ── 1. Happy path ────────────────────────────────────────────────────────
-
-    [Fact]
-    public async Task HappyPath_SingleCsvAttachment_CreatesOneOrderAndEnqueuesParseJob()
-    {
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
-        var supplierId = await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "PO #12345",
-            Attachments: new[]
-            {
-                new InboundAttachment("po.csv", "text/csv", Encoding.UTF8.GetBytes("po,date\r\n001,2026-05-28")),
-            });
-
-        var result = await router.RouteAsync(payload, default);
-
-        result.Success.Should().BeTrue();
-        result.OrgId.Should().Be(orgId);
-        result.CreatedOrderIds.Should().HaveCount(1);
-
-        orders.CalledWith.Should().HaveCount(1);
-        orders.CalledWith[0].OrgId.Should().Be(orgId);
-        orders.CalledWith[0].SupplierId.Should().Be(supplierId);
-        orders.CalledWith[0].FileName.Should().Be("po.csv");
-
-        enqueuer.Calls.Should().HaveCount(1);
-        enqueuer.Calls[0].OrderId.Should().Be(result.CreatedOrderIds[0]);
-        enqueuer.Calls[0].OrgId.Should().Be(orgId);
-    }
-
-    // ── 2. Multiple attachments ──────────────────────────────────────────────
-
-    [Fact]
-    public async Task MultipleSupportedAttachments_CreatesMultipleOrders()
-    {
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Trialing);
-        await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "Multiple POs",
-            Attachments: new[]
-            {
-                new InboundAttachment("po-a.csv",  "text/csv", new byte[] { 1, 2, 3 }),
-                new InboundAttachment("po-b.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", new byte[] { 4, 5, 6 }),
-                new InboundAttachment("po-c.pdf",  "application/pdf", new byte[] { 7, 8, 9 }),
-            });
-
-        var result = await router.RouteAsync(payload, default);
-
-        result.Success.Should().BeTrue();
-        result.CreatedOrderIds.Should().HaveCount(3);
-        orders.CalledWith.Should().HaveCount(3);
-        enqueuer.Calls.Should().HaveCount(3);
-
-        // Each attachment produced a distinct order id.
-        result.CreatedOrderIds.Distinct().Should().HaveCount(3);
-    }
-
-    // ── 3. Unsupported attachment ────────────────────────────────────────────
-
-    [Fact]
-    public async Task UnsupportedAttachment_IsSkippedReturnsSuccessWithEmptyList()
-    {
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
-        await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "Word doc disguised as PO",
-            Attachments: new[]
-            {
-                new InboundAttachment("po.docx",
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    new byte[] { 1, 2, 3 }),
-            });
-
-        var result = await router.RouteAsync(payload, default);
-
-        result.Success.Should().BeTrue("the message itself was valid even if no attachment was usable");
-        result.OrgId.Should().Be(orgId);
-        result.CreatedOrderIds.Should().BeEmpty();
-
-        orders.CalledWith.Should().BeEmpty("the .docx attachment must not reach CreateStubAsync");
-        enqueuer.Calls.Should().BeEmpty();
-    }
-
-    // ── 4. Unknown recipient ─────────────────────────────────────────────────
 
     [Fact]
     public async Task UnknownRecipient_ReturnsFailureWithoutCreatingOrders()
     {
         await using var db = CreateDb();
         // No org seeded — the mapping config also points nowhere useful.
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: Guid.NewGuid());
+        var router = MakeRouter(db, slug: Slug, orgId: Guid.NewGuid());
 
         var payload = new InboundEmailPayload(
             FromEmail: "buyer@example.com",
@@ -157,587 +41,8 @@ public class InboundEmailRouterTests
 
         result.Success.Should().BeFalse();
         result.OrgId.Should().BeNull();
-        result.CreatedOrderIds.Should().BeEmpty();
         result.Error.Should().NotBeNullOrWhiteSpace();
-
-        orders.CalledWith.Should().BeEmpty();
-        enqueuer.Calls.Should().BeEmpty();
     }
-
-    // ── 5. Read-only tenant gate ─────────────────────────────────────────────
-
-    [Fact]
-    public async Task ReadOnlyTenant_ReturnsFailureAndCreatesNoOrders()
-    {
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.ReadOnly);
-        await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "PO during read-only",
-            Attachments: new[]
-            {
-                new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }),
-            });
-
-        var result = await router.RouteAsync(payload, default);
-
-        result.Success.Should().BeFalse();
-        result.OrgId.Should().Be(orgId, "the tenant resolved — we just refused to ingest");
-        result.CreatedOrderIds.Should().BeEmpty();
-        result.Error.Should().Contain("read_only");
-
-        orders.CalledWith.Should().BeEmpty();
-        enqueuer.Calls.Should().BeEmpty();
-    }
-
-    // ── 6. Trial-expired tenant gate ─────────────────────────────────────────
-
-    [Fact]
-    public async Task TrialExpiredTenant_ReturnsFailureAndCreatesNoOrders()
-    {
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.TrialExpired);
-        await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "PO after trial",
-            Attachments: new[]
-            {
-                new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }),
-            });
-
-        var result = await router.RouteAsync(payload, default);
-
-        result.Success.Should().BeFalse();
-        result.OrgId.Should().Be(orgId);
-        result.CreatedOrderIds.Should().BeEmpty();
-        result.Error.Should().Contain("trial_expired");
-
-        orders.CalledWith.Should().BeEmpty();
-        enqueuer.Calls.Should().BeEmpty();
-    }
-
-    // ── 7. No attachments at all ─────────────────────────────────────────────
-
-    [Fact]
-    public async Task NoAttachments_ReturnsSuccessWithEmptyList()
-    {
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
-        await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "Just a note, no file",
-            Attachments: Array.Empty<InboundAttachment>());
-
-        var result = await router.RouteAsync(payload, default);
-
-        result.Success.Should().BeTrue();
-        result.OrgId.Should().Be(orgId);
-        result.CreatedOrderIds.Should().BeEmpty();
-        orders.CalledWith.Should().BeEmpty();
-        enqueuer.Calls.Should().BeEmpty();
-    }
-
-    // ── 8. Mixed supported + unsupported attachments ─────────────────────────
-
-    [Fact]
-    public async Task MixedAttachments_OnlySupportedTypesCreateOrders()
-    {
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
-        await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "Mixed bag",
-            Attachments: new[]
-            {
-                new InboundAttachment("po.csv",         "text/csv",                   new byte[] { 1, 2, 3 }),
-                new InboundAttachment("signature.png",  "image/png",                  new byte[] { 4, 5, 6 }),
-                new InboundAttachment("notes.docx",     "application/msword",         new byte[] { 7, 8, 9 }),
-                new InboundAttachment("backup.xml",     "application/xml",            new byte[] { 10, 11 }),
-            });
-
-        var result = await router.RouteAsync(payload, default);
-
-        result.Success.Should().BeTrue();
-        result.CreatedOrderIds.Should().HaveCount(2,
-            "only the .csv and .xml attachments are in the supported set");
-        orders.CalledWith.Select(c => c.FileName).Should().BeEquivalentTo(new[] { "po.csv", "backup.xml" });
-    }
-
-    // ── 8b. Oversized attachment → skipped before CreateStubAsync ────────────
-
-    [Fact]
-    public async Task OversizedAttachment_IsSkipped_NeverReachesCreateStub()
-    {
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
-        await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "Huge PO",
-            Attachments: new[]
-            {
-                new InboundAttachment("huge.csv", "text/csv", new byte[IngressLimits.MaxFileBytes + 1]),
-            });
-
-        var result = await router.RouteAsync(payload, default);
-
-        result.Success.Should().BeTrue("the message was valid even though the attachment was too large");
-        result.CreatedOrderIds.Should().BeEmpty();
-        orders.CalledWith.Should().BeEmpty("an oversized attachment must never reach CreateStubAsync");
-        enqueuer.Calls.Should().BeEmpty();
-    }
-
-    // ── 8b-2. No bytes — and WHICH kind of no bytes ──────────────────────────
-    //    Both of these used to be the same branch, writing a log line and nothing else while the
-    //    skips on either side of it wrote audit rows. See InboundAttachmentDecode for the whole
-    //    account; the end-to-end proof, from a corrupt base64 string to the audit row, is
-    //    ProcuLink.Api.Tests/Controllers/InboundEmailAttachmentDecodeTests.cs.
-
-    [Fact]
-    public async Task UndecodableAttachment_IsSkipped_AndWritesTheAuditRowNamingThatCause()
-    {
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
-        await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: orgId);
-
-        var result = await router.RouteAsync(new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "PO with a mangled attachment",
-            Attachments: new[]
-            {
-                new InboundAttachment("po.csv", "text/csv", Array.Empty<byte>(),
-                    InboundAttachmentDecode.Undecodable),
-            }), default);
-
-        result.Success.Should().BeTrue(
-            "the message is not unprocessable — one attachment is, and the status code is message-level");
-        result.CreatedOrderIds.Should().BeEmpty();
-        orders.CalledWith.Should().BeEmpty("there are no bytes to upload or parse");
-
-        var actions = await db.AuditEvents.AsNoTracking()
-            .Where(a => a.OrgId == orgId)
-            .Select(a => a.Action)
-            .ToListAsync();
-
-        actions.Should().Contain("inbound_email.attachment_skipped_undecodable",
-            "the audit row is the only product-side evidence — the sender is never told, and no order exists to look at");
-        actions.Should().NotContain("inbound_email.attachment_skipped_empty",
-            "the sender attached something; saying they attached nothing would send an operator after the wrong customer");
-    }
-
-    [Fact]
-    public async Task EmptyAttachment_IsSkipped_AndWritesTheAuditRowNamingThatCause()
-    {
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
-        await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: orgId);
-
-        var result = await router.RouteAsync(new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "PO with an empty attachment",
-            Attachments: new[]
-            {
-                new InboundAttachment("po.csv", "text/csv", Array.Empty<byte>()),
-            }), default);
-
-        result.Success.Should().BeTrue();
-        result.CreatedOrderIds.Should().BeEmpty();
-        orders.CalledWith.Should().BeEmpty();
-
-        var actions = await db.AuditEvents.AsNoTracking()
-            .Where(a => a.OrgId == orgId)
-            .Select(a => a.Action)
-            .ToListAsync();
-
-        actions.Should().Contain("inbound_email.attachment_skipped_empty");
-        actions.Should().NotContain("inbound_email.attachment_skipped_undecodable",
-            "nothing failed to decode — a zero-byte attachment decoded perfectly well");
-    }
-
-    /// <summary>
-    /// A message is not all-or-nothing. An undecodable attachment must not cost the ones beside it
-    /// that were fine — which is also why the webhook's status code cannot speak for this: there is
-    /// one status per message and many attachments per message.
-    /// </summary>
-    [Fact]
-    public async Task UndecodableAttachment_DoesNotStopItsSiblingsFromBecomingOrders()
-    {
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
-        await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: orgId);
-
-        var result = await router.RouteAsync(new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "Two POs, one mangled",
-            Attachments: new[]
-            {
-                new InboundAttachment("mangled.csv", "text/csv", Array.Empty<byte>(),
-                    InboundAttachmentDecode.Undecodable),
-                new InboundAttachment("good.csv", "text/csv", new byte[] { 1, 2, 3 }),
-            }), default);
-
-        result.CreatedOrderIds.Should().HaveCount(1);
-        orders.CalledWith.Select(c => c.FileName).Should().Equal("good.csv");
-
-        var actions = await db.AuditEvents.AsNoTracking()
-            .Where(a => a.OrgId == orgId)
-            .Select(a => a.Action)
-            .ToListAsync();
-
-        actions.Should().Contain("inbound_email.attachment_skipped_undecodable");
-        actions.Should().Contain("inbound_email.processed");
-    }
-
-    // ── 8c. No supplier at all → UNROUTED hold, not a reject ─────────────────
-    //    The webhook used to answer 422 "no supplier configured" and drop the mail
-    //    (audit inbound_email.rejected_no_supplier). It now mirrors the pull channels
-    //    (SftpIngressService / S3IngressService / EmailPollOrgJob): the attachment is
-    //    imported via CreateUnroutedStubAsync, the parse job parks it 'unrouted', and
-    //    POST /api/orders/{id}/assign-supplier resolves it later.
-
-    [Fact]
-    public async Task NoSupplierConfigured_Attachment_ImportedUnrouted_AndParseEnqueued()
-    {
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
-        // Deliberately NO supplier seeded for this org.
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "PO #98765",
-            Attachments: new[]
-            {
-                new InboundAttachment("po.csv", "text/csv", Encoding.UTF8.GetBytes("po,qty\r\nUNROUTED-1,5\r\n")),
-            });
-
-        var result = await router.RouteAsync(payload, default);
-
-        result.Success.Should().BeTrue(
-            "an org with no supplier is not an unprocessable message — the webhook must answer 200 so Postmark stops");
-        result.OrgId.Should().Be(orgId);
-        result.CreatedOrderIds.Should().HaveCount(1);
-
-        orders.UnroutedCalledWith.Should().HaveCount(1,
-            "with no supplier the attachment must go through the unrouted hold path");
-        orders.UnroutedCalledWith[0].OrgId.Should().Be(orgId);
-        orders.UnroutedCalledWith[0].FileName.Should().Be("po.csv");
-        orders.RoutedCalledWith.Should().BeEmpty(
-            "an order must never be routed to a supplier that does not exist");
-
-        enqueuer.Calls.Should().HaveCount(1,
-            "the unrouted order still needs a parse job — the parse parks it 'unrouted'");
-        enqueuer.Calls[0].OrderId.Should().Be(result.CreatedOrderIds[0]);
-    }
-
-    [Fact]
-    public async Task NoSupplierConfigured_WritesUnroutedAudit_NotRejectedAudit()
-    {
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
-
-        var orders = new FakeOrderService();
-        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: orgId);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "PO #98765",
-            Attachments: new[]
-            {
-                new InboundAttachment("po.csv", "text/csv", Encoding.UTF8.GetBytes("po,qty\r\nA,1\r\n")),
-            });
-
-        await router.RouteAsync(payload, default);
-
-        var actions = await db.AuditEvents.AsNoTracking()
-            .Where(a => a.OrgId == orgId)
-            .Select(a => a.Action)
-            .ToListAsync();
-
-        actions.Should().Contain("inbound_email.unrouted_no_supplier",
-            "operators need an audit trail explaining why the order arrived without a supplier");
-        actions.Should().NotContain("inbound_email.rejected_no_supplier",
-            "the reject is gone — the message is held, not dropped");
-        actions.Should().Contain("inbound_email.processed");
-    }
-
-    [Fact]
-    public async Task OnlySoftDeletedSupplier_ImportsUnrouted_NeverRoutesToDeletedSupplier()
-    {
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
-        db.Suppliers.Add(new Supplier
-        {
-            Id = Guid.NewGuid(),
-            OrgId = orgId,
-            Name = "Retired supplier",
-            CreatedAt = DateTime.UtcNow.AddDays(-30),
-            DeletedAt = DateTime.UtcNow.AddMinutes(-5),
-        });
-        await db.SaveChangesAsync();
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "PO after supplier removal",
-            Attachments: new[]
-            {
-                new InboundAttachment("po.csv", "text/csv", Encoding.UTF8.GetBytes("po,qty\r\nB,2\r\n")),
-            });
-
-        var result = await router.RouteAsync(payload, default);
-
-        result.Success.Should().BeTrue();
-        orders.UnroutedCalledWith.Should().HaveCount(1,
-            "a soft-deleted supplier degrades to the unrouted hold instead of dropping the mail");
-        orders.RoutedCalledWith.Should().BeEmpty();
-        enqueuer.Calls.Should().HaveCount(1);
-    }
-
-    [Fact]
-    public async Task ActiveSuppliersButNoDefault_ImportsUnrouted_NeverPicksOneForTheOrg()
-    {
-        // The org owns two perfectly usable suppliers and has named neither as its
-        // Email-intake default. The router used to take the OLDEST — measured doing exactly
-        // that on production (routing-matrix proof, F1), attributing a real purchase order to
-        // a counterparty nobody chose. Owning suppliers is not the same as saying which one
-        // an unaddressed email belongs to, so the message parks for a human instead.
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
-        db.Suppliers.Add(new Supplier
-        {
-            Id = Guid.NewGuid(), OrgId = orgId, Name = "Oldest supplier",
-            CreatedAt = DateTime.UtcNow.AddDays(-30),
-        });
-        db.Suppliers.Add(new Supplier
-        {
-            Id = Guid.NewGuid(), OrgId = orgId, Name = "Newer supplier",
-            CreatedAt = DateTime.UtcNow.AddDays(-1),
-        });
-        await db.SaveChangesAsync();
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "PO with no default supplier set",
-            Attachments: new[]
-            {
-                new InboundAttachment("po.csv", "text/csv", Encoding.UTF8.GetBytes("po,qty\r\nC,3\r\n")),
-            });
-
-        var result = await router.RouteAsync(payload, default);
-
-        result.Success.Should().BeTrue("parking is not a rejection — Postmark still gets its 200");
-        orders.UnroutedCalledWith.Should().HaveCount(1);
-        orders.RoutedCalledWith.Should().BeEmpty(
-            "no supplier was chosen by the org, so none may be chosen on its behalf");
-        enqueuer.Calls.Should().HaveCount(1);
-    }
-
-    [Fact]
-    public async Task NoSupplierConfigured_BodyOnlyEmail_CreatesUnroutedOrder()
-    {
-        // The gap this used to pin is closed. The body-NLP fallback no longer needs a
-        // supplier to persist: with none configured it takes the unrouted sibling
-        // (CreateUnroutedStubFromParsedOrderAsync), exactly as the attachment path takes
-        // CreateUnroutedStubAsync. A prose-only email to a supplier-less org now lands as
-        // a real order parked 'unrouted' for the assign-supplier flow to resolve, instead
-        // of being accepted, audited and silently dropped.
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-        var extractor = new FakeBodyExtractor(new EmailBodyExtractionResult(
-            Success: true,
-            Confidence: 0.9,
-            Order: new ExtractedOrder(
-                PoNumber: "PO-BODY-NOSUP",
-                OrderDate: new DateTime(2026, 7, 24),
-                BuyerName: "Acme Buyer",
-                Currency: "EUR",
-                Lines: new[] { new ExtractedOrderLine(1, "WIDGET-A", "Widget A", 1m, "pcs", 1m) }),
-            FailureReason: null));
-
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId, extractor: extractor);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "Order request (no attachment)",
-            Attachments: Array.Empty<InboundAttachment>(),
-            Body: "Please send 1 WIDGET-A.");
-
-        var result = await router.RouteAsync(payload, default);
-
-        result.Success.Should().BeTrue("the message is accepted — Postmark must not retry it");
-        result.CreatedOrderIds.Should().HaveCount(1,
-            "a prose-only order to a supplier-less org is held for routing, not dropped");
-        extractor.Calls.Should().Be(1, "the extraction is now persistable, so it is worth running");
-
-        // The ROUTED persist path must not have been used — it would have needed a
-        // supplier id, and there is none to invent.
-        orders.ParsedOrderCalls.Should().BeEmpty();
-        orders.UnroutedParsedOrderCalls.Should().HaveCount(1);
-        orders.UnroutedParsedOrderCalls[0].OrgId.Should().Be(orgId);
-        orders.UnroutedParsedOrderCalls[0].Source.Should().Be("email_body_nlp");
-        orders.UnroutedParsedOrderCalls[0].Order.PoNumber.Should().Be("PO-BODY-NOSUP");
-
-        // No parse job — the order is already populated; there is no source file to parse.
-        enqueuer.Calls.Should().BeEmpty();
-
-        var actions = await db.AuditEvents.Select(a => a.Action).ToListAsync();
-        actions.Should().Contain("inbound_email.processed");
-    }
-
-    [Fact]
-    public async Task ReadOnlyTenant_WithNoSupplier_StillReturnsFailure()
-    {
-        // The unrouted hold must not weaken the account-status gate: a read-only org
-        // is still an unprocessable message, supplier or no supplier.
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.ReadOnly);
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "PO for a frozen account",
-            Attachments: new[]
-            {
-                new InboundAttachment("po.csv", "text/csv", Encoding.UTF8.GetBytes("po,qty\r\nC,3\r\n")),
-            });
-
-        var result = await router.RouteAsync(payload, default);
-
-        result.Success.Should().BeFalse();
-        orders.UnroutedCalledWith.Should().BeEmpty();
-        orders.RoutedCalledWith.Should().BeEmpty();
-        enqueuer.Calls.Should().BeEmpty();
-    }
-
-    // ── 9. Email-body NLP fallback ───────────────────────────────────────────
-
-    [Fact]
-    public async Task BodyExtractionPath_NoAttachments_CreatesStubFromExtractedOrder()
-    {
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
-        await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-
-        // Extractor returns a successful extraction — the router must call
-        // CreateStubFromParsedOrderAsync (NOT CreateStubAsync) and report the
-        // resulting order id back to the caller.
-        var extractedOrder = new ExtractedOrder(
-            PoNumber:  "PO-FROM-BODY-001",
-            OrderDate: new DateTime(2026, 5, 28),
-            BuyerName: "Acme Buyer",
-            Currency:  "EUR",
-            Lines: new[]
-            {
-                new ExtractedOrderLine(1, "WIDGET-A", "Widget A blue", 10m, "pcs", 2.50m),
-                new ExtractedOrderLine(2, "WIDGET-B", "Widget B red",   5m, "pcs", 3.00m),
-            });
-        var extractor = new FakeBodyExtractor(
-            new EmailBodyExtractionResult(Success: true, Confidence: 0.85, Order: extractedOrder, FailureReason: null));
-
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId, extractor: extractor);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "Order request (no attachment)",
-            Attachments: Array.Empty<InboundAttachment>(),
-            Body: "Hi team, please send 10 of WIDGET-A at 2.50 EUR and 5 of WIDGET-B at 3.00 EUR. Thanks!");
-
-        var result = await router.RouteAsync(payload, default);
-
-        result.Success.Should().BeTrue();
-        result.OrgId.Should().Be(orgId);
-        result.CreatedOrderIds.Should().HaveCount(1,
-            "the extractor returned a usable order from the email body");
-
-        // The body path uses the new CreateStubFromParsedOrderAsync — the
-        // attachment path (CreateStubAsync) must not have been invoked.
-        orders.CalledWith.Should().BeEmpty();
-        orders.ParsedOrderCalls.Should().HaveCount(1);
-        orders.ParsedOrderCalls[0].OrgId.Should().Be(orgId);
-        orders.ParsedOrderCalls[0].Source.Should().Be("email_body_nlp");
-        orders.ParsedOrderCalls[0].Order.PoNumber.Should().Be("PO-FROM-BODY-001");
-        orders.ParsedOrderCalls[0].Order.Lines.Should().HaveCount(2);
-
-        // No parse job — the order is already populated, there is nothing to parse.
-        enqueuer.Calls.Should().BeEmpty();
-
-        extractor.Calls.Should().Be(1);
-    }
-
-    // ── 10. Local-part addressing — {slug}@{InboundDomain} ───────────────────
 
     [Fact]
     public async Task LocalPartAddressing_RoutesToOrg_WhenInboundDomainConfigured()
@@ -745,10 +50,7 @@ public class InboundEmailRouterTests
         await using var db = CreateDb();
         var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
         var supplierId = await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId,
+        var router = MakeRouter(db, slug: Slug, orgId: orgId,
             inboundDomain: "orders.proculink.eu");
 
         // Slug is the LOCAL part; host is the single fixed inbound domain.
@@ -763,14 +65,10 @@ public class InboundEmailRouterTests
 
         var result = await router.RouteAsync(payload, default);
 
-        result.Success.Should().BeTrue();
+        result.Success.Should().BeFalse("an organisation-level address no longer receives documents");
+        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Transient);
         result.OrgId.Should().Be(orgId);
-        result.CreatedOrderIds.Should().HaveCount(1);
-        orders.CalledWith.Should().HaveCount(1);
-        orders.CalledWith[0].SupplierId.Should().Be(supplierId);
     }
-
-    // ── 10b. Plus-addressing tag is stripped from the local-part slug ────────
 
     [Fact]
     public async Task LocalPartAddressing_StripsPlusTag()
@@ -778,10 +76,7 @@ public class InboundEmailRouterTests
         await using var db = CreateDb();
         var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
         await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId,
+        var router = MakeRouter(db, slug: Slug, orgId: orgId,
             inboundDomain: "orders.proculink.eu");
 
         // "acme+urgent@orders.proculink.eu" must still resolve to org "acme".
@@ -796,12 +91,10 @@ public class InboundEmailRouterTests
 
         var result = await router.RouteAsync(payload, default);
 
-        result.Success.Should().BeTrue();
+        result.Success.Should().BeFalse("an organisation-level address no longer receives documents");
+        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Transient);
         result.OrgId.Should().Be(orgId);
-        result.CreatedOrderIds.Should().HaveCount(1);
     }
-
-    // ── 10c. Subdomain scheme still works even when InboundDomain is set ─────
 
     [Fact]
     public async Task SubdomainAddressing_StillWorks_WhenInboundDomainConfigured()
@@ -809,12 +102,9 @@ public class InboundEmailRouterTests
         await using var db = CreateDb();
         var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
         await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
         // InboundDomain configured, but the recipient uses the legacy subdomain
         // scheme — it must still resolve (back-compat).
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId,
+        var router = MakeRouter(db, slug: Slug, orgId: orgId,
             inboundDomain: "orders.proculink.eu");
 
         var payload = new InboundEmailPayload(
@@ -828,12 +118,10 @@ public class InboundEmailRouterTests
 
         var result = await router.RouteAsync(payload, default);
 
-        result.Success.Should().BeTrue();
+        result.Success.Should().BeFalse("an organisation-level address no longer receives documents");
+        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Transient);
         result.OrgId.Should().Be(orgId);
-        result.CreatedOrderIds.Should().HaveCount(1);
     }
-
-    // ── 10d. Local-part rejection cases ──────────────────────────────────────
 
     [Theory]
     [InlineData("+@orders.proculink.eu")]        // empty slug after stripping the +tag
@@ -843,10 +131,7 @@ public class InboundEmailRouterTests
         await using var db = CreateDb();
         var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
         await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId,
+        var router = MakeRouter(db, slug: Slug, orgId: orgId,
             inboundDomain: "orders.proculink.eu");
 
         var payload = new InboundEmailPayload(
@@ -861,46 +146,6 @@ public class InboundEmailRouterTests
         var result = await router.RouteAsync(payload, default);
 
         result.Success.Should().BeFalse("the local part does not resolve to a valid tenant slug");
-        result.CreatedOrderIds.Should().BeEmpty();
-        orders.CalledWith.Should().BeEmpty();
-        enqueuer.Calls.Should().BeEmpty();
-    }
-
-    // ── 11. GDPR: the processed audit row is keyed to the created order ──────
-    // Finding #8: the inbound-email audit must be erasable via the per-order erase
-    // path, which finds audit rows by EntityId == orderId. A single-attachment email
-    // creates exactly one order, so the "processed" audit MUST carry EntityId == that
-    // order id (previously it was Guid.Empty and survived erasure forever).
-    [Fact]
-    public async Task ProcessedAudit_IsKeyedToCreatedOrder_SoErasureRemovesIt()
-    {
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
-        await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "PO #12345 — confidential pricing",
-            Attachments: new[]
-            {
-                new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }),
-            });
-
-        var result = await router.RouteAsync(payload, default);
-
-        result.CreatedOrderIds.Should().HaveCount(1);
-        var orderId = result.CreatedOrderIds[0];
-
-        var processed = await db.AuditEvents
-            .SingleAsync(e => e.Action == "inbound_email.processed");
-        processed.EntityId.Should().Be(orderId,
-            "the processed audit must be keyed to the order so the erase path removes it");
-        processed.OrgId.Should().Be(orgId);
     }
 
     // ── 11b. GDPR: the audit payload omits raw sender email + subject ────────
@@ -927,106 +172,11 @@ public class InboundEmailRouterTests
             "the sender is stored only as a one-way hash for correlation/diagnostics");
     }
 
-    // ── 12. Log levels — routine chatter at Debug, rejects at Warning ────────
-    // The webhook fires on every message an org receives (including the ones that
-    // carry nothing but a signature image). Production runs at Default=Information,
-    // so anything routine must sit at Debug to stay out of the log; anything an
-    // operator has to act on must sit at Warning to stay visible.
-
-    [Fact]
-    public async Task NoAttachmentsNotice_IsLoggedAtDebug()
-    {
-        var log = await RunAndCaptureLogAsync(
-            AccountStatusConstants.Active,
-            Array.Empty<InboundAttachment>());
-
-        log.LevelOf("carried no attachments").Should().Be(LogLevel.Debug,
-            "an attachment-less email is routine — the body-NLP fallback note is diagnostics, not news");
-    }
-
-    [Fact]
-    public async Task UnsupportedAttachmentSkip_IsLoggedAtDebug()
-    {
-        var log = await RunAndCaptureLogAsync(
-            AccountStatusConstants.Active,
-            new[] { new InboundAttachment("signature.png", "image/png", new byte[] { 1, 2, 3 }) });
-
-        log.LevelOf("skipped: unsupported type").Should().Be(LogLevel.Debug,
-            "email signatures and logos ride along on nearly every message — skipping them is expected");
-    }
-
-    [Fact]
-    public async Task UndecodableAttachmentSkip_IsLoggedAtWarning()
-    {
-        var log = await RunAndCaptureLogAsync(
-            AccountStatusConstants.Active,
-            new[]
-            {
-                new InboundAttachment("po.csv", "text/csv", Array.Empty<byte>(),
-                    InboundAttachmentDecode.Undecodable),
-            });
-
-        log.LevelOf("could not be decoded").Should().Be(LogLevel.Warning,
-            "a purchase order arrived and could not be read — that is not routine chatter, and the sender is never told");
-    }
-
-    [Fact]
-    public async Task EmptyAttachmentSkip_IsLoggedAtWarning()
-    {
-        var log = await RunAndCaptureLogAsync(
-            AccountStatusConstants.Active,
-            new[] { new InboundAttachment("po.csv", "text/csv", Array.Empty<byte>()) });
-
-        log.LevelOf("has empty content").Should().Be(LogLevel.Warning,
-            "an empty attachment on a .csv named like a PO is a sender-side mistake somebody has to chase");
-    }
-
-    [Fact]
-    public async Task BodyExtractionYieldingNoOrder_IsLoggedAtDebug()
-    {
-        var log = await RunAndCaptureLogAsync(
-            AccountStatusConstants.Active,
-            Array.Empty<InboundAttachment>(),
-            body: "Hi, just checking in on last week's order. Thanks!");
-
-        log.LevelOf("did not yield an order").Should().Be(LogLevel.Debug,
-            "most prose emails are not orders, and the extractor is a no-op without an AI key");
-    }
-
-    [Fact]
-    public async Task BlockedAccountStatus_IsLoggedAtWarning()
-    {
-        var log = await RunAndCaptureLogAsync(
-            AccountStatusConstants.ReadOnly,
-            new[] { new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }) });
-
-        log.LevelOf("blocks ingest").Should().Be(LogLevel.Warning,
-            "the message is rejected and the sender is never told — the operator must see it");
-    }
-
-    [Fact]
-    public async Task CreatedOrder_StaysAtInformation()
-    {
-        var log = await RunAndCaptureLogAsync(
-            AccountStatusConstants.Active,
-            new[] { new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }) });
-
-        log.LevelOf("created routed order").Should().Be(LogLevel.Information,
-            "one line per order actually created is the operational trail, not chatter");
-    }
-
-    // ── 13. Retry contract — what the mail provider is told to do next ───────
-    // Postmark retries every non-200 response ten times over ~10.5 hours and only
-    // then files the message under Failed (where a human can still re-fire it).
-    // So each reject branch has to answer one question: could re-sending this exact
-    // message ever work? Sender-side faults say no; our own outages say yes.
-
     [Fact]
     public async Task UnparseableRecipient_IsPermanent_BecauseNoRetryCanChangeTheAddress()
     {
         await using var db = CreateDb();
-        var orders = new FakeOrderService();
-        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: Guid.NewGuid());
+        var router = MakeRouter(db, slug: Slug, orgId: Guid.NewGuid());
 
         var payload = new InboundEmailPayload(
             FromEmail: "buyer@example.com",
@@ -1045,8 +195,7 @@ public class InboundEmailRouterTests
     public async Task UnknownTenantSlug_IsPermanent_SoStrayMailIsNotDeliveredTenTimes()
     {
         await using var db = CreateDb();
-        var orders = new FakeOrderService();
-        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: Guid.NewGuid());
+        var router = MakeRouter(db, slug: Slug, orgId: Guid.NewGuid());
 
         var payload = new InboundEmailPayload(
             FromEmail: "buyer@example.com",
@@ -1063,114 +212,6 @@ public class InboundEmailRouterTests
     }
 
     [Fact]
-    public async Task MissingOrganisation_IsTransient_SoFixingTheMappingStillLandsTheOrder()
-    {
-        // The address row resolved but the org row is gone — that is our own inconsistency, not a
-        // bad address, and the operator can repair it inside the retry window.
-        await using var db = CreateDb();
-        var orders = new FakeOrderService();
-        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: Guid.NewGuid());
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "PO for a vanished org",
-            Attachments: Array.Empty<InboundAttachment>());
-
-        var result = await router.RouteAsync(payload, default);
-
-        result.Success.Should().BeFalse();
-        result.OrgId.Should().NotBeNull("the slug did resolve — the organisation behind it is what is missing");
-        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Transient);
-    }
-
-    [Fact]
-    public async Task ReadOnlyTenant_IsTransient_SoLiftingTheBlockLandsTheOrder()
-    {
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.ReadOnly);
-        await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: orgId);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "PO during read-only",
-            Attachments: new[]
-            {
-                new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }),
-            });
-
-        var result = await router.RouteAsync(payload, default);
-
-        result.Success.Should().BeFalse();
-        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Transient,
-            "a frozen account is a billing state a human clears in minutes — the retries are the grace window");
-    }
-
-    [Fact]
-    public async Task TrialExpiredTenant_IsTransient_ForTheSameReasonAsReadOnly()
-    {
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.TrialExpired);
-        await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: orgId);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "PO after the trial ran out",
-            Attachments: new[]
-            {
-                new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }),
-            });
-
-        var result = await router.RouteAsync(payload, default);
-
-        result.Success.Should().BeFalse();
-        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Transient);
-    }
-
-    [Fact]
-    public async Task BlockedAccountStatus_WritesItsAuditRow_SoTheRefusalIsNeverInvisible()
-    {
-        // The audit row is the only product-side evidence that a message arrived and
-        // was refused — the sender is never told, and no order exists to look at.
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.ReadOnly);
-        await SeedSupplierAsync(db, orgId);
-
-        var router = MakeRouter(db, new FakeOrderService(), new RecordingEnqueuer(), slug: Slug, orgId: orgId);
-
-        await router.RouteAsync(new InboundEmailPayload(
-            FromEmail: "buyer@example.com",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "PO for a frozen account",
-            Attachments: new[]
-            {
-                new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }),
-            }), default);
-
-        var actions = await db.AuditEvents.AsNoTracking()
-            .Where(a => a.OrgId == orgId)
-            .Select(a => a.Action)
-            .ToListAsync();
-
-        actions.Should().Contain("inbound_email.rejected_read_only");
-    }
-
-    // ── Tenant selection is by credential, not by anything the sender chose ───
-    //
-    // The defect: the recipient's LOCAL PART used to be matched against organisations.slug — a
-    // company name plus four hex characters — so mailing a guessed address filed purchase orders
-    // into a stranger's inbox, with no credential involved at all. These four pin the closure at
-    // the router, where the decision is actually consumed.
-
-    [Fact]
     public async Task SlugAddressedMail_IsRefused_WhenNoAddressWasIssuedForThatSlug()
     {
         await using var db = CreateDb();
@@ -1182,10 +223,7 @@ public class InboundEmailRouterTests
         var org = await db.Organisations.SingleAsync(o => o.Id == orgId);
         org.Slug = "acme-a1b2";
         await db.SaveChangesAsync();
-
-        var orders = new FakeOrderService();
-        var enqueuer = new RecordingEnqueuer();
-        var router = MakeRouter(db, orders, enqueuer, slug: Slug, orgId: orgId);
+        var router = MakeRouter(db, slug: Slug, orgId: orgId);
 
         var result = await router.RouteAsync(new InboundEmailPayload(
             FromEmail: "stranger@example.com",
@@ -1199,8 +237,6 @@ public class InboundEmailRouterTests
             "the slug is public and guessable; resolving on it is what let a stranger address " +
             "another tenant's inbox");
         result.RejectionKind.Should().Be(InboundEmailRejectionKind.Permanent);
-        orders.CalledWith.Should().BeEmpty("no order may be created for an unissued address");
-        enqueuer.Calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -1216,10 +252,8 @@ public class InboundEmailRouterTests
         {
             ["Inbound:Postmark:TenantMapping:injected"] = orgId.ToString(),
         });
-
-        var orders = new FakeOrderService();
         var router = new InboundEmailRouter(
-            db, orders, new RecordingEnqueuer(), FakeBodyExtractor.NoOp,
+            db,
             InboundAddressTestHarness.Create(db, config), PermissiveBilling(), config,
             NullLogger<InboundEmailRouter>.Instance);
 
@@ -1231,7 +265,6 @@ public class InboundEmailRouterTests
 
         result.Success.Should().BeFalse();
         result.OrgId.Should().BeNull();
-        orders.CalledWith.Should().BeEmpty();
     }
 
     [Fact]
@@ -1249,7 +282,7 @@ public class InboundEmailRouterTests
         });
 
         var router = new InboundEmailRouter(
-            db, new FakeOrderService(), new RecordingEnqueuer(), FakeBodyExtractor.NoOp,
+            db,
             InboundAddressTestHarness.Create(db, broken), PermissiveBilling(), broken,
             NullLogger<InboundEmailRouter>.Instance);
 
@@ -1274,7 +307,7 @@ public class InboundEmailRouterTests
 
         const string secretAddress = "deadbeefdeadbeefdeadbeefdeadbeef";
         var logger = new RecordingLogger();
-        var router = MakeRouter(db, new FakeOrderService(), new RecordingEnqueuer(),
+        var router = MakeRouter(db,
             slug: Slug, orgId: orgId, logger: logger);
 
         await router.RouteAsync(new InboundEmailPayload(
@@ -1291,34 +324,52 @@ public class InboundEmailRouterTests
             "the rejection has to be greppable without printing the credential that was presented");
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
+    [Theory]
+    [InlineData("orders@acme.example", "acme.example")]
+    [InlineData("Orders@ACME.eXaMpLe", "acme.example")]
+    [InlineData("\"Acme Orders\" <orders@mail.acme.example>", "mail.acme.example")]
+    [InlineData("a.person+tag@acme.example", "acme.example")]
+    public void ExtractSenderDomain_keepsOnlyTheDomain(string from, string expected)
+    {
+        // The local part is the half that identifies a PERSON. It must not survive this call —
+        // the full address keeps its existing SHA-256-only treatment and nothing else.
+        Assert.Equal(expected, InboundEmailRouter.ExtractSenderDomain(from));
+    }
 
-    /// <summary>
-    /// Routes one payload through a router wired to a <see cref="RecordingLogger"/>
-    /// and returns the captured log so a test can assert the level of a single line.
-    /// </summary>
-    private static async Task<RecordingLogger> RunAndCaptureLogAsync(
-        string accountStatus,
-        IReadOnlyList<InboundAttachment> attachments,
-        string? body = null)
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("not-an-address")]
+    [InlineData("someone@localhost")]   // no dot: a host name, never a shared match key
+    [InlineData("someone@")]
+    public void ExtractSenderDomain_returnsNull_forAnythingThatIsNotClearlyADomain(string? from)
+    {
+        Assert.Null(InboundEmailRouter.ExtractSenderDomain(from));
+    }
+
+    [Fact]
+    public async Task OrganisationAddress_IsRefusedTransient_AndAuditedSoTheMailStaysRefireable()
     {
         await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, accountStatus);
-        await SeedSupplierAsync(db, orgId);
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+        var router = MakeRouter(db, slug: Slug, orgId: orgId);
 
-        var logger = new RecordingLogger();
-        var router = MakeRouter(db, new FakeOrderService(), new RecordingEnqueuer(),
-            slug: Slug, orgId: orgId, logger: logger);
-
-        await router.RouteAsync(new InboundEmailPayload(
+        var result = await router.RouteAsync(new InboundEmailPayload(
             FromEmail: "buyer@example.com",
             ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "PO #12345",
-            Attachments: attachments,
-            Body: body), default);
+            Subject:   "PO to the organisation address",
+            Attachments: new[] { new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }) }),
+            default);
 
-        return logger;
+        result.Success.Should().BeFalse();
+        result.OrgId.Should().Be(orgId);
+        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Transient,
+            "Permanent would settle the mail as handled, which here would be silent loss");
+        db.AuditEvents.Should().ContainSingle(a => a.OrgId == orgId && a.Action == "inbound_email.rejected_orders_retired");
     }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>
     /// An <see cref="IBillingService"/> that says yes, for the tests whose subject is NOT the
@@ -1341,11 +392,8 @@ public class InboundEmailRouterTests
 
     private static InboundEmailRouter MakeRouter(
         ProcuLinkDbContext db,
-        IClaimedOrderCreator orders,
-        IParseJobEnqueuer enqueuer,
         string slug,
         Guid orgId,
-        IEmailBodyOrderExtractor? extractor = null,
         string? inboundDomain = null,
         ILogger<InboundEmailRouter>? logger = null,
         IBillingService? billing = null)
@@ -1363,8 +411,7 @@ public class InboundEmailRouterTests
         InboundAddressTestHarness.SeedAddress(db, orgId, slug, config);
 
         return new InboundEmailRouter(
-            db, orders, enqueuer,
-            extractor ?? FakeBodyExtractor.NoOp,
+            db,
             InboundAddressTestHarness.Create(db, config),
             billing ?? PermissiveBilling(),
             config,
@@ -1419,249 +466,6 @@ public class InboundEmailRouterTests
         return new InboundEmailTestDbContext(options);
     }
 
-    // ── Doubles ──────────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Records the args passed to <see cref="IOrderService.CreateStubAsync"/>
-    /// and returns a successful stub. Other methods throw — the router must
-    /// not touch them.
-    /// </summary>
-    // ── Sender-domain capture (founder ruling D2) ────────────────────────────
-
-    [Theory]
-    [InlineData("orders@acme.example", "acme.example")]
-    [InlineData("Orders@ACME.eXaMpLe", "acme.example")]
-    [InlineData("\"Acme Orders\" <orders@mail.acme.example>", "mail.acme.example")]
-    [InlineData("a.person+tag@acme.example", "acme.example")]
-    public void ExtractSenderDomain_keepsOnlyTheDomain(string from, string expected)
-    {
-        // The local part is the half that identifies a PERSON. It must not survive this call —
-        // the full address keeps its existing SHA-256-only treatment and nothing else.
-        Assert.Equal(expected, InboundEmailRouter.ExtractSenderDomain(from));
-    }
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    [InlineData("not-an-address")]
-    [InlineData("someone@localhost")]   // no dot: a host name, never a shared match key
-    [InlineData("someone@")]
-    public void ExtractSenderDomain_returnsNull_forAnythingThatIsNotClearlyADomain(string? from)
-    {
-        Assert.Null(InboundEmailRouter.ExtractSenderDomain(from));
-    }
-
-    [Fact]
-    public async Task RoutedAttachment_passesTheSenderDomainToOrderCreation()
-    {
-        // Captured on ROUTED orders too, and that is the point: an order whose supplier is already
-        // known is exactly what teaches the domain→supplier history the next UNROUTED one is
-        // scored against. Capture only the unrouted ones and the signal never accumulates.
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
-        await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: orgId);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "Orders@ACME.example",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "PO #12345",
-            Attachments: new[]
-            {
-                new InboundAttachment("po.csv", "text/csv", Encoding.UTF8.GetBytes("po,date\r\n001,2026-05-28")),
-            });
-
-        var result = await router.RouteAsync(payload, default);
-
-        result.Success.Should().BeTrue();
-        orders.SenderDomains.Should().ContainSingle().Which.Should().Be("acme.example");
-    }
-
-    [Fact]
-    public async Task Attachment_fromAnUnparseableSenderAddress_passesNoDomain()
-    {
-        await using var db = CreateDb();
-        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
-        await SeedSupplierAsync(db, orgId);
-
-        var orders = new FakeOrderService();
-        var router = MakeRouter(db, orders, new RecordingEnqueuer(), slug: Slug, orgId: orgId);
-
-        var payload = new InboundEmailPayload(
-            FromEmail: "not-an-address",
-            ToEmail:   $"orders@{Slug}.proculink.eu",
-            Subject:   "PO #12345",
-            Attachments: new[]
-            {
-                new InboundAttachment("po.csv", "text/csv", Encoding.UTF8.GetBytes("po,date\r\n001,2026-05-28")),
-            });
-
-        await router.RouteAsync(payload, default);
-
-        orders.SenderDomains.Should().ContainSingle().Which.Should().BeNull();
-    }
-
-    private sealed class FakeOrderService : IOrderService, IClaimedOrderCreator
-    {
-        // ── IClaimedOrderCreator ────────────────────────────────────────────────────────────────
-        // The router creates under the id its WP-22 dedupe claim pre-generated, and carries the
-        // routed/unrouted decision as a nullable supplier id on one method rather than two entry
-        // points. These forward to the existing recorders so every assertion in this suite — which
-        // path ran, with what sender domain — keeps its meaning unchanged.
-
-        public Task<Result<PurchaseOrderEntity>> CreateClaimedStubAsync(
-            Guid organisationId, Guid? supplierId, Guid orderId, Stream fileStream, string filename,
-            string contentType, string? inboundSenderDomain, CancellationToken ct)
-            => supplierId is { } routed
-                ? CreateStubAsync(organisationId, routed, fileStream, filename, contentType, ct, inboundSenderDomain)
-                : CreateUnroutedStubAsync(organisationId, fileStream, filename, contentType, ct, inboundSenderDomain);
-
-        public Task<Result<PurchaseOrderEntity>> CreateClaimedFromParsedOrderAsync(
-            Guid organisationId, Guid? supplierId, Guid orderId, ExtractedOrder order, string source,
-            string? inboundSenderDomain, CancellationToken ct)
-            => supplierId is { } routed
-                ? CreateStubFromParsedOrderAsync(organisationId, routed, order, source, ct, inboundSenderDomain)
-                : CreateUnroutedStubFromParsedOrderAsync(organisationId, order, source, ct, inboundSenderDomain);
-
-        /// <summary>Every stub creation, routed and unrouted alike (unrouted records Guid.Empty).</summary>
-        public List<(Guid OrgId, Guid SupplierId, string FileName, string ContentType, long Size)> CalledWith { get; } = new();
-        /// <summary>Only the routed calls — <c>CreateStubAsync</c> with a real supplier.</summary>
-        public List<(Guid OrgId, Guid SupplierId, string FileName, string ContentType, long Size)> RoutedCalledWith { get; } = new();
-        /// <summary>Only the unrouted-hold calls — <c>CreateUnroutedStubAsync</c>, no supplier.</summary>
-        public List<(Guid OrgId, string FileName, string ContentType, long Size)> UnroutedCalledWith { get; } = new();
-        public List<(Guid OrgId, Guid SupplierId, ExtractedOrder Order, string Source)> ParsedOrderCalls { get; } = new();
-        public List<(Guid OrgId, ExtractedOrder Order, string Source)> UnroutedParsedOrderCalls { get; } = new();
-        /// <summary>Sender domain handed to EVERY creation path, in call order. Null entries are real.</summary>
-        public List<string?> SenderDomains { get; } = new();
-
-        public Task<Result<PurchaseOrderEntity>> CreateStubAsync(
-            Guid organisationId, Guid supplierId, Stream fileStream,
-            string filename, string contentType, CancellationToken ct, string? inboundSenderDomain = null)
-        {
-            SenderDomains.Add(inboundSenderDomain);
-            var stub = Record(organisationId, supplierId, fileStream, filename, contentType, out var size);
-            RoutedCalledWith.Add((organisationId, supplierId, filename, contentType, size));
-            return Task.FromResult(Result<PurchaseOrderEntity>.Ok(stub));
-        }
-
-        // Unrouted hold path records a Guid.Empty supplier in CalledWith and its own
-        // UnroutedCalledWith entry, so a test can assert WHICH creation path ran.
-        public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubAsync(
-            Guid organisationId, Stream fileStream, string filename, string contentType, CancellationToken ct,
-            string? inboundSenderDomain = null)
-        {
-            SenderDomains.Add(inboundSenderDomain);
-            var stub = Record(organisationId, Guid.Empty, fileStream, filename, contentType, out var size);
-            stub.SupplierId = null;
-            UnroutedCalledWith.Add((organisationId, filename, contentType, size));
-            return Task.FromResult(Result<PurchaseOrderEntity>.Ok(stub));
-        }
-
-        private PurchaseOrderEntity Record(
-            Guid organisationId, Guid supplierId, Stream fileStream,
-            string filename, string contentType, out long size)
-        {
-            // Drain the stream so we record the actual byte count the router sent.
-            using var ms = new MemoryStream();
-            fileStream.CopyTo(ms);
-            size = ms.Length;
-            CalledWith.Add((organisationId, supplierId, filename, contentType, size));
-
-            return new PurchaseOrderEntity
-            {
-                Id = Guid.NewGuid(),
-                OrgId = organisationId,
-                SupplierId = supplierId,
-                Status = "parsing",
-                SourceFileKey = $"{organisationId}/{Guid.NewGuid()}/{filename}",
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
-            };
-        }
-
-        public Task<Result<PurchaseOrderEntity>> CreateStubFromParsedOrderAsync(
-            Guid organisationId, Guid supplierId, ExtractedOrder order, string source, CancellationToken ct,
-            string? inboundSenderDomain = null)
-        {
-            SenderDomains.Add(inboundSenderDomain);
-            ParsedOrderCalls.Add((organisationId, supplierId, order, source));
-            return Task.FromResult(Result<PurchaseOrderEntity>.Ok(
-                ParsedStub(organisationId, supplierId, "pending_review")));
-        }
-
-        // Supplier-less sibling of the above — the body-NLP path takes this when the org has
-        // no resolvable supplier. Recorded separately so a test can assert WHICH path ran.
-        public Task<Result<PurchaseOrderEntity>> CreateUnroutedStubFromParsedOrderAsync(
-            Guid organisationId, ExtractedOrder order, string source, CancellationToken ct,
-            string? inboundSenderDomain = null)
-        {
-            SenderDomains.Add(inboundSenderDomain);
-            UnroutedParsedOrderCalls.Add((organisationId, order, source));
-            return Task.FromResult(Result<PurchaseOrderEntity>.Ok(
-                ParsedStub(organisationId, supplierId: null, "unrouted")));
-        }
-
-        private static PurchaseOrderEntity ParsedStub(Guid organisationId, Guid? supplierId, string status) => new()
-        {
-            Id = Guid.NewGuid(),
-            OrgId = organisationId,
-            SupplierId = supplierId,
-            Status = status,
-            SourceFileKey = null,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        };
-
-        public Task<Result<PurchaseOrderEntity>> CreateFromFileAsync(Guid organisationId, Guid supplierId, Stream fileStream, string filename, string contentType, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<ParsedFileOutput>> ParseStoredFileAsync(Guid organisationId, Guid orderId, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> GetByIdAsync(Guid organisationId, Guid orderId, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<IReadOnlyList<PurchaseOrderSummary>>> ListAsync(Guid organisationId, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>> ListPagedAsync(Guid organisationId, int page, int pageSize, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>> ListWindowAsync(Guid organisationId, int skip, int take, string? status, Guid? supplierId, string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<TransformResponse>> TransformAsync(Guid organisationId, Guid orderId, OutputFormat format, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<DownloadUrl>> GetDownloadUrlAsync(Guid organisationId, Guid orderId, Guid artifactId, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> ResolveAsync(Guid organisationId, Guid orderId, IReadOnlyList<LineResolution> resolutions, bool saveMappings, CancellationToken ct, ResolveHeaderFields? header = null)
-            => throw new NotImplementedException();
-        public Task<Result<int>> AcceptAiSuggestionsAsync(Guid organisationId, Guid orderId, double minConfidence, CancellationToken ct)
-            => throw new NotImplementedException();
-        public Task<Result<PurchaseOrderEntity>> MarkRejectedAsync(Guid organisationId, Guid orderId, string reason, CancellationToken ct)
-            => throw new NotImplementedException();
-    }
-
-    /// <summary>
-    /// Test double for <see cref="IEmailBodyOrderExtractor"/>. Returns a fixed
-    /// result on every call; <see cref="NoOp"/> short-circuits with
-    /// <c>Success=false</c> so tests that don't care about the body path see
-    /// the router behave exactly as before.
-    /// </summary>
-    private sealed class FakeBodyExtractor : IEmailBodyOrderExtractor
-    {
-        public static readonly FakeBodyExtractor NoOp = new(
-            new EmailBodyExtractionResult(Success: false, Confidence: 0, Order: null, FailureReason: "no-op fake"));
-
-        private readonly EmailBodyExtractionResult _result;
-        public int Calls { get; private set; }
-
-        public FakeBodyExtractor(EmailBodyExtractionResult result) { _result = result; }
-
-        public Task<EmailBodyExtractionResult> ExtractAsync(string emailBody, CancellationToken ct)
-        {
-            Calls++;
-            return Task.FromResult(_result);
-        }
-    }
-
     /// <summary>
     /// Captures every log line with its level so tests can pin the level of one
     /// message. <see cref="LevelOf"/> fails loudly when the message is absent or
@@ -1690,17 +494,6 @@ public class InboundEmailRouterTests
                 + string.Join(" | ", Entries.Select(e => $"[{e.Level}] {e.Message}")));
 
             return matches[0].Level;
-        }
-    }
-
-    private sealed class RecordingEnqueuer : IParseJobEnqueuer
-    {
-        public List<(Guid OrderId, Guid OrgId)> Calls { get; } = new();
-
-        public Task EnqueueAsync(Guid orderId, Guid orgId, CancellationToken ct)
-        {
-            Calls.Add((orderId, orgId));
-            return Task.CompletedTask;
         }
     }
 

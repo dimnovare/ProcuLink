@@ -2,29 +2,6 @@ using System.Text.Json;
 
 namespace ProcuLink.Core.Services.Email;
 
-public sealed record UpdateEmailSettingsRequest(
-    bool Enabled,
-    string Host,
-    int Port,
-    bool UseSsl,
-    string Username,
-    string? Password,
-    string Folder,
-    Guid? DefaultSupplierId);
-
-public sealed record EmailSettingsResponse(
-    bool Enabled,
-    string Host,
-    int Port,
-    bool UseSsl,
-    string Username,
-    string Folder,
-    Guid? DefaultSupplierId,
-    bool HasPassword,
-    string? PasswordDisplay,
-    DateTime? LastPolledAt,
-    DateTime? UpdatedAt);
-
 public sealed record EmailPollingConfig(
     bool Enabled,
     string Host,

@@ -14,52 +14,7 @@ internal static class TestDb
         var opts = new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
-        return new SampleOrderTestDbContext(opts);
-    }
-}
-
-internal static class TestSampleOrderService
-{
-    public static SampleOrderService Create(
-        ProcuLinkDbContext db,
-        out FakeParseJobEnqueuer enqueuer,
-        bool emailConfigured = true)
-    {
-        enqueuer = new FakeParseJobEnqueuer();
-        return new SampleOrderService(
-            db, enqueuer, new InMemoryFileStorage(), new NoOpAnalytics(),
-            new FakeEmailApiClient(emailConfigured));
-    }
-
-    public static SampleOrderService Create(ProcuLinkDbContext db, bool emailConfigured = true) =>
-        Create(db, out _, emailConfigured);
-}
-
-/// <summary>
-/// Stands in for the Postmark client. Only <see cref="IsConfigured"/> matters to
-/// SampleOrderService — it gates the WP-27 delivery seeding so a deployment with no email provider
-/// keeps the honest pre-WP-27 "no delivery is set up" ending instead of a guaranteed failed send.
-/// </summary>
-internal sealed class FakeEmailApiClient : IEmailApiClient
-{
-    public FakeEmailApiClient(bool configured) => IsConfigured = configured;
-
-    public bool IsConfigured { get; }
-    public string DefaultFrom => "orders@proculink.test";
-
-    public Task<EmailApiResult> SendAsync(EmailApiMessage message, CancellationToken ct = default) =>
-        throw new InvalidOperationException(
-            "SampleOrderService must never send mail itself — delivery is driven by the user's send.");
-}
-
-internal sealed class FakeParseJobEnqueuer : IParseJobEnqueuer
-{
-    public List<(Guid OrderId, Guid OrgId)> Enqueued { get; } = new();
-
-    public Task EnqueueAsync(Guid orderId, Guid orgId, CancellationToken ct)
-    {
-        Enqueued.Add((orderId, orgId));
-        return Task.CompletedTask;
+        return new TrimmedTestDbContext(opts);
     }
 }
 
@@ -88,26 +43,9 @@ internal sealed class InMemoryFileStorage : IFileStorageService
     }
 }
 
-internal sealed class NoOpAnalytics : IAnalyticsService
+internal sealed class TrimmedTestDbContext : ProcuLinkDbContext
 {
-    public Task CaptureAsync(
-        Guid organisationId,
-        string? userId,
-        string eventName,
-        IReadOnlyDictionary<string, object?>? properties = null,
-        CancellationToken ct = default) => Task.CompletedTask;
-
-    public Task SetPersonPropertiesAsync(
-        string distinctId,
-        IReadOnlyDictionary<string, object?> properties,
-        CancellationToken ct = default) => Task.CompletedTask;
-
-    public Task FlushAsync(CancellationToken ct = default) => Task.CompletedTask;
-}
-
-internal sealed class SampleOrderTestDbContext : ProcuLinkDbContext
-{
-    public SampleOrderTestDbContext(DbContextOptions<ProcuLinkDbContext> options) : base(options) { }
+    public TrimmedTestDbContext(DbContextOptions<ProcuLinkDbContext> options) : base(options) { }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -165,8 +103,7 @@ internal sealed class SampleOrderTestDbContext : ProcuLinkDbContext
             b.Ignore(x => x.Products);
         });
 
-        // Seeded by SampleOrderService (catalog + 2-of-3 mappings) — mapped standalone,
-        // navigations ignored, same style as the other entities in this trimmed context.
+        // Mapped standalone, navigations ignored, same style as the other entities in this trimmed context.
         modelBuilder.Entity<ItemMapping>(b =>
         {
             b.HasKey(x => x.Id);
@@ -181,10 +118,7 @@ internal sealed class SampleOrderTestDbContext : ProcuLinkDbContext
             b.Ignore(x => x.Supplier);
         });
 
-        // WP-27: the sample supplier is now seeded with an `email` delivery setup so the practice
-        // order can actually reach `delivered`. Mapped standalone (navigations ignored) like the
-        // other entities above — it used to be Ignore()d, which would silently swallow the seed.
-        modelBuilder.Entity<SupplierDeliveryConfig>(b =>
+                modelBuilder.Entity<SupplierDeliveryConfig>(b =>
         {
             b.HasKey(x => x.Id);
             b.Ignore(x => x.Organisation);

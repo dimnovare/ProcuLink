@@ -177,12 +177,11 @@ builder.Services.AddScoped<IOrderExceptionService, OrderExceptionService>();
 // Register it here so Worker DI validation passes (same as API/Program.cs line 198).
 builder.Services.AddScoped<IIntegrationTriggerService, IntegrationTriggerService>();
 // Analytics (PostHog) — required by StripeBillingService (resolved via IBillingService
-// in EmailPollingJob) and ParseOrderJob. No-op when Analytics:PostHog:ApiKey is absent.
+// in ParseOrderJob). No-op when Analytics:PostHog:ApiKey is absent.
 // Mirrors API/Program.cs lines 189-190.
 builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Analytics:PostHog"));
 builder.Services.Configure<ProcuLink.Api.Services.Documents.DocumentEngineOptions>(builder.Configuration.GetSection("DocumentEngine"));
 builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.DocumentEngineGate>();
-builder.Services.AddSingleton<ProcuLink.Core.Services.IOrderIntakeSwitch>(sp => sp.GetRequiredService<ProcuLink.Api.Services.Documents.DocumentEngineGate>());
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentRechecker>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentSender>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentIntakeService>();
@@ -217,7 +216,6 @@ builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 // Same scoped OrderService also serves the pull-ingress stub-creation seam (explicit order id).
 builder.Services.AddScoped<IStubOrderCreator>(sp => (OrderService)sp.GetRequiredService<IOrderService>());
-builder.Services.AddScoped<IClaimedOrderCreator>(sp => (OrderService)sp.GetRequiredService<IOrderService>());
 // Durable AI-suggestion decision history — an optional OrderService dependency; register it
 // so the resolve/accept paths persist history when driven from the Worker too.
 builder.Services.AddScoped<IAiSuggestionDecisionService, AiSuggestionDecisionService>();
@@ -226,7 +224,6 @@ builder.Services.AddScoped<IBillingService, StripeBillingService>();
 // (driven by the daily BillingReconciliationJob). Registered here because the Worker is the
 // sole Hangfire executor and Development DI validation constructs the job's dependency graph.
 builder.Services.AddScoped<IBillingReconciliationService, StripeSubscriptionReconciliationService>();
-builder.Services.AddScoped<IEmailSettingsService, EmailSettingsService>();
 builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
 // T4 — external web/product-code grounding (no-op unless Ai:OpenAI:ProductSearch:Enabled=true).
 builder.Services.AddSingleton<IProductCodeSearch, OpenAiProductCodeSearch>();
@@ -355,9 +352,7 @@ builder.Services.AddOutputTransforms();
 
 // ── Wave 2: pull-ingress (SFTP / S3-R2) + OCR fallback ────────────────────
 builder.Services.AddSingleton<ISftpClientFactory, RenciSftpClientFactory>();
-builder.Services.AddScoped<ISftpIngressService, SftpIngressService>();
 builder.Services.AddSingleton<IAmazonS3ClientFactory, AmazonS3ClientFactory>();
-builder.Services.AddScoped<IS3IngressService, S3IngressService>();
 
 // ── Catalog import channels: SFTP/FTP(S) pull (plan 2026-06-12) ────────────
 // DI foot-gun precedent 4607d6d: ISupplierCatalogService was Api-only — the Worker
@@ -370,12 +365,6 @@ builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogPullService,
 // must resolve here too (DI foot-gun precedent 4607d6d).
 builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogVendorFetcher,
                            ProcuLink.Infrastructure.Services.Catalog.Aes2faSignedCatalogFetcher>();
-builder.Services.AddScoped<CatalogSyncDispatcherJob>();
-builder.Services.AddScoped<CatalogSyncSourceJob>();
-// IEmailBodyOrderExtractor intentionally NOT registered here: OpenAiEmailBodyOrderExtractor
-// depends on ICurrentTenantService (HttpContext-based) which only exists in the API.
-// Email-body NLP runs in the API's InboundEmailController scope (Postmark webhook),
-// not in Worker jobs. Registering it here triggers DI validation failure at Host.Build().
 
 // PDF rasterizer for the vision fallback (scanned/no-text PDFs). The Worker runs
 // ParseOrderJob, so it needs the same registration as the API.
@@ -398,21 +387,9 @@ else
 // second DI fix.
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, ProcuLink.Infrastructure.Services.Detection.FormatDetectorService>();
 
-builder.Services.AddScoped<EmailPollingJob>();
-builder.Services.AddScoped<EmailPollOrgJob>();
-builder.Services.AddScoped<SftpPollingJob>();
-builder.Services.AddScoped<SftpPollOrgJob>();
-builder.Services.AddScoped<S3PollingJob>();
-builder.Services.AddScoped<S3PollOrgJob>();
 // P0 reliability: stuck-order detection sweep + operator retry job.
 builder.Services.AddScoped<IStuckOrderDetectionService, StuckOrderDetectionService>();
 builder.Services.AddScoped<StuckOrderDetectionJob>();
-// StuckOrderDetectionService re-enqueues stuck 'parsing' orders through IParseJobEnqueuer.
-// That dependency is optional, so without this registration the Worker would reset stuck
-// orders to 'pending_parse' but never enqueue a fresh parse job — nothing would drive them.
-// The concrete adapter lives in ProcuLink.Api (alongside Hangfire + ParseOrderJob) and needs
-// only IBackgroundJobClient, which this Worker already provides.
-builder.Services.AddScoped<IParseJobEnqueuer, ProcuLink.Api.Controllers.HangfireParseJobEnqueuer>();
 // Group O reliability: automatic delivery retry queue (scheduled here) + SLA breach sweep.
 builder.Services.AddScoped<RetryDeliveryJob>();
 builder.Services.AddScoped<DeliverySlaSweepJob>();

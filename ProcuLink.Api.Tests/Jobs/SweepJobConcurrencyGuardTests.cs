@@ -31,8 +31,6 @@ namespace ProcuLink.Api.Tests.Jobs;
 ///   <item>DataRetentionSweepJob — pure atomic ExecuteDeleteAsync; no read-modify-write to lose.</item>
 ///   <item>BlobRetentionSweepJob — SELECT-then-act, but storage deletes are idempotent on a missing
 ///     key and the purge flag is a constant write, so the only racing effect is an inflated stat.</item>
-///   <item>Email/S3/SftpPollingJob — dispatcher parents; the children hold [PerOrgDistributedMutex],
-///     which SERIALISES rather than drops, so a duplicate child skips on the committed ledger claim.</item>
 /// </list></para>
 /// </summary>
 public class SweepJobConcurrencyGuardTests

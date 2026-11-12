@@ -1,7 +1,7 @@
 namespace ProcuLink.Core.Services.Ai;
 
 /// <summary>
-/// A single order line as extracted from an email body.
+/// A single order line as extracted from a document body.
 /// Mirrors the essential fields of <c>ParsedOrderLine</c> in ProcuLink.Transform
 /// without creating an assembly dependency between Core and Transform.
 /// </summary>
@@ -12,7 +12,7 @@ public sealed record ExtractedOrderLine(
     decimal Quantity,
     string? Unit,
     decimal? UnitPrice,
-    // Phase 4 enrichment (optional — additive, defaulted so existing callers are unaffected).
+    // Phase 4 enrichment (optional ā€” additive, defaulted so existing callers are unaffected).
     decimal? LineAmount = null,
     decimal? TaxRate = null,
     // Per-line VAT amount as printed (e.g. 25% VAT on an ex-VAT unit price). Additive, defaulted.
@@ -49,7 +49,7 @@ public sealed record ExtractedParty(
 public sealed record ExtractedRawField(string Label, string Value);
 
 /// <summary>
-/// A purchase order as extracted from an email body.
+/// A purchase order as extracted from a document body.
 /// Mirrors the essential fields of <c>ParsedOrder</c> in ProcuLink.Transform
 /// without creating an assembly dependency between Core and Transform.
 /// </summary>
@@ -70,7 +70,7 @@ public sealed record ExtractedOrder(
     string? PaymentTerms = null,
     string? DocumentType = null,
     // V5 deepen-canonical: requested delivery date (header-level).
-    // Mirrors ParsedOrder.RequestedDeliveryDate — null when absent.
+    // Mirrors ParsedOrder.RequestedDeliveryDate ā€” null when absent.
     DateOnly? RequestedDeliveryDate = null,
     // Phase 1 lossless capture (additive, defaulted).
     IReadOnlyList<ExtractedParty>? Parties = null,
@@ -87,49 +87,3 @@ public sealed record ExtractedOrder(
     string? Iban = null,
     string? PaymentReference = null
 );
-
-/// <summary>
-/// Result of attempting to extract a purchase order from a plain-text email body.
-/// </summary>
-/// <param name="Success">
-/// True when a purchase order was extracted with sufficient confidence
-/// (Confidence ≥ 0.6). False on all failure paths.
-/// </param>
-/// <param name="Confidence">
-/// Model-reported extraction confidence in the range 0.0–1.0.
-/// Always 0.0 when Success is false.
-/// </param>
-/// <param name="Order">
-/// The extracted purchase order. Null when Success is false.
-/// </param>
-/// <param name="FailureReason">
-/// Human-readable explanation of why extraction failed.
-/// Null when Success is true.
-/// </param>
-public record EmailBodyExtractionResult(
-    bool Success,
-    double Confidence,
-    ExtractedOrder? Order,
-    string? FailureReason
-);
-
-/// <summary>
-/// Attempts to extract a purchase order from a plain-text email body using
-/// AI NLP. Callers should treat the result as a draft — the user must review
-/// and confirm the extracted lines before they enter the normal PO workflow.
-///
-/// Implementations are scoped per-request — they read the current tenant from
-/// <see cref="ICurrentTenantService"/> (or equivalent test double) to enforce
-/// the per-org monthly token cap via <see cref="IAiUsageTracker"/>.
-///
-/// All failure paths (no API key, wrong provider, over cap, low confidence)
-/// return <c>Success = false</c> without throwing.
-/// </summary>
-public interface IEmailBodyOrderExtractor
-{
-    /// <summary>
-    /// Attempts to extract a purchase order from a plain-text email body.
-    /// Returns Success=false when confidence &lt; 0.6 or when no API key is configured.
-    /// </summary>
-    Task<EmailBodyExtractionResult> ExtractAsync(string emailBody, CancellationToken ct);
-}
