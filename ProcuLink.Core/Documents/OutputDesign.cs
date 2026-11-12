@@ -13,7 +13,7 @@ public sealed record DraftCite(string Where, string Quote);
 /// <summary>
 /// One leaf of a draft. <paramref name="FieldKey"/> is unqualified, as written into the rule.
 /// <paramref name="By"/> says who chose the value: <c>"name"</c> (matched by name), <c>"ai"</c> (matched by the AI
-/// from a sample) or <c>"docs"</c> (proposed from documentation, which carries no confidence); null when unset.
+/// from a sample), <c>"meaning"</c> (matched by an alias of the field's meaning) or <c>"docs"</c> (proposed from documentation, which carries no confidence); null when unset.
 /// </summary>
 public sealed record DraftLeaf(string Path, string? FieldKey, string? By, float? Confidence, bool Required = false, DraftCite? Cite = null);
 

@@ -165,6 +165,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         var fields = DocumentJson.Deserialize<FlowFieldList>(flow.FieldsJson);
         var slots = DraftBinder.Slots(template, format, fields);
         var matches = DraftBinder.ByName(slots, fields).Select(m => (m, "name")).ToList();
+        matches.AddRange(DraftBinder.ByMeaning(slots, fields).Where(m => matches.All(n => n.m.Path != m.Path)).Select(m => (m, "meaning")).ToList());
         var left = slots.Where(s => matches.All(m => m.m.Path != s.Path)).ToList();
         if (left.Count > 0)
             matches.AddRange((await designer.BindAsync(orgId, left, fields, ct)).Select(m => (m, "ai")));
