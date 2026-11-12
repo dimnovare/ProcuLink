@@ -304,7 +304,12 @@ public sealed class StripeBillingService : IBillingService
         // Checkout stays for an org with nothing live (Pilot, or a subscription that has ended).
         var live = await GetLiveSubscriptionAsync(org.StripeSubscriptionId, ct);
         if (live is not null)
+        {
+            // Moving down is support's call: the UI never offers it, so only a hand-made request lands here.
+            if (PlanConstants.IsDowngrade(org.Plan, plan))
+                throw new InvalidOperationException("plan_downgrade_not_allowed");
             return await ChangeSubscriptionPriceAsync(live, priceId, plan, interval, frontendUrl, ct);
+        }
 
         // success_url routes to /welcome so the frontend can show the upgraded banner.
         // {CHECKOUT_SESSION_ID} is a Stripe substitution token — C# {{ }} escaping produces

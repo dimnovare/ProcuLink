@@ -226,6 +226,18 @@ public static class PlanConstants
     public static decimal GetMonthlyPriceEur(string plan) =>
         MonthlyPriceEur.TryGetValue(plan ?? string.Empty, out var price) ? price : 0m;
 
+    /// <summary>
+    /// True when <paramref name="toPlan"/> costs strictly less per month than <paramref name="fromPlan"/>,
+    /// across both ladders. Enterprise ranks highest; an equal price is not a downgrade.
+    /// </summary>
+    public static bool IsDowngrade(string? fromPlan, string toPlan)
+    {
+        static decimal Rank(string p) => p == Enterprise ? decimal.MaxValue : GetMonthlyPriceEur(p);
+        var from = fromPlan?.ToLowerInvariant();
+        var to = toPlan.ToLowerInvariant();
+        return IsKnownPlan(from) && IsKnownPlan(to) && Rank(to) < Rank(from!);
+    }
+
     public static bool IsPaidPlan(string plan) =>
         plan is Growth or Operations or Integration or Distributor or Enterprise
             or Starter or Pro or Business or Scale;

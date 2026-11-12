@@ -69,6 +69,7 @@ public class PlanChangeOnLiveSubscriptionTests
         {
             ["Stripe:GrowthPriceId"]     = "price_growth_test",
             ["Stripe:OperationsPriceId"] = "price_ops_test",
+            ["Stripe:StarterPriceId"]    = "price_starter_test",
         }).Build();
 
     private static async Task<(ProcuLinkDbContext Db, Guid OrgId)> PaidGrowthOrgAsync()
@@ -103,6 +104,20 @@ public class PlanChangeOnLiveSubscriptionTests
         var options = update.Options.Should().BeOfType<SubscriptionUpdateOptions>().Subject;
         options.Items.Should().ContainSingle(i => i.Id == "si_live" && i.Price == "price_ops_test");
         options.ProrationBehavior.Should().Be("always_invoice");
+    }
+
+    [Fact]
+    public async Task CheaperPlanOnALiveSubscription_IsRefused_AndStripeIsNeverChanged()
+    {
+        var (db, orgId) = await PaidGrowthOrgAsync();
+        var stripe = new RecordingStripeClient();
+        var svc = new StripeBillingService(db, Config(), NullLogger<StripeBillingService>.Instance,
+            new FakeAnalyticsService(), stripe);
+
+        var act = () => svc.CreateCheckoutSessionAsync(orgId, PlanConstants.Starter, "https://app.test", "monthly");
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("plan_downgrade_not_allowed");
+        stripe.Calls.Should().NotContain(c => c.Method == HttpMethod.Post, "€149 Growth must not move itself to €35 Starter");
     }
 
     [Fact]
