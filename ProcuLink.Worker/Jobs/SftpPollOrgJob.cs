@@ -17,12 +17,15 @@ public sealed class SftpPollOrgJob
     private readonly ISftpIngressService _sftpIngress;
     private readonly IBillingService _billing;
     private readonly ILogger<SftpPollOrgJob> _logger;
+    private readonly IOrderIntakeSwitch? _intakeSwitch;
 
     public SftpPollOrgJob(
         ISftpIngressService sftpIngress,
         IBillingService billing,
-        ILogger<SftpPollOrgJob> logger)
+        ILogger<SftpPollOrgJob> logger,
+        IOrderIntakeSwitch? intakeSwitch = null)
     {
+        _intakeSwitch = intakeSwitch;
         _sftpIngress = sftpIngress;
         _billing = billing;
         _logger = logger;
@@ -42,6 +45,13 @@ public sealed class SftpPollOrgJob
     [PerOrgDistributedMutex(orgArgumentIndex: 0, timeoutSeconds: 300)]
     public async Task ExecuteAsync(Guid orgId, CancellationToken ct)
     {
+        // Pollers never move or delete remote files, so skipping loses nothing.
+        if (_intakeSwitch?.IsRetired(orgId) == true)
+        {
+            _logger.LogInformation("SftpPollOrgJob: legacy order intake is retired for org {OrgId}; not polling.", orgId);
+            return;
+        }
+
         // Billing gate FIRST — before any network work. Mirrors EmailPollOrgJob, which has
         // early-returned on a missing feature since it shipped; SFTP polling skipped the
         // check entirely, so an org whose plan does not include SFTP ingestion (or one that

@@ -47,6 +47,51 @@ public class IngestPathBillingGateTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 
+    /// <summary>Reusable fake for the order-intake switch (also used by the pull-path tests).</summary>
+    internal sealed class FakeIntakeSwitch(bool retired) : IOrderIntakeSwitch
+    {
+        public bool IsRetired(Guid orgId) => retired;
+    }
+
+    [Fact]
+    public async Task LegacyUploadAndRestIngress_ForAnOrgOnTheDocumentEngine_Answer410OrdersRetired_AndCreateNoOrder()
+    {
+        var h = BuildIngress(
+            new LimitCheckResult(Allowed: true, PilotExpired: false, Plan: PlanConstants.Growth, Limit: 150),
+            new FakeIntakeSwitch(true));
+
+        var ingress = await h.Controller.ReceiveOrder(
+            "acme", OrderPayload(h.Supplier.Id), h.Orders.Object, h.ClaimedOrders.Object, CancellationToken.None);
+
+        var db = NewDb();
+        var tenant = new Mock<ICurrentTenantService>();
+        tenant.SetupGet(t => t.OrganisationId).Returns(h.OrgId);
+        var uploads = new OrdersController(
+            new Mock<IOrderService>().Object, tenant.Object, new Mock<Hangfire.IBackgroundJobClient>().Object, db,
+            NullLogger<OrdersController>.Instance, new Mock<IBillingService>().Object,
+            new Mock<IIdempotencyService>().Object, new Mock<IOrderExceptionService>().Object,
+            new Mock<ISupplierAcceptanceService>().Object,
+            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
+            new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
+            new Mock<IFileStorageService>().Object, new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
+            Array.Empty<ITransformService>(), intakeSwitch: new FakeIntakeSwitch(true));
+
+        // A null file would be a 400 on a live endpoint; a retired one must answer 410 first.
+        var upload = await uploads.Upload(null!, Guid.NewGuid(), new Mock<IStubOrderCreator>().Object);
+
+        foreach (var result in new[] { ingress, upload })
+        {
+            var refused = result.Should().BeOfType<ObjectResult>().Subject;
+            refused.StatusCode.Should().Be(410);
+            ((string)((dynamic)refused.Value!).error).Should().Be("orders_retired");
+        }
+        db.PurchaseOrders.Should().BeEmpty();
+        h.ClaimedOrders.Verify(o => o.CreateClaimedFromParsedOrderAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<Guid>(),
+            It.IsAny<ProcuLink.Core.Services.Ai.ExtractedOrder>(),
+            It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     // ── REST ingress ─────────────────────────────────────────────────────────
 
     private sealed record IngressHarness(
@@ -57,7 +102,7 @@ public class IngestPathBillingGateTests
         Mock<IClaimedOrderCreator> ClaimedOrders,
         Mock<IBillingService> Billing);
 
-    private static IngressHarness BuildIngress(LimitCheckResult limit)
+    private static IngressHarness BuildIngress(LimitCheckResult limit, IOrderIntakeSwitch? intakeSwitch = null)
     {
         var db = NewDb();
         var orgId = Guid.NewGuid();
@@ -118,7 +163,7 @@ public class IngestPathBillingGateTests
 
         var controller = new IngressController(
             db, idempotency.Object, tenant.Object, billing.Object,
-            NullLogger<IngressController>.Instance)
+            NullLogger<IngressController>.Instance, intakeSwitch)
         {
             ControllerContext = new ControllerContext
             {
@@ -206,6 +251,42 @@ public class IngestPathBillingGateTests
 
         sftp.Verify(s => s.PollAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never,
             "the IMAP poller has always early-returned on a missing feature; SFTP must too");
+    }
+
+    [Fact]
+    public async Task InboundEmail_ToTheOrderAddressOfAnOrgOnTheDocumentEngine_IsRefusedTransient_AndCreatesNoOrder()
+    {
+        var h = BuildEmail(hasEmailIngestion: true, new LimitCheckResult(
+            Allowed: true, PilotExpired: false, Plan: PlanConstants.Growth, Limit: 150),
+            intakeSwitch: new FakeIntakeSwitch(true));
+
+        var result = await h.Router.RouteAsync(EmailPayload(), CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.RejectionKind.Should().Be(InboundEmailRejectionKind.Transient,
+            "Permanent would settle the mail as handled; Transient keeps it in Postmark's re-delivery window");
+        h.Db.PurchaseOrders.Should().BeEmpty();
+        VerifyNoOrderCreated(h, "a retired org must not get a legacy order");
+        h.Db.AuditEvents.Should().ContainSingle(a => a.Action == "inbound_email.rejected_orders_retired");
+    }
+
+    [Fact]
+    public async Task PollJobs_ForAnOrgOnTheDocumentEngine_DoNotPoll()
+    {
+        var orgId = Guid.NewGuid();
+        var billing = new Mock<IBillingService>();
+        billing.Setup(b => b.HasFeatureAsync(orgId, It.IsAny<BillingFeature>(), It.IsAny<CancellationToken>()))
+               .ReturnsAsync(true);
+        var sftp = new Mock<ISftpIngressService>();
+        var s3 = new Mock<IS3IngressService>();
+
+        await new SftpPollOrgJob(sftp.Object, billing.Object, NullLogger<SftpPollOrgJob>.Instance,
+            new FakeIntakeSwitch(true)).ExecuteAsync(orgId, CancellationToken.None);
+        await new S3PollOrgJob(s3.Object, billing.Object, NullLogger<S3PollOrgJob>.Instance,
+            new FakeIntakeSwitch(true)).ExecuteAsync(orgId, CancellationToken.None);
+
+        sftp.Verify(x => x.PollAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+        s3.Verify(x => x.PollAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -304,7 +385,8 @@ public class IngestPathBillingGateTests
         InboundEmailRouter Router,
         Guid OrgId,
         Mock<IClaimedOrderCreator> Orders,
-        Mock<IBillingService> Billing);
+        Mock<IBillingService> Billing,
+        ProcuLinkDbContext Db);
 
     /// <summary>
     /// A router over a seeded org with a live inbound address. Order creation ALWAYS succeeds, for
@@ -314,7 +396,8 @@ public class IngestPathBillingGateTests
     private static EmailHarness BuildEmail(
         bool hasEmailIngestion,
         LimitCheckResult limit,
-        string accountStatus = AccountStatusConstants.Active)
+        string accountStatus = AccountStatusConstants.Active,
+        IOrderIntakeSwitch? intakeSwitch = null)
     {
         var db = NewDb();
         var orgId = Guid.NewGuid();
@@ -353,9 +436,9 @@ public class IngestPathBillingGateTests
             db, orders.Object, new NoOpEnqueuer(), NoOrderBody.Instance,
             InboundAddressTestHarness.Create(db, config),
             billing.Object, config,
-            NullLogger<InboundEmailRouter>.Instance);
+            NullLogger<InboundEmailRouter>.Instance, intakeSwitch: intakeSwitch);
 
-        return new EmailHarness(router, orgId, orders, billing);
+        return new EmailHarness(router, orgId, orders, billing, db);
     }
 
     private static InboundEmailPayload EmailPayload() => new(
