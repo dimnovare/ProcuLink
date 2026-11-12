@@ -57,14 +57,10 @@ public static class DocumentChecks
     }
 
     // Only rules whose every meaning is on the read and parses fire; a flow without money meanings never fails here.
-    // Once the flow lists fields its meanings decide (a listed key's, null included; unlisted extras are ignored);
-    // before that the read's own meanings stand.
+    // Meanings come from FieldMeanings.Of; an ambiguous number (FieldValueParser.Number is null) cannot be checked, so the rule skips.
     private static void Arithmetic(ReadResult read, FlowFieldList flow, Action<string, string?, string> fail)
     {
-        string? FieldMeaning(ReadField f) => flow.Fields.Count == 0 ? f.Meaning : flow.Fields.FirstOrDefault(x => x.Key == f.Key)?.Meaning;
-        ReadField? Find(string meaning) => read.Fields.FirstOrDefault(f => FieldMeaning(f) == meaning);
-        // An ambiguous reading ("1.000": one or a thousand) cannot be checked, so the rule skips.
-        static decimal? Num(string? s) => FieldValueParser.NumberCandidates(s) is [var only] ? only : null;
+        ReadField? Find(string meaning) => read.Fields.FirstOrDefault(f => FieldMeanings.Of(f, flow) == meaning);
 
         var dp = DecimalPlaces(Find(FieldMeanings.Currency)?.Value);
         var unit = (decimal)Math.Pow(10, -dp);
@@ -73,7 +69,7 @@ public static class DocumentChecks
         {
             var f = Find(meaning);
             key = f?.Key ?? "";
-            var n = f is null ? null : Num(f.Value);
+            var n = f is null ? null : FieldValueParser.Number(f.Value);
             v = n ?? 0;
             return n is not null;
         }
@@ -83,14 +79,11 @@ public static class DocumentChecks
             && R(net) + R(tax) != R(gross))
             fail(ArithmeticMismatch, grossKey, "Net plus tax doesn't equal the total.");
 
-        string? ColumnMeaning(ReadTable t, ReadColumn c) => flow.Tables.Count == 0
-            ? c.Meaning
-            : flow.Tables.FirstOrDefault(x => x.Key == t.Key)?.Columns.FirstOrDefault(x => x.Key == c.Key)?.Meaning;
-        var table = read.Tables.FirstOrDefault(t => t.Columns.Any(c => ColumnMeaning(t, c) == FieldMeanings.LineAmount));
+        var table = read.Tables.FirstOrDefault(t => t.Columns.Any(c => FieldMeanings.Of(t, c, flow) == FieldMeanings.LineAmount));
         if (table is null || table.Rows.Count == 0) return;
-        string? Col(string meaning) => table.Columns.FirstOrDefault(c => ColumnMeaning(table, c) == meaning)?.Key;
+        string? Col(string meaning) => table.Columns.FirstOrDefault(c => FieldMeanings.Of(table, c, flow) == meaning)?.Key;
         decimal? Cell(ReadRow row, string? key) =>
-            key is not null && row.Cells.TryGetValue(key, out var c) ? Num(c.Value) : null;
+            key is not null && row.Cells.TryGetValue(key, out var c) ? FieldValueParser.Number(c.Value) : null;
 
         var amountKey = Col(FieldMeanings.LineAmount);
         var amounts = table.Rows.Select(r => Cell(r, amountKey)).ToList();

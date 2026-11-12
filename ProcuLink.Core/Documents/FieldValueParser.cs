@@ -40,6 +40,9 @@ public static class FieldValueParser
             : [first];
     }
 
+    /// <summary>The number when it has exactly one reading; null when it has none or is ambiguous ("1.000": one or a thousand).</summary>
+    public static decimal? Number(string? s) => NumberCandidates(s) is [var only] ? only : null;
+
     public static bool TryNumber(string? s, out decimal value)
     {
         value = 0;
