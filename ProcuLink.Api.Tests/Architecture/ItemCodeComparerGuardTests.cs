@@ -101,6 +101,9 @@ public class ItemCodeComparerGuardTests
     /// Sites that compare a governed column WITHOUT the shared rule on purpose. Each entry is
     /// (file, a distinctive fragment of the line, why). The reason is the point: an entry without a
     /// real one is indistinguishable from someone silencing the guard.
+    /// <para>2026-11-13, plan 13b: the three <c>OrderIngestionService.cs</c> entries and the
+    /// <c>ReplayService.cs</c> entry left this list because both files were deleted with the order
+    /// pipeline — not because their sites started using the shared rule.</para>
     /// </summary>
     private static readonly (string File, string Fragment, string Reason)[] AcceptedExceptions =
     {
@@ -121,34 +124,12 @@ public class ItemCodeComparerGuardTests
             + "a 'b-1' line from a 'B-1' row and the WRONG ITEM is ordered. The match below this line "
             + "does use the shared rule."),
 
-        ("OrderIngestionService.cs", "Distinct(StringComparer.Ordinal)",
-            "ResolveFromSnapshot answers each requested spelling separately, for the same reason the "
-            + "live resolver does: a replay must reach the same row the live run reached, per input "
-            + "code. Collapsing two spellings here would make a replay substitute one line's "
-            + "supplier code for another's. Its MATCH against snapshot rows still folds case."),
-
-        ("OrderIngestionService.cs", "row.BuyerItemCode, code, StringComparison.Ordinal",
-            "ResolveFromSnapshot's exact-case tie-break, aligned with PickDeterministically so the "
-            + "replay picks the same twin the live resolver picked."),
-
         ("SupplierCatalogService.cs", "existing.ToDictionary(p => p.Code, StringComparer.Ordinal)",
             "Catalog IMPORT is deliberately case-sensitive while every catalog READ folds case. "
             + "Folding here would collapse two rows of one supplier feed and DELETE a product; the "
             + "item code is a namespace the supplier controls and an importer must not decide two of "
             + "their SKUs are the same thing. The read side resolves any resulting twin "
-            + "deterministically (BuildCatalogLookupAsync orders by Code then Id). Full reasoning is "
-            + "in the comment at the site."),
-
-        ("ReplayService.cs", "map.TryGetValue(buyerItemCode.Trim()",
-            "ResolveCodeFromMap names NO comparer on purpose: it must inherit whatever the resolver "
-            + "that built the map decided, so a lookup here cannot disagree with the answer that was "
-            + "computed. Deciding case here independently would answer a 'b-1' line from a 'B-1' "
-            + "entry and report a code change that never happened."),
-
-        ("OrderIngestionService.cs", "map.TryGetValue(buyerItemCode.Trim()",
-            "BuildLineEntitiesAsync's local ResolveFromMap — same contract as ReplayService's copy "
-            + "above, reading the same two dictionaries. Its comparer must come from whichever "
-            + "resolver produced the map, never from here."),
+            + "deterministically. Full reasoning is in the comment at the site."),
 
         ("SupplierCatalogService.cs", "codes.Contains(p.Code)",
             "The existing-row fetch for the same deliberately case-sensitive import batch. It must "

@@ -7,11 +7,29 @@ using ProcuLink.Infrastructure;
 namespace ProcuLink.Api.Services;
 
 /// <summary>
-/// Internal sub-service of <see cref="OrderService"/> owning read-only order queries
-/// and signed-download URL generation. Methods moved verbatim from the original
-/// God-class (audit W1/B1 decomposition).
+/// The read-only order archive's reads: what <c>OrdersController</c> needs, and nothing that writes.
+/// (2026-11-13, plan 13b: the archive's slice of the deleted <c>IOrderService</c> facade.)
 /// </summary>
-internal sealed class OrderQueryService
+public interface IOrderQueryService
+{
+    Task<Result<PurchaseOrderEntity>> GetByIdAsync(Guid organisationId, Guid orderId, CancellationToken ct);
+
+    Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>> ListPagedAsync(
+        Guid organisationId, int page, int pageSize, string? status, Guid? supplierId,
+        string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct);
+
+    Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>> ListWindowAsync(
+        Guid organisationId, int skip, int take, string? status, Guid? supplierId,
+        string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct);
+
+    Task<Result<DownloadUrl>> GetDownloadUrlAsync(Guid organisationId, Guid orderId, Guid artifactId, CancellationToken ct);
+}
+
+/// <summary>
+/// The read-only order archive's queries and signed-download URL generation — all that is left of
+/// the order service layer after the document engine replaced the order pipeline.
+/// </summary>
+public sealed class OrderQueryService : IOrderQueryService
 {
     private readonly ProcuLinkDbContext  _db;
     private readonly IFileStorageService _fileStorage;

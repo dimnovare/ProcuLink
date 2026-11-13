@@ -107,7 +107,8 @@ public sealed class ProcessGlobalStateIsSerializedTests
             "RevisionAuthorityReadinessSurfaceTests",  // names MigrationReadiness AND boots a host
             "ProgramHardeningTests",                   // boots a host only
             "TenancyIsolationTests",                   // boots a host only
-            "EndToEndPipelineTests",                   // boots a host only
+            // (2026-11-13, plan 13b: "EndToEndPipelineTests" left this list — the class was deleted
+            // with the order pipeline it drove, not missed by the detector.)
             // Declares no factory of its own — it takes HardeningTestFactory, declared in
             // ProgramHardeningTests.cs, as an IClassFixture, and so boots its own host. A
             // file-local check missed it; this entry pins the cross-file path specifically.

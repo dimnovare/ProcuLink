@@ -25,7 +25,7 @@ namespace ProcuLink.Api.Tests.Integration;
 /// real Postgres engine. (Honest note: Postgres often returns a stable scan order for equal
 /// keys on a small single-session read, so this test does not by itself force an overlap — it
 /// proves correct full coverage on Postgres and guards the deterministic ordering the
-/// tiebreaker provides.) Docker-gated (mirrors <see cref="EndToEndPipelineTests"/>) so it
+/// tiebreaker provides.) Docker-gated (mirrors <see cref="DockerRequiredFactAttribute"/>) so it
 /// skips where Docker is absent instead of failing the suite.</para>
 /// </summary>
 [Collection("postgres-container")]

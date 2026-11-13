@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Controllers;
+using ProcuLink.Api.Services;
 using ProcuLink.Api.Tests.TestSupport;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -30,7 +31,7 @@ public class OrdersControllerListPagingTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 
-    private static OrdersController BuildController(IOrderService orders, Guid orgId, ProcuLinkDbContext db)
+    private static OrdersController BuildController(IOrderQueryService orders, Guid orgId, ProcuLinkDbContext db)
     {
         var tenant = new Mock<ICurrentTenantService>();
         tenant.SetupGet(t => t.OrganisationId).Returns(orgId);

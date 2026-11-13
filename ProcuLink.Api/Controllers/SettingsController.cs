@@ -50,9 +50,9 @@ public sealed class SettingsController : ControllerBase
 
     /// <summary>
     /// Partial update. The order direction stays open to every member; changing where invoices go
-    /// is an admin's (it redirects every invoice), so that part is gated in-method. A new
-    /// destination also takes every invoice parked for want of one, settles its checks (ready or
-    /// held, never sent), and is audited — all in the one save below.
+    /// is an admin's (it redirects every invoice), so that part is gated in-method, and audited in
+    /// the one save below. (2026-11-13, plan 13b: a new destination no longer re-routes invoices
+    /// parked for want of one — that was the order pipeline, and old orders are a read-only archive.)
     /// </summary>
     [HttpPut("organisation")]
     [ProducesResponseType(typeof(OrgSettingsResponse), StatusCodes.Status200OK)]
@@ -71,12 +71,11 @@ public sealed class SettingsController : ControllerBase
             if (to is { } destination && !await SupplierExistsAsync(orgId, destination, ct))
                 return BadRequest(new { error = "invoice_destination_not_found" });
 
-            var moved = to is { } d ? await OrderIngestionService.RouteParkedInvoicesAsync(_db, orgId, d, ct) : 0;
             _db.AuditEvents.Add(new AuditEvent
             {
                 Id = Guid.NewGuid(), OrgId = orgId, EntityType = "Organisation", EntityId = orgId,
                 Action = "InvoiceDestinationChanged", CreatedAt = DateTime.UtcNow,
-                Payload = JsonSerializer.SerializeToDocument(new { by = _tenant.ClerkUserId, from, to, moved }),
+                Payload = JsonSerializer.SerializeToDocument(new { by = _tenant.ClerkUserId, from, to }),
             });
         }
 

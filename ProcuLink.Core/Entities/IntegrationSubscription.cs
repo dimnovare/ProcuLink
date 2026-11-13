@@ -7,9 +7,8 @@ public class IntegrationSubscription
     /// <summary>"zapier" | "make" | "custom"</summary>
     public string  Platform        { get; set; } = "custom";
     /// <summary>
-    /// One of <see cref="Constants.IntegrationEventTypes.Subscribable"/>. Do not re-list the values
-    /// here — this comment previously named three events while five were emitted, and a stale doc
-    /// that reads as a registry is how the missing <c>order.rejected</c> entry went unnoticed.
+    /// An order event name (<c>order.*</c>). Nothing fires these any more: plan 13b (2026-11-13)
+    /// deleted the order-event webhook sender with the order pipeline. The table stays (no drops).
     /// </summary>
     public string  EventType       { get; set; } = string.Empty;
     public string  TargetUrl       { get; set; } = string.Empty;

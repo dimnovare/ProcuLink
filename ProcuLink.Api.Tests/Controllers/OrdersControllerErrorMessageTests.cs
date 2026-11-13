@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Controllers;
+using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
@@ -57,7 +58,7 @@ public class OrdersControllerErrorMessageTests
             OutboundArtifacts = new List<OutboundArtifact>(),
         };
 
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc
             .Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(failedEntity));
@@ -115,7 +116,7 @@ public class OrdersControllerErrorMessageTests
             OutboundArtifacts = new List<OutboundArtifact>(),
         };
 
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc
             .Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(failedEntity));
@@ -173,7 +174,7 @@ public class OrdersControllerErrorMessageTests
             OutboundArtifacts = new List<OutboundArtifact>(),
         };
 
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc
             .Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(deadEntity));
@@ -237,7 +238,7 @@ public class OrdersControllerErrorMessageTests
             OutboundArtifacts = new List<OutboundArtifact>(),
         };
 
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc
             .Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(parkedEntity));
@@ -318,7 +319,7 @@ public class OrdersControllerErrorMessageTests
             OutboundArtifacts = new List<OutboundArtifact>(),
         };
 
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc
             .Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(parkedEntity));
@@ -393,7 +394,7 @@ public class OrdersControllerErrorMessageTests
             OutboundArtifacts = new List<OutboundArtifact>(),
         };
 
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc
             .Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(heldEntity));
@@ -534,7 +535,7 @@ public class OrdersControllerErrorMessageTests
     private static async Task<OrderDto> GetDtoAsync(
         ProcuLinkDbContext db, Guid orgId, Guid orderId, PurchaseOrderEntity entity)
     {
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc
             .Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(entity));
@@ -576,7 +577,7 @@ public class OrdersControllerErrorMessageTests
             OutboundArtifacts = new List<OutboundArtifact>(),
         };
 
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc
             .Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(readyEntity));

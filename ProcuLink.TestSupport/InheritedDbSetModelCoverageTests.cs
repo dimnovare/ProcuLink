@@ -105,9 +105,10 @@ public class InheritedDbSetModelCoverageTests
             + "would make it ignore nothing and prove nothing");
 
         // 9 -> 4 on 2026-11-13: plan 13b deleted four of the ten subclasses with the order
-        // endpoints their tests covered (6 today).
-        scan.Contexts.Count(c => !c.IsControl).Should().BeGreaterThan(4,
-            "this assembly is known to hold six ProcuLinkDbContext subclasses; fewer means type "
+        // endpoints their tests covered. 4 -> 3 the same day: plan 13b Task 7a deleted
+        // TransformStrandNeverSilentTests and its two subclasses with OrderTransformService (4 today).
+        scan.Contexts.Count(c => !c.IsControl).Should().BeGreaterThan(3,
+            "this assembly is known to hold four ProcuLinkDbContext subclasses; fewer means type "
             + "discovery is broken, not that the population shrank");
     }
 

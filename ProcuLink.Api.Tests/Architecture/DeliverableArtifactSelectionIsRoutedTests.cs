@@ -74,14 +74,16 @@ public sealed class DeliverableArtifactSelectionIsRoutedTests
     /// allowed to appear (the guard above is what judges them), but these disappearing means the
     /// scanner has stopped seeing the real tree — the failure mode where a guard reports clean
     /// because it matches nothing.
+    ///
+    /// <para>2026-11-13, plan 13b: <c>OrderTransformService.TransformCoreAsync</c>,
+    /// <c>ReplayService.ReprocessAsync</c> and <c>DeliveryService.RetryDeliveryAsync</c> left this
+    /// floor because those three classes were deleted with the order pipeline — not because the
+    /// scanner stopped seeing them.</para>
     /// </summary>
     private static readonly string[] KnownSelectionSites =
     [
         "ProcuLink.Api.Controllers.OrdersController.MapToDto",
-        "ProcuLink.Api.Services.OrderTransformService.TransformCoreAsync",
-        "ProcuLink.Api.Services.ReplayService.ReprocessAsync",
         "ProcuLink.Core.Services.OutboundArtifactSelection.NewestDeliverable",
-        "ProcuLink.Infrastructure.Services.DeliveryService.RetryDeliveryAsync",
     ];
 
     /// <summary>
@@ -89,10 +91,12 @@ public sealed class DeliverableArtifactSelectionIsRoutedTests
     /// lookup by identity or a bulk sweep — the caller already knows which artifact it means, so
     /// there is no recency question to get wrong. Their existence is asserted separately, because a
     /// negative control that names a method which no longer exists proves nothing.
+    ///
+    /// <para>2026-11-13, plan 13b: <c>DeliveryService.DispatchArtifactAsync</c> left this list
+    /// because <c>DeliveryService</c> was deleted with the order pipeline.</para>
     /// </summary>
     private static readonly (Type Type, string Method)[] NotSelections =
     [
-        (typeof(ProcuLink.Infrastructure.Services.DeliveryService), "DispatchArtifactAsync"),
         (typeof(ProcuLink.Infrastructure.Services.DataErasureService), "EraseOrderAsync"),
         (typeof(ProcuLink.Infrastructure.Services.BlobRetentionService), "RunAsync"),
     ];

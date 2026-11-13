@@ -21,10 +21,9 @@ namespace ProcuLink.Api.Tests.Services;
 /// the lines dropped to review with no explanation.</para>
 ///
 /// <para><b>These tests assert the DIFFERENCE, not the sameness (R6).</b> Each case-variant is
-/// driven through THREE paths that must agree — the live resolver, the pinned-revision snapshot
-/// resolver, and the catalog lookup — and the assertion compares their outcomes to each other. If
-/// any ONE path changes its case rule alone, the comparison fails. A test that merely asserted
-/// "resolves case-insensitively" three times would pass while the three drifted apart.</para>
+/// driven through the live resolver's single and batch paths, and the assertion compares their
+/// outcomes to each other. (2026-11-13, plan 13b: the other two paths this compared against — the
+/// pinned-revision snapshot resolver and the catalog lookup — went with the order pipeline.)</para>
 ///
 /// <para>This class runs on the EF InMemory provider, where <c>.ToLower()</c> executes in C#. It
 /// therefore proves the CONTRACT but says nothing about Npgsql translation or database collation —
@@ -42,7 +41,7 @@ public class ItemMappingCaseParityTests
 
     /// <summary>
     /// Every spelling an ERP export realistically produces for one stored code. Whatever the case
-    /// rule is, all three paths must apply it identically to each of these.
+    /// rule is, both resolver paths must apply it identically to each of these.
     /// </summary>
     public static TheoryData<string> CaseVariants() => new()
     {
@@ -53,11 +52,11 @@ public class ItemMappingCaseParityTests
         " WIDGET-1 ", // padded (trimming is already the documented contract)
     };
 
-    // ── 1. The difference assertion: three paths, one answer ─────────────────────
+    // ── 1. The difference assertion: two paths, one answer ───────────────────────
 
     [Theory]
     [MemberData(nameof(CaseVariants))]
-    public async Task LiveResolver_SnapshotResolver_AndCatalog_AgreeOnEveryCaseVariant(string queried)
+    public async Task LiveResolver_SingleAndBatch_AgreeOnEveryCaseVariant(string queried)
     {
         await using var db = NewDb();
         var orgId      = Guid.NewGuid();
@@ -70,43 +69,21 @@ public class ItemMappingCaseParityTests
             Source = "manual", Confidence = 1f,
             CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
         });
-        db.SupplierProducts.Add(new SupplierProduct
-        {
-            Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,
-            Code = Stored, IsActive = true,
-            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
-        });
         await db.SaveChangesAsync();
 
         var service = new ItemMappingService(db);
 
-        // Path A — the live learned-mapping resolver (single + batch must also agree with each other).
+        // The live learned-mapping resolver: single and batch must agree with each other.
         var liveSingle = await service.ResolveAsync(orgId, supplierId, queried, CancellationToken.None);
         var liveMany   = await service.ResolveManyAsync(
             orgId, supplierId, new[] { queried }, CancellationToken.None);
         var liveManyHit = liveMany.TryGetValue(queried.Trim(), out var v) && v is not null;
 
-        // Path B — the pinned-revision snapshot resolver (must mirror the live one exactly).
-        var snapshot = OrderIngestionService.ResolveFromSnapshot(
-            new[] { new EffectiveRevisionItemMapping(Stored, Target) },
-            new[] { new ParsedOrderLine(1, queried, null, 1m, null, 1m) });
-        var snapshotHit = snapshot.TryGetValue(queried.Trim(), out var sv) && sv is not null;
-
-        // Path C — the supplier catalog lookup.
-        var catalog    = await OrderServiceShared.BuildCatalogLookupAsync(
-            db, orgId, supplierId, new[] { queried.Trim() }, CancellationToken.None);
-        var catalogHit = catalog.ContainsKey(queried.Trim());
-
         var liveSingleHit = liveSingle is not null;
 
-        liveSingleHit.Should().Be(catalogHit,
-            "the learned-mapping resolver and the catalog must apply the SAME case rule to '{0}' — "
-            + "one resolving while the other does not is the defect", queried);
-        liveManyHit.Should().Be(catalogHit,
-            "the batch resolver must agree with the catalog on '{0}'", queried);
-        snapshotHit.Should().Be(catalogHit,
-            "the pinned-revision snapshot resolver must agree with the catalog on '{0}' — a replay "
-            + "that resolves differently from the live path is not a replay", queried);
+        liveSingleHit.Should().BeTrue("the learned mapping resolves '{0}' case-insensitively", queried);
+        liveManyHit.Should().Be(liveSingleHit,
+            "the batch resolver must agree with the single resolver on '{0}'", queried);
     }
 
     // ── 2. Non-vacuity anchors ───────────────────────────────────────────────────
@@ -114,7 +91,7 @@ public class ItemMappingCaseParityTests
     [Fact]
     public async Task TheAgreementIsNotVacuous_ExactCaseResolvesEverywhere()
     {
-        // Without this, all three paths returning "no" for everything would satisfy the theory above.
+        // The exact-case anchor for the theory above.
         await using var db = NewDb();
         var orgId      = Guid.NewGuid();
         var supplierId = Guid.NewGuid();
@@ -126,18 +103,10 @@ public class ItemMappingCaseParityTests
             Source = "manual", Confidence = 1f,
             CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
         });
-        db.SupplierProducts.Add(new SupplierProduct
-        {
-            Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,
-            Code = Stored, IsActive = true, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
-        });
         await db.SaveChangesAsync();
 
         (await new ItemMappingService(db).ResolveAsync(orgId, supplierId, Stored, CancellationToken.None))
             .Should().Be(Target);
-
-        (await OrderServiceShared.BuildCatalogLookupAsync(db, orgId, supplierId, new[] { Stored }, CancellationToken.None))
-            .Should().ContainKey(Stored);
     }
 
     [Fact]
@@ -265,8 +234,8 @@ public class ItemMappingCaseParityTests
     //
     // Case-insensitivity belongs in the MATCH (which stored row does this code find?), never in the
     // RESULT KEYING (which answer does this line get?). Folding the keys collapses two genuinely
-    // different lines onto one answer, and OrderIngestionService.BuildLineEntitiesAsync writes that
-    // one answer onto both lines — the WRONG ITEM is ordered, silently, with a confident mapping.
+    // different lines onto one answer, and a caller writing that answer per line would put it onto
+    // both — the WRONG ITEM is ordered, silently, with a confident mapping.
 
     /// <summary>
     /// Seeds two case-variant rows and returns a service over them. Deliberately models the
@@ -365,58 +334,8 @@ public class ItemMappingCaseParityTests
         many["WIDGET-1"].Should().Be("SUP-9");
     }
 
-    // ── 5. The snapshot resolver's tie-break must match the live one ─────────────
-
-    [Fact]
-    public async Task ResolveFromSnapshot_PicksTheSameTwinAsTheLiveResolver()
-    {
-        // A replay renders through ResolveFromSnapshot. "Last snapshot row wins" and the live
-        // resolver's "exact-case wins" disagree whenever the snapshot lists the twins in the order
-        // below — so a replay of a delivered order silently substitutes a different supplier code.
-        await using var db = NewDb();
-        var (service, orgId, supplierId) = await TwinRowsAsync(db);
-
-        var snapshot = new[]
-        {
-            new EffectiveRevisionItemMapping("B-1", "SUP-UPPER"),
-            new EffectiveRevisionItemMapping("b-1", "SUP-LOWER"),
-        };
-        var lines = new[] { new ParsedOrderLine(1, "B-1", null, 1m, null, 1m) };
-
-        var fromSnapshot = OrderIngestionService.ResolveFromSnapshot(snapshot, lines);
-        var live         = await service.ResolveManyAsync(
-            orgId, supplierId, new[] { "B-1" }, CancellationToken.None);
-
-        fromSnapshot["B-1"].Should().Be(live["B-1"],
-            "a replay must reproduce what the live path did, including which of two case-variant "
-            + "rows won");
-    }
-
-    [Fact]
-    public async Task ResolveFromSnapshot_KeysByTheExactRequestedCode_LikeTheLiveResolver()
-    {
-        await using var db = NewDb();
-        var (service, orgId, supplierId) = await TwinRowsAsync(db);
-
-        var snapshot = new[]
-        {
-            new EffectiveRevisionItemMapping("B-1", "SUP-UPPER"),
-            new EffectiveRevisionItemMapping("b-1", "SUP-LOWER"),
-        };
-        var lines = new[]
-        {
-            new ParsedOrderLine(1, "B-1", null, 1m, null, 1m),
-            new ParsedOrderLine(2, "b-1", null, 1m, null, 1m),
-        };
-
-        var fromSnapshot = OrderIngestionService.ResolveFromSnapshot(snapshot, lines);
-        var live         = await service.ResolveManyAsync(
-            orgId, supplierId, new[] { "B-1", "b-1" }, CancellationToken.None);
-
-        fromSnapshot.Should().HaveCount(live.Count);
-        fromSnapshot["B-1"].Should().Be(live["B-1"]);
-        fromSnapshot["b-1"].Should().Be(live["b-1"]);
-    }
+    // (2026-11-13, plan 13b: section 5 — the snapshot resolver's tie-break — went with
+    // OrderIngestionService.ResolveFromSnapshot.)
 
     // ── 6. EVERY write path obeys the shared rule (the twin population is closed) ─
 

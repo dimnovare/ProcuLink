@@ -113,9 +113,9 @@ public sealed class OutputFormatWritePathsValidateTests
             .Select(s => $"{s.Method.DeclaringType?.Name}.{s.Method.Name}")
             .ToList();
 
-        sites.Should().Contain(
-            s => s.Contains("SupplierConnectionService") && s.Contains("ApplyScalars"),
-            "the connection-revision write path is the site the defect was reported on");
+        // 2026-11-13, plan 13b: the SupplierConnectionService.ApplyScalars pin left this floor
+        // because SupplierConnectionService was deleted (its connection-revision write path went with
+        // the order pipeline's replay) — not because the scanner stopped seeing it.
         sites.Should().Contain(
             s => s.Contains("DeliveryConfigService") && s.Contains("UpsertAsync"),
             "the live delivery-config write path is its sibling, and has always validated");

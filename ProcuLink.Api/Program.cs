@@ -101,10 +101,6 @@ StripeConfiguration.AppInfo = new AppInfo { Name = "ProcuLink", Url = "https://p
 // API gets 30 (it serves HTTP + enqueues Hangfire jobs); the Worker (WorkerCount=10)
 // gets 20. ConnectionIdleLifetime returns idle pooled connections to Neon so the
 // pool doesn't pin its ceiling. Existing settings in the string are preserved.
-// P2 hardening: log-only order state-machine observer. Singleton interceptor attached to
-// every DbContext, so all tracked Status writes flow through one observation point. It
-// only logs warnings on unexpected transitions — it never blocks or mutates a save.
-builder.Services.AddSingleton<ProcuLink.Infrastructure.Services.OrderStatusTransitionObserver>();
 // Time-boxed diagnostic: record database faults against the in-flight request so the
 // middleware below can say whether that request survived them. See DatabaseFaultOutcome.
 builder.Services.AddSingleton<ProcuLink.Api.Middleware.DatabaseFaultOutcome.ConnectionObserver>();
@@ -118,7 +114,6 @@ builder.Services.AddDbContext<ProcuLinkDbContext>((sp, options) =>
     options.UseNpgsql(BuildPooledConnectionString(
             builder.Configuration.GetConnectionString("DefaultConnection"), maxPoolSize: 30))
         .AddInterceptors(
-            sp.GetRequiredService<ProcuLink.Infrastructure.Services.OrderStatusTransitionObserver>(),
             sp.GetRequiredService<ProcuLink.Api.Middleware.DatabaseFaultOutcome.ConnectionObserver>(),
             sp.GetRequiredService<ProcuLink.Api.Middleware.DatabaseFaultOutcome.TransactionObserver>()));
 
@@ -541,26 +536,18 @@ else
 
 // ── Domain services ────────────────────────────────────────────────────────
 // ItemMappingService is Scoped (DbContext is Scoped).
-// OrderService is Scoped for the same reason.
 builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
 // Supplier product catalog (ground truth for AI code suggestions) — Scoped (DbContext is Scoped).
 builder.Services.AddScoped<ISupplierCatalogService, SupplierCatalogService>();
 // V10 — indexed catalog retrieval at scale (exact + pg_trgm trigram). Scoped; OrderIngestionService
 // self-constructs one from its DbContext, but register it so other consumers can resolve it.
 builder.Services.AddScoped<ICatalogRetrievalService, CatalogRetrievalService>();
-// Durable AI-suggestion accept/reject decision history (confidence calibration) — Scoped.
-builder.Services.AddScoped<IAiSuggestionDecisionService, AiSuggestionDecisionService>();
 builder.Services.AddScoped<IOrderExceptionService, OrderExceptionService>();
 builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();
-// WP-17 — the server-side acceptance gate. Registered in BOTH hosts (see Worker/Program.cs): the
-// Worker is where TransformOrderJob actually runs, so a gate registered only here would be
-// enforcement living in the API process and nowhere the transform happens.
-builder.Services.AddScoped<IAcceptanceGate, AcceptanceGate>();
 // Group V4 — unified validation: reusable rule definitions + binding-aware read API + boot backfill.
 builder.Services.AddScoped<IRuleDefinitionService, RuleDefinitionService>();
 builder.Services.AddScoped<IRuleDefinitionBackfillService, RuleDefinitionBackfillService>();
 // Group V1 — versioned Supplier Connection (lifecycle service, ingest-time resolver, backfill).
-builder.Services.AddScoped<ISupplierConnectionService, SupplierConnectionService>();
 builder.Services.AddScoped<IConnectionResolver, ConnectionResolver>();
 builder.Services.AddScoped<IConnectionBackfillService, ConnectionBackfillService>();
 // Task 8 (credential AAD binding) — idempotent boot backfill that re-encrypts pre-binding
@@ -579,11 +566,8 @@ builder.Services.AddScoped<ICredentialBindingBackfillService, CredentialBindingB
 // docs/ops/revision-authority-production-smoke.md.
 builder.Services.AddScoped<IEffectiveConnectionConfigResolver,
                            ProcuLink.Infrastructure.Services.EffectiveConnectionConfigResolver>();
-// Group V2 — replay / impact testing (non-mutating; reuses the transform + acceptance engines).
-builder.Services.AddScoped<IReplayService, ReplayService>();
-builder.Services.AddScoped<IOrderService, OrderService>();
-// Same scoped OrderService also serves the pull-ingress stub-creation seam (explicit order id).
-builder.Services.AddScoped<IStubOrderCreator>(sp => (OrderService)sp.GetRequiredService<IOrderService>());
+// The read-only order archive (the three GETs on OrdersController).
+builder.Services.AddScoped<IOrderQueryService, OrderQueryService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
 // Parity with the Worker (which runs the daily reconciliation sweep); keeps Development DI
 // validation consistent across both hosts even though only the Worker executes the job.
@@ -687,20 +671,12 @@ if (builder.Configuration.GetValue<bool>("NoEgressOcr:Enabled"))
     builder.Services.AddSingleton<IDocumentOcrService, RapidOcrDocumentOcrService>();
 else
     builder.Services.AddSingleton<IDocumentOcrService, NoOpOcrService>();
-// IPoMappingService resolves to the INVALIDATING decorator, never the bare PoMappingService. All five
-// supplier-mapping writers go through this interface, so wrapping it here is what makes "a supplier
-// mapping save can never leave a stale artifact shippable" total rather than per-endpoint. The inner
-// implementation is registered as a concrete type so only the decorator can reach it.
-builder.Services.AddScoped<PoMappingService>();
-builder.Services.AddScoped<IPoMappingService>(sp => new ArtifactInvalidatingPoMappingService(
-    sp.GetRequiredService<PoMappingService>(),
-    sp.GetRequiredService<ProcuLinkDbContext>(),
-    sp.GetRequiredService<IEffectiveConnectionConfigResolver>(),
-    sp.GetRequiredService<ILogger<ArtifactInvalidatingPoMappingService>>()));
+// The artifact-invalidating decorator went with the order pipeline (plan 13b): no order artifact
+// can be re-sent any more, so there is nothing left for a mapping save to invalidate.
+builder.Services.AddScoped<IPoMappingService, PoMappingService>();
 builder.Services.AddScoped<IBuyerService, BuyerService>();
 // ── Wave 4: API keys + integration subscriptions ──────────────────────────
 builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
-builder.Services.AddScoped<IIntegrationTriggerService, IntegrationTriggerService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
 builder.Services.AddSingleton<OutboundRequestGuard>();
 // Group O reliability: retry-queue backoff + SLA window tunables (section Delivery:Reliability).
@@ -717,12 +693,6 @@ builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
 // the Sender SharedSecret for the cXML transform (OrderService → OrderTransformService). Unregistered
 // → legacy GUID identities.
 builder.Services.AddScoped<ICxmlCredentialResolver, CxmlCredentialResolver>();
-builder.Services.AddScoped<IDeliveryService, DeliveryService>();
-// Re-drive seam: the reactivation webhook (BillingController → ReleaseBillingHeldOrdersAsync)
-// re-enqueues delivery for billing-held orders (held parks are restored, not re-enqueued). The
-// Hangfire adapter needs only IBackgroundJobClient, which the Api already provides. Also injected
-// into DeliveryService.
-builder.Services.AddScoped<IRetryDeliveryEnqueuer, ProcuLink.Infrastructure.Jobs.HangfireRetryDeliveryEnqueuer>();
 builder.Services.AddScoped<IErpConnector, ErplyConnector>();
 builder.Services.AddScoped<IErpConnector, DirectoConnector>();
 builder.Services.AddScoped<IDeliveryDispatcher, HttpDeliveryDispatcher>();

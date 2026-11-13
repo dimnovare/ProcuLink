@@ -26,7 +26,7 @@ public class OrdersControllerPurgedBlobTests
             .Options);
 
     private static OrdersController Build(
-        Mock<IOrderService> ordersSvc,
+        Mock<IOrderQueryService> ordersSvc,
         Guid orgId,
         ProcuLinkDbContext db)
     {
@@ -45,7 +45,7 @@ public class OrdersControllerPurgedBlobTests
     public async Task Download_PurgedArtifact_Returns410WithPolicyMessage_Not500()
     {
         var orgId = Guid.NewGuid();
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc
             .Setup(s => s.GetDownloadUrlAsync(orgId, It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<DownloadUrl>.Fail(RetentionConstants.BlobPurgedError));
@@ -65,7 +65,7 @@ public class OrdersControllerPurgedBlobTests
     public async Task Download_UnknownArtifact_StillReturns404()
     {
         var orgId = Guid.NewGuid();
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc
             .Setup(s => s.GetDownloadUrlAsync(orgId, It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<DownloadUrl>.Fail("Artifact not found."));

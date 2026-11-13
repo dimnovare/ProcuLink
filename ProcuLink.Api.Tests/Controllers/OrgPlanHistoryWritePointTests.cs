@@ -56,7 +56,6 @@ public class OrgPlanHistoryWritePointTests
             NullLogger<BillingController>.Instance,
             db,
             new Mock<IAiUsageTracker>().Object,
-            new Mock<ProcuLink.Core.Services.Delivery.IDeliveryService>().Object,
             new ProcuLink.Api.Services.Documents.DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new ProcuLink.Api.Services.Documents.DocumentEngineOptions())));
 
     private static AdminController MakeAdminController(ProcuLinkDbContext db) =>

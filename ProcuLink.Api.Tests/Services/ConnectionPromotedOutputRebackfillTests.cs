@@ -34,10 +34,9 @@ namespace ProcuLink.Api.Tests.Services;
 ///       repairs legacy null-output rows created by the backfill — fill-null-only, idempotent,
 ///       scoped to "system:backfill" rows; rows without a usable promoted Output (none / empty /
 ///       malformed / no po-mapping) and user-authored revisions stay untouched.</item>
-///   <item>CONSUMABLE-SHAPE PROOF: after the re-backfill, a PINNED order rendered through the
-///       revision path produces BYTE-IDENTICAL output to an identical UNPINNED order rendered
-///       through the live batch-4A supplier-promoted path, for the same supplier config.</item>
 /// </list>
+/// (2026-11-13, plan 13b: the CONSUMABLE-SHAPE PROOF fact — pinned vs unpinned order rendered
+/// through <c>OrderService</c> — went with the order pipeline's transform.)
 /// </summary>
 public class ConnectionPromotedOutputRebackfillTests
 {
@@ -265,133 +264,5 @@ public class ConnectionPromotedOutputRebackfillTests
 
         Assert.Equal(0, updated);
         Assert.Null((await db.SupplierConnectionRevisions.SingleAsync(r => r.Id == userRev.Id)).OutputMappingJson);
-    }
-
-    // ── CONSUMABLE-SHAPE PROOF: revision path ≡ batch-4A promoted path ─────────
-
-    /// <summary>OrderService wired exactly like <see cref="RevisionAuthorityTransformTests"/>: real PoMappingService (4A path), real transformers, byte-capturing storage, revision-authority resolver.</summary>
-    private static (OrderService Svc, Func<byte[]?> CapturedBytes) Build(ProcuLinkDbContext db, bool flagEnabled)
-    {
-        byte[]? captured = null;
-
-        var fileStorage = new Mock<IFileStorageService>();
-        fileStorage
-            .Setup(s => s.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .Callback<Stream, string, string, CancellationToken>((stream, _, _, _) =>
-            {
-                using var ms = new MemoryStream();
-                stream.Position = 0;
-                stream.CopyTo(ms);
-                captured = ms.ToArray();
-            })
-            .ReturnsAsync("artifact-key");
-
-        var resolver = new EffectiveConnectionConfigResolver(db, new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                [EffectiveConnectionConfigResolver.FlagKey] = flagEnabled ? "true" : "false",
-            })
-            .Build());
-
-        var svc = new OrderService(
-            db,
-            fileStorage.Object,
-            new OrderParserFactory(new IPurchaseOrderParser[] { new CsvOrderParser() }),
-            new Mock<IItemMappingService>().Object,
-            new OrderExceptionService(db),
-            new PoMappingService(db), // REAL — drives the live 4A promoted path for the unpinned order
-            new Mock<IAiMappingService>().Object,
-            new ITransformService[] { new CsvTransformService(), new JsonTransformService(), new XmlTransformService() },
-            NullLogger<OrderService>.Instance,
-            new Mock<IIntegrationTriggerService>().Object,
-            new ProcuLink.Infrastructure.Services.Detection.FormatDetectorService(),
-            effectiveConfig: resolver);
-
-        return (svc, () => captured);
-    }
-
-    /// <summary>Seeds a fully-resolved 2-line order; identical content per call so renders are comparable.</summary>
-    private static async Task<Guid> SeedResolvedOrderAsync(
-        ProcuLinkDbContext db, Guid orgId, Guid supplierId, Guid? connectionRevisionId)
-    {
-        var orderId = Guid.NewGuid();
-        db.PurchaseOrders.Add(new PurchaseOrderEntity
-        {
-            Id         = orderId,
-            OrgId      = orgId,
-            SupplierId = supplierId,
-            ConnectionRevisionId = connectionRevisionId,
-            PoNumber   = "PO-PARITY-1",
-            BuyerName  = "Parity Buyer",
-            OrderDate  = new DateOnly(2026, 6, 11),
-            Currency   = "EUR",
-            Status     = "ready",
-            CreatedAt  = DateTime.UtcNow,
-            UpdatedAt  = DateTime.UtcNow,
-            Lines =
-            {
-                new PurchaseOrderLineEntity
-                {
-                    Id = Guid.NewGuid(), OrderId = orderId, LineNumber = 1,
-                    BuyerItemCode = "B-1", SupplierItemCode = "SUP-1", Description = "Widget",
-                    Quantity = 3m, Unit = "EA", UnitPrice = 10m, NeedsReview = false, Confidence = 1.0f,
-                },
-                new PurchaseOrderLineEntity
-                {
-                    Id = Guid.NewGuid(), OrderId = orderId, LineNumber = 2,
-                    BuyerItemCode = "B-2", SupplierItemCode = "SUP-2", Description = "Gadget",
-                    Quantity = 2m, Unit = "EA", UnitPrice = 5.5m, NeedsReview = false, Confidence = 1.0f,
-                },
-            },
-        });
-        await db.SaveChangesAsync();
-        return orderId;
-    }
-
-    [Fact]
-    public async Task Rebackfill_PinnedRevisionPath_RendersByteIdenticalToLivePromotedPath()
-    {
-        await using var db = NewDb();
-        var (orgId, supplierId) = await SeedSupplierAsync(db);
-        await new PoMappingService(db).UpsertAsync(orgId, supplierId, PromotedConfig(), CancellationToken.None);
-        var legacy = await SeedLegacyBackfilledRevisionAsync(db, orgId, supplierId);
-
-        // Identical orders: one PINNED to the legacy revision, one UNPINNED (live 4A path).
-        var pinnedOrderId   = await SeedResolvedOrderAsync(db, orgId, supplierId, legacy.Id);
-        var unpinnedOrderId = await SeedResolvedOrderAsync(db, orgId, supplierId, null);
-
-        var repaired = await new ConnectionBackfillService(db).RebackfillPromotedOutputAsync(CancellationToken.None);
-        Assert.Equal(1, repaired);
-
-        var (svc, captured) = Build(db, flagEnabled: true);
-
-        var pinnedResult = await svc.TransformAsync(orgId, pinnedOrderId, OutputFormat.Csv, CancellationToken.None);
-        Assert.True(pinnedResult.IsSuccess, pinnedResult.Error);
-        var pinnedBytes = captured()!;
-
-        var unpinnedResult = await svc.TransformAsync(orgId, unpinnedOrderId, OutputFormat.Csv, CancellationToken.None);
-        Assert.True(unpinnedResult.IsSuccess, unpinnedResult.Error);
-        var promotedBytes = captured()!;
-
-        // The promoted layout actually drove the pinned render (not a coincidental fixed fallback)…
-        var pinnedCsv = Encoding.UTF8.GetString(pinnedBytes);
-        Assert.StartsWith("PromotedRef,PromotedCode", pinnedCsv);
-        Assert.Contains("PO-PARITY-1,SUP-1", pinnedCsv);
-
-        // …and the revision path renders BYTE-IDENTICAL output to the batch-4A promoted path
-        // for the same supplier config (CSV is timestamp-free) — the consumable-shape proof.
-        Assert.Equal(promotedBytes, pinnedBytes);
-
-        // Provenance: the pinned artifact records the revision-prefixed digest over the
-        // re-backfilled snapshot; the unpinned one records the supplier-prefixed digest.
-        var revJson = (await db.SupplierConnectionRevisions.SingleAsync(r => r.Id == legacy.Id)).OutputMappingJson;
-        var pinnedArtifact = await db.OutboundArtifacts.SingleAsync(a => a.OrderId == pinnedOrderId);
-        Assert.Equal(
-            ProvenanceHash.TrySha256HexUtf8($"revision:{legacy.Id}:{revJson}"),
-            pinnedArtifact.ConfigDigest);
-        var unpinnedArtifact = await db.OutboundArtifacts.SingleAsync(a => a.OrderId == unpinnedOrderId);
-        Assert.Equal(
-            ProvenanceHash.TrySha256HexUtf8($"supplier:{revJson}"),
-            unpinnedArtifact.ConfigDigest); // same output-config JSON, supplier-prefixed — shapes provably identical
     }
 }

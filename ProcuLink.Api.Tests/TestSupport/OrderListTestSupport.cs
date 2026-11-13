@@ -1,13 +1,8 @@
-using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
-using ProcuLink.Core.Services.Ai;
-using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
-using ProcuLink.Transform.Output;
-using ProcuLink.Transform.Parsing;
 
 namespace ProcuLink.Api.Tests.TestSupport;
 
@@ -15,64 +10,19 @@ namespace ProcuLink.Api.Tests.TestSupport;
 /// Shared helpers for the order-list / pagination tests. Centralises the two pieces that
 /// were copy-pasted across <c>OrderServiceListPagedTests</c>,
 /// <c>OrdersControllerListPagingTests</c>, and <c>OrdersListPagingPostgresTests</c>:
-/// constructing a real <see cref="OrderService"/> with no-op collaborators, and seeding
-/// purchase-order rows. Each test still owns its own DbContext (InMemory vs Postgres) and
-/// org/supplier setup — only the duplicated mechanics live here.
+/// constructing a real <see cref="OrderQueryService"/>, and seeding purchase-order rows.
+/// Each test still owns its own DbContext (InMemory vs Postgres) and org/supplier setup —
+/// only the duplicated mechanics live here.
 /// </summary>
 internal static class OrderListTestSupport
 {
     /// <summary>
-    /// A real <see cref="OrderService"/> over <paramref name="db"/> whose collaborators are
-    /// no-ops (empty item/PO/AI mappings, file storage, integration trigger). The list/window
-    /// query path does not invoke any of them, so this is safe for every paging test.
+    /// A real <see cref="OrderQueryService"/> over <paramref name="db"/> with a no-op file
+    /// store. (2026-11-13, plan 13b: this built the deleted <c>OrderService</c> facade; the
+    /// list/window queries it delegated to are <see cref="OrderQueryService"/>'s.)
     /// </summary>
-    public static OrderService BuildOrderService(ProcuLinkDbContext db)
-    {
-        var fileStorage = new Mock<IFileStorageService>();
-
-        var itemMappings = new Mock<IItemMappingService>();
-        itemMappings
-            .Setup(s => s.ResolveManyAsync(
-                It.IsAny<Guid>(), It.IsAny<Guid>(),
-                It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyDictionary<string, string?>)new Dictionary<string, string?>());
-
-        var poMappings = new Mock<IPoMappingService>();
-        poMappings
-            .Setup(s => s.GetAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((PoMappingConfig?)null);
-
-        var aiMappings = new Mock<IAiMappingService>();
-        aiMappings
-            .Setup(s => s.SuggestSupplierItemCodesAsync(
-                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(),
-                It.IsAny<IReadOnlyList<AiMappingLineContext>>(),
-                It.IsAny<IReadOnlyList<AiMappingCandidate>>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyDictionary<int, AiMappingSuggestion>)new Dictionary<int, AiMappingSuggestion>());
-
-        var integrationTrigger = new Mock<IIntegrationTriggerService>();
-        integrationTrigger
-            .Setup(s => s.EnqueueAsync(
-                It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<object>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
-
-        return new OrderService(
-            db,
-            fileStorage.Object,
-            new OrderParserFactory(new IPurchaseOrderParser[]
-            {
-                new CsvOrderParser(), new XlsxOrderParser(), new PdfOrderParser()
-            }),
-            itemMappings.Object,
-            new ProcuLink.Infrastructure.Services.OrderExceptionService(db),
-            poMappings.Object,
-            aiMappings.Object,
-            Array.Empty<ITransformService>(),
-            NullLogger<OrderService>.Instance,
-            integrationTrigger.Object,
-            new ProcuLink.Infrastructure.Services.Detection.FormatDetectorService());
-    }
+    public static OrderQueryService BuildOrderService(ProcuLinkDbContext db) =>
+        new(db, new Mock<IFileStorageService>().Object);
 
     /// <summary>
     /// Adds <paramref name="count"/> purchase orders for (<paramref name="orgId"/>,

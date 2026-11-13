@@ -131,12 +131,7 @@ static string? BuildPooledConnectionString(string? raw, int maxPoolSize)
     return b.ConnectionString;
 }
 
-// P2 hardening: same log-only order state-machine observer as the API host — delivery,
-// stuck-detection, and job-driven Status writes happen here too. Warnings only; never blocks.
-builder.Services.AddSingleton<ProcuLink.Infrastructure.Services.OrderStatusTransitionObserver>();
-builder.Services.AddDbContext<ProcuLinkDbContext>((sp, options) =>
-    options.UseNpgsql(connectionString)
-        .AddInterceptors(sp.GetRequiredService<ProcuLink.Infrastructure.Services.OrderStatusTransitionObserver>()));
+builder.Services.AddDbContext<ProcuLinkDbContext>(options => options.UseNpgsql(connectionString));
 
 builder.Services.AddHangfire(cfg => cfg
     .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
@@ -173,9 +168,6 @@ else
 
 builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
 builder.Services.AddScoped<IOrderExceptionService, OrderExceptionService>();
-// Wave 4: IntegrationTriggerService is needed by OrderService and DeliveryService.
-// Register it here so Worker DI validation passes (same as API/Program.cs line 198).
-builder.Services.AddScoped<IIntegrationTriggerService, IntegrationTriggerService>();
 // Analytics (PostHog) — required by StripeBillingService (resolved via IBillingService
 // in ParseOrderJob). No-op when Analytics:PostHog:ApiKey is absent.
 // Mirrors API/Program.cs lines 189-190.
@@ -216,12 +208,6 @@ else
     builder.Services.AddScoped<IEmailSender, ConsoleEmailSender>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.FlowDestinationService>();
 builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
-builder.Services.AddScoped<IOrderService, OrderService>();
-// Same scoped OrderService also serves the pull-ingress stub-creation seam (explicit order id).
-builder.Services.AddScoped<IStubOrderCreator>(sp => (OrderService)sp.GetRequiredService<IOrderService>());
-// Durable AI-suggestion decision history — an optional OrderService dependency; register it
-// so the resolve/accept paths persist history when driven from the Worker too.
-builder.Services.AddScoped<IAiSuggestionDecisionService, AiSuggestionDecisionService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
 // Billing safety net: reconciles plan/account_status against Stripe as source of truth
 // (driven by the daily BillingReconciliationJob). Registered here because the Worker is the
@@ -231,16 +217,9 @@ builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
 // T4 — external web/product-code grounding (no-op unless Ai:OpenAI:ProductSearch:Enabled=true).
 builder.Services.AddSingleton<IProductCodeSearch, OpenAiProductCodeSearch>();
 builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
-// Same decorator as the API composition root. No Worker job writes a supplier PO mapping today — all
-// six writers are API-side — so this is behaviour-neutral here. It is registered anyway because the
-// alternative is two composition roots that disagree about what IPoMappingService means, and the
-// first Worker job that ever writes one would silently skip the invalidation.
-builder.Services.AddScoped<PoMappingService>();
-builder.Services.AddScoped<IPoMappingService>(sp => new ArtifactInvalidatingPoMappingService(
-    sp.GetRequiredService<PoMappingService>(),
-    sp.GetRequiredService<ProcuLinkDbContext>(),
-    sp.GetRequiredService<IEffectiveConnectionConfigResolver>(),
-    sp.GetRequiredService<ILogger<ArtifactInvalidatingPoMappingService>>()));
+// The artifact-invalidating decorator went with the order pipeline (plan 13b): no order artifact
+// can be re-sent any more, so there is nothing left for a mapping save to invalidate.
+builder.Services.AddScoped<IPoMappingService, PoMappingService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
 builder.Services.AddSingleton<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>();
 // Group O reliability: retry-queue backoff + SLA window tunables (section Delivery:Reliability).
@@ -265,15 +244,7 @@ builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
 // cXML network credentials resolver — consumed by the Worker's TransformOrderJob (OrderService →
 // OrderTransformService) so cXML generated on the Worker carries the supplier's real identities.
 builder.Services.AddScoped<ICxmlCredentialResolver, CxmlCredentialResolver>();
-// WP-17 — the server-side acceptance gate, and the acceptance evaluator it reads. THE WORKER is
-// where TransformOrderJob runs, so this is the host that actually enforces the supplier's blocking
-// rules; before this work package neither type was registered here at all. OrderService also
-// constructs a real gate when DI hands it none, so a future omission degrades to "still enforced"
-// rather than "silently open" — but the registration is the intended path and
-// AcceptanceGateHostRegistrationTests pins both hosts.
 builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();
-builder.Services.AddScoped<IAcceptanceGate, AcceptanceGate>();
-builder.Services.AddScoped<IDeliveryService, DeliveryService>();
 
 // ── Wave 4 reliability/observability: worker-health alert sweep + retention ──
 // The recurring jobs are scheduled in Worker.cs; these are their DI deps.
@@ -386,15 +357,10 @@ else
 // second DI fix.
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, ProcuLink.Infrastructure.Services.Detection.FormatDetectorService>();
 
-// Group O reliability: automatic delivery retry queue (scheduled here).
-builder.Services.AddScoped<RetryDeliveryJob>();
-builder.Services.AddScoped<IRetryDeliveryEnqueuer, ProcuLink.Infrastructure.Jobs.HangfireRetryDeliveryEnqueuer>();
 builder.Services.AddScoped<BillingReconciliationJob>();
 // ParseOrderJob (executed here) records schema fingerprints — register the service it depends on.
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISupplierSuggestionService, ProcuLink.Infrastructure.Services.Detection.SupplierSuggestionService>();
-// ParseOrderJob lives in ProcuLink.Api but is enqueued on "default" — Worker executes it.
-builder.Services.AddScoped<ParseOrderJob>();
 
 builder.Services.AddScoped<ReadDocumentJob>();
 builder.Services.AddScoped<DeliverDocumentJob>();

@@ -111,10 +111,14 @@ public sealed class OrderExceptionService : IOrderExceptionService
         // ReconcileAsync prefers the sentence the park itself wrote to the attempt row, because that
         // one knows WHY the order parked (a file-drop connection that will refuse a repeat send
         // needs the opposite advice from a channel that cannot de-duplicate one). Null protocol =
-        // the channel-agnostic wording: this method works from order status alone.
+        // the channel-agnostic wording: this method works from order status alone. (2026-11-13: the
+        // sentence was DeliveryService.BuildUnconfirmedMessage(protocol: null); plan 13b deleted
+        // DeliveryService, so the null-protocol wording now lives here verbatim.)
         if (status == OrderStatusConstants.DeliveryUnconfirmed)
             return ("delivery_unconfirmed", "Deliver", "warning",
-                DeliveryService.BuildUnconfirmedMessage(protocol: null));
+                "Delivery unconfirmed. We may have sent this order, but lost the connection before the "
+                + "supplier confirmed it, and this delivery channel cannot tell us whether it arrived. "
+                + "Check with the supplier, then either send it again or mark it delivered.");
         if (status == OrderStatusConstants.RejectedBySupplier)
             return ("supplier_rejected", "Deliver", "error", "The supplier rejected this order.");
         if (status == OrderStatusConstants.DeliveryDeadLetter)

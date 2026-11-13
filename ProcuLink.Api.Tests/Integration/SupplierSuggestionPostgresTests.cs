@@ -1,7 +1,5 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
-using Moq;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -108,9 +106,9 @@ public sealed class SupplierSuggestionPostgresFixture(PostgresContainerFixture p
 
 /// <summary>
 /// Supplier auto-detect against real Postgres: the migration, the partial unique index, the
-/// cross-supplier catalog probe (whose index path InMemory cannot tell apart from a broken query),
-/// and the live file-backed parse that writes the suggestions. (The <c>assign-supplier</c>
-/// decision-recording facts retired with that endpoint in plan 13b.)
+/// and the cross-supplier catalog probe (whose index path InMemory cannot tell apart from a broken
+/// query). (The <c>assign-supplier</c> decision-recording facts retired with that endpoint in plan
+/// 13b; the file-backed-parse fact went with the order pipeline's parse, 2026-11-13.)
 /// </summary>
 [Collection("postgres-container")]
 public sealed class SupplierSuggestionPostgresTests : IClassFixture<SupplierSuggestionPostgresFixture>
@@ -352,82 +350,5 @@ public sealed class SupplierSuggestionPostgresTests : IClassFixture<SupplierSugg
 
         Assert.Equal(usual.Id, result[0].SupplierId);
         Assert.Contains("3 earlier orders", result[0].Signals.Single(s => s.Signal == SupplierSignalKind.SenderDomainHistory).Detail);
-    }
-
-    // ── The live production path, end to end ──────────────────────────────────
-
-    [DockerRequiredFact]
-    public async Task FileBackedParse_resolvedFromTheContainer_writesSuggestionsForAnUnroutedOrder()
-    {
-        // Reproduces the 2026-07-27 production scenario exactly: an emailed CSV parks 'unrouted'
-        // with no supplier, and its three line codes are real codes in ONE supplier's catalog.
-        //
-        // Everything below the entry point is the real thing — real Postgres, the real parse
-        // transaction, the real scorer, and IOrderService resolved from a DI container rather than
-        // hand-built. That last part is the whole point: on prod this wrote ZERO suggestion rows
-        // while the feature's own tests were green, because they constructed the ingestion service
-        // themselves and OrderService's positional call never forwarded the scorer.
-        await using var db = new ProcuLinkDbContext(Options());
-        var orgId = await SeedOrgAsync(db, "wiring");
-
-        var carrier = AddSupplier(db, orgId, "Exemplar Distribution GmbH");
-        var other   = AddSupplier(db, orgId, "Unrelated Ltd");
-
-        void Catalog(Guid supplierId, params string[] codes)
-        {
-            foreach (var code in codes)
-                db.SupplierProducts.Add(new SupplierProduct
-                {
-                    Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId, Code = code,
-                    IsActive = true, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
-                });
-        }
-
-        Catalog(carrier.Id, "ETI292", "BIXCABPAR2", "ETTAEZC1X-5");
-        Catalog(other.Id, "NOTHING-ALIKE");
-
-        var order = AddOrder(db, orgId, status: OrderStatusConstants.Parsing, supplierId: null,
-            senderDomain: "distributor.example");
-        order.SourceFileKey = $"orders/{order.Id}/AUTODETECT-1.csv";
-        await db.SaveChangesAsync();
-
-        const string csv =
-            "ponumber,currency,buyername,linenumber,buyeritemcode,description,quantity,unitprice\n" +
-            "AUTODETECT-1,EUR,Buyer Ltd,1,ETI292,Scanner,1,10.00\n" +
-            "AUTODETECT-1,EUR,Buyer Ltd,2,BIXCABPAR2,Cable,2,5.00\n" +
-            "AUTODETECT-1,EUR,Buyer Ltd,3,ETTAEZC1X-5,Terminal,1,99.00\n";
-        var bytes = System.Text.Encoding.UTF8.GetBytes(csv);
-
-        var storage = new Mock<IFileStorageService>();
-        storage.Setup(f => f.DownloadAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-               .ReturnsAsync(() => new MemoryStream(bytes));
-
-        await using var sp = Composition.OrderServiceCompositionRootTests.BuildContainer(
-            s => s.AddSingleton<IFileStorageService>(storage.Object),
-            postgresConnectionString: _fx.ConnectionString);
-
-        using var scope = sp.CreateScope();
-        var parsed = await scope.ServiceProvider.GetRequiredService<IOrderService>()
-            .ParseStoredFileAsync(orgId, order.Id, default);
-
-        Assert.True(parsed.IsSuccess, parsed.Error);
-
-        await using var verify = new ProcuLinkDbContext(Options());
-
-        var rows = await verify.OrderSupplierSuggestions.AsNoTracking()
-            .Where(s => s.OrderId == order.Id)
-            .OrderBy(s => s.Rank)
-            .ToListAsync();
-
-        Assert.NotEmpty(rows);
-        Assert.Equal(carrier.Id, rows[0].SupplierId);
-        Assert.DoesNotContain(rows, r => r.SupplierId == other.Id);
-        Assert.All(rows, r => Assert.Null(r.Decision));
-
-        // Suggest, never assign (founder ruling D3): the order still waits for a human.
-        var reparked = await verify.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == order.Id);
-        Assert.Null(reparked.SupplierId);
-        Assert.Equal(OrderStatusConstants.Unrouted, reparked.Status);
-        Assert.Equal(3, await verify.PurchaseOrderLines.CountAsync(l => l.OrderId == order.Id));
     }
 }

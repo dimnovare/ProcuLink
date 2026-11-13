@@ -14,7 +14,7 @@ using ProcuLink.Transform.Parsing;
 namespace ProcuLink.Api.Tests.Services;
 
 /// <summary>
-/// Unit tests for <see cref="OrderService.ListPagedAsync"/>:
+/// Unit tests for <see cref="OrderQueryService.ListPagedAsync"/>:
 /// pagination boundaries, org-scoping, each filter type, and default ordering.
 /// Uses EF InMemory — no database required.
 /// </summary>
@@ -27,7 +27,7 @@ public class OrderServiceListPagedTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 
-    private static OrderService BuildService(ProcuLinkDbContext db)
+    private static OrderQueryService BuildService(ProcuLinkDbContext db)
         => OrderListTestSupport.BuildOrderService(db);
 
     /// <summary>Seeds N purchase orders for a given org, returning their ids newest-first.</summary>

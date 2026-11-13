@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Contracts;
+using ProcuLink.Api.Services;
 using ProcuLink.Api.Tests.TestSupport;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -33,7 +34,7 @@ public class OrderCountsAndListDescribeOnePopulationTests
 
     private sealed record Harness(
         ProcuLinkDbContext Db,
-        IOrderService      Orders,
+        IOrderQueryService      Orders,
         Guid               OrgId);
 
     private static Harness Build()

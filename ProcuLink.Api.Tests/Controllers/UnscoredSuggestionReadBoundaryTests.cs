@@ -6,6 +6,7 @@ using Microsoft.Extensions.Caching.Memory;
 using Moq;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Controllers;
+using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
@@ -155,7 +156,7 @@ public class UnscoredSuggestionReadBoundaryTests
         var tenant = new Mock<ICurrentTenantService>();
         tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
 
-        var orders = new Mock<IOrderService>();
+        var orders = new Mock<IOrderQueryService>();
         orders
             .Setup(s => s.GetByIdAsync(orgId, entity.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(entity));

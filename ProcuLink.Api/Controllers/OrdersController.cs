@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Contracts;
+using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
@@ -23,11 +24,11 @@ namespace ProcuLink.Api.Controllers;
 [Route("api/orders")]
 public sealed class OrdersController : ControllerBase
 {
-    private readonly IOrderService         _orders;
+    private readonly IOrderQueryService    _orders;
     private readonly ICurrentTenantService _tenant;
     private readonly ProcuLinkDbContext    _db;
 
-    public OrdersController(IOrderService orders, ICurrentTenantService tenant, ProcuLinkDbContext db)
+    public OrdersController(IOrderQueryService orders, ICurrentTenantService tenant, ProcuLinkDbContext db)
     {
         _orders = orders;
         _tenant = tenant;
