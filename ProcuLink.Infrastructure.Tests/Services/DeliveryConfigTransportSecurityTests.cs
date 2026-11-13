@@ -177,19 +177,22 @@ public class DeliveryConfigTransportSecurityTests
             .Should().NotThrow();
     }
 
-    // ── Configs saved BEFORE enforcement existed (the read-path warning) ─────
+    // ── Configs saved BEFORE enforcement existed (the delivery-time warning) ──
 
     /// <summary>
     /// Refusing at save protects nothing already stored. A config saved with an http:// endpoint
     /// before enforcement keeps delivering — silently breaking it would trade a security weakness
-    /// for an outage — but it is flagged on read so the editor can say so.
+    /// for an outage — but the dispatchers log it on every send. 2026-11-13 (plan 13b, task 8a):
+    /// re-anchored from the deleted read-path composer <c>DescribeConfigWarnings</c> onto its
+    /// transport half, <see cref="DeliveryConfigTransport.DescribeInsecureTransport"/>, which the
+    /// HTTP, Directo and Erply delivery paths call.
     /// </summary>
     [Theory]
     [InlineData("{\"url\":\"http://erp.supplier.com/xmlcore\"}")]
     [InlineData("{\"URL\":\"http://erp.supplier.com/xmlcore\"}")]
     public void AConfigSavedBeforeEnforcement_IsFlaggedInsecure(string configJson)
     {
-        var warning = DeliveryConfigTransport.DescribeConfigWarnings(DeliveryProtocolConstants.ErpDirecto, configJson);
+        var warning = DeliveryConfigTransport.DescribeInsecureTransport(DeliveryProtocolConstants.ErpDirecto, configJson);
 
         warning.Should().NotBeNullOrWhiteSpace();
         warning.Should().Contain("https://");
@@ -201,18 +204,18 @@ public class DeliveryConfigTransportSecurityTests
     [InlineData("{\"host\":\"files.supplier.example\"}")]
     public void ASecureOrLoopbackConfig_CarriesNoWarning(string configJson)
     {
-        DeliveryConfigTransport.DescribeConfigWarnings(DeliveryProtocolConstants.Http, configJson)
+        DeliveryConfigTransport.DescribeInsecureTransport(DeliveryProtocolConstants.Http, configJson)
             .Should().BeNull();
     }
 
     /// <summary>
-    /// The warning is rendered in the editor and logged. A stored userinfo URL must be flagged,
-    /// but the flag must not carry the password back out into either place.
+    /// The warning is logged. A stored userinfo URL must be flagged, but the flag must not carry
+    /// the password back out into the log line.
     /// </summary>
     [Fact]
     public void AStoredUserinfoUrl_IsFlaggedWithoutEchoingTheSecret()
     {
-        var warning = DeliveryConfigTransport.DescribeConfigWarnings(
+        var warning = DeliveryConfigTransport.DescribeInsecureTransport(
             DeliveryProtocolConstants.Http, "{\"url\":\"https://apiuser:hunter2@supplier.example/orders\"}");
 
         warning.Should().NotBeNullOrWhiteSpace();

@@ -21,9 +21,9 @@ namespace ProcuLink.Infrastructure.Tests.Services;
 ///
 /// <para>2026-11-13 (plan 13b): re-anchored from <c>DeliveryConfigService.UpsertAsync</c>, deleted
 /// with the order pipeline, onto <see cref="DeliveryConfigRules.ValidateCredentialHeaders"/> — the
-/// rule the flow destination save path runs — and the read-path facts onto
-/// <see cref="DeliveryConfigTransport.DescribeConfigWarnings"/>. The persistence-only fact ("a
-/// refused header is nowhere in the persisted column") went with the service.</para>
+/// rule the flow destination save path runs. The persistence-only fact ("a refused header is
+/// nowhere in the persisted column") went with the service, and the read-path facts went with
+/// <c>DescribeConfigWarnings</c>, which lost its last caller (plan 13b, task 8a).</para>
 /// </summary>
 public class DeliveryConfigCredentialHeaderTests
 {
@@ -123,43 +123,5 @@ public class DeliveryConfigCredentialHeaderTests
     public void RemovingALegacyHeader_IsAllowed()
     {
         Save(Clean, stored: WithToken).Should().NotThrow();
-    }
-
-    // ── The read surface ─────────────────────────────────────────────────────
-
-    /// <summary>How an operator whose config predates enforcement finds out.</summary>
-    [Fact]
-    public void ALegacyCredentialHeader_IsReportedWithoutTheToken()
-    {
-        var warning = DeliveryConfigTransport.DescribeConfigWarnings(DeliveryProtocolConstants.Http, WithToken);
-
-        warning.Should().NotBeNullOrWhiteSpace();
-        warning.Should().Contain("'Authorization'");
-        warning.Should().NotContain(Token);
-    }
-
-    [Fact]
-    public void ACleanConfig_HasNoWarning()
-    {
-        DeliveryConfigTransport.DescribeConfigWarnings(DeliveryProtocolConstants.Http, Clean).Should().BeNull();
-    }
-
-    /// <summary>
-    /// A config that is BOTH cleartext and credential-bearing reports both faults, because fixing
-    /// one does not fix the other and an operator told only about the URL would leave the token in
-    /// place.
-    /// </summary>
-    [Fact]
-    public void BothFaults_AreBothReported()
-    {
-        // $$$ / {{{...}}}: $$ / {{...}} does not compile here (CS9007) — the literal "}}" closing
-        // the headers object and then the outer object immediately follows the interpolation's own
-        // closing "}}", producing a same-length brace run the 2-brace delimiter cannot disambiguate.
-        var warning = DeliveryConfigTransport.DescribeConfigWarnings(DeliveryProtocolConstants.Http,
-            $$$"""{"url":"http://supplier.example/orders","headers":{"Authorization":"Bearer {{{Token}}}"}}""");
-
-        warning.Should().Contain("https://", "the transport fault must still be reported");
-        warning.Should().Contain("'Authorization'", "the credential-header fault must be reported too");
-        warning.Should().NotContain(Token);
     }
 }

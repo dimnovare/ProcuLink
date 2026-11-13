@@ -70,19 +70,15 @@ public class OutputTemplateEmitterByteParityTests
                 OutputNode.FieldOf("Qty", Canon("Quantity"))))),
     };
 
-    private static OutputNodeTemplate CsvTree()
+    private static OutputNodeTemplate CsvTree() => new()
     {
-        var config = new OutputMappingConfig
-        {
-            Header = { ["po"] = new OutputFieldRule { OutputPath = "OrderRef", CanonicalField = "PoNumber" } },
-            Lines =
-            {
-                ["sku"] = new OutputFieldRule { OutputPath = "ItemCode", CanonicalField = "SupplierItemCode" },
-                ["qty"] = new OutputFieldRule { OutputPath = "Qty", CanonicalField = "Quantity" },
-            },
-        };
-        return OutputNodeTemplateConverter.FromFlat(config, OutputFormat.Csv);
-    }
+        Format = OutputFormat.Csv,
+        Root = OutputNode.Obj("root",
+            OutputNode.FieldOf("OrderRef", new OutputFieldRule { OutputPath = "OrderRef", CanonicalField = "PoNumber" }),
+            OutputNode.Arr("lines", OutputNode.Obj("line",
+                OutputNode.FieldOf("ItemCode", new OutputFieldRule { OutputPath = "ItemCode", CanonicalField = "SupplierItemCode" }),
+                OutputNode.FieldOf("Qty", new OutputFieldRule { OutputPath = "Qty", CanonicalField = "Quantity" })))),
+    };
 
     private static string Emit(OutputNodeTemplate t)
     {

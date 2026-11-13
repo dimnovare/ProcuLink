@@ -17,7 +17,6 @@ namespace ProcuLink.Transform.Tests;
 ///   3. MappedTransformService.BuildHeaderRow exposes SubTotal, TaxTotal, GrandTotal,
 ///      PaymentTerms, RequestedDeliveryDate
 ///   4. MappedTransformService.BuildLineRow exposes LineAmount, TaxRate, DeliveryDate
-///   5. ScribanOrderModel exposes RequestedDeliveryDate (header) and TaxRate/DeliveryDate (line)
 ///   6. Byte-identical guard: CSV and XML fixed transforms produce the SAME output
 ///      whether or not V5 fields are populated — they read entity typed columns only.
 /// </summary>
@@ -251,78 +250,6 @@ public class V5DeepenCanonicalTests
 
         row["TaxRate"].Should().BeEmpty();
         row["DeliveryDate"].Should().BeEmpty();
-    }
-
-    // ── 5. ScribanOrderModel — V5 fields ─────────────────────────────────────────
-
-    [Fact]
-    public void ScribanOrderModel_ExposesRequestedDeliveryDate()
-    {
-        var order = BuildOrder(requestedDeliveryDate: new DateOnly(2026, 8, 10));
-        order.Lines = new List<PurchaseOrderLineEntity>
-        {
-            new() { LineNumber = 1, BuyerItemCode = "B", SupplierItemCode = "S",
-                    Quantity = 1m, UnitPrice = 1m, NeedsReview = false },
-        };
-
-        var root = ScribanOrderModel.Build(order, null);
-
-        root["RequestedDeliveryDate"].Should().Be("2026-08-10");
-    }
-
-    [Fact]
-    public void ScribanOrderModel_RequestedDeliveryDateEmptyWhenNull()
-    {
-        var order = BuildOrder();  // no requestedDeliveryDate
-        order.Lines = new List<PurchaseOrderLineEntity>
-        {
-            new() { LineNumber = 1, BuyerItemCode = "B", SupplierItemCode = "S",
-                    Quantity = 1m, UnitPrice = 1m, NeedsReview = false },
-        };
-
-        var root = ScribanOrderModel.Build(order, null);
-
-        root["RequestedDeliveryDate"].Should().Be(string.Empty);
-    }
-
-    [Fact]
-    public void ScribanOrderModel_ExposesPerLineTaxRateAndDeliveryDate()
-    {
-        var order = BuildOrder();
-        order.Lines = new List<PurchaseOrderLineEntity>
-        {
-            new() { LineNumber = 1, BuyerItemCode = "B", SupplierItemCode = "S",
-                    Quantity = 2m, UnitPrice = 10m, NeedsReview = false,
-                    TaxRate = 0.20m, DeliveryDate = new DateOnly(2026, 9, 1) },
-        };
-
-        var root = ScribanOrderModel.Build(order, null);
-
-        var lines = root["Lines"] as IEnumerable<object>;
-        lines.Should().HaveCount(1);
-
-        var line = (Scriban.Runtime.ScriptObject)lines!.Single();
-        Convert.ToDecimal(line["TaxRate"]).Should().Be(0.20m);
-        line["DeliveryDate"].Should().Be("2026-09-01");
-    }
-
-    [Fact]
-    public void ScribanOrderModel_TaxRateAndDeliveryDateAreEmptyWhenNull()
-    {
-        var order = BuildOrder();
-        order.Lines = new List<PurchaseOrderLineEntity>
-        {
-            new() { LineNumber = 1, BuyerItemCode = "B", SupplierItemCode = "S",
-                    Quantity = 1m, UnitPrice = 1m, NeedsReview = false,
-                    TaxRate = null, DeliveryDate = null },
-        };
-
-        var root = ScribanOrderModel.Build(order, null);
-
-        var lines = root["Lines"] as IEnumerable<object>;
-        var line = (Scriban.Runtime.ScriptObject)lines!.Single();
-        line["TaxRate"].Should().Be(string.Empty);
-        line["DeliveryDate"].Should().Be(string.Empty);
     }
 
     // ── 6. Byte-identical guard (CSV and XML — fully deterministic) ──────────────

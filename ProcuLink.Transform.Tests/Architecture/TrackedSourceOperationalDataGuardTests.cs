@@ -503,8 +503,10 @@ public class TrackedSourceOperationalDataGuardTests
         // count when the five catalog fixtures went with the catalog pipeline. It counts literals
         // in ASSIGNMENT position only, so a clean refactor can move it by one or two; lower it on
         // purpose when that happens. Breaking the regex drives it to zero, which is what it is for.
+        // 8 -> 7 on 2026-11-13 (plan 13b, task 8a): the one literal in the deleted
+        // EffectiveEntityResolverCarriesWidenedFieldsTests went with it. 7 is today's count.
         (b.ScannedBrandLiterals + c.ScannedBrandLiterals).Should().BeGreaterThanOrEqualTo(
-            8,
+            7,
             $"only {b.ScannedBrandLiterals} brand literals in C# and {c.ScannedBrandLiterals} in "
             + "fixtures were extracted and checked — the brand arm matched almost nothing, so "
             + "class 7 proves nothing");

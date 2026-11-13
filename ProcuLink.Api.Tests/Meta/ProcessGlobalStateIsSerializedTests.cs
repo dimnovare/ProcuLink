@@ -59,7 +59,9 @@ public sealed class ProcessGlobalStateIsSerializedTests
     // were deleted with their subjects, leaving 187. A broken repo root lands near zero, not here.
     // 187 -> 182 on 2026-11-13 (Task 7b pass 2): the revision-authority (3), output-format write-path
     // and item-code comparer guard files went with their subjects.
-    private const int MinimumFilesParsed = 182;
+    // 182 -> 179 on 2026-11-13 (Task 8a): InvoiceChecksTests, SourceTokenReDerivePostgresTests and
+    // WidenedFieldBlastRadiusPostgresTests went with their subjects.
+    private const int MinimumFilesParsed = 179;
     private const int MinimumFilesTouchingProcessGlobalState = 5;
     private const int MinimumTestClassesChecked = 5;
 
