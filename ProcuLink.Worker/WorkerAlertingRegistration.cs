@@ -71,6 +71,7 @@ public static class WorkerAlertingRegistration
         // container that has none.
         services.AddSingleton<IRecurringJobLastExecutionSource, HangfireRecurringJobLastExecutionSource>();
         services.AddScoped<IOperationalAlertProbe, OperationalAlertProbe>();
+        services.AddScoped<IFlowDeliveryHealthProbe, FlowDeliveryHealthProbe>();
 
         // Sinks are SCOPED because the email sink resolves the scoped IEmailApiClient — a singleton
         // sink would capture it. The composite fans out and isolates each transport, so a dead
