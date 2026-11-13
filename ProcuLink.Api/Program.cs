@@ -671,6 +671,9 @@ builder.Services.AddSingleton<IStarterTemplateService, StarterTemplateService>()
 builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Analytics:PostHog"));
 builder.Services.Configure<ProcuLink.Api.Services.Documents.DocumentEngineOptions>(builder.Configuration.GetSection("DocumentEngine"));
 builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.DocumentEngineGate>();
+builder.Services.Configure<ProcuLink.Api.Services.Documents.ValidatorOptions>(builder.Configuration.GetSection("Validator"));
+builder.Services.AddHttpClient(ProcuLink.Api.Services.Documents.PhormValidator.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddScoped<ProcuLink.Core.Documents.IStandardValidator, ProcuLink.Api.Services.Documents.PhormValidator>();
 builder.Services.AddSingleton<ProcuLink.Core.Services.IOrderIntakeSwitch>(sp => sp.GetRequiredService<ProcuLink.Api.Services.Documents.DocumentEngineGate>());
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentRechecker>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentSender>();

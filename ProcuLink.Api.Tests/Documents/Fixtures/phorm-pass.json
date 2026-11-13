@@ -1,0 +1,52 @@
+{
+  "invocationDateTime": "2000-01-01T00:00:00Z",
+  "invocationDurationMillis": 0,
+  "validationDateTime": "2000-01-01T00:00:00Z",
+  "validationSource": {
+    "sourceTypeID": "xml",
+    "partialSource": false
+  },
+  "ves": {
+    "vesid": "eu.peppol.bis3:invoice:2026.5",
+    "name": "OpenPeppol UBL Invoice (2026.5) (aka BIS Billing 3.0.21)",
+    "deprecated": false,
+    "status": {
+      "lastModification": "2000-01-01T00:00:00Z",
+      "type": "valid",
+      "validFrom": "2026-08-17T00:00:00Z"
+    }
+  },
+  "success": true,
+  "interrupted": false,
+  "mostSevereErrorLevel": "SUCCESS",
+  "results": [
+    {
+      "success": "TRUE",
+      "validity": "valid",
+      "artifactType": "xsd",
+      "artifactPathType": "classpath",
+      "artifactPath": "external/schemas/ubl21/maindoc/UBL-Invoice-2.1.xsd",
+      "items": [],
+      "durationMS": 0
+    },
+    {
+      "success": "TRUE",
+      "validity": "valid",
+      "artifactType": "schematron-xslt2",
+      "artifactPathType": "classpath",
+      "artifactPath": "external/schematron/openpeppol/2026.5/xslt/CEN-EN16931-UBL.xslt",
+      "items": [],
+      "durationMS": 0
+    },
+    {
+      "success": "TRUE",
+      "validity": "valid",
+      "artifactType": "schematron-xslt2",
+      "artifactPathType": "classpath",
+      "artifactPath": "external/schematron/openpeppol/2026.5/xslt/PEPPOL-EN16931-UBL.xslt",
+      "items": [],
+      "durationMS": 0
+    }
+  ],
+  "durationMS": 0
+}
