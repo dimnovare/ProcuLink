@@ -208,7 +208,7 @@ public sealed class EndpointReachabilityGuardTests
         MachineFacing.Concat(UncalledPendingDecision).ToDictionary(e => e.Key, e => e, StringComparer.Ordinal);
 
     /// <summary>
-    /// The union as landed, 2026-08-15 (was 2026-08-13). Moved three times, each deliberately and in the open, and each
+    /// The union as landed, 2026-08-15 (was 2026-08-13). Moved four times, each deliberately and in the open, and each
     /// marked at its entries with the date and the caller: 2026-08-15 (the Postmark bounce webhook), 2026-08-20 (the
     /// support PO-number lookup), 2026-11-07 (plan 4's file API, two routes) and 2026-11-13 (the inbound Postmark webhook, whose harness went). <b>SHRINK-ONLY.</b> An entry may be deleted — when the
     /// endpoint gains a caller, or is removed — but nothing may ever be added: a NEW caller-less
