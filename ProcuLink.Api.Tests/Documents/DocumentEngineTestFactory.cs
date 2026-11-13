@@ -12,7 +12,9 @@ using ProcuLink.Api.Tests.Integration;
 using Moq;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Google;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Services.Google;
 
 namespace ProcuLink.Api.Tests.Documents;
 
@@ -21,6 +23,31 @@ public sealed class FakeStandardValidator : ProcuLink.Core.Documents.IStandardVa
     public ProcuLink.Core.Documents.ValidationOutcome Outcome { get; set; } = new(ProcuLink.Core.Documents.ValidationStatus.Passed, []);
 
     public Task<ProcuLink.Core.Documents.ValidationOutcome> ValidateAsync(string vesid, byte[] xml, CancellationToken ct) => Task.FromResult(Outcome);
+}
+
+/// <summary>Replaces <see cref="IGoogleOAuthClient"/>: the real (pure) authorize URL, a canned grant and user, no network.</summary>
+public sealed class FakeGoogleOAuthClient : IGoogleOAuthClient
+{
+    // BuildAuthorizeUrl never touches HTTP, so the real client needs no factory here.
+    private readonly GoogleOAuthClient _real = new(null!, Microsoft.Extensions.Options.Options.Create(new GoogleOptions { ClientId = "test-client-id" }));
+
+    public GoogleGrant Grant { get; set; } = new("at-1", "rt-1", $"openid email {GoogleOAuthClient.DriveFileScope}");
+    public GoogleUser User { get; set; } = new("sub-1", "user@example.com");
+
+    /// <summary>The last code exchange, i.e. what reached "Google".</summary>
+    public (string Code, string RedirectUri, string Verifier)? Exchanged { get; set; }
+
+    public string BuildAuthorizeUrl(string redirectUri, string state, string codeChallenge) => _real.BuildAuthorizeUrl(redirectUri, state, codeChallenge);
+
+    public Task<GoogleGrant> ExchangeCodeAsync(string code, string redirectUri, string codeVerifier, CancellationToken ct)
+    {
+        Exchanged = (code, redirectUri, codeVerifier);
+        return Task.FromResult(Grant);
+    }
+
+    public Task<GoogleUser> GetUserAsync(string accessToken, CancellationToken ct) => Task.FromResult(User);
+    public Task<GoogleRefresh> RefreshAsync(string refreshToken, CancellationToken ct) => Task.FromResult(new GoogleRefresh("at-2", Revoked: false));
+    public Task RevokeAsync(string refreshToken, CancellationToken ct) => Task.CompletedTask;
 }
 
 /// <summary>
@@ -53,6 +80,9 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
     /// <summary>Replaces <see cref="ProcuLink.Core.Documents.IStandardValidator"/>; tests set the outcome.</summary>
     public FakeStandardValidator Validator { get; } = new();
 
+    /// <summary>Replaces <see cref="IGoogleOAuthClient"/>; tests set the grant and user.</summary>
+    public FakeGoogleOAuthClient Google { get; } = new();
+
     /// <summary>Replaces <see cref="IBackgroundJobClient"/>; tests count the jobs created.</summary>
     public Mock<IBackgroundJobClient> Jobs { get; } = new();
 
@@ -80,7 +110,7 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             ["Hangfire:UseInMemory"] = "true",
             ["Sentry:Dsn"] = "",
             ["Storage:R2AccessKeyId"] = "",
-            ["Frontend:Url"] = "http://localhost:3000",
+            ["Frontend:Url"] = "http://localhost:3000, http://localhost:8082/", // space and slash on purpose: the Google origin check trims both (R5)
             ["Security:ApiKeyHashSecret"] = "test-api-key-hash-secret-not-a-real-one",
             ["DocumentEngine:EnabledOrgIds:0"] = OrgA.ToString(),
             ["DocumentEngine:EnabledOrgIds:1"] = OrgB.ToString(),
@@ -89,6 +119,12 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             ["DocumentEngine:FormatOrgIds:0"] = OrgB.ToString(),
             ["DocumentEngine:DocsOutputOrgIds:0"] = OrgA.ToString(),
             ["DocumentEngine:PeppolOrgIds:0"] = OrgA.ToString(),
+            ["DocumentEngine:NativeConnectorOrgIds:0"] = OrgA.ToString(),
+            ["DocumentEngine:NativeConnectorOrgIds:1"] = OrgB.ToString(),
+            ["Google:ClientId"] = "test-client-id",
+            ["Google:ClientSecret"] = "test-client-secret",
+            ["Google:PickerApiKey"] = "test-picker-key",
+            ["Google:ProjectNumber"] = "123456",
         }));
 
         builder.ConfigureServices(services =>
@@ -126,6 +162,9 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             foreach (var d in services.Where(d => d.ServiceType == typeof(ProcuLink.Core.Documents.IStandardValidator)).ToList())
                 services.Remove(d);
             services.AddSingleton<ProcuLink.Core.Documents.IStandardValidator>(Validator);
+            foreach (var d in services.Where(d => d.ServiceType == typeof(IGoogleOAuthClient)).ToList())
+                services.Remove(d);
+            services.AddSingleton<IGoogleOAuthClient>(Google);
             services.AddSingleton(Storage.Object);
             services.AddSingleton(Jobs.Object);
 

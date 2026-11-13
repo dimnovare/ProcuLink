@@ -677,6 +677,7 @@ builder.Services.Configure<ProcuLink.Infrastructure.Services.Google.GoogleOption
 builder.Services.AddHttpClient(ProcuLink.Infrastructure.Services.Google.GoogleOAuthClient.HttpClientName); // fixed Google hosts: no OutboundRequestGuard
 builder.Services.AddScoped<ProcuLink.Core.Services.Google.IGoogleOAuthClient, ProcuLink.Infrastructure.Services.Google.GoogleOAuthClient>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Google.ILinkedAccountTokens, ProcuLink.Infrastructure.Services.Google.LinkedAccountTokens>();
+builder.Services.AddScoped<ProcuLink.Api.Services.Google.GoogleConnectService>(); // Api only: the Worker never connects
 builder.Services.Configure<ProcuLink.Api.Services.Documents.ValidatorOptions>(builder.Configuration.GetSection("Validator"));
 builder.Services.AddHttpClient(ProcuLink.Api.Services.Documents.PhormValidator.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(4)); // under the web app's 8 s budget; the Worker keeps 10 s
 builder.Services.AddScoped<ProcuLink.Core.Documents.IStandardValidator, ProcuLink.Api.Services.Documents.PhormValidator>();
