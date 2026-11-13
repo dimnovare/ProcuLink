@@ -23,6 +23,15 @@ public static class FieldMeanings
     /// <summary>A Peppol participant id, scheme and id: <c>0088:0000000000000</c>. Present only in that shape.</summary>
     public const string SenderEndpointId = "sender_endpoint_id";
     public const string ReceiverEndpointId = "receiver_endpoint_id";
+    public const string SenderStreet = "sender_street";
+    public const string SenderCity = "sender_city";
+    public const string SenderPostcode = "sender_postcode";
+    public const string ReceiverStreet = "receiver_street";
+    public const string ReceiverCity = "receiver_city";
+    public const string ReceiverPostcode = "receiver_postcode";
+    public const string SenderContactName = "sender_contact_name";
+    public const string SenderContactPhone = "sender_contact_phone";
+    public const string SenderContactEmail = "sender_contact_email";
 
     public const string LineDescription = "line_description";
     public const string LineQuantity = "line_quantity";
@@ -39,6 +48,8 @@ public static class FieldMeanings
         TotalNet, TotalTax, TotalGross, Iban, PaymentReference,
         ReceiverVatId, BuyerReference, OrderReference, DeliveryDate, SenderCountry, ReceiverCountry,
         SenderEndpointId, ReceiverEndpointId,
+        SenderStreet, SenderCity, SenderPostcode, ReceiverStreet, ReceiverCity, ReceiverPostcode,
+        SenderContactName, SenderContactPhone, SenderContactEmail,
         LineDescription, LineQuantity, LineUnit, LineUnitPrice, LineAmount, LineTaxRate, LineItemCode, LineNumber,
     ];
 
@@ -65,6 +76,15 @@ public static class FieldMeanings
         [ReceiverCountry] = ["receivercountry", "buyercountry", "customercountry", "shiptocountry"],
         [SenderEndpointId] = ["senderpeppolid", "sellerpeppolid", "senderendpointid", "sellerendpointid", "senderelectronicaddress", "sellerelectronicaddress"],
         [ReceiverEndpointId] = ["receiverpeppolid", "buyerpeppolid", "receiverendpointid", "buyerendpointid", "receiverelectronicaddress", "buyerelectronicaddress"],
+        [SenderStreet] = ["senderstreet", "sellerstreet", "supplierstreet", "vendorstreet", "senderaddress", "selleraddress"],
+        [SenderCity] = ["sendercity", "sellercity", "suppliercity", "vendorcity"],
+        [SenderPostcode] = ["senderpostcode", "sellerpostcode", "supplierpostcode", "senderzip", "sellerzip", "senderpostalcode", "sellerpostalcode"],
+        [ReceiverStreet] = ["receiverstreet", "buyerstreet", "customerstreet", "receiveraddress", "buyeraddress"],
+        [ReceiverCity] = ["receivercity", "buyercity", "customercity"],
+        [ReceiverPostcode] = ["receiverpostcode", "buyerpostcode", "customerpostcode", "receiverzip", "buyerzip", "receiverpostalcode", "buyerpostalcode"],
+        [SenderContactName] = ["sendercontactname", "sellercontactname", "suppliercontactname", "sendercontact", "sellercontact"],
+        [SenderContactPhone] = ["sendercontactphone", "sellercontactphone", "suppliercontactphone", "sendertelephone", "sellertelephone"],
+        [SenderContactEmail] = ["sendercontactemail", "sellercontactemail", "suppliercontactemail", "senderemail", "selleremail"],
         [LineDescription] = ["description", "itemdescription", "linedescription", "productname", "item", "artikelbezeichnung", "nimetus"],
         [LineQuantity] = ["quantity", "qty", "amountordered", "menge", "kogus"],
         [LineUnit] = ["unit", "uom", "unitofmeasure", "einheit", "uhik"],
