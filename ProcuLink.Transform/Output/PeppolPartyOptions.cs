@@ -40,4 +40,6 @@ public sealed class PeppolPartyOptions
     public string? BuyerCountry { get; init; }
     /// <summary>BT-13 — purchase order reference.</summary>
     public string? OrderReference { get; init; }
+    /// <summary>BT-72 - actual delivery date; only the CII writer emits it.</summary>
+    public DateOnly? DeliveryDate { get; init; }
 }

@@ -306,7 +306,7 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
     /// present and non-zero; otherwise fall back to the max line tax rate. Returned
     /// as a whole percentage (e.g. 20.00 for 20%).
     /// </summary>
-    private static decimal DerivePercent(InvoiceEntity inv, IReadOnlyList<InvoiceLineEntity> lines)
+    internal static decimal DerivePercent(InvoiceEntity inv, IReadOnlyList<InvoiceLineEntity> lines)
     {
         if (inv.SubTotal > 0m && inv.TaxTotal > 0m)
             return Math.Round(inv.TaxTotal / inv.SubTotal * 100m, 2);
@@ -318,6 +318,6 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
     /// Line TaxRate is stored as a fraction in some paths (0.20) and as a whole
     /// percent in others (20). Normalize: values ≤ 1 are treated as fractions.
     /// </summary>
-    private static decimal NormalizePercent(decimal rate)
+    internal static decimal NormalizePercent(decimal rate)
         => rate > 0m && rate <= 1m ? Math.Round(rate * 100m, 2) : Math.Round(rate, 2);
 }

@@ -76,6 +76,13 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
                 [Row("Bolt", "3", "C62", "20.00", "60.00"), Row("Nut", "2", "C62", "20.00", "40.00")], true)]);
     }
 
+    // The CII needs no electronic addresses: its read carries none.
+    private static ReadResult ReadWithoutEndpoints()
+    {
+        var read = Read();
+        return new ReadResult(read.KindLabel, [.. read.Fields.Where(f => f.Meaning is not (FieldMeanings.SenderEndpointId or FieldMeanings.ReceiverEndpointId))], read.Tables);
+    }
+
     [DockerRequiredFact]
     public async Task Both_documents_pass_the_official_rules()
     {
@@ -83,9 +90,9 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
         var validator = new PhormValidator(new Factory(http),
             Options.Create(new ValidatorOptions { BaseUrl = http.BaseAddress.ToString(), Token = Token }), NullLogger<PhormValidator>.Instance);
 
-        foreach (var id in new[] { "peppol-bis-billing-3", "peppol-bis-billing-3-credit-note" })
+        foreach (var id in new[] { "peppol-bis-billing-3", "peppol-bis-billing-3-credit-note", "en16931-cii", "en16931-cii-credit-note" })
         {
-            var render = await StandardOutputs.RenderAsync(id, Read(), FlowFieldList.Empty, "lines", Guid.Empty, default);
+            var render = await StandardOutputs.RenderAsync(id, id.StartsWith("en16931", StringComparison.Ordinal) ? ReadWithoutEndpoints() : Read(), FlowFieldList.Empty, "lines", Guid.Empty, default);
             Assert.True(render.Ok, render.Detail);
             using var bytes = new MemoryStream();
             await render.Result!.Content.CopyToAsync(bytes);

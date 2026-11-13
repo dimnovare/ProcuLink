@@ -53,6 +53,7 @@ public static class StandardInvoiceAdapter
                 BuyerName = a.Text(FieldMeanings.ReceiverName), BuyerEndpointScheme = buyerScheme, BuyerEndpointId = buyerId,
                 BuyerVatId = a.Text(FieldMeanings.ReceiverVatId), BuyerCountry = a.Text(FieldMeanings.ReceiverCountry)?.ToUpperInvariant(),
                 OrderReference = a.Text(FieldMeanings.OrderReference),
+                DeliveryDate = a.OptionalDate(FieldMeanings.DeliveryDate),
             };
             return new Built(invoice, lines, parties);
         });
