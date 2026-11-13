@@ -203,49 +203,6 @@ public static class MigrationBootstrap
     private static async Task RunPostMigrationBackfillsAsync(
         IServiceProvider scopedServices, ProcuLinkDbContext db, ILogger migLogger)
     {
-        // ── Group V1: idempotent connection backfill ─────────────────
-        // Turn each supplier's current loose config into a published "revision 1"
-        // under a SupplierConnection (zero behaviour change). Idempotent — the
-        // UNIQUE(org_id, supplier_id) connection guard makes re-runs a no-op, so
-        // it's safe to call on every boot. Best-effort: a backfill failure must
-        // NOT keep the app from serving (migrations already succeeded).
-        try
-        {
-            var backfill = scopedServices.GetRequiredService<IConnectionBackfillService>();
-            var createdCount = await backfill.BackfillAllAsync(CancellationToken.None);
-            migLogger.LogInformation(
-                "Group V1 connection backfill complete: {Count} new connection(s) created.", createdCount);
-        }
-        catch (Exception backfillEx)
-        {
-            migLogger.LogError(backfillEx,
-                "Group V1 connection backfill failed (app stays up; orders fall back to live config).");
-            SentrySdk.CaptureException(backfillEx);
-        }
-
-        // ── Launch batch 7 review fix: promoted-output re-backfill ───
-        // Earlier V1 backfills left output_mapping_json NULL even when the supplier's
-        // PoMappingConfig carried a promoted Output section (batch 4A) — flag-ON pinned
-        // orders would silently lose the promoted layout. Fills ONLY null snapshots on
-        // "system:backfill" rows; idempotent; per-row skip+warn keeps it compatible with
-        // the published-row immutability trigger (AddReviewReasonAndPublishedRevision-
-        // Immutability — it must run BEFORE that trigger migration is applied, or the
-        // trigger must exempt NULL→value output fills, so rows are repaired rather than
-        // skipped). Best-effort, like V1.
-        try
-        {
-            var rebackfill = scopedServices.GetRequiredService<IConnectionBackfillService>();
-            var repairedCount = await rebackfill.RebackfillPromotedOutputAsync(CancellationToken.None);
-            migLogger.LogInformation(
-                "Promoted-output re-backfill complete: {Count} backfilled revision(s) repaired.", repairedCount);
-        }
-        catch (Exception rebackfillEx)
-        {
-            migLogger.LogError(rebackfillEx,
-                "Promoted-output re-backfill failed (app stays up; affected pinned orders use the fixed transformer until repaired).");
-            SentrySdk.CaptureException(rebackfillEx);
-        }
-
         // ── Credential binding backfill ──────────────────────────────
         // Re-encrypt pre-binding (version 1) credential blobs into the bound envelope, so
         // they gain the tenant + purpose + scope binding. Idempotent — a version-2 blob is
@@ -289,27 +246,6 @@ public static class MigrationBootstrap
                 "Inbound-address backfill failed (app stays up; inbound mail is DEFERRED by the " +
                 "provider's retries until this succeeds, not dropped).");
             SentrySdk.CaptureException(inboundAddressEx);
-        }
-
-        // ── Group V4: idempotent rule-definition seed + link ─────────
-        // Seed the global rule catalog as org-scoped RuleDefinitions and link existing
-        // free-floating acceptance rules to a matching definition. ZERO evaluation change
-        // (rule scalar columns are never touched). Idempotent — UNIQUE(org_id, code) +
-        // the "RuleDefinitionId is null" link guard make re-runs a no-op. Best-effort:
-        // a failure must NOT keep the app from serving (migrations already succeeded).
-        try
-        {
-            var ruleBackfill = scopedServices.GetRequiredService<IRuleDefinitionBackfillService>();
-            var (defs, links) = await ruleBackfill.BackfillAllAsync(CancellationToken.None);
-            migLogger.LogInformation(
-                "Group V4 rule-definition backfill complete: {Defs} definition(s) seeded, {Links} rule(s) linked.",
-                defs, links);
-        }
-        catch (Exception ruleBackfillEx)
-        {
-            migLogger.LogError(ruleBackfillEx,
-                "Group V4 rule-definition backfill failed (app stays up; acceptance evaluation unaffected).");
-            SentrySdk.CaptureException(ruleBackfillEx);
         }
 
         // ── Billing: idempotent org-plan-history baseline seed ───────

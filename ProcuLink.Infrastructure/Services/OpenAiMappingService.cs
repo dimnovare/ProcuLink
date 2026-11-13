@@ -21,33 +21,6 @@ public sealed class OpenAiMappingService : IAiMappingService
     private const int BatchSize = 50;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private static readonly BinaryData SuggestionSchema = BinaryData.FromBytes("""
-        {
-          "type": "object",
-          "properties": {
-            "supplierItemCode": {
-              "type": "string",
-              "description": "Suggested supplier item code. Empty string when no useful suggestion exists."
-            },
-            "confidence": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1
-            },
-            "reason": {
-              "type": "string",
-              "description": "Short operational explanation for a procurement user."
-            },
-            "provenance": {
-              "type": "string",
-              "description": "Evidence used, such as existing mapping rows or buyer code/description signals."
-            }
-          },
-          "required": ["supplierItemCode", "confidence", "reason", "provenance"],
-          "additionalProperties": false
-        }
-        """u8.ToArray());
-
     private static readonly BinaryData BatchSuggestionSchema = BinaryData.FromBytes("""
         {
           "type": "object",
@@ -85,30 +58,6 @@ public sealed class OpenAiMappingService : IAiMappingService
             }
           },
           "required": ["suggestions"],
-          "additionalProperties": false
-        }
-        """u8.ToArray());
-
-    private static readonly BinaryData FieldMappingSchema = BinaryData.FromBytes("""
-        {
-          "type": "object",
-          "properties": {
-            "mappings": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "canonicalField": { "type": "string" },
-                  "suggestedColumn": { "type": "string" },
-                  "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-                  "reason": { "type": "string" }
-                },
-                "required": ["canonicalField", "suggestedColumn", "confidence", "reason"],
-                "additionalProperties": false
-              }
-            }
-          },
-          "required": ["mappings"],
           "additionalProperties": false
         }
         """u8.ToArray());
@@ -214,153 +163,6 @@ public sealed class OpenAiMappingService : IAiMappingService
             _logger.LogWarning(ex,
                 "No-egress check failed for org {OrgId}; skipping OpenAI mapping to be safe.", organisationId);
             return true;
-        }
-    }
-
-    public async Task<AiMappingSuggestion?> SuggestSupplierItemCodeAsync(
-        Guid organisationId,
-        Guid supplierId,
-        string supplierName,
-        AiMappingLineContext line,
-        IReadOnlyList<AiMappingCandidate> candidates,
-        CancellationToken ct = default)
-    {
-        if (_client is null)
-            return null;
-
-        if (string.IsNullOrWhiteSpace(line.BuyerItemCode)
-            && string.IsNullOrWhiteSpace(line.Description))
-        {
-            return null;
-        }
-
-        // ── Per-org monthly token cap ────────────────────────────────────────
-        // Resolved per-call so the EF DbContext is short-lived and so test
-        // doubles can be injected via the internal ctor.
-        await using var trackerScope = _scopeFactory?.CreateAsyncScope();
-        var tracker = trackerScope is not null
-            ? trackerScope.Value.ServiceProvider.GetService<IAiUsageTracker>()
-            : _trackerFactory?.Invoke();
-
-        // No-egress orgs never send line data to OpenAI (single chokepoint for IAiMappingService).
-        if (await IsNoEgressOrgAsync(trackerScope?.ServiceProvider, organisationId, ct))
-        {
-            _logger.LogInformation(
-                "OpenAI mapping skipped — org {OrgId} is no-egress (self-hosted OCR).", organisationId);
-            return null;
-        }
-
-        if (tracker is not null)
-        {
-            try
-            {
-                if (await tracker.IsAtOrOverLimitAsync(organisationId, ct))
-                {
-                    var snapshot = await tracker.GetCurrentAsync(organisationId, ct);
-                    _logger.LogWarning(
-                        "OpenAI mapping skipped — org {OrgId} reached monthly token limit {Limit}",
-                        organisationId,
-                        snapshot.TokensLimit);
-                    return null;
-                }
-            }
-            catch (Exception ex)
-            {
-                // If the cap check itself fails we must not silently bypass the
-                // cap. Treat it as a no-op and warn.
-                _logger.LogWarning(
-                    ex,
-                    "OpenAI cap check failed for org {OrgId}; skipping suggestion to be safe",
-                    organisationId);
-                return null;
-            }
-        }
-
-        try
-        {
-            // Catalog allow-list: when this supplier has a product catalog, the candidates
-            // carry the real codes and the model MUST select one of them — any code outside
-            // the catalog is rejected after the call so a hallucinated code can never surface.
-            // With no catalog the allow-list is empty → behaviour is unchanged (free suggestion).
-            var catalog = BuildCatalogAllowList(candidates);
-
-            var promptPayload = new
-            {
-                supplierName,
-                line,
-                candidates = candidates.Take(40).ToArray()
-            };
-
-            var messages = new List<ChatMessage>
-            {
-                new SystemChatMessage(catalog.HasCatalog ? CatalogSystemPrompt : FreeSystemPrompt),
-                new UserChatMessage(JsonSerializer.Serialize(promptPayload, JsonOptions))
-            };
-
-            var options = new ChatCompletionOptions
-            {
-                MaxOutputTokenCount = 350,
-                ResponseFormat = ChatResponseFormat.CreateJsonSchemaFormat(
-                    jsonSchemaFormatName: "supplier_item_code_suggestion",
-                    jsonSchema: SuggestionSchema,
-                    jsonSchemaIsStrict: true)
-            };
-
-            Ai.OpenAiModels.UseLeastReasoning(options, _model);
-
-            ChatCompletion completion = await _client.CompleteChatAsync(messages, options, ct);
-
-            // Record token usage regardless of whether the structured output
-            // produced a usable suggestion — the call was billable either way.
-            if (tracker is not null)
-            {
-                try
-                {
-                    var totalTokens = completion.Usage?.TotalTokenCount ?? 0;
-                    if (totalTokens > 0)
-                        await tracker.IncrementAsync(organisationId, totalTokens, ct);
-                }
-                catch (Exception incEx)
-                {
-                    _logger.LogWarning(
-                        incEx,
-                        "Failed to record AI token usage for org {OrgId}",
-                        organisationId);
-                }
-            }
-
-            var json = completion.Content.FirstOrDefault()?.Text;
-
-            if (string.IsNullOrWhiteSpace(json))
-                return null;
-
-            var dto = JsonSerializer.Deserialize<OpenAiSuggestionDto>(json, JsonOptions);
-            if (dto is null) return null;
-
-            // Allow-list guard + concrete provenance (shared with the batch path). Returns
-            // null when the code is empty OR (when a catalog is present) not a real catalog
-            // code — so a hallucinated code can never surface. offer ⇔ works.
-            var suggestion = ResolveSuggestion(
-                catalog, dto.SupplierItemCode, dto.Confidence, dto.Reason, dto.Provenance);
-
-            if (suggestion is null && catalog.HasCatalog && !string.IsNullOrWhiteSpace(dto.SupplierItemCode))
-            {
-                _logger.LogInformation(
-                    "Rejected non-catalog AI suggestion {Code} for org {OrgId}, supplier {SupplierId}, line {LineNumber}",
-                    dto.SupplierItemCode.Trim(), organisationId, supplierId, line.LineNumber);
-            }
-
-            return suggestion;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "OpenAI mapping suggestion failed for org {OrgId}, supplier {SupplierId}, line {LineNumber}",
-                organisationId,
-                supplierId,
-                line.LineNumber);
-            return null;
         }
     }
 
@@ -572,145 +374,6 @@ public sealed class OpenAiMappingService : IAiMappingService
         }
     }
 
-    public async Task<IReadOnlyList<AiFieldMappingSuggestion>> SuggestFieldMappingsAsync(
-        Guid organisationId,
-        Guid supplierId,
-        IReadOnlyList<string> columns,
-        IReadOnlyList<string> unresolvedCanonicalFields,
-        CancellationToken ct = default)
-    {
-        if (_client is null)
-            return Array.Empty<AiFieldMappingSuggestion>();
-
-        if (columns.Count == 0 || unresolvedCanonicalFields.Count == 0)
-            return Array.Empty<AiFieldMappingSuggestion>();
-
-        // ── Per-org monthly token cap (same pattern as the line suggester) ───
-        await using var trackerScope = _scopeFactory?.CreateAsyncScope();
-        var tracker = trackerScope is not null
-            ? trackerScope.Value.ServiceProvider.GetService<IAiUsageTracker>()
-            : _trackerFactory?.Invoke();
-
-        // No-egress orgs never send source column headers to OpenAI. This closes the
-        // "magic auto-map" field-suggestion touchpoint so the no-egress guarantee is
-        // whole; AiAugmentedFieldMappingSuggester degrades to heuristic-only on empty.
-        if (await IsNoEgressOrgAsync(trackerScope?.ServiceProvider, organisationId, ct))
-        {
-            _logger.LogInformation(
-                "OpenAI field mapping skipped — org {OrgId} is no-egress (self-hosted OCR).", organisationId);
-            return Array.Empty<AiFieldMappingSuggestion>();
-        }
-
-        if (tracker is not null)
-        {
-            try
-            {
-                if (await tracker.IsAtOrOverLimitAsync(organisationId, ct))
-                {
-                    var snapshot = await tracker.GetCurrentAsync(organisationId, ct);
-                    _logger.LogWarning(
-                        "OpenAI field mapping skipped — org {OrgId} reached monthly token limit {Limit}",
-                        organisationId,
-                        snapshot.TokensLimit);
-                    return Array.Empty<AiFieldMappingSuggestion>();
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "OpenAI cap check failed for org {OrgId}; skipping field mapping to be safe",
-                    organisationId);
-                return Array.Empty<AiFieldMappingSuggestion>();
-            }
-        }
-
-        try
-        {
-            var promptPayload = new
-            {
-                sourceColumns = columns.Take(100).ToArray(),
-                canonicalFieldsNeedingMapping = unresolvedCanonicalFields.Take(20).ToArray()
-            };
-
-            var messages = new List<ChatMessage>
-            {
-                new SystemChatMessage("""
-                    You map a supplier's purchase-order file column headers to ProcuLink's
-                    canonical PO fields. For each canonical field that still needs a mapping,
-                    pick the single best matching source column from the provided list.
-                    Only choose a column when the evidence is reasonable; if no column fits a
-                    field, omit that field from the result. Use confidence 0..1.
-                    suggestedColumn MUST be one of the provided source columns verbatim.
-                    Keep each reason to a short phrase.
-                    """),
-                new UserChatMessage(JsonSerializer.Serialize(promptPayload, JsonOptions))
-            };
-
-            var options = new ChatCompletionOptions
-            {
-                MaxOutputTokenCount = 600,
-                ResponseFormat = ChatResponseFormat.CreateJsonSchemaFormat(
-                    jsonSchemaFormatName: "field_mapping_suggestions",
-                    jsonSchema: FieldMappingSchema,
-                    jsonSchemaIsStrict: true)
-            };
-
-            Ai.OpenAiModels.UseLeastReasoning(options, _model);
-
-            ChatCompletion completion = await _client.CompleteChatAsync(messages, options, ct);
-
-            if (tracker is not null)
-            {
-                try
-                {
-                    var totalTokens = completion.Usage?.TotalTokenCount ?? 0;
-                    if (totalTokens > 0)
-                        await tracker.IncrementAsync(organisationId, totalTokens, ct);
-                }
-                catch (Exception incEx)
-                {
-                    _logger.LogWarning(
-                        incEx,
-                        "Failed to record AI token usage for org {OrgId}",
-                        organisationId);
-                }
-            }
-
-            var json = completion.Content.FirstOrDefault()?.Text;
-            if (string.IsNullOrWhiteSpace(json))
-                return Array.Empty<AiFieldMappingSuggestion>();
-
-            var dto = JsonSerializer.Deserialize<OpenAiFieldMappingEnvelope>(json, JsonOptions);
-            if (dto?.Mappings is null || dto.Mappings.Count == 0)
-                return Array.Empty<AiFieldMappingSuggestion>();
-
-            // Only trust columns the model was actually given (strict schema can't
-            // enforce an enum here because columns are dynamic).
-            var allowedColumns = new HashSet<string>(columns, StringComparer.OrdinalIgnoreCase);
-
-            return dto.Mappings
-                .Where(m => !string.IsNullOrWhiteSpace(m.CanonicalField)
-                            && !string.IsNullOrWhiteSpace(m.SuggestedColumn)
-                            && allowedColumns.Contains(m.SuggestedColumn.Trim()))
-                .Select(m => new AiFieldMappingSuggestion(
-                    m.CanonicalField.Trim(),
-                    m.SuggestedColumn.Trim(),
-                    Math.Clamp(m.Confidence, 0f, 1f),
-                    m.Reason?.Trim() ?? string.Empty))
-                .ToList();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "OpenAI field mapping suggestion failed for org {OrgId}, supplier {SupplierId}",
-                organisationId,
-                supplierId);
-            return Array.Empty<AiFieldMappingSuggestion>();
-        }
-    }
-
     /// <summary>
     /// Partitions <paramref name="lines"/> into fixed-size, in-order batches, each tagged
     /// with its starting offset. Pure and side-effect free so the batching boundaries can
@@ -736,31 +399,6 @@ public sealed class OpenAiMappingService : IAiMappingService
     // (today's behaviour). WITH a catalog the candidates are the supplier's REAL product
     // rows and the model MUST select one of them (the post-response allow-list guard then
     // rejects anything that slips through), so a hallucinated code can never reach delivery.
-
-    private const string FreeSystemPrompt = """
-        You suggest supplier item codes for unresolved B2B purchase-order lines.
-        Use existing candidate mappings when they support the suggestion.
-        If the evidence is weak, return an empty supplierItemCode and confidence 0.
-        Never claim a mapping is confirmed. Suggestions are human review hints only.
-        Keep reason and provenance concise.
-        """;
-
-    private const string CatalogSystemPrompt = """
-        You match an unresolved B2B purchase-order line to the supplier's REAL product catalog.
-        The candidates list contains the supplier's actual products (code + name + barcode + unit,
-        and where known manufacturerPartNumber + manufacturerName).
-        You MUST set supplierItemCode to one of the supplierItemCode values present in candidates,
-        choosing the closest real product to the buyer's line. You may NOT invent or modify a code.
-        The line's manufacturerPartNumber, when present, is the strongest evidence available: it is
-        the manufacturer's own number and is often the only identifier a punchout order carries,
-        because the buyer's item code is then the buying network's internal id and means nothing to
-        the supplier. A candidate whose manufacturerPartNumber matches the line's — ignoring case,
-        spaces and hyphens — is a match even when its supplierItemCode looks nothing like the line.
-        Answer with that candidate's supplierItemCode, never with the manufacturer's part number.
-        If no candidate is a reasonable match, return an empty supplierItemCode and confidence 0.
-        Never claim a mapping is confirmed. Suggestions are human review hints only.
-        Keep reason and provenance concise.
-        """;
 
     private const string FreeBatchSystemPrompt = """
         You suggest supplier item codes for unresolved B2B purchase-order lines.
@@ -954,12 +592,6 @@ public sealed class OpenAiMappingService : IAiMappingService
         return string.IsNullOrWhiteSpace(fromModel) ? "OpenAI structured output" : fromModel;
     }
 
-    private sealed record OpenAiSuggestionDto(
-        string SupplierItemCode,
-        float Confidence,
-        string? Reason,
-        string? Provenance);
-
     private sealed record OpenAiBatchSuggestionEnvelope(
         List<OpenAiBatchSuggestionDto>? Suggestions);
 
@@ -969,13 +601,4 @@ public sealed class OpenAiMappingService : IAiMappingService
         float Confidence,
         string? Reason,
         string? Provenance);
-
-    private sealed record OpenAiFieldMappingEnvelope(
-        List<OpenAiFieldMappingDto>? Mappings);
-
-    private sealed record OpenAiFieldMappingDto(
-        string CanonicalField,
-        string SuggestedColumn,
-        float Confidence,
-        string? Reason);
 }

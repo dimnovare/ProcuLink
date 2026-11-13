@@ -387,7 +387,7 @@ public sealed class PublishedRevisionImmutabilityPostgresTests(PostgresContainer
         db.Suppliers.Add(new Supplier { Id = supplierId, OrgId = orgId, Name = "Immut Supplier", CreatedAt = now });
         await db.SaveChangesAsync();
 
-        db.SupplierConnections.Add(new SupplierConnection
+        db.Set<SupplierConnection>().Add(new SupplierConnection
         {
             Id = connectionId, OrgId = orgId, SupplierId = supplierId,
             Name = "Immut Supplier", ActiveRevisionId = null,

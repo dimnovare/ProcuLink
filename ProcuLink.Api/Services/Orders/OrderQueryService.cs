@@ -14,10 +14,6 @@ public interface IOrderQueryService
 {
     Task<Result<PurchaseOrderEntity>> GetByIdAsync(Guid organisationId, Guid orderId, CancellationToken ct);
 
-    Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>> ListPagedAsync(
-        Guid organisationId, int page, int pageSize, string? status, Guid? supplierId,
-        string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct);
-
     Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>> ListWindowAsync(
         Guid organisationId, int skip, int take, string? status, Guid? supplierId,
         string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct);
@@ -60,26 +56,6 @@ public sealed class OrderQueryService : IOrderQueryService
 
         return Result<PurchaseOrderEntity>.Ok(entity);
     }
-
-    // ── ListPagedAsync ────────────────────────────────────────────────────────
-
-    public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>> ListPagedAsync(
-        Guid      organisationId,
-        int       page,
-        int       pageSize,
-        string?   status,
-        Guid?     supplierId,
-        string?   search,
-        DateTime? dateFrom,
-        DateTime? dateTo,
-        CancellationToken ct)
-        // Page/pageSize is just a window: skip whole pages, take one page. The offset/limit
-        // primitive does the real work so both entry points share one code path.
-        => ListWindowAsync(
-            organisationId,
-            skip: (Math.Max(1, page) - 1) * pageSize,
-            take: pageSize,
-            status, supplierId, search, dateFrom, dateTo, ct);
 
     // ── ListWindowAsync ─────────────────────────────────────────────────────────
 

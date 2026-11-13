@@ -213,7 +213,7 @@ public sealed class CredentialBindingBackfillPostgresTests : IAsyncLifetime
         });
         await db.SaveChangesAsync();
 
-        db.SupplierConnections.Add(new SupplierConnection
+        db.Set<SupplierConnection>().Add(new SupplierConnection
         {
             Id = connectionId,
             OrgId = orgId,
@@ -247,7 +247,7 @@ public sealed class CredentialBindingBackfillPostgresTests : IAsyncLifetime
         });
         await db.SaveChangesAsync();
 
-        var conn = await db.SupplierConnections.SingleAsync(c => c.Id == connectionId);
+        var conn = await db.Set<SupplierConnection>().SingleAsync(c => c.Id == connectionId);
         conn.ActiveRevisionId = revisionId;
         await db.SaveChangesAsync();
 

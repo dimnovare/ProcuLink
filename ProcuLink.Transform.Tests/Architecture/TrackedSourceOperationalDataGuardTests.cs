@@ -477,8 +477,12 @@ public class TrackedSourceOperationalDataGuardTests
             1_000_000,
             $"only {b.ScannedBytes} bytes of C# were read — the files were listed but not opened");
 
+        // 40 -> 34 on 2026-11-13 (plan 13b, Task 7b): the deleted ConnectorManifestCatalog,
+        // CatalogPullService and their tests (catalog pull, connection backfill, cXML credential
+        // resolver) held the six protocol literals that went. 34 is today's count; the floor exists
+        // to catch an extractor that matches nothing, which lands at zero, not at 34.
         b.ScannedProtocolLiterals.Should().BeGreaterThanOrEqualTo(
-            40,
+            34,
             $"only {b.ScannedProtocolLiterals} protocol literals were extracted and checked — the "
             + "protocol arm matched nothing, so class 6 proves nothing");
 

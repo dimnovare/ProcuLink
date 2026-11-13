@@ -104,39 +104,26 @@ public class ItemCodeComparerGuardTests
     /// <para>2026-11-13, plan 13b: the three <c>OrderIngestionService.cs</c> entries and the
     /// <c>ReplayService.cs</c> entry left this list because both files were deleted with the order
     /// pipeline — not because their sites started using the shared rule.</para>
+    /// <para>2026-11-13, plan 13b Task 7b: the three <c>ItemMappingService.cs</c> entries and the two
+    /// <c>SupplierCatalogService.cs</c> entries left for the same reason — both files were deleted as
+    /// orphans of the order pipeline.</para>
     /// </summary>
     private static readonly (string File, string Fragment, string Reason)[] AcceptedExceptions =
     {
-        ("ItemMappingService.cs", "StringComparison.Ordinal))",
-            "PickDeterministically's exact-case preference. This IS the shared rule's tie-break: when "
-            + "two case-variant rows both match, the row spelled exactly as requested wins. It has to "
-            + "be an ordinal comparison — that is what 'exact case' means — and folding it here would "
-            + "make the tie-break vacuous."),
-
-        ("ItemMappingService.cs", "m.BuyerItemCode, normalisedCode, StringComparison.Ordinal",
-            "FindExistingAsync's exact-case preference, the write-side twin of the line above. Same "
-            + "reason: it selects WHICH matching row to update, after the case-insensitive fetch has "
-            + "already decided which rows match."),
-
-        ("ItemMappingService.cs", "Distinct(StringComparer.Ordinal)",
-            "ResolveManyAsync keys its result by the caller's exact code. Case-insensitivity belongs "
-            + "in the match against stored rows, never in the result keying: folding the keys answers "
-            + "a 'b-1' line from a 'B-1' row and the WRONG ITEM is ordered. The match below this line "
-            + "does use the shared rule."),
-
-        ("SupplierCatalogService.cs", "existing.ToDictionary(p => p.Code, StringComparer.Ordinal)",
-            "Catalog IMPORT is deliberately case-sensitive while every catalog READ folds case. "
-            + "Folding here would collapse two rows of one supplier feed and DELETE a product; the "
-            + "item code is a namespace the supplier controls and an importer must not decide two of "
-            + "their SKUs are the same thing. The read side resolves any resulting twin "
-            + "deterministically. Full reasoning is in the comment at the site."),
-
-        ("SupplierCatalogService.cs", "codes.Contains(p.Code)",
-            "The existing-row fetch for the same deliberately case-sensitive import batch. It must "
-            + "match the byCode dictionary that consumes it — folding only this query would fetch a "
-            + "case-variant row the Ordinal dictionary then fails to find, producing an INSERT that "
-            + "violates nothing but resurrects the twin anyway."),
     };
+
+    /// <summary>
+    /// A known unguarded comparison and its guarded twin, scanned instead of the repo to prove the
+    /// detector is alive. 2026-11-13 (plan 13b, Task 7b): the last real sites were deleted with
+    /// <c>ItemMappingService</c> and <c>SupplierCatalogService</c>, so the repo is genuinely clean
+    /// and a non-empty repo scan can no longer be the non-vacuity check. The repo walk (FlaggedSites) still
+    /// runs on every build and fails the first new unguarded site.
+    /// </summary>
+    private static readonly string[] UnguardedProbe = { "if (m.BuyerItemCode == code) return m;" };
+    private static readonly string[] GuardedProbe =
+        { "if (ItemCodeComparison.Matches(m.BuyerItemCode, code)) return m;" };
+
+    private static List<Site> ProbeSites(string[] lines) => ScanLines("Probe.cs", lines, false).ToList();
 
     // ── The scan ─────────────────────────────────────────────────────────────────
 
@@ -179,42 +166,48 @@ public class ItemCodeComparerGuardTests
                 // The product-code half only applies to files that actually work with the entity.
                 var isProductFile = text.Contains("SupplierProduct");
 
-                for (var i = 0; i < lines.Length; i++)
-                {
-                    var line = lines[i];
-
-                    // Comments explain comparisons; they do not perform them.
-                    if (line.TrimStart().StartsWith("//") || line.TrimStart().StartsWith("///")) continue;
-
-                    // Tier 1 — the line itself names a governed column AND decides equality.
-                    var flagged = NamesColumn(line, isProductFile) && ComparisonShaped.IsMatch(line);
-
-                    // Tier 2 — the column is named earlier in the SAME statement and this line picks
-                    // a comparer explicitly. A fluent chain
-                    // (`var requested = buyerItemCodes` / `.Select(…)` / `.Distinct(comparer)`) puts
-                    // the comparer several lines below the only mention of the column.
-                    if (!flagged && ExplicitComparerChoice.IsMatch(line))
-                        flagged = NamesColumn(StatementText(lines, i), isProductFile);
-
-                    if (!flagged) continue;
-
-                    // The shared rule may sit a line or two away (a `key` local, a comparer variable).
-                    var from = Math.Max(0, i - ContextLines);
-                    var to   = Math.Min(lines.Length - 1, i + ContextLines);
-                    var near = string.Join('\n', lines[from..(to + 1)]);
-                    if (UsesSharedRule.IsMatch(near)) continue;
-
-                    // An EF predicate that folds case in SQL is the shared rule expressed for the
-                    // database: `m.BuyerItemCode.ToLower() == key` is exactly what ItemCodeComparison.Key
-                    // is built to be compared against.
-                    if (near.Contains(".ToLower()")) continue;
-
-                    sites.Add(new Site(Path.GetFileName(file), i + 1, line.Trim()));
-                }
+                sites.AddRange(ScanLines(Path.GetFileName(file), lines, isProductFile));
             }
         }
 
         return sites;
+    }
+
+    /// <summary>The detector itself: the flagged, unguarded comparison sites in one file's lines.</summary>
+    private static IEnumerable<Site> ScanLines(string fileName, string[] lines, bool isProductFile)
+    {
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+
+            // Comments explain comparisons; they do not perform them.
+            if (line.TrimStart().StartsWith("//") || line.TrimStart().StartsWith("///")) continue;
+
+            // Tier 1 — the line itself names a governed column AND decides equality.
+            var flagged = NamesColumn(line, isProductFile) && ComparisonShaped.IsMatch(line);
+
+            // Tier 2 — the column is named earlier in the SAME statement and this line picks
+            // a comparer explicitly. A fluent chain
+            // (`var requested = buyerItemCodes` / `.Select(…)` / `.Distinct(comparer)`) puts
+            // the comparer several lines below the only mention of the column.
+            if (!flagged && ExplicitComparerChoice.IsMatch(line))
+                flagged = NamesColumn(StatementText(lines, i), isProductFile);
+
+            if (!flagged) continue;
+
+            // The shared rule may sit a line or two away (a `key` local, a comparer variable).
+            var from = Math.Max(0, i - ContextLines);
+            var to   = Math.Min(lines.Length - 1, i + ContextLines);
+            var near = string.Join('\n', lines[from..(to + 1)]);
+            if (UsesSharedRule.IsMatch(near)) continue;
+
+            // An EF predicate that folds case in SQL is the shared rule expressed for the
+            // database: `m.BuyerItemCode.ToLower() == key` is exactly what ItemCodeComparison.Key
+            // is built to be compared against.
+            if (near.Contains(".ToLower()")) continue;
+
+            yield return new Site(fileName, i + 1, line.Trim());
+        }
     }
 
     /// <summary>
@@ -275,8 +268,8 @@ public class ItemCodeComparerGuardTests
         // genuinely clean produce the same green. Pin the detector instead of the allowlist: it is
         // the half that must never be empty, and it is what makes an accepted exception mean
         // anything at all. Same assertion TheScanner_ActuallyFindsSomething already makes.
-        sites.Should().NotBeEmpty(
-            "the detector must still match the known ordinal sites — with no sites found, every "
+        ProbeSites(UnguardedProbe).Should().NotBeEmpty(
+            "the detector must still match a known ordinal site — with nothing found, every "
             + "accepted exception below is checked against nothing and this test cannot fail");
 
         foreach (var (file, fragment, _) in AcceptedExceptions)
@@ -299,7 +292,7 @@ public class ItemCodeComparerGuardTests
         // empty and would otherwise report Passed having read no reason at all: the detector is
         // alive, and no site is covered twice. A duplicate entry is how a stale exception keeps
         // covering a line after the entry that earned it was removed.
-        FlaggedSites().Should().NotBeEmpty(
+        ProbeSites(UnguardedProbe).Should().NotBeEmpty(
             "with no sites found, the exceptions below excuse nothing and their reasons go unread");
         AcceptedExceptions.Select(e => (e.File, e.Fragment)).Should().OnlyHaveUniqueItems(
             "two entries for the same line mean deleting one silently leaves the cover in place");
@@ -318,8 +311,11 @@ public class ItemCodeComparerGuardTests
     public void TheScanner_ActuallyFindsSomething()
     {
         // Non-vacuity: a regex that matched nothing would make all three tests above pass forever.
-        FlaggedSites().Should().NotBeEmpty(
-            "the guard's detector must still match the known ordinal sites — if this is empty the "
+        ProbeSites(UnguardedProbe).Should().NotBeEmpty(
+            "the guard's detector must still match a known ordinal site — if this is empty the "
             + "patterns have drifted away from the code and the guard is inert");
+        ProbeSites(GuardedProbe).Should().BeEmpty(
+            "a comparison that goes through the shared rule must not be flagged, or the probe above "
+            + "proves only that the detector flags everything");
     }
 }

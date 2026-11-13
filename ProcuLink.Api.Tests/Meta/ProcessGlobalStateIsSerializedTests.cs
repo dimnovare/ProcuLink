@@ -53,8 +53,11 @@ public sealed class ProcessGlobalStateIsSerializedTests
 
     // Anti-vacuity floors. Every one of these is a real, currently-true count; they exist so a
     // broken repo-root, a moved directory or an over-tightened filter fails LOUD instead of
-    // reporting a clean sweep over nothing. 293 .cs files live under ProcuLink.Api.Tests today.
-    private const int MinimumFilesParsed = 200;
+    // reporting a clean sweep over nothing. 293 .cs files lived under ProcuLink.Api.Tests then.
+    // 200 -> 187 on 2026-11-13 (plan 13b, Task 7b): the acceptance, rule-definition, connection
+    // backfill, catalog, schema-fingerprint, supplier-suggestion and artifact-selection test files
+    // were deleted with their subjects, leaving 187. A broken repo root lands near zero, not here.
+    private const int MinimumFilesParsed = 187;
     private const int MinimumFilesTouchingProcessGlobalState = 5;
     private const int MinimumTestClassesChecked = 5;
 

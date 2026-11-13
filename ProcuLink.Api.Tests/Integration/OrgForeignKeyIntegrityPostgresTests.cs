@@ -144,7 +144,7 @@ public sealed class OrgForeignKeyIntegrityPostgresTests(PostgresContainerFixture
                 Id = Guid.NewGuid(), OrgId = orgId, Key = "custom_field", Label = "Custom field",
                 Scope = "header", Type = "string", CreatedAt = now, UpdatedAt = now,
             });
-            db.SchemaFingerprints.Add(new SchemaFingerprint
+            db.Set<SchemaFingerprint>().Add(new SchemaFingerprint
             {
                 Id = Guid.NewGuid(), OrganisationId = orgId, ColumnNameHash = new string('a', 64),
                 DetectedFormat = "csv", ParseSuccessCount = 1, LastSeenAt = now, CreatedAt = now,
@@ -164,7 +164,7 @@ public sealed class OrgForeignKeyIntegrityPostgresTests(PostgresContainerFixture
             "the IMAP dedupe ledger carries the organisation's own message ids and file names");
         (await check.CanonicalFieldDefs.CountAsync(x => x.OrgId == orgId)).Should().Be(0,
             "custom canonical fields describe one organisation's document model and nothing else");
-        (await check.SchemaFingerprints.CountAsync(x => x.OrganisationId == orgId)).Should().Be(0,
+        (await check.Set<SchemaFingerprint>().CountAsync(x => x.OrganisationId == orgId)).Should().Be(0,
             "schema fingerprints are org-scoped detection statistics with no cross-org sharing");
     }
 

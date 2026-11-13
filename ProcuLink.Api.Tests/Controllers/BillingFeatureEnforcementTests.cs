@@ -21,9 +21,7 @@ using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Core.Services.Organisation;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
-using ProcuLink.Infrastructure.Services.Catalog;
 using ProcuLink.Infrastructure.Services.Security;
-using ProcuLink.Transform.Detection;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Controllers;

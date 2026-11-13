@@ -8,7 +8,6 @@ using ProcuLink.Core.Services.Catalog;
 using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
-using ProcuLink.Infrastructure.Services.Catalog;
 
 namespace ProcuLink.Infrastructure.Tests.Services.Catalog;
 

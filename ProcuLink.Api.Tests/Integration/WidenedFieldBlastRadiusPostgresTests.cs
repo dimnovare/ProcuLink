@@ -191,7 +191,7 @@ public sealed class WidenedFieldBlastRadiusPostgresTests(
 
             // POSITIVE 1 — the machine-generated shape. OutputNodeTemplateInferrer auto-binds this
             // for any sample column containing "manufacturerpart", so it is not hypothetical.
-            db.SupplierPoMappings.Add(NewPoMapping(orgId, supplierA, now, """
+            db.Set<SupplierPoMapping>().Add(NewPoMapping(orgId, supplierA, now, """
                 {"header":{"po":{"outputPath":"po","canonicalField":"PoNumber","fieldManipulators":[]}},
                  "lines":{"mpn":{"outputPath":"mpn","canonicalField":"ManufacturerPartNumber","fieldManipulators":[]}}}
                 """));
@@ -199,7 +199,7 @@ public sealed class WidenedFieldBlastRadiusPostgresTests(
             // POSITIVE 2 — a Fallback manipulator whose FIRST argument was unresolvable before
             // WP-14 and resolves now: the value CHANGES rather than filling a blank. Plus a Scriban
             // expression naming another new field.
-            db.SupplierPoMappings.Add(NewPoMapping(orgId, supplierB, now, """
+            db.Set<SupplierPoMapping>().Add(NewPoMapping(orgId, supplierB, now, """
                 {"header":{"ship":{"outputPath":"ship","fieldManipulators":[
                     {"type":"Fallback","params":{"fields":"ShipToName,BuyerName"}}]},
                   "note":{"outputPath":"note","expression":"{{order.Incoterms}}-{{order.ShipToCity}}","fieldManipulators":[]}},
@@ -207,7 +207,7 @@ public sealed class WidenedFieldBlastRadiusPostgresTests(
                 """));
 
             // NEGATIVE — a perfectly ordinary config naming only pre-WP-14 fields.
-            db.SupplierPoMappings.Add(NewPoMapping(orgId, supplierC, now, """
+            db.Set<SupplierPoMapping>().Add(NewPoMapping(orgId, supplierC, now, """
                 {"header":{"po":{"outputPath":"po","canonicalField":"PoNumber","fieldManipulators":[]},
                            "cur":{"outputPath":"cur","canonicalField":"Currency","fieldManipulators":[]}},
                  "lines":{"qty":{"outputPath":"qty","canonicalField":"Quantity","fieldManipulators":[]}}}

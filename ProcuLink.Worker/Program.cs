@@ -166,7 +166,6 @@ if (string.IsNullOrEmpty(builder.Configuration["Storage:R2AccessKeyId"]))
 else
     builder.Services.AddSingleton<IFileStorageService, R2StorageService>();
 
-builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
 builder.Services.AddScoped<IOrderExceptionService, OrderExceptionService>();
 // Analytics (PostHog) — required by StripeBillingService (resolved via IBillingService
 // in ParseOrderJob). No-op when Analytics:PostHog:ApiKey is absent.
@@ -213,13 +212,7 @@ builder.Services.AddScoped<IBillingService, StripeBillingService>();
 // (driven by the daily BillingReconciliationJob). Registered here because the Worker is the
 // sole Hangfire executor and Development DI validation constructs the job's dependency graph.
 builder.Services.AddScoped<IBillingReconciliationService, StripeSubscriptionReconciliationService>();
-builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
-// T4 — external web/product-code grounding (no-op unless Ai:OpenAI:ProductSearch:Enabled=true).
-builder.Services.AddSingleton<IProductCodeSearch, OpenAiProductCodeSearch>();
 builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
-// The artifact-invalidating decorator went with the order pipeline (plan 13b): no order artifact
-// can be re-sent any more, so there is nothing left for a mapping save to invalidate.
-builder.Services.AddScoped<IPoMappingService, PoMappingService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
 builder.Services.AddSingleton<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>();
 // Group O reliability: retry-queue backoff + SLA window tunables (section Delivery:Reliability).
@@ -241,10 +234,6 @@ builder.Services.AddSingleton(sp =>
 // and docs/ops/revision-authority-production-smoke.md.
 builder.Services.AddScoped<IEffectiveConnectionConfigResolver, EffectiveConnectionConfigResolver>();
 builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
-// cXML network credentials resolver — consumed by the Worker's TransformOrderJob (OrderService →
-// OrderTransformService) so cXML generated on the Worker carries the supplier's real identities.
-builder.Services.AddScoped<ICxmlCredentialResolver, CxmlCredentialResolver>();
-builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();
 
 // ── Wave 4 reliability/observability: worker-health alert sweep + retention ──
 // The recurring jobs are scheduled in Worker.cs; these are their DI deps.
@@ -302,15 +291,6 @@ if (builder.Configuration.GetValue<bool>("Delivery:EnableSmtp"))
 builder.Services.AddScoped<IDeliveryDispatcher, ErplyDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, DirectoDeliveryDispatcher>();
 
-builder.Services.AddSingleton<IPurchaseOrderParser, CsvOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, XlsxOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, PdfOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, CxmlOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, UblOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, IDocOrders05Parser>(); // SAP IDoc ORDERS05 (.xml, root <ORDERS05>)
-builder.Services.AddSingleton<IPurchaseOrderParser, EdifactOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, X12OrderParser>(); // Group M — ANSI X12 850
-builder.Services.AddSingleton<OrderParserFactory>();
 // SourceMap engine tokenizer: the Worker's parse job (ParseOrderJob → OrderService →
 // OrderIngestionService.ParseStoredFileAsync) needs this to capture the FULL source-token set
 // for structured formats into source_captures. Singleton — stateless, mirrors the Api registration.
@@ -323,26 +303,12 @@ builder.Services.AddOutputTransforms();
 // ── Wave 2: pull-ingress (SFTP / S3-R2) + OCR fallback ────────────────────
 builder.Services.AddSingleton<ISftpClientFactory, RenciSftpClientFactory>();
 builder.Services.AddSingleton<IAmazonS3ClientFactory, AmazonS3ClientFactory>();
-
-// ── Catalog import channels: SFTP/FTP(S) pull (plan 2026-06-12) ────────────
-// DI foot-gun precedent 4607d6d: ISupplierCatalogService was Api-only. No Worker job calls the catalog
-// sink + pull pipeline today; it stays registered here so it resolves if one ever does.
-builder.Services.AddScoped<ISupplierCatalogService, SupplierCatalogService>();
+// FTP/FTPS fetch seam for the flow pickups (FtpPickupSource).
 builder.Services.AddSingleton<IFtpFetchClientFactory, FluentFtpFetchClientFactory>();
-builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogPullService,
-                           ProcuLink.Infrastructure.Services.Catalog.CatalogPullService>();
-// Vendor catalog fetchers (plan 2026-07-02 D4) — the Worker runs the sync jobs, so the fetcher
-// must resolve here too (DI foot-gun precedent 4607d6d).
-builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogVendorFetcher,
-                           ProcuLink.Infrastructure.Services.Catalog.Aes2faSignedCatalogFetcher>();
 
 // PDF rasterizer for the vision fallback (scanned/no-text PDFs). The Worker runs
 // ParseOrderJob, so it needs the same registration as the API.
 builder.Services.AddSingleton<IPdfRasterizer, SkiaPdfRasterizer>();
-// Primary PDF path: text → LLM structured extraction. The Worker runs ParseOrderJob,
-// so it must register the same singleton extractor as the API (orgId is a method
-// param + tracker resolved via IServiceScopeFactory — no ICurrentTenantService).
-builder.Services.AddSingleton<IStructuredOrderExtractor, OpenAiPdfOrderExtractor>();
 builder.Services.AddSingleton<IDocumentReader, OpenAiDocumentReader>();
 // OCR seam. The Worker runs ParseOrderJob, so this is where self-hosted OCR executes.
 // Opt-in (RapidOcrNet) only when enabled — otherwise a no-op (no models loaded).
@@ -351,16 +317,7 @@ if (builder.Configuration.GetValue<bool>("NoEgressOcr:Enabled"))
 else
     builder.Services.AddSingleton<IDocumentOcrService, NoOpOcrService>();
 
-// ── Phase 6: smart format auto-detect ─────────────────────────────────────
-// Mirrors API/Program.cs. Currently used only by API controllers, but registered
-// here too so future background jobs in this dep graph can resolve it without a
-// second DI fix.
-builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, ProcuLink.Infrastructure.Services.Detection.FormatDetectorService>();
-
 builder.Services.AddScoped<BillingReconciliationJob>();
-// ParseOrderJob (executed here) records schema fingerprints — register the service it depends on.
-builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();
-builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISupplierSuggestionService, ProcuLink.Infrastructure.Services.Detection.SupplierSuggestionService>();
 
 builder.Services.AddScoped<ReadDocumentJob>();
 builder.Services.AddScoped<DeliverDocumentJob>();

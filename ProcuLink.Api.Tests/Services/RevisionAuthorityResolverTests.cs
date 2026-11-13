@@ -63,7 +63,7 @@ public class RevisionAuthorityResolverTests
                 },
             },
         };
-        db.SupplierConnections.Add(new SupplierConnection
+        db.Set<SupplierConnection>().Add(new SupplierConnection
         {
             Id = connectionId, OrgId = orgId, SupplierId = supplierId, Name = "conn",
             ActiveRevisionId = revision.Id, CreatedAt = now, UpdatedAt = now,

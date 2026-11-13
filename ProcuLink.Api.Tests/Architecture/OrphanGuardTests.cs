@@ -88,15 +88,14 @@ public sealed class OrphanGuardTests
 
         // ── WP-04 findings, 2026-07-30. Recorded, NOT fixed: each belongs to another packet.
         new KnownWriteOnly("Buyer",
-            "2026-11-12 — plan 13b removed BuyersController and the /library/buyers screen. The "
-            + "entity, table and BuyerService stay until the service sweep; no route in either repo "
-            + "reaches them."),
+            "2026-11-12 — plan 13b removed BuyersController and the /library/buyers screen. "
+            + "2026-11-13 — Task 7b deleted BuyerService; the entity, table and DbSet stay (R2). No "
+            + "route or service in either repo reaches them."),
         new KnownWriteOnly("MappingCorrection",
-            "WP-04 finding 2026-07-30: written by ItemMappingService (~L120) when a user changes a "
-            + "mapping's supplier item code, and read by NOTHING — no reader in any of the five "
-            + "production projects, no endpoint anywhere in ProcuLink.Api, and no route referencing it "
-            + "in project-proculink at origin/main. The correction trail is captured and discarded; "
-            + "fingerprint learning runs off SchemaFingerprint, not this table."),
+            "WP-04 finding 2026-07-30: was written by ItemMappingService when a user changed a "
+            + "mapping's supplier item code, and read by NOTHING. 2026-11-13 — plan 13b Task 7b "
+            + "deleted ItemMappingService, so nothing writes it either; the entity, table and DbSet "
+            + "stay (R2)."),
         new KnownWriteOnly("RetentionAuditLog",
             "WP-04 finding 2026-07-30, judged LEGITIMATELY write-mostly: an append-only evidence trail "
             + "written by BlobRetentionService (~L225) with a DetailsJson payload, so that 'what did the "
@@ -691,7 +690,11 @@ public sealed class OrphanGuardTests
 
         var expected = Registrations(raw);
 
-        Assert.True(expected > 50, $"expected the API composition root to register plenty; found {expected}");
+        // 50 -> 42 on 2026-11-13 (plan 13b, Task 7b): the supplier/catalog/mapping/acceptance/
+        // connection/detection sweep removed 17 scoped registrations, leaving 43. The floor only
+        // keeps the equality below from comparing two near-empty counts; it sits one under today's
+        // count so the next removal has to revisit it on purpose.
+        Assert.True(expected > 42, $"expected the API composition root to register plenty; found {expected}");
         Assert.Equal(expected, Registrations(scanned.Text));
     }
 

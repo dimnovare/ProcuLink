@@ -162,20 +162,19 @@ public class RetiredSubsystemsStayRetiredTests
                      ("ProcuLink.Core.Entities.IntegrationSubscription",
                       "its sender is retired (plan 13b, 2026-11-13) but the rows are kept, inert, and " +
                       "CredentialBindingBackfillService still re-encrypts their secrets — no drops"),
+                     // 2026-11-13 (plan 13b, Task 7b): the acceptance evaluator, the rule-definition
+                     // service and their RuleCatalog seed source were deleted as orphans. The two
+                     // entities stay mapped because their tables stay (R2: no drops); their
+                     // RuleCatalog.Entries assertion went with RuleCatalog.
                      ("ProcuLink.Core.Entities.SupplierAcceptanceRule",
-                      "the rule engine that actually evaluates — LIVE (the retired one is ValidationRule)"),
+                      "its evaluator is deleted (plan 13b) but the rows are kept, inert — no drops"),
                      ("ProcuLink.Core.Entities.RuleDefinition",
-                      "bound to SupplierAcceptanceRule — LIVE, and seeded per-org from RuleCatalog"),
+                      "its service and seed are deleted (plan 13b) but the rows are kept, inert — no drops"),
                  })
         {
             mapped.Should().Contain(fullName,
                 $"{fullName} must still be mapped by ProcuLinkDbContext: {why}");
         }
-
-        // ── The rule engine's seed source. "RuleDefinition still compiles" is not the claim; the
-        //    claim is that the catalog an org's rules are materialised FROM still has entries.
-        RuleCatalog.Entries.Should().NotBeEmpty(
-            "RuleCatalog seeds the per-org RuleDefinition rows the supplier acceptance engine binds to");
 
         // ── The OutputNode AST emitter — LIVE, and the near-namesake of the retired OutputTemplate
         //    ENTITY. Assert its rendering entry point, not its name.

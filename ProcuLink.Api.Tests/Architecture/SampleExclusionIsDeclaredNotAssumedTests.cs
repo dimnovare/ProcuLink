@@ -47,21 +47,9 @@ public class SampleExclusionIsDeclaredNotAssumedTests
     /// </summary>
     private static readonly Dictionary<string, (int Sites, string Why)> SampleInclusiveByDesign = new()
     {
-        ["ProcuLink.Infrastructure/Services/BuyerService.cs"] =
-            (1,
-             "GET /api/buyers per-buyer orderCount. KNOWN GAP, not a justification. The practice " +
-             "order carries the fixture's buyer name once parsed, so a first-run org sees a buyer " +
-             "it never traded with, carrying one order. This is the same shape as the wire " +
-             "topology, which WAS fixed (DashboardController.cs:140). Left alone here only " +
-             "because it is a different screen from the P0-5 pairing and is tracked separately."),
-
-        ["ProcuLink.Infrastructure/Services/Detection/SupplierSuggestionService.cs"] =
-            (1,
-             "Sender-domain → supplier routing history. UNREACHABLE for practice orders rather " +
-             "than exempt: the predicate requires o.InboundSenderDomain == senderDomain, and " +
-             "SampleOrderService never assigns InboundSenderDomain (verified — the field does not " +
-             "appear in that file), so a sample can never join this aggregate. Filtering IsSample " +
-             "here would be dead code."),
+        // Empty since 2026-11-13 (plan 13b, Task 7b): the two entries — BuyerService.cs and
+        // Detection/SupplierSuggestionService.cs, one site each — left with their files, which were
+        // deleted as orphans. Neither site started filtering IsSample.
     };
 
     /// <summary>
@@ -94,8 +82,11 @@ public class SampleExclusionIsDeclaredNotAssumedTests
     // order counts and the dead-letter count; those held the sites that disappeared.
     // 12 -> 7 later on 2026-11-13 (plan 13b, the order API cut to a read-only archive): the deleted
     // DashboardController KPI/summary queries, OnboardingController's order counts and
-    // OrdersController's write actions held the five sites. 7 today: 5 sample-aware, 2 inclusive.
-    private const int MinimumAggregateSitesExpected = 7;
+    // OrdersController's write actions held the five sites. 7 then: 5 sample-aware, 2 inclusive.
+    // 7 -> 5 on 2026-11-13 (plan 13b, Task 7b): the two sample-INCLUSIVE sites were the registry's
+    // two entries, BuyerService.cs and SupplierSuggestionService.cs, both deleted as orphans. 5 today,
+    // all sample-aware; the companion floor below is unchanged because no sample-aware site went.
+    private const int MinimumAggregateSitesExpected = 5;
 
     /// <summary>Companion floor: the convention must be visibly PRESENT, not merely unviolated.
     /// 8 -> 5 with the same plan 13b cut (all five vanished sites above were sample-aware).</summary>

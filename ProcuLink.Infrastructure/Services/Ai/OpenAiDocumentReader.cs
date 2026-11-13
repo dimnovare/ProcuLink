@@ -151,7 +151,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            if (OpenAiPdfOrderExtractor.ClassifyProviderFailure(ex) is { } providerFailure)
+            if (OpenAiProviderFailure.ClassifyProviderFailure(ex) is { } providerFailure)
                 _logger.LogError(ex, "AI provider failure ({Failure}) during document read (org {OrgId}).", providerFailure, organisationId);
             else
                 _logger.LogWarning(ex, "Document read failed (org {OrgId}).", organisationId);

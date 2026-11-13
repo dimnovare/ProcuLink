@@ -535,21 +535,7 @@ else
     builder.Services.AddSingleton<IFileStorageService, R2StorageService>();
 
 // ── Domain services ────────────────────────────────────────────────────────
-// ItemMappingService is Scoped (DbContext is Scoped).
-builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
-// Supplier product catalog (ground truth for AI code suggestions) — Scoped (DbContext is Scoped).
-builder.Services.AddScoped<ISupplierCatalogService, SupplierCatalogService>();
-// V10 — indexed catalog retrieval at scale (exact + pg_trgm trigram). Scoped; OrderIngestionService
-// self-constructs one from its DbContext, but register it so other consumers can resolve it.
-builder.Services.AddScoped<ICatalogRetrievalService, CatalogRetrievalService>();
 builder.Services.AddScoped<IOrderExceptionService, OrderExceptionService>();
-builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();
-// Group V4 — unified validation: reusable rule definitions + binding-aware read API + boot backfill.
-builder.Services.AddScoped<IRuleDefinitionService, RuleDefinitionService>();
-builder.Services.AddScoped<IRuleDefinitionBackfillService, RuleDefinitionBackfillService>();
-// Group V1 — versioned Supplier Connection (lifecycle service, ingest-time resolver, backfill).
-builder.Services.AddScoped<IConnectionResolver, ConnectionResolver>();
-builder.Services.AddScoped<IConnectionBackfillService, ConnectionBackfillService>();
 // Task 8 (credential AAD binding) — idempotent boot backfill that re-encrypts pre-binding
 // (version-1) credential blobs into the bound (version-2) envelope. See
 // ICredentialBindingBackfillService for the columns covered and the delivery-credentials exclusion.
@@ -631,11 +617,7 @@ builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Organisation.IOrganisationSettingsService, ProcuLink.Infrastructure.Services.OrganisationSettingsService>();
 builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
 builder.Services.AddSingleton<ProcuLink.Core.Documents.IOutputDesigner, ProcuLink.Infrastructure.Services.Ai.OpenAiOutputDesigner>();
-// T4 — external web/product-code grounding. No-op unless Ai:OpenAI:ProductSearch:Enabled=true
-// (default off → byte-identical deploy). Reuses Ai:OpenAI:ApiKey via the Responses web_search tool.
-builder.Services.AddSingleton<IProductCodeSearch, OpenAiProductCodeSearch>();
 builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
-builder.Services.AddScoped<ISchemaInferencer, OpenAiSchemaInferencer>();
 builder.Services.AddScoped<IInboundAddressService, InboundAddressService>();
 builder.Services.AddScoped<IInboundEmailRouter, InboundEmailRouter>();
 // Outbound direction of the same provider relationship: Postmark's bounce / spam-complaint
@@ -646,24 +628,15 @@ builder.Services.AddScoped<IDeliveryBounceHandler, ProcuLink.Infrastructure.Serv
 builder.Services.AddSingleton<ISftpClientFactory, RenciSftpClientFactory>();
 builder.Services.AddSingleton<IAmazonS3ClientFactory, AmazonS3ClientFactory>();
 
-// ── Catalog import channels: SFTP/FTP(S) pull + settings (plan 2026-06-12) ─
+// ── FTP/FTPS fetch seam for the flow pickups (FtpPickupSource) ─────────────
 // FluentFTP fetch seam is hardened (PASVEX + mandatory FTPS data encryption + 30 s
-// timeouts) inside the factory; CatalogPullService owns guard/deadline/bounded-read.
+// timeouts) inside the factory.
 builder.Services.AddSingleton<ProcuLink.Infrastructure.Services.Ingress.IFtpFetchClientFactory,
                               ProcuLink.Infrastructure.Services.Ingress.FluentFtpFetchClientFactory>();
-builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogPullService,
-                           ProcuLink.Infrastructure.Services.Catalog.CatalogPullService>();
-// Vendor catalog fetchers (plan 2026-07-02 D4) — resolved by protocol inside CatalogPullService.
-builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogVendorFetcher,
-                           ProcuLink.Infrastructure.Services.Catalog.Aes2faSignedCatalogFetcher>();
 
 // PDF rasterizer for the vision fallback (scanned/no-text PDFs). Self-contained
 // PDFium + SkiaSharp natives — no extra system packages on the Debian base.
 builder.Services.AddSingleton<IPdfRasterizer, SkiaPdfRasterizer>();
-// Primary PDF path: text → LLM structured extraction (no-op without an OpenAI key,
-// so the deterministic PdfOrderParser stays the fallback). Singleton + per-call
-// IServiceScopeFactory tracker resolution so the same instance is valid in the Worker.
-builder.Services.AddSingleton<IStructuredOrderExtractor, OpenAiPdfOrderExtractor>();
 builder.Services.AddSingleton<IDocumentReader, OpenAiDocumentReader>();
 // OCR seam. Opt-in self-hosted no-egress engine (RapidOcrNet) only when enabled —
 // otherwise a no-op, so the ~12MB models + ONNX session are never loaded.
@@ -671,10 +644,6 @@ if (builder.Configuration.GetValue<bool>("NoEgressOcr:Enabled"))
     builder.Services.AddSingleton<IDocumentOcrService, RapidOcrDocumentOcrService>();
 else
     builder.Services.AddSingleton<IDocumentOcrService, NoOpOcrService>();
-// The artifact-invalidating decorator went with the order pipeline (plan 13b): no order artifact
-// can be re-sent any more, so there is nothing left for a mapping save to invalidate.
-builder.Services.AddScoped<IPoMappingService, PoMappingService>();
-builder.Services.AddScoped<IBuyerService, BuyerService>();
 // ── Wave 4: API keys + integration subscriptions ──────────────────────────
 builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
@@ -689,10 +658,6 @@ builder.Services.AddSingleton(sp =>
     return opts;
 });
 builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
-// cXML network credentials: resolves a supplier's configured From/To/Sender identities + decrypts
-// the Sender SharedSecret for the cXML transform (OrderService → OrderTransformService). Unregistered
-// → legacy GUID identities.
-builder.Services.AddScoped<ICxmlCredentialResolver, CxmlCredentialResolver>();
 builder.Services.AddScoped<IErpConnector, ErplyConnector>();
 builder.Services.AddScoped<IErpConnector, DirectoConnector>();
 builder.Services.AddScoped<IDeliveryDispatcher, HttpDeliveryDispatcher>();
@@ -707,19 +672,6 @@ if (builder.Configuration.GetValue<bool>("Delivery:EnableSmtp"))
     builder.Services.AddScoped<IDeliveryDispatcher, SmtpDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, ErplyDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, DirectoDeliveryDispatcher>();
-
-// ── Parsing layer (ProcuLink.Transform) ───────────────────────────────────
-// Each parser registered individually so DI can inject IEnumerable<IPurchaseOrderParser>
-// into OrderParserFactory, which selects by file extension at runtime.
-builder.Services.AddSingleton<IPurchaseOrderParser, CsvOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, XlsxOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, PdfOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, CxmlOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, UblOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, IDocOrders05Parser>(); // SAP IDoc ORDERS05 (.xml, root <ORDERS05>)
-builder.Services.AddSingleton<IPurchaseOrderParser, EdifactOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, X12OrderParser>(); // Group M — ANSI X12 850
-builder.Services.AddSingleton<OrderParserFactory>();
 
 // ── Transform layer (ProcuLink.Transform) ──────────────────────────────────
 // Every implementation registered as ITransformService. OrderService resolves the correct one at
@@ -743,12 +695,6 @@ builder.Services.AddScoped<IDataErasureService, ProcuLink.Infrastructure.Service
 // Whole-organisation erase (admin endpoint + Worker DisposableOrgSweepJob); receipt in platform_audit_events.
 builder.Services.AddScoped<IOrganisationEraser, ProcuLink.Infrastructure.Services.OrganisationEraser>();
 
-// ── Phase 6: smart format auto-detect ─────────────────────────────────────
-builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, ProcuLink.Infrastructure.Services.Detection.FormatDetectorService>();
-builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();
-builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISupplierSuggestionService, ProcuLink.Infrastructure.Services.Detection.SupplierSuggestionService>();
-// Stateless source-column extractor used by the magic-mapping UI (GET /api/suppliers/{id}/mapping/source-columns).
-builder.Services.AddSingleton<ProcuLink.Core.Services.Detection.ISourceColumnExtractor, ProcuLink.Transform.Detection.SourceColumnExtractor>();
 // SourceMap engine tokenizer: extracts every addressable value from a source file (CSV + XML concrete;
 // other formats return an empty list). Singleton — stateless, reused across requests.
 builder.Services.AddSingleton<ProcuLink.Transform.Tokenizing.ISourceTokenizer, ProcuLink.Transform.Tokenizing.SourceTokenizer>();

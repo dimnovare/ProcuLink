@@ -9,49 +9,7 @@ namespace ProcuLink.Infrastructure.Tests.Services;
 
 public class OpenAiMappingServiceTests
 {
-    [Fact]
-    public async Task SuggestSupplierItemCodeAsync_NoApiKey_ReturnsNull()
-    {
-        var service = CreateService(new Dictionary<string, string?>
-        {
-            ["Ai:Provider"] = "openai",
-            ["Ai:OpenAI:MappingModel"] = "gpt-5-mini"
-        });
-
-        var result = await service.SuggestSupplierItemCodeAsync(
-            Guid.NewGuid(),
-            Guid.NewGuid(),
-            "Acme Components",
-            new AiMappingLineContext(1, "HEI-PLT-09", "Mounting plate 90mm", 4, "PCS"),
-            Array.Empty<AiMappingCandidate>());
-
-        result.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task SuggestSupplierItemCodeAsync_NonOpenAiProvider_ReturnsNull()
-    {
-        var service = CreateService(new Dictionary<string, string?>
-        {
-            ["Ai:Provider"] = "none",
-            ["Ai:OpenAI:ApiKey"] = "test-key",
-            ["Ai:OpenAI:MappingModel"] = "gpt-5-mini"
-        });
-
-        var result = await service.SuggestSupplierItemCodeAsync(
-            Guid.NewGuid(),
-            Guid.NewGuid(),
-            "Acme Components",
-            new AiMappingLineContext(1, "HEI-PLT-09", "Mounting plate 90mm", 4, "PCS"),
-            new[]
-            {
-                new AiMappingCandidate("HEI-PLT-08", "ACM-PLT-080", "existing mapping")
-            });
-
-        result.Should().BeNull();
-    }
-
-    // ── Batch variant: same no-op guarantees as the single-line method ──────────
+    // ── Batch suggestions: no-op guarantees ─────────────────────────────────────
 
     [Fact]
     public async Task SuggestSupplierItemCodesAsync_NoApiKey_ReturnsEmpty()
@@ -126,33 +84,8 @@ public class OpenAiMappingServiceTests
 
     // ── No-egress gate (Organisation.SelfHostedOcr) ─────────────────────────────
     // This is the single IAiMappingService chokepoint: a no-egress org must never have
-    // its line data OR its source column headers (the "magic auto-map" path) sent to
-    // OpenAI, even with a key configured. The short-circuit runs BEFORE the cap check,
-    // so a strict tracker (no setups) proves OpenAI is never reached.
-
-    [Fact]
-    public async Task SuggestFieldMappingsAsync_NoEgressOrg_ReturnsEmptyWithoutCallingOpenAi()
-    {
-        var tracker = new Mock<IAiUsageTracker>(MockBehavior.Strict);
-
-        var service = CreateServiceWithNoEgress(
-            new Dictionary<string, string?>
-            {
-                ["Ai:Provider"]      = "openai",
-                ["Ai:OpenAI:ApiKey"] = "sk-test-key",
-            },
-            tracker: tracker.Object,
-            noEgress: true);
-
-        var result = await service.SuggestFieldMappingsAsync(
-            Guid.NewGuid(),
-            Guid.NewGuid(),
-            new[] { "Item No", "Qty", "Unit Price" },
-            new[] { "lines[].SupplierItemCode", "lines[].Quantity" });
-
-        result.Should().BeEmpty("no-egress orgs never send source column headers to OpenAI");
-        // Strict mock would have thrown if the cap check (IsAtOrOverLimitAsync) ran.
-    }
+    // its line data sent to OpenAI, even with a key configured. The short-circuit runs
+    // BEFORE the cap check, so a strict tracker (no setups) proves OpenAI is never reached.
 
     [Fact]
     public async Task SuggestSupplierItemCodesAsync_NoEgressOrg_ReturnsEmptyWithoutCallingOpenAi()

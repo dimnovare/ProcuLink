@@ -14,9 +14,13 @@ using ProcuLink.Transform.Parsing;
 namespace ProcuLink.Api.Tests.Services;
 
 /// <summary>
-/// Unit tests for <see cref="OrderQueryService.ListPagedAsync"/>:
+/// Unit tests for <see cref="OrderQueryService.ListWindowAsync"/>:
 /// pagination boundaries, org-scoping, each filter type, and default ordering.
 /// Uses EF InMemory — no database required.
+///
+/// <para>Re-anchored 2026-11-13 (plan 13b): the page/pageSize wrapper <c>ListPagedAsync</c> had no
+/// production caller and was removed, so each page is now written as the skip/take window it
+/// always delegated to (page N of size S = skip (N-1)*S, take S).</para>
 /// </summary>
 public class OrderServiceListPagedTests
 {
@@ -58,12 +62,12 @@ public class OrderServiceListPagedTests
     // ── pagination boundary tests ──────────────────────────────────────────────
 
     [Fact]
-    public async Task ListPagedAsync_Page1_ReturnsFirstPageNewestFirst()
+    public async Task ListWindowAsync_Page1_ReturnsFirstPageNewestFirst()
     {
         var (db, orgId, _, ids) = await SeedOrdersAsync(10);
         var svc = BuildService(db);
 
-        var result = await svc.ListPagedAsync(orgId, page: 1, pageSize: 3,
+        var result = await svc.ListWindowAsync(orgId, skip: 0, take: 3,
             null, null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -77,12 +81,12 @@ public class OrderServiceListPagedTests
     }
 
     [Fact]
-    public async Task ListPagedAsync_Page2_ReturnsCorrectSlice()
+    public async Task ListWindowAsync_Page2_ReturnsCorrectSlice()
     {
         var (db, orgId, _, ids) = await SeedOrdersAsync(10);
         var svc = BuildService(db);
 
-        var result = await svc.ListPagedAsync(orgId, page: 2, pageSize: 3,
+        var result = await svc.ListWindowAsync(orgId, skip: 3, take: 3,
             null, null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -95,13 +99,13 @@ public class OrderServiceListPagedTests
     }
 
     [Fact]
-    public async Task ListPagedAsync_LastPage_ReturnsRemainder()
+    public async Task ListWindowAsync_LastPage_ReturnsRemainder()
     {
         var (db, orgId, _, ids) = await SeedOrdersAsync(10);
         var svc = BuildService(db);
 
         // pageSize=3: pages 1–3 have 3 items each, page 4 has 1 item.
-        var result = await svc.ListPagedAsync(orgId, page: 4, pageSize: 3,
+        var result = await svc.ListWindowAsync(orgId, skip: 9, take: 3,
             null, null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -112,12 +116,12 @@ public class OrderServiceListPagedTests
     }
 
     [Fact]
-    public async Task ListPagedAsync_BeyondLastPage_ReturnsEmptyItemsButCorrectTotal()
+    public async Task ListWindowAsync_BeyondLastPage_ReturnsEmptyItemsButCorrectTotal()
     {
         var (db, orgId, _, _) = await SeedOrdersAsync(5);
         var svc = BuildService(db);
 
-        var result = await svc.ListPagedAsync(orgId, page: 99, pageSize: 10,
+        var result = await svc.ListWindowAsync(orgId, skip: 980, take: 10,
             null, null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -129,12 +133,12 @@ public class OrderServiceListPagedTests
     // ── default ordering ───────────────────────────────────────────────────────
 
     [Fact]
-    public async Task ListPagedAsync_DefaultOrdering_IsNewestFirst()
+    public async Task ListWindowAsync_DefaultOrdering_IsNewestFirst()
     {
         var (db, orgId, _, ids) = await SeedOrdersAsync(5);
         var svc = BuildService(db);
 
-        var result = await svc.ListPagedAsync(orgId, page: 1, pageSize: 5,
+        var result = await svc.ListWindowAsync(orgId, skip: 0, take: 5,
             null, null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -148,7 +152,7 @@ public class OrderServiceListPagedTests
     // ── org-scoping ────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task ListPagedAsync_OrgANeverSeesOrgBOrders()
+    public async Task ListWindowAsync_OrgANeverSeesOrgBOrders()
     {
         var db    = NewDb();
         var orgA  = Guid.NewGuid();
@@ -185,7 +189,7 @@ public class OrderServiceListPagedTests
         var svc = BuildService(db);
 
         // Org A query.
-        var resultA = await svc.ListPagedAsync(orgA, 1, 25,
+        var resultA = await svc.ListWindowAsync(orgA, 0, 25,
             null, null, null, null, null, CancellationToken.None);
         Assert.True(resultA.IsSuccess);
         Assert.Equal(3, resultA.Value.TotalCount);
@@ -194,7 +198,7 @@ public class OrderServiceListPagedTests
         Assert.All(resultA.Value.Items, item => Assert.Equal("Sup A", item.SupplierName));
 
         // Org B query.
-        var resultB = await svc.ListPagedAsync(orgB, 1, 25,
+        var resultB = await svc.ListWindowAsync(orgB, 0, 25,
             null, null, null, null, null, CancellationToken.None);
         Assert.True(resultB.IsSuccess);
         Assert.Equal(5, resultB.Value.TotalCount);
@@ -208,7 +212,7 @@ public class OrderServiceListPagedTests
     // ── status filter ──────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task ListPagedAsync_StatusFilter_ReturnsOnlyMatchingStatus()
+    public async Task ListWindowAsync_StatusFilter_ReturnsOnlyMatchingStatus()
     {
         var db         = NewDb();
         var orgId      = Guid.NewGuid();
@@ -230,7 +234,7 @@ public class OrderServiceListPagedTests
         await db.SaveChangesAsync();
         var svc = BuildService(db);
 
-        var result = await svc.ListPagedAsync(orgId, 1, 25,
+        var result = await svc.ListWindowAsync(orgId, 0, 25,
             status: "delivered", null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -245,7 +249,7 @@ public class OrderServiceListPagedTests
     /// status=failed must return the WHOLE failure bucket — not just literal "failed".
     /// </summary>
     [Fact]
-    public async Task ListPagedAsync_StatusFilterFailed_ReturnsWholeFailureBucket()
+    public async Task ListWindowAsync_StatusFilterFailed_ReturnsWholeFailureBucket()
     {
         var db         = NewDb();
         var orgId      = Guid.NewGuid();
@@ -277,7 +281,7 @@ public class OrderServiceListPagedTests
         await db.SaveChangesAsync();
         var svc = BuildService(db);
 
-        var result = await svc.ListPagedAsync(orgId, 1, 25,
+        var result = await svc.ListWindowAsync(orgId, 0, 25,
             status: "failed", null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -300,7 +304,7 @@ public class OrderServiceListPagedTests
     /// only the literal status is returned (the bucket expansion is failed-only).
     /// </summary>
     [Fact]
-    public async Task ListPagedAsync_StatusFilterNonFailed_StaysExactMatch()
+    public async Task ListWindowAsync_StatusFilterNonFailed_StaysExactMatch()
     {
         var db         = NewDb();
         var orgId      = Guid.NewGuid();
@@ -328,7 +332,7 @@ public class OrderServiceListPagedTests
         await db.SaveChangesAsync();
         var svc = BuildService(db);
 
-        var result = await svc.ListPagedAsync(orgId, 1, 25,
+        var result = await svc.ListWindowAsync(orgId, 0, 25,
             status: "delivered", null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -340,7 +344,7 @@ public class OrderServiceListPagedTests
     // ── supplierId filter ──────────────────────────────────────────────────────
 
     [Fact]
-    public async Task ListPagedAsync_SupplierIdFilter_ReturnsOnlyThatSupplier()
+    public async Task ListWindowAsync_SupplierIdFilter_ReturnsOnlyThatSupplier()
     {
         var db    = NewDb();
         var orgId = Guid.NewGuid();
@@ -374,7 +378,7 @@ public class OrderServiceListPagedTests
         await db.SaveChangesAsync();
         var svc = BuildService(db);
 
-        var result = await svc.ListPagedAsync(orgId, 1, 25,
+        var result = await svc.ListWindowAsync(orgId, 0, 25,
             null, supplierId: sup1, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -387,7 +391,7 @@ public class OrderServiceListPagedTests
     // ── date range filter ──────────────────────────────────────────────────────
 
     [Fact]
-    public async Task ListPagedAsync_DateFromFilter_ExcludesOlderOrders()
+    public async Task ListWindowAsync_DateFromFilter_ExcludesOlderOrders()
     {
         var db         = NewDb();
         var orgId      = Guid.NewGuid();
@@ -417,7 +421,7 @@ public class OrderServiceListPagedTests
         var svc = BuildService(db);
 
         var from   = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc);
-        var result = await svc.ListPagedAsync(orgId, 1, 25,
+        var result = await svc.ListWindowAsync(orgId, 0, 25,
             null, null, null, dateFrom: from, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -429,7 +433,7 @@ public class OrderServiceListPagedTests
     }
 
     [Fact]
-    public async Task ListPagedAsync_DateToFilter_ExcludesNewerOrders()
+    public async Task ListWindowAsync_DateToFilter_ExcludesNewerOrders()
     {
         var db         = NewDb();
         var orgId      = Guid.NewGuid();
@@ -458,7 +462,7 @@ public class OrderServiceListPagedTests
         var svc = BuildService(db);
 
         var to     = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc);
-        var result = await svc.ListPagedAsync(orgId, 1, 25,
+        var result = await svc.ListWindowAsync(orgId, 0, 25,
             null, null, null, null, dateTo: to, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -470,7 +474,7 @@ public class OrderServiceListPagedTests
     }
 
     [Fact]
-    public async Task ListPagedAsync_DateRangeBothBounds_FiltersCorrectly()
+    public async Task ListWindowAsync_DateRangeBothBounds_FiltersCorrectly()
     {
         var db         = NewDb();
         var orgId      = Guid.NewGuid();
@@ -500,7 +504,7 @@ public class OrderServiceListPagedTests
 
         var from = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc);
         var to   = new DateTime(2026, 3, 31, 0, 0, 0, DateTimeKind.Utc);
-        var result = await svc.ListPagedAsync(orgId, 1, 25,
+        var result = await svc.ListWindowAsync(orgId, 0, 25,
             null, null, null, dateFrom: from, dateTo: to, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -519,7 +523,7 @@ public class OrderServiceListPagedTests
     // integration tests that run against a real Postgres container.
 
     [Fact]
-    public async Task ListPagedAsync_Search_NullSearch_ReturnsAllOrders()
+    public async Task ListWindowAsync_Search_NullSearch_ReturnsAllOrders()
     {
         // Verifies that omitting the search filter (null) returns the full set —
         // the baseline for all search-related integration tests.
@@ -544,7 +548,7 @@ public class OrderServiceListPagedTests
         var svc = BuildService(db);
 
         // Null search — all 3 orders should be returned.
-        var result = await svc.ListPagedAsync(orgId, 1, 25,
+        var result = await svc.ListWindowAsync(orgId, 0, 25,
             null, null, search: null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -554,7 +558,7 @@ public class OrderServiceListPagedTests
     }
 
     [Fact]
-    public async Task ListPagedAsync_Search_NullSearch_ReturnsAllSuppliers()
+    public async Task ListWindowAsync_Search_NullSearch_ReturnsAllSuppliers()
     {
         // Verifies org-scoped list works when two suppliers are present and search is null.
         var db    = NewDb();
@@ -585,7 +589,7 @@ public class OrderServiceListPagedTests
         await db.SaveChangesAsync();
         var svc = BuildService(db);
 
-        var result = await svc.ListPagedAsync(orgId, 1, 25,
+        var result = await svc.ListWindowAsync(orgId, 0, 25,
             null, null, search: null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -599,7 +603,7 @@ public class OrderServiceListPagedTests
     }
 
     [Fact]
-    public async Task ListPagedAsync_BuyerName_IsDenormalisedOnEntity()
+    public async Task ListWindowAsync_BuyerName_IsDenormalisedOnEntity()
     {
         // Verifies that BuyerName is exposed directly on the summary (not from CanonicalJson).
         // ILike search on BuyerName is covered by integration tests (InMemory cannot translate ILike).
@@ -644,7 +648,7 @@ public class OrderServiceListPagedTests
         var svc = BuildService(db);
 
         // Use null search so InMemory EF never hits ILike.
-        var result = await svc.ListPagedAsync(orgId, 1, 25,
+        var result = await svc.ListWindowAsync(orgId, 0, 25,
             null, null, search: null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -661,7 +665,7 @@ public class OrderServiceListPagedTests
     }
 
     [Fact]
-    public async Task ListPagedAsync_Search_EmptySearch_ReturnsAllOrders()
+    public async Task ListWindowAsync_Search_EmptySearch_ReturnsAllOrders()
     {
         // Verifies that whitespace/empty search behaves identically to null search.
         var db         = NewDb();
@@ -681,7 +685,7 @@ public class OrderServiceListPagedTests
         var svc = BuildService(db);
 
         // Empty-string search is treated as null — no ILike predicate, all rows returned.
-        var result = await svc.ListPagedAsync(orgId, 1, 25,
+        var result = await svc.ListWindowAsync(orgId, 0, 25,
             null, null, search: "   ", null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -691,7 +695,7 @@ public class OrderServiceListPagedTests
     // ── combined filters + pagination correctness ──────────────────────────────
 
     [Fact]
-    public async Task ListPagedAsync_CombinedStatusAndDateFilter_WorksTogether()
+    public async Task ListWindowAsync_CombinedStatusAndDateFilter_WorksTogether()
     {
         var db         = NewDb();
         var orgId      = Guid.NewGuid();
@@ -722,7 +726,7 @@ public class OrderServiceListPagedTests
         var from = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc);
         var to   = new DateTime(2026, 2, 28, 0, 0, 0, DateTimeKind.Utc);
 
-        var result = await svc.ListPagedAsync(orgId, 1, 25,
+        var result = await svc.ListWindowAsync(orgId, 0, 25,
             status: "ready", null, null, dateFrom: from, dateTo: to, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -733,13 +737,13 @@ public class OrderServiceListPagedTests
     }
 
     [Fact]
-    public async Task ListPagedAsync_EmptyOrg_ReturnsEmptyResult()
+    public async Task ListWindowAsync_EmptyOrg_ReturnsEmptyResult()
     {
         var db    = NewDb();
         var orgId = Guid.NewGuid();
         var svc   = BuildService(db);
 
-        var result = await svc.ListPagedAsync(orgId, 1, 25,
+        var result = await svc.ListWindowAsync(orgId, 0, 25,
             null, null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);
@@ -749,13 +753,13 @@ public class OrderServiceListPagedTests
     }
 
     [Fact]
-    public async Task ListPagedAsync_TotalCountReflectsFilterNotPageSize()
+    public async Task ListWindowAsync_TotalCountReflectsFilterNotPageSize()
     {
         var (db, orgId, _, _) = await SeedOrdersAsync(15);
         var svc = BuildService(db);
 
         // Page 1 with pageSize 5 — total should still be 15, not 5.
-        var result = await svc.ListPagedAsync(orgId, 1, 5,
+        var result = await svc.ListWindowAsync(orgId, 0, 5,
             null, null, null, null, null, CancellationToken.None);
 
         Assert.True(result.IsSuccess);

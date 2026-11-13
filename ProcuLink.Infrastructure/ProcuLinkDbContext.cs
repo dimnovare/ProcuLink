@@ -135,16 +135,12 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<Supplier> Suppliers => Set<Supplier>();
     public DbSet<PurchaseOrderEntity> PurchaseOrders => Set<PurchaseOrderEntity>();
     public DbSet<PurchaseOrderLineEntity> PurchaseOrderLines => Set<PurchaseOrderLineEntity>();
-    public DbSet<OrderParty> OrderParties => Set<OrderParty>();
-    public DbSet<SourceCapture> SourceCaptures => Set<SourceCapture>();
     public DbSet<ItemMapping> ItemMappings => Set<ItemMapping>();
-    public DbSet<SupplierProduct> SupplierProducts => Set<SupplierProduct>();
     public DbSet<SupplierCatalogSource> SupplierCatalogSources => Set<SupplierCatalogSource>();
     public DbSet<AiSuggestionDecision> AiSuggestionDecisions => Set<AiSuggestionDecision>();
     public DbSet<OutboundArtifact> OutboundArtifacts => Set<OutboundArtifact>();
     public DbSet<DeliveryAttempt> DeliveryAttempts => Set<DeliveryAttempt>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
-    public DbSet<SupplierPoMapping> SupplierPoMappings => Set<SupplierPoMapping>();
     public DbSet<SupplierDeliveryConfig> SupplierDeliveryConfigs => Set<SupplierDeliveryConfig>();
     public DbSet<IdempotencyKey> IdempotencyKeys => Set<IdempotencyKey>();
     public DbSet<AiUsageMonthly> AiUsageMonthly => Set<AiUsageMonthly>();
@@ -158,21 +154,19 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     // Invoice and ASN tables (InvoiceEntity, InvoiceLineEntity, AdvanceShippingNoticeEntity, AsnPackageEntity,
     // AsnPackageLineEntity) have no DbSet since plan 13b: nothing reads them. The entities stay mapped below,
     // so the tables and migrations are untouched; reach one with Set<T>() if a reader is ever needed.
+    // Likewise since plan 13b Task 7b (2026-11-13): OrderParty, SourceCapture, SupplierProduct,
+    // SupplierPoMapping, SchemaFingerprint, SupplierAcceptanceProfile, SupplierAcceptanceRule,
+    // RuleDefinition and SupplierConnection lost their last reader with the supplier/catalog/mapping
+    // services. Their DbSets went; the entities stay mapped below with explicit table names (R2).
     public DbSet<TenantApiKey>            TenantApiKeys            => Set<TenantApiKey>();
     public DbSet<IntegrationSubscription> IntegrationSubscriptions => Set<IntegrationSubscription>();
-    public DbSet<SchemaFingerprint>       SchemaFingerprints       => Set<SchemaFingerprint>();
     public DbSet<OrderConfirmationEntity>     OrderConfirmations     => Set<OrderConfirmationEntity>();
     public DbSet<OrderConfirmationLineEntity> OrderConfirmationLines => Set<OrderConfirmationLineEntity>();
     public DbSet<MappingCorrection>  MappingCorrections  { get; set; } = null!;
     public DbSet<PoPassportEvent>    PoPassportEvents    { get; set; } = null!;
     public DbSet<OrderException>              OrderExceptions              { get; set; } = null!;
-    public DbSet<SupplierAcceptanceProfile>   SupplierAcceptanceProfiles   { get; set; } = null!;
-    public DbSet<SupplierAcceptanceRule>      SupplierAcceptanceRules      { get; set; } = null!;
     public DbSet<OrderValidationResult>       OrderValidationResults       { get; set; } = null!;
-    // ── Group V4: unified validation — reusable rule definitions (templates) ─
-    public DbSet<RuleDefinition>              RuleDefinitions              { get; set; } = null!;
     // ── Group V1: versioned Supplier Connection ─────────────────────────────
-    public DbSet<SupplierConnection>             SupplierConnections           { get; set; } = null!;
     public DbSet<SupplierConnectionRevision>     SupplierConnectionRevisions   { get; set; } = null!;
     public DbSet<ConnectionRevisionItemMapping>  ConnectionRevisionItemMappings { get; set; } = null!;
     public DbSet<ConnectionRevisionTestCase>     ConnectionRevisionTestCases   { get; set; } = null!;
@@ -660,7 +654,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // (OrgId, SupplierId): order-list query filtered/grouped by supplier within a tenant.
             b.HasIndex(x => new { x.OrgId, x.SupplierId })
              .HasDatabaseName("IX_purchase_orders_org_id_supplier_id");
-            // (OrgId, BuyerName): SQL-native buyer-name search in ListPagedAsync (ILike predicate).
+            // (OrgId, BuyerName): SQL-native buyer-name search in ListWindowAsync (ILike predicate).
             b.HasIndex(x => new { x.OrgId, x.BuyerName })
              .HasDatabaseName("IX_purchase_orders_org_id_buyer_name");
             // (OrgId, InboundSenderDomain): supplier auto-detect's sender-domain history probe —
