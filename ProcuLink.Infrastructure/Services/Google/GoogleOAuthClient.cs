@@ -17,7 +17,6 @@ public sealed class GoogleOAuthClient(IHttpClientFactory http, IOptions<GoogleOp
     private const string AuthorizeEndpoint = "https://accounts.google.com/o/oauth2/v2/auth";
     private const string TokenEndpoint = "https://oauth2.googleapis.com/token";
     private const string UserInfoEndpoint = "https://openidconnect.googleapis.com/v1/userinfo";
-    private const string RevokeEndpoint = "https://oauth2.googleapis.com/revoke";
 
     public string BuildAuthorizeUrl(string redirectUri, string state, string codeChallenge) =>
         AuthorizeEndpoint + "?" + string.Join("&", new Dictionary<string, string>
@@ -71,21 +70,6 @@ public sealed class GoogleOAuthClient(IHttpClientFactory http, IOptions<GoogleOp
         if ((int)status is < 200 or > 299 || token is null)
             throw new HttpRequestException($"Google token refresh answered HTTP {(int)status}.", null, status);
         return new GoogleRefresh(token, Revoked: false);
-    }
-
-    public async Task RevokeAsync(string refreshToken, CancellationToken ct)
-    {
-        try
-        {
-            await SendAsync(new HttpRequestMessage(HttpMethod.Post, RevokeEndpoint)
-            {
-                Content = new FormUrlEncodedContent(new Dictionary<string, string> { ["token"] = refreshToken }),
-            }, ct);
-        }
-        catch (Exception)
-        {
-            // Best effort (R8): our copy is deleted whatever Google answers.
-        }
     }
 
     private HttpRequestMessage TokenRequest(Dictionary<string, string> form)

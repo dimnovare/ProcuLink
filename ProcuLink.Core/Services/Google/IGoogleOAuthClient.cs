@@ -14,7 +14,11 @@ public sealed class GoogleAuthException(string code) : Exception(code)
     public string Code { get; } = code;
 }
 
-/// <summary>Google OAuth over plain HTTP (R4): authorize URL, code exchange, userinfo, refresh and revoke.</summary>
+/// <summary>
+/// Google OAuth over plain HTTP (R4): authorize URL, code exchange, userinfo and refresh. No revoke, on
+/// purpose: Google's revoke ends the whole grant for that Google user, which would silently disconnect
+/// the same user's account in another organisation.
+/// </summary>
 public interface IGoogleOAuthClient
 {
     string BuildAuthorizeUrl(string redirectUri, string state, string codeChallenge);
@@ -27,7 +31,4 @@ public interface IGoogleOAuthClient
 
     /// <exception cref="HttpRequestException">Network, timeout, 5xx, or any refusal other than <c>invalid_grant</c>.</exception>
     Task<GoogleRefresh> RefreshAsync(string refreshToken, CancellationToken ct);
-
-    /// <summary>Best effort; never throws.</summary>
-    Task RevokeAsync(string refreshToken, CancellationToken ct);
 }

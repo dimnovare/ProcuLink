@@ -242,8 +242,8 @@ internal static class OrgAdminGateIlScanner
 
         new("GoogleConnectService.DeleteAsync",
             OnInterface<ProcuLink.Api.Services.Google.GoogleConnectService>(nameof(ProcuLink.Api.Services.Google.GoogleConnectService.DeleteAsync)),
-            "Revokes the organisation's Google grant and deletes its token; nothing can be sent to that account "
-          + "afterwards."),
+            "Deletes the organisation's stored Google token; nothing can be sent to that account afterwards "
+          + "until someone reconnects it."),
 
         new("ILinkedAccountTokens.GetGoogleAccessTokenAsync",
             OnInterface<ProcuLink.Core.Services.Google.ILinkedAccountTokens>(nameof(ProcuLink.Core.Services.Google.ILinkedAccountTokens.GetGoogleAccessTokenAsync)),

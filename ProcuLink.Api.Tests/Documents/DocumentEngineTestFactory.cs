@@ -39,15 +39,17 @@ public sealed class FakeGoogleOAuthClient : IGoogleOAuthClient
 
     public string BuildAuthorizeUrl(string redirectUri, string state, string codeChallenge) => _real.BuildAuthorizeUrl(redirectUri, state, codeChallenge);
 
+    /// <summary>When set, the exchange fails with this Google error, as a used or expired code does with <c>invalid_grant</c>.</summary>
+    public string? ExchangeError { get; set; }
+
     public Task<GoogleGrant> ExchangeCodeAsync(string code, string redirectUri, string codeVerifier, CancellationToken ct)
     {
         Exchanged = (code, redirectUri, codeVerifier);
-        return Task.FromResult(Grant);
+        return ExchangeError is { } error ? throw new GoogleAuthException(error) : Task.FromResult(Grant);
     }
 
     public Task<GoogleUser> GetUserAsync(string accessToken, CancellationToken ct) => Task.FromResult(User);
     public Task<GoogleRefresh> RefreshAsync(string refreshToken, CancellationToken ct) => Task.FromResult(new GoogleRefresh("at-2", Revoked: false));
-    public Task RevokeAsync(string refreshToken, CancellationToken ct) => Task.CompletedTask;
 }
 
 /// <summary>

@@ -23,7 +23,7 @@ public sealed class GoogleConnectException(int status, string code) : Exception(
 }
 
 /// <summary>
-/// Connects (R4/R5) and disconnects (R8) an organisation's Google account. The connect state is a
+/// Connects (R4/R5) and disconnects (R8, without a Google revoke) an organisation's Google account. The connect state is a
 /// 10-minute DataProtection blob binding org, user, PKCE verifier and redirect URI, so no BE endpoint
 /// is anonymous and the verifier never reaches the browser in clear.
 /// </summary>
@@ -52,8 +52,10 @@ public sealed class GoogleConnectService(
             .Select(u => u.TrimEnd('/'));
         if (!allowed.Contains(origin, StringComparer.Ordinal)) throw new GoogleConnectException(422, "invalid_origin");
 
-        // Same-site paths only: "//host" and "/\host" are both protocol-relative to a browser.
-        if (returnTo is null || !returnTo.StartsWith('/') || returnTo.StartsWith("//") || returnTo.StartsWith("/\\")) returnTo = null;
+        // Same-site paths only: "//host" and "/\host" are both protocol-relative to a browser, and a URL parser
+        // strips tab/CR/LF, so "/\t/host" becomes "//host".
+        if (returnTo is null || !returnTo.StartsWith('/') || returnTo.StartsWith("//") || returnTo.StartsWith("/\\") || returnTo.Any(char.IsControl))
+            returnTo = null;
         var verifier = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
         var redirectUri = origin + "/settings/google-callback";
         var state = Protector().Protect(JsonSerializer.Serialize(new State(orgId, userId, verifier, redirectUri, returnTo)), StateLifetime);
@@ -88,13 +90,16 @@ public sealed class GoogleConnectService(
         account.Email = user.Email;
         account.Status = LinkedAccountStatus.Active;
         account.UpdatedAt = DateTime.UtcNow;
-        Audit(account, "linked_account.connected");
+        Audit(account, "linked_account.connected", userId);
         await db.SaveChangesAsync(ct);
         return (ToDto(account), s.ReturnTo);
     }
 
-    /// <summary>Null: no such account in this org. False: a destination still names it (R8). True: revoked at Google (best effort) and deleted.</summary>
-    public async Task<bool?> DeleteAsync(Guid orgId, Guid accountId, CancellationToken ct)
+    /// <summary>
+    /// Null: no such account in this org. False: a destination still names it (R8). True: deleted. Google is
+    /// not called: its revoke ends the grant for that Google user everywhere, including another org's link.
+    /// </summary>
+    public async Task<bool?> DeleteAsync(Guid orgId, string userId, Guid accountId, CancellationToken ct)
     {
         var account = await db.LinkedAccounts.FirstOrDefaultAsync(a => a.OrgId == orgId && a.Id == accountId, ct);
         if (account is null) return null;
@@ -105,13 +110,8 @@ public sealed class GoogleConnectService(
             .ToListAsync(ct);
         if (configs.Any(c => NamesAccount(c, accountId))) return false;
 
-        string? refreshToken = null;
-        try { refreshToken = LinkedAccountTokens.ReadRefreshToken(encryption, account); }
-        catch (Exception) { } // an unreadable token cannot be revoked; deleting our copy is the obligation and must not be blocked
-        if (refreshToken is not null) await google.RevokeAsync(refreshToken, ct);
-
         db.LinkedAccounts.Remove(account);
-        Audit(account, "linked_account.disconnected");
+        Audit(account, "linked_account.disconnected", userId);
         await db.SaveChangesAsync(ct);
         return true;
     }
@@ -130,10 +130,10 @@ public sealed class GoogleConnectService(
             && Guid.TryParse(v.GetString(), out var id) && id == accountId;
     }
 
-    /// <summary>R13: provider only; never the email or a token.</summary>
-    private void Audit(LinkedAccount a, string action) => db.AuditEvents.Add(new AuditEvent
+    /// <summary>R13: the provider, plus the acting Clerk user as <c>by</c> (the repo's audit convention); never the email or a token.</summary>
+    private void Audit(LinkedAccount a, string action, string userId) => db.AuditEvents.Add(new AuditEvent
     {
         Id = Guid.NewGuid(), OrgId = a.OrgId, EntityType = "LinkedAccount", EntityId = a.Id, Action = action,
-        CreatedAt = DateTime.UtcNow, Payload = JsonSerializer.SerializeToDocument(new { provider = a.Provider }),
+        CreatedAt = DateTime.UtcNow, Payload = JsonSerializer.SerializeToDocument(new { provider = a.Provider, by = userId }),
     });
 }

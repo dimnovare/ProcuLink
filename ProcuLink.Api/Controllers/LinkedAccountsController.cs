@@ -68,6 +68,10 @@ public sealed class LinkedAccountsController(
         {
             return StatusCode(ex.Status, new { error = ex.Code });
         }
+        catch (GoogleAuthException ex) when (ex.Code == "invalid_grant")
+        {
+            return BadRequest(new { error = "invalid_state" }); // used or expired code, or PKCE mismatch: only a fresh start works
+        }
         catch (GoogleAuthException ex)
         {
             logger.LogWarning("Google account connect failed: {GoogleError}.", ex.Code); // Google's error value, never a token
@@ -92,7 +96,7 @@ public sealed class LinkedAccountsController(
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         if (Refuse() is { } refused) return refused;
-        return await connect.DeleteAsync(tenant.OrganisationId, id, ct) switch
+        return await connect.DeleteAsync(tenant.OrganisationId, tenant.ClerkUserId, id, ct) switch
         {
             null => NotFound(new { error = "account_not_found" }),
             false => Conflict(new { error = "account_in_use" }),

@@ -27,6 +27,7 @@ public class LinkedAccountsApiTests : IClassFixture<DocumentEngineTestFactory>
         _factory = factory;
         _factory.Google.Grant = new GoogleGrant("at-1", "rt-1", $"openid email {GoogleOAuthClient.DriveFileScope}");
         _factory.Google.Exchanged = null;
+        _factory.Google.ExchangeError = null;
     }
 
     private static async Task<string> StartAsync(HttpClient client)
@@ -62,6 +63,9 @@ public class LinkedAccountsApiTests : IClassFixture<DocumentEngineTestFactory>
         var (_, redirectUri, verifier) = _factory.Google.Exchanged!.Value;
         redirectUri.Should().Be("http://localhost:8082/settings/google-callback");
         WebEncoders.Base64UrlEncode(SHA256.HashData(Encoding.ASCII.GetBytes(verifier))).Should().Be(Param(url, "code_challenge"));
+        // The callback revisited: Google refuses the used code, and the answer is "start again", not "Google is down".
+        _factory.Google.ExchangeError = "invalid_grant";
+        (await (await CompleteAsync(client, url)).Content.ReadAsStringAsync()).Should().Contain("invalid_state");
 
         var list = await client.GetFromJsonAsync<JsonElement>("/api/linked-accounts");
         list.GetProperty("available").GetBoolean().Should().BeTrue();
