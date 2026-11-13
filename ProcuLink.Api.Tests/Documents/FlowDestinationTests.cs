@@ -11,7 +11,10 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
+using ProcuLink.Infrastructure.Services.Dispatchers;
 using ProcuLink.Infrastructure.Services.Google;
+using ProcuLink.Core.Services.Google;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using static ProcuLink.Api.Services.Documents.FlowDestinationService;
 using static ProcuLink.Api.Tests.Documents.DocumentEngineTestFactory;
@@ -104,6 +107,41 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
         var inUse = await http.DeleteAsync($"/api/linked-accounts/{own}");
         inUse.StatusCode.Should().Be(HttpStatusCode.Conflict);
         (await inUse.Content.ReadAsStringAsync()).Should().Contain("account_in_use");
+    }
+
+    private sealed class SheetsFake : HttpMessageHandler, IHttpClientFactory, ILinkedAccountTokens
+    {
+        public readonly List<(HttpMethod Method, string Url)> Requests = [];
+        public HttpClient CreateClient(string name) => new(this, disposeHandler: false);
+        public Task<LinkedAccessToken> GetGoogleAccessTokenAsync(Guid orgId, Guid accountId, CancellationToken ct) => Task.FromResult(new LinkedAccessToken("at-1", null));
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Requests.Add((request.Method, request.RequestUri!.ToString()));
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") });
+        }
+    }
+
+    [Fact]
+    public async Task Sheets_test_without_a_payload_sends_a_csv_and_only_reads_the_sheet()
+    {
+        await using var db = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        var fake = new SheetsFake();
+        var d = new FlowDestination
+        {
+            Id = Guid.NewGuid(), OrgId = OrgA, Name = "Sheet", Protocol = DeliveryProtocolConstants.GoogleSheets,
+            ConfigJson = $$"""{"accountId":"{{Guid.NewGuid()}}","spreadsheetId":"sh-1"}""",
+        };
+        db.Set<FlowDestination>().Add(d);
+        await db.SaveChangesAsync();
+        var service = new FlowDestinationService(db, null!,
+            [new GoogleSheetsDeliveryDispatcher(fake, fake, NullLogger<GoogleSheetsDeliveryDispatcher>.Instance)],
+            new DocumentEngineGate(Options.Create(new DocumentEngineOptions { EnabledOrgIds = [OrgA.ToString()] })),
+            Options.Create(new GoogleOptions { ClientId = "c", ClientSecret = "s" }));
+
+        var result = await service.TestAsync(OrgA, d.Id, default);
+
+        result!.Success.Should().BeTrue();
+        fake.Requests.Should().ContainSingle().Which.Method.Should().Be(HttpMethod.Get);
     }
 
     [Fact]

@@ -51,13 +51,19 @@ public class GoogleSheetsDeliveryDispatcherTests
     {
         var sheets = new FakeSheets("""{"values":[["Number","Total"]]}""");
 
-        var result = await Send(sheets, "Number,Total,\r\nA-1,=1+1\r\n", "text/csv");
+        var result = await Send(sheets, "Number,Total,\r\nA-1,=1+1,12.50,007,1234567890123456\r\n", "text/csv");
 
         result.Success.Should().BeTrue();
         var append = sheets.Requests.Single(r => r.Url.Contains(":append"));
         append.Url.Split('?')[0].Should().EndWith("values/'Q4 ''test'''!A1:append");
         append.Url.Should().Contain("valueInputOption=RAW").And.Contain("insertDataOption=INSERT_ROWS");
-        JsonNode.Parse(append.Body)!["values"]!.AsArray().Select(r => r!.AsArray().Select(v => (string)v!).ToArray()).Should().BeEquivalentTo(new[] { new[] { "A-1", "=1+1" } });
+        var cells = JsonNode.Parse(append.Body)!["values"]![0]!.AsArray();
+        cells[0]!.GetValue<string>().Should().Be("A-1");
+        cells[1]!.GetValue<string>().Should().Be("=1+1");
+        cells[2]!.GetValueKind().Should().Be(System.Text.Json.JsonValueKind.Number);
+        cells[2]!.ToJsonString().Should().Be("12.50");
+        cells[3]!.GetValue<string>().Should().Be("007");
+        cells[4]!.GetValue<string>().Should().Be("1234567890123456");
     }
 
     [Fact]

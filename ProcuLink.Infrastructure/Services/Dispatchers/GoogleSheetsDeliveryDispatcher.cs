@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using CsvHelper;
 using CsvHelper.Configuration;
 using Microsoft.Extensions.Logging;
@@ -83,7 +84,7 @@ public sealed class GoogleSheetsDeliveryDispatcher(
             var range = Uri.EscapeDataString(tab is null ? "A1" : $"{Quote(tab)}!A1");
             var body = new JsonObject
             {
-                ["values"] = new JsonArray(rows.Select(r => (JsonNode)new JsonArray(r.Select(v => (JsonNode?)JsonValue.Create(v)).ToArray())).ToArray()),
+                ["values"] = new JsonArray(rows.Select(r => (JsonNode)new JsonArray(r.Select(Cell).ToArray())).ToArray()),
             };
             using var append = await SendAsync(client, token.Token!, HttpMethod.Post,
                 $"{Api}/{id}/values/{range}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS",
@@ -99,6 +100,17 @@ public sealed class GoogleSheetsDeliveryDispatcher(
             logger.LogWarning(ex, "Google Sheets delivery failed");
             return new DeliveryResult(false, "Google Sheets could not be reached.");
         }
+    }
+
+    private static readonly Regex PlainNumber = new(@"^-?(0|[1-9][0-9]*)(\.[0-9]+)?$", RegexOptions.CultureInvariant);
+
+    /// <summary>A plain decimal of at most 15 significant digits goes as a JSON number so columns sum; anything else (leading zeros, long codes, formulas) stays text.</summary>
+    private static JsonNode? Cell(string v)
+    {
+        var t = v.Trim();
+        if (!PlainNumber.IsMatch(t) || t.Replace("-", "").Replace(".", "").TrimStart('0').Length > 15)
+            return JsonValue.Create(v);
+        return JsonValue.Create(decimal.Parse(t, NumberStyles.Float, CultureInfo.InvariantCulture));
     }
 
     // Sheets omits trailing empty cells from a row, so compare without them.

@@ -173,6 +173,10 @@ public sealed class FlowDestinationService(
         else
             try
             {
+                // Sheets only takes CSV, so a payload-less test sends the shared CSV sample (check-only: nothing is appended).
+                payload ??= d.Protocol == DeliveryProtocolConstants.GoogleSheets
+                    ? new TestPayload(Encoding.UTF8.GetBytes(DeliveryTestArtifact.Body), DeliveryTestArtifact.FileName, DeliveryTestArtifact.ContentType)
+                    : null;
                 result = await dispatcher.DispatchAsync(
                     payload?.Content ?? Encoding.UTF8.GetBytes(TestFileContent),
                     payload is null ? TestFileName : "TEST_" + payload.FileName, payload?.ContentType ?? "text/plain",

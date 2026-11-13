@@ -25,7 +25,8 @@ public sealed class LinkedAccountsController(
     private IActionResult? Refuse() =>
         gate.IsEnabled(tenant.OrganisationId) ? null : StatusCode(403, new { error = "document_engine_not_enabled" });
 
-    private bool Available => gate.NativeConnectorsOn(tenant.OrganisationId) && google.Value.IsConfigured;
+    private bool Available => gate.NativeConnectorsOn(tenant.OrganisationId) && google.Value.IsConfigured
+        && !string.IsNullOrWhiteSpace(google.Value.PickerApiKey) && !string.IsNullOrWhiteSpace(google.Value.ProjectNumber);
 
     private IActionResult? RefuseConnect() =>
         Refuse() ?? (Available ? null : StatusCode(403, new { error = "native_connectors_off" }));

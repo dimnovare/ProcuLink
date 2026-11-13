@@ -674,7 +674,7 @@ builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.DocumentEngineGat
 // Google Drive / Sheets destinations (plan 9b). Blank Google config = feature invisible. Both hosts
 // register it: the Worker refreshes tokens during delivery.
 builder.Services.Configure<ProcuLink.Infrastructure.Services.Google.GoogleOptions>(builder.Configuration.GetSection(ProcuLink.Infrastructure.Services.Google.GoogleOptions.Section));
-builder.Services.AddHttpClient(ProcuLink.Infrastructure.Services.Google.GoogleOAuthClient.HttpClientName); // fixed Google hosts: no OutboundRequestGuard
+builder.Services.AddHttpClient(ProcuLink.Infrastructure.Services.Google.GoogleOAuthClient.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(30)); // fixed Google hosts: no OutboundRequestGuard
 builder.Services.AddScoped<ProcuLink.Core.Services.Google.IGoogleOAuthClient, ProcuLink.Infrastructure.Services.Google.GoogleOAuthClient>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Google.ILinkedAccountTokens, ProcuLink.Infrastructure.Services.Google.LinkedAccountTokens>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Google.GoogleConnectService>(); // Api only: the Worker never connects
