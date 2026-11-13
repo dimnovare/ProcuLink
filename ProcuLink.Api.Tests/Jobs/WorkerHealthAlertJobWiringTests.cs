@@ -78,11 +78,16 @@ public sealed class WorkerHealthAlertJobWiringTests
                 Id = Guid.NewGuid(), OrgId = Guid.NewGuid(), DocumentId = Guid.NewGuid(), Protocol = "email",
                 Status = status, CreatedAt = updated, UpdatedAt = updated,
             };
+            var delivering = Row(FlowDeliveryStatus.Delivering, now);
+            delivering.ClaimedAt = now.AddMinutes(-31);                  // stuck (claim clock)
+            var retrying = Row(FlowDeliveryStatus.Failed, now);
+            retrying.NextAttemptAt = now.AddMinutes(-31);                // stuck (retry clock)
             db.Set<FlowDelivery>().AddRange(
                 Row(FlowDeliveryStatus.DeadLetter, now.AddMinutes(-1)),  // counted
                 Row(FlowDeliveryStatus.DeadLetter, now.AddHours(-25)),   // outside the 24 h window
                 Row(FlowDeliveryStatus.Queued, now.AddMinutes(-31)),     // stuck
-                Row(FlowDeliveryStatus.Queued, now.AddMinutes(-5)));     // still the sweep's to move
+                Row(FlowDeliveryStatus.Queued, now.AddMinutes(-5)),      // still the sweep's to move
+                delivering, retrying);
             await db.SaveChangesAsync();
         }
 
@@ -91,7 +96,7 @@ public sealed class WorkerHealthAlertJobWiringTests
 
         mail.Sent.Should().HaveCount(2);
         mail.Sent.Should().ContainSingle(m => m.Subject.Contains(OperationalAlertKeys.FlowDeliveryDeadLetter) && m.TextBody.Contains("= 1"));
-        mail.Sent.Should().ContainSingle(m => m.Subject.Contains(OperationalAlertKeys.FlowDeliveryStuck) && m.TextBody.Contains("= 1"));
+        mail.Sent.Should().ContainSingle(m => m.Subject.Contains(OperationalAlertKeys.FlowDeliveryStuck) && m.TextBody.Contains("= 3"));
     }
 
     [Fact]
