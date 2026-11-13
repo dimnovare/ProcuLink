@@ -106,11 +106,12 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
             read.Tables);
     }
 
-    // A credit note printed negative: every amount and quantity carries a minus sign.
-    private static ReadResult Negated(ReadResult read)
+    private static readonly string[] Amounts = [FieldMeanings.TotalNet, FieldMeanings.TotalTax, FieldMeanings.TotalGross, FieldMeanings.LineAmount];
+
+    // A credit note printed negative: each listed meaning's value carries a minus sign.
+    private static ReadResult Negated(ReadResult read, params string[] meanings)
     {
-        string[] signed = [FieldMeanings.TotalNet, FieldMeanings.TotalTax, FieldMeanings.TotalGross, FieldMeanings.LineQuantity, FieldMeanings.LineUnitPrice, FieldMeanings.LineAmount];
-        string? Neg(string? meaning, string? value) => signed.Contains(meaning) ? "-" + value : value;
+        string? Neg(string? meaning, string? value) => meanings.Contains(meaning) ? "-" + value : value;
         var t = read.Tables[0];
         var columns = t.Columns.ToDictionary(c => c.Key, c => c.Meaning);
         return new ReadResult(read.KindLabel, [.. read.Fields.Select(f => f with { Value = Neg(f.Meaning, f.Value) })],
@@ -132,8 +133,10 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
             var reads = id.StartsWith("en16931", StringComparison.Ordinal) ? new[] { Read(), ReadWithoutEndpoints() }
                 : id is "xrechnung-ubl" or "xrechnung-cii" ? new[] { RichRead(), RichReadWithEmailSeller() }
                 : id.StartsWith("xrechnung", StringComparison.Ordinal) ? new[] { RichRead() } : id == "peppol-bis-billing-3" ? new[] { Read(), RichRead() } : new[] { Read() };
-            // Every credit note is also read printed negative; XRechnung needs the rich fields.
-            if (StandardOutputs.Find(id)!.CreditNote) reads = [.. reads, Negated(id.StartsWith("xrechnung", StringComparison.Ordinal) ? RichRead() : Read())];
+            // Every credit note is also read printed negative: Peppol and EN 16931 with only the amounts negative, XRechnung (with
+            // the rich fields it needs) with the quantities and prices negative too.
+            if (StandardOutputs.Find(id)!.CreditNote) reads = [.. reads, id.StartsWith("xrechnung", StringComparison.Ordinal)
+                ? Negated(RichRead(), [.. Amounts, FieldMeanings.LineQuantity, FieldMeanings.LineUnitPrice]) : Negated(Read(), Amounts)];
             foreach (var read in reads)
             {
                 var render = await StandardOutputs.RenderAsync(id, read, FlowFieldList.Empty, "lines", Guid.Empty, default);
@@ -153,7 +156,7 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
         }
 
         // Two Peppol renders + two CII ids read with and without electronic addresses + four XRechnung ids (the UBL and CII invoices also read with an email seller address) + the Peppol invoice read with addresses too
-        // + the four credit notes read printed negative.
+        // + the four credit notes read printed negative (two with only the amounts negative, two with everything negative).
         Assert.Equal(17, checkedRenders);
     }
 }

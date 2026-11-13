@@ -126,6 +126,7 @@ public class StandardOutputsTests
     // An invoice id is never flipped. Its quantities and prices stay positive, because an invoice needs them positive to be written.
     [Theory]
     [InlineData("peppol-bis-billing-3-credit-note", true, "121.00")]
+    [InlineData("peppol-bis-billing-3-credit-note", false, "121.00")]
     [InlineData("en16931-cii-credit-note", true, "121.00")]
     [InlineData("peppol-bis-billing-3", false, "-121.00")]
     public async Task Credit_note_printed_negative_is_written_positive(string id, bool negativeLines, string payable)
