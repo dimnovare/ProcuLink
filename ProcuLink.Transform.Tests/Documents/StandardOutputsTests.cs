@@ -2,6 +2,7 @@ using FluentAssertions;
 using ProcuLink.Core.Documents;
 using ProcuLink.Transform.Conformance;
 using ProcuLink.Transform.Documents;
+using System.Xml.Linq;
 using Xunit;
 
 namespace ProcuLink.Transform.Tests.Documents;
@@ -73,5 +74,49 @@ public class StandardOutputsTests
     {
         Text(await Render("cxml-1-2", Read())).Should().Contain("lineNumber=\"10\"").And.Contain("lineNumber=\"20\"");
         Text(await Render("cxml-1-2", Read(no2: ""))).Should().Contain("lineNumber=\"1\"").And.Contain("lineNumber=\"2\"");
+    }
+
+    private static readonly (string Label, string? Meaning)[] InvoiceColumns =
+    [
+        ("Description", FieldMeanings.LineDescription), ("Qty", FieldMeanings.LineQuantity), ("Unit", FieldMeanings.LineUnit),
+        ("Price", FieldMeanings.LineUnitPrice), ("Amount", FieldMeanings.LineAmount),
+    ];
+
+    // Two lines and no line tax rate: the header's 21 / 100 is the lines' rate. Endpoints are GLN-valid test ids.
+    private static ReadResult InvoiceRead(string senderEndpoint = "0088:0000000000000")
+    {
+        ReadRow Row(params string[] values) => new(InvoiceColumns.Select((c, i) => (c, i))
+            .ToDictionary(x => FieldKey.Normalise(x.c.Label), x => new ReadCell(values[x.i], 1, null, false, false)));
+        return new ReadResult("Invoice",
+            [Field("Invoice number", "INV-1", FieldMeanings.DocumentNumber), Field("Issue date", "01.11.2026", FieldMeanings.IssueDate),
+             Field("Due date", "01.12.2026", FieldMeanings.DueDate), Field("Currency", "EUR", FieldMeanings.Currency),
+             Field("Seller", "Seller Co", FieldMeanings.SenderName), Field("Buyer", "Buyer Co", FieldMeanings.ReceiverName),
+             Field("Sender Peppol ID", senderEndpoint, FieldMeanings.SenderEndpointId), Field("Receiver Peppol ID", "0088:0000000000017", FieldMeanings.ReceiverEndpointId),
+             Field("Seller country", "LV", FieldMeanings.SenderCountry), Field("Buyer country", "LV", FieldMeanings.ReceiverCountry),
+             Field("Seller VAT", "LV00000000000", FieldMeanings.SenderVatId), Field("Buyer reference", "BUYER-REF-1", FieldMeanings.BuyerReference),
+             Field("Net", "100.00", FieldMeanings.TotalNet), Field("Tax", "21.00", FieldMeanings.TotalTax), Field("Gross", "121.00", FieldMeanings.TotalGross)],
+            [new ReadTable("lines", "Lines", InvoiceColumns.Select(c => new ReadColumn(FieldKey.Normalise(c.Label), c.Label, "text", c.Meaning)).ToList(),
+                [Row("Bolt", "3", "C62", "20.00", "60.00"), Row("Nut", "2", "C62", "20.00", "40.00")], true)]);
+    }
+
+    [Theory]
+    [InlineData("peppol-bis-billing-3", "Invoice", "InvoiceTypeCode", "380")]
+    [InlineData("peppol-bis-billing-3-credit-note", "CreditNote", "CreditNoteTypeCode", "381")]
+    public async Task Peppol_invoice_and_credit_note_render_from_meanings(string id, string root, string typeCode, string code)
+    {
+        var doc = XDocument.Parse(Text(await Render(id, InvoiceRead())));
+
+        doc.Root!.Name.LocalName.Should().Be(root);
+        doc.Descendants().Single(e => e.Name.LocalName == typeCode).Value.Should().Be(code);
+        var lineRates = doc.Descendants().Where(e => e.Name.LocalName == "ClassifiedTaxCategory").Select(e => e.Elements().Single(x => x.Name.LocalName == "Percent").Value);
+        lineRates.Should().Equal("21.00", "21.00");
+        doc.Descendants().Count(e => e.Name.LocalName == "Country" && e.Elements().Any(x => x.Name.LocalName == "IdentificationCode")).Should().Be(2);
+    }
+
+    [Fact]
+    public async Task An_endpoint_without_a_scheme_is_missing()
+    {
+        var render = await Render("peppol-bis-billing-3", InvoiceRead(senderEndpoint: "5790000435951"));
+        (render.Result is null, render.Error, render.Detail).Should().Be((true, "output_invalid", "This standard needs Sender Peppol ID."));
     }
 }

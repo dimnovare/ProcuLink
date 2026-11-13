@@ -77,6 +77,9 @@ public class FixtureNamingGuardTests
         // "parties" names the ship-to / bill-to address blocks a fixture exists to pin.
         "parties",
 
+        // The rule-checker proof fixtures: Peppol BIS Billing documents, and phorm (the rule-checker image whose answers they pin).
+        "documents", "peppol", "creditnote", "invoice", "phorm", "valid", "fail", "pass",
+
         // Locales and currencies.
         "es", "fr", "it", "pl", "de", "en", "eur", "pln", "sek", "usd",
     };

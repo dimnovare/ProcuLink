@@ -20,6 +20,9 @@ public static class FieldMeanings
     public const string DeliveryDate = "delivery_date";
     public const string SenderCountry = "sender_country";
     public const string ReceiverCountry = "receiver_country";
+    /// <summary>A Peppol participant id, scheme and id: <c>0088:0000000000000</c>. Present only in that shape.</summary>
+    public const string SenderEndpointId = "sender_endpoint_id";
+    public const string ReceiverEndpointId = "receiver_endpoint_id";
 
     public const string LineDescription = "line_description";
     public const string LineQuantity = "line_quantity";
@@ -35,6 +38,7 @@ public static class FieldMeanings
         DocumentNumber, IssueDate, DueDate, SenderName, SenderVatId, ReceiverName, Currency,
         TotalNet, TotalTax, TotalGross, Iban, PaymentReference,
         ReceiverVatId, BuyerReference, OrderReference, DeliveryDate, SenderCountry, ReceiverCountry,
+        SenderEndpointId, ReceiverEndpointId,
         LineDescription, LineQuantity, LineUnit, LineUnitPrice, LineAmount, LineTaxRate, LineItemCode, LineNumber,
     ];
 
@@ -59,6 +63,8 @@ public static class FieldMeanings
         [DeliveryDate] = ["deliverydate", "shipdate", "requesteddeliverydate", "lieferdatum", "tarnekuupaev"],
         [SenderCountry] = ["sendercountry", "sellercountry", "suppliercountry", "vendorcountry"],
         [ReceiverCountry] = ["receivercountry", "buyercountry", "customercountry", "shiptocountry"],
+        [SenderEndpointId] = ["senderpeppolid", "sellerpeppolid", "senderendpointid", "sellerendpointid", "senderelectronicaddress", "sellerelectronicaddress"],
+        [ReceiverEndpointId] = ["receiverpeppolid", "buyerpeppolid", "receiverendpointid", "buyerendpointid", "receiverelectronicaddress", "buyerelectronicaddress"],
         [LineDescription] = ["description", "itemdescription", "linedescription", "productname", "item", "artikelbezeichnung", "nimetus"],
         [LineQuantity] = ["quantity", "qty", "amountordered", "menge", "kogus"],
         [LineUnit] = ["unit", "uom", "unitofmeasure", "einheit", "uhik"],
