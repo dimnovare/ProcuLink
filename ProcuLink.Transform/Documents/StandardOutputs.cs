@@ -49,15 +49,15 @@ public static class StandardOutputs
     public static async Task<DocumentRender> RenderAsync(string id, ReadResult read, FlowFieldList fields, string? tableKey, Guid orgId, CancellationToken ct)
     {
         if (Find(id) is not { } standard) return new(null, "output_invalid", null);
-        var invoice = standard.Vesid is null ? default : StandardInvoiceAdapter.ToInvoice(read, fields, tableKey, standard.Needs, orgId);
-        var (order, orderMissing) = standard.Vesid is null ? StandardOrderAdapter.ToOrder(read, fields, tableKey, standard.Needs, orgId) : (null, invoice.Missing);
-        if (order is null && invoice.Invoice is null)
-        {
-            var items = orderMissing.Count == 1 ? orderMissing[0] : $"{string.Join(", ", orderMissing.SkipLast(1))} and {orderMissing[^1]}";
-            return new(null, "output_invalid", $"This standard needs {items}.");
-        }
         try
         {
+            var invoice = standard.Vesid is null ? default : StandardInvoiceAdapter.ToInvoice(read, fields, tableKey, standard.Needs, orgId);
+            var (order, orderMissing) = standard.Vesid is null ? StandardOrderAdapter.ToOrder(read, fields, tableKey, standard.Needs, orgId) : (null, invoice.Missing);
+            if (order is null && invoice.Invoice is null)
+            {
+                var items = orderMissing.Count == 1 ? orderMissing[0] : $"{string.Join(", ", orderMissing.SkipLast(1))} and {orderMissing[^1]}";
+                return new(null, "output_invalid", $"This standard needs {items}.");
+            }
             if (invoice.Invoice is { } inv)
             {
                 var doc = new PeppolBisInvoiceTransformService().BuildDocument(inv, invoice.Lines, invoice.Parties!, standard.CreditNote);

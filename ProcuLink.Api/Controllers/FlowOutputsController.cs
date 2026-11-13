@@ -215,7 +215,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
     /// <summary>Renders the document through a Peppol output and checks it against the official rules. Nothing is sent or saved.</summary>
     [HttpPost("api/flows/{flowId:guid}/outputs/{outputId:guid}/check")]
     public async Task<IActionResult> Check(Guid flowId, Guid outputId, [FromQuery] Guid documentId, [FromServices] IStandardValidator validator,
-        CancellationToken ct, [FromQuery] bool published = false)
+        CancellationToken ct)
     {
         if (Refuse() is { } refused) return refused;
         var orgId = tenant.OrganisationId;
@@ -223,7 +223,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         if (doc is null) return NotFound(new { error = "document_not_found" });
         var flow = await db.Flows.AsNoTracking().FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == flowId, ct);
         if (flow is null) return FlowNotFound();
-        var config = published ? await FlowConfigLoader.CurrentAsync(db, flow, ct) : await FlowConfigLoader.LiveAsync(db, flow, ct);
+        var config = await FlowConfigLoader.LiveAsync(db, flow, ct);
         var output = config.Outputs.FirstOrDefault(o => o.Id == outputId);
         if (output is null) return OutputNotFound();
         if (StandardOutputs.Find(output.Standard) is not { Vesid: { } vesid } standard) return NotFound(new { error = "not_a_rule_checked_output" });

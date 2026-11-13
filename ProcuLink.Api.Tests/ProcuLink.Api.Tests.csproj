@@ -41,7 +41,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Captured phorm answers and the hand-built Peppol samples that produced them. -->
+    <!-- Captured phorm answers. -->
     <None Include="Documents\Fixtures\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

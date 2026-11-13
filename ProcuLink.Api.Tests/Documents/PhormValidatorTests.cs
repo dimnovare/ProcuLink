@@ -40,6 +40,15 @@ public class PhormValidatorTests
         Assert.Equal(ValidationStatus.Failed, failed.Status);
         Assert.False(string.IsNullOrEmpty(failed.Issues[0].RuleId));
         Assert.Equal("error", failed.Issues[0].Severity);
+        Assert.DoesNotContain(failed.Issues, i => i.Message.StartsWith('['));
+    }
+
+    [Fact]
+    public async Task A_failure_with_only_warnings_is_unavailable()
+    {
+        const string body = """{"success":false,"results":[{"items":[{"errorLevel":"WARN","errorID":"W-1","errorText":"[W-1]-careful"}]}]}""";
+        var warned = new Stub(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) });
+        Assert.Equal(ValidationStatus.Unavailable, (await Validator(warned).ValidateAsync(Vesid, [1], default)).Status);
     }
 
     [Fact]

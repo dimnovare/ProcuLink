@@ -20,12 +20,17 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
     private const string Token = "proof-test-token";
 
     private readonly IContainer _phorm = new ContainerBuilder()
-        .WithImage("phelger/phorm:2.2.13")
+        .WithImage(PinnedImage())
         .WithEnvironment("PHORM_API_REQUIREDTOKEN", Token)
         .WithEnvironment("PHORM_API_RESPONSE_ONFAILURE_HTTP400", "false")
         .WithPortBinding(8080, true)
         .WithWaitStrategy(Wait.ForUnixContainer().UntilHttpRequestIsSucceeded(r => r.ForPort(8080).ForPath("/ping")))
         .Build();
+
+    // The tag lives in validator/Dockerfile only: a bump there is the bump this test proves.
+    private static string PinnedImage() =>
+        File.ReadLines(Path.Combine(ProcuLink.Api.Tests.Architecture.OrphanDetector.FindRepoRoot(), "validator", "Dockerfile"))
+            .First(l => l.StartsWith("FROM ", StringComparison.Ordinal))["FROM ".Length..].Trim();
 
     public async Task InitializeAsync()
     {
@@ -33,7 +38,8 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
         try { await _phorm.StartAsync(budget.Token); }
         catch (Exception ex)
         {
-            var (_, stderr) = await _phorm.GetLogsAsync();
+            var stderr = "";
+            try { (_, stderr) = await _phorm.GetLogsAsync(); } catch { /* never created: keep the original failure */ }
             throw new InvalidOperationException($"The rule checker image did not start in 180 s: {ex.Message}\n{stderr}", ex);
         }
     }

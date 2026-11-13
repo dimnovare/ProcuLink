@@ -119,6 +119,25 @@ public class PeppolRuleChecksTests(DocumentEngineTestFactory factory) : IClassFi
         calls.Should().Be(1);
     }
 
+    [Fact]
+    public async Task A_batch_past_its_budget_asks_nothing()
+    {
+        var org = DocumentEngineTestFactory.OrgA;
+        var (flowId, _) = await SeedDocument(org);
+        await AddOutput(org, flowId);
+        var calls = 0;
+        using var scope = factory.Services.CreateScope();
+        var gate = scope.ServiceProvider.GetRequiredService<DocumentEngineGate>();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        var flow = await db.Flows.FirstAsync(f => f.Id == flowId);
+        var config = await FlowConfigLoader.LiveAsync(db, flow, CancellationToken.None);
+
+        var spent = new OutputRuleChecks.Batch(TimeSpan.Zero);
+        (await OutputRuleChecks.RunAsync(gate, new CountingValidator(() => calls++), org, PeppolRulesProofTests.Read(), config, CancellationToken.None, spent)).Should().BeEmpty();
+
+        calls.Should().Be(0);
+    }
+
     private sealed class CountingValidator(Action onCall) : IStandardValidator
     {
         public Task<ValidationOutcome> ValidateAsync(string vesid, byte[] xml, CancellationToken ct)

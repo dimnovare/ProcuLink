@@ -9,8 +9,21 @@ namespace ProcuLink.Api.Services.Documents;
 /// </summary>
 public static class OutputRuleChecks
 {
-    /// <summary>One batch of rechecks: after the checker is found unreachable, the rest of the batch does not ask again.</summary>
-    public sealed class Batch { public bool CheckerDown { get; set; } }
+    /// <summary>
+    /// One batch of rechecks: after the checker is found unreachable, or the batch has used its time budget, the rest of the batch does not ask again.
+    /// </summary>
+    public sealed class Batch(TimeSpan? budget = null)
+    {
+        private readonly long _start = Environment.TickCount64;
+        private readonly TimeSpan _budget = budget ?? TimeSpan.FromSeconds(4);
+        private bool _down;
+
+        public bool CheckerDown
+        {
+            get => _down || Environment.TickCount64 - _start >= _budget.TotalMilliseconds;
+            set => _down = value;
+        }
+    }
 
     private const int Listed = 3;
 
@@ -33,7 +46,11 @@ public static class OutputRuleChecks
             await render.Result!.Content.CopyToAsync(buffer, ct);
 
             var outcome = await validator.ValidateAsync(vesid, buffer.ToArray(), ct);
-            if (outcome.Status == ValidationStatus.Unavailable && batch is not null) { batch.CheckerDown = true; break; }
+            if (outcome.Status == ValidationStatus.Unavailable)
+            {
+                if (batch is not null) batch.CheckerDown = true;
+                break;
+            }
             if (outcome.Status != ValidationStatus.Failed) continue;
             var errors = outcome.Issues.Where(i => i.Severity == "error").ToList();
             if (errors.Count == 0) continue;

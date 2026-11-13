@@ -72,14 +72,22 @@ public sealed class PhormValidator(IHttpClientFactory clients, IOptions<Validato
                     foreach (var item in items.EnumerateArray())
                     {
                         var rule = Str(item, "errorID");
-                        issues.Add(new ValidationIssue(rule.Length > 0 ? rule : artifact, Severity(Str(item, "errorLevel")), Str(item, "errorText")));
+                        issues.Add(new ValidationIssue(rule.Length > 0 ? rule : artifact, Severity(Str(item, "errorLevel")), WithoutRuleId(Str(item, "errorText"), rule)));
                     }
                 }
 
-            var failed = !ok.GetBoolean() || issues.Any(i => i.Severity == "error");
-            return new ValidationOutcome(failed ? ValidationStatus.Failed : ValidationStatus.Passed, issues);
+            // A failure with no error item (warnings only, an interrupted run) says nothing a person can act on: not understood.
+            if (issues.Any(i => i.Severity == "error")) return new ValidationOutcome(ValidationStatus.Failed, issues);
+            return ok.GetBoolean() ? new ValidationOutcome(ValidationStatus.Passed, issues) : null;
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException) { return null; } // e.g. a non-object item
+    }
+
+    /// <summary>phorm's text already starts with "[RULE-ID]-"; the rule id is shown on its own.</summary>
+    private static string WithoutRuleId(string text, string rule)
+    {
+        if (rule.Length == 0 || !text.StartsWith($"[{rule}]", StringComparison.Ordinal)) return text;
+        return text[(rule.Length + 2)..].TrimStart().TrimStart('-').TrimStart();
     }
 
     private static string Str(JsonElement e, string name) =>
