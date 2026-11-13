@@ -14,13 +14,9 @@ public static class OrderStatusConstants
     /// <summary>
     /// Delivery paused because the org cannot currently process orders (billing: past_due /
     /// read_only / trial_expired / cancelled) at the moment its transform-ready order reached the
-    /// delivery job. NOT a failure and NOT lost: the transformed artifact is intact. The order is
-    /// automatically released when the org returns to good standing (see
-    /// <c>IDeliveryService.ReleaseBillingHeldOrdersAsync</c>) — back to <see cref="ReadyToDeliver"/>
-    /// and re-driven, except a held PARK (<c>PurchaseOrderEntity.HeldFromStatus</c> ==
-    /// <see cref="DeliveryUnconfirmed"/>), which is restored to its park for a human instead of
-    /// being auto re-sent. Either way a mid-pipeline billing flip can never SILENTLY strand a
-    /// paid, transformed order.
+    /// delivery job. NOT a failure: the transformed artifact is intact. Stays held: the archive
+    /// never sends. (Until 2026-11-13 the order was released automatically when the org returned to
+    /// good standing; plan 13b deleted that release with the order pipeline.)
     /// </summary>
     public const string DeliveryHeld = "delivery_held";
     public const string DeliveryFailed = "delivery_failed";
@@ -131,12 +127,10 @@ public static class OrderStatusConstants
     /// do not know the send failed. It is parked, which is what this bucket means.</para>
     ///
     /// <para><b><see cref="DeliveryHeld"/> is deliberately EXCLUDED — do not "fix" that.</b> A
-    /// billing hold is not waiting on a human acting ON THE ORDER: it releases itself when the org
-    /// returns to good standing (<c>IDeliveryService.ReleaseBillingHeldOrdersAsync</c>). The founder
-    /// call recorded on <c>OpsHealthSummary.DeliveryHeld</c> (2026-07-16) is that a deliberate,
-    /// self-releasing pause must never render as a failure; it is surfaced as its own count instead.
-    /// A held PARK restores to <see cref="DeliveryUnconfirmed"/>, where this bucket picks it up
-    /// again.</para>
+    /// billing hold is not waiting on a human acting ON THE ORDER. The founder call recorded on
+    /// <c>OpsHealthSummary.DeliveryHeld</c> (2026-07-16) is that a deliberate billing pause must never
+    /// render as a failure; it is surfaced as its own count instead. Stays held: the archive never
+    /// sends (plan 13b deleted the automatic release with the order pipeline, 2026-11-13).</para>
     /// </summary>
     public static readonly IReadOnlySet<string> AwaitingHumanBucket = new HashSet<string>(StringComparer.Ordinal)
     {
