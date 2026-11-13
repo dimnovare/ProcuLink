@@ -10,14 +10,14 @@ public sealed record FlowSnapshot(FlowFieldList Fields, bool FieldsConfirmed, IR
         flow.FieldsConfirmed,
         outputs.OrderBy(o => o.CreatedAt).ThenBy(o => o.Id)
             .Select(o => new FlowSnapshotOutput(o.Id, o.Name, o.Format, o.TemplateJson, o.TableKey,
-                o.DestinationId, o.SendWhenJson, o.LayoutJson, o.Logo))
+                o.DestinationId, o.SendWhenJson, o.LayoutJson, o.Logo, o.Standard))
             .ToList());
 
     public string Canonical() => DocumentJson.Serialize(this);
 }
 
 public sealed record FlowSnapshotOutput(Guid Id, string Name, string Format, string TemplateJson, string? TableKey,
-    Guid? DestinationId, string? SendWhenJson, string? LayoutJson, byte[]? Logo)
+    Guid? DestinationId, string? SendWhenJson, string? LayoutJson, byte[]? Logo, string? Standard = null)
 {
     /// <summary>An untracked entity.</summary>
     public FlowOutput ToEntity(Guid orgId, Guid flowId)
@@ -32,5 +32,6 @@ public sealed record FlowSnapshotOutput(Guid Id, string Name, string Format, str
     {
         o.Name = Name; o.Format = Format; o.TemplateJson = TemplateJson; o.TableKey = TableKey;
         o.DestinationId = DestinationId; o.SendWhenJson = SendWhenJson; o.LayoutJson = LayoutJson; o.Logo = Logo;
+        o.Standard = Standard;
     }
 }

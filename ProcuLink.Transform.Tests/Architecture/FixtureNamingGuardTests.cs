@@ -77,6 +77,9 @@ public class FixtureNamingGuardTests
         // "parties" names the ship-to / bill-to address blocks a fixture exists to pin.
         "parties",
 
+        // The rule-checker fixtures: captured answers of phorm (the rule-checker image).
+        "documents", "phorm", "fail", "pass",
+
         // Locales and currencies.
         "es", "fr", "it", "pl", "de", "en", "eur", "pln", "sek", "usd",
     };

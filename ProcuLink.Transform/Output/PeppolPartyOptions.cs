@@ -32,4 +32,14 @@ public sealed class PeppolPartyOptions
     public string? BuyerEndpointScheme { get; init; }
     /// <summary>BT-48 — buyer VAT identifier.</summary>
     public string? BuyerVatId { get; init; }
+
+    // ── Added for the document engine's standards (BT-40 / BT-55 / BT-13) ───
+    /// <summary>BT-40 — seller country code (ISO 3166 alpha-2).</summary>
+    public string? SellerCountry { get; init; }
+    /// <summary>BT-55 — buyer country code (ISO 3166 alpha-2).</summary>
+    public string? BuyerCountry { get; init; }
+    /// <summary>BT-13 — purchase order reference.</summary>
+    public string? OrderReference { get; init; }
+    /// <summary>BT-72 - actual delivery date; only the CII writer emits it.</summary>
+    public DateOnly? DeliveryDate { get; init; }
 }

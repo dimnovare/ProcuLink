@@ -15,6 +15,8 @@ public sealed class DocumentEngineOptions
     public bool FormatsForAll { get; set; }
     public string[] DocsOutputOrgIds { get; set; } = [];
     public bool DocsOutputsForAll { get; set; }
+    public string[] PeppolOrgIds { get; set; } = [];
+    public bool PeppolForAll { get; set; }
 }
 
 /// <summary>Per-org switch for the document engine; off unless listed or enabled for all.</summary>
@@ -40,6 +42,10 @@ public sealed class DocumentEngineGate(IOptions<DocumentEngineOptions> options)
     /// <summary>Outputs designed from documentation by the AI: the engine must be on, then the org is listed or all are on.</summary>
     public bool DocsOutputsOn(Guid orgId) =>
         IsEnabled(orgId) && (options.Value.DocsOutputsForAll || Listed(options.Value.DocsOutputOrgIds, orgId));
+
+    /// <summary>Peppol BIS Billing outputs and their rule checks: the engine must be on, then the org is listed or all are on.</summary>
+    public bool PeppolOn(Guid orgId) =>
+        IsEnabled(orgId) && (options.Value.PeppolForAll || Listed(options.Value.PeppolOrgIds, orgId));
 
     public string[] AcceptedFormats(Guid orgId) => DocumentFormats.For(ScansOn(orgId), FormatsOn(orgId));
 }

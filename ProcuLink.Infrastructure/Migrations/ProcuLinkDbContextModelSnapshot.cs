@@ -1214,6 +1214,10 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("jsonb")
                         .HasColumnName("send_when_json");
 
+                    b.Property<string>("Standard")
+                        .HasColumnType("text")
+                        .HasColumnName("standard");
+
                     b.Property<string>("TableKey")
                         .HasColumnType("text")
                         .HasColumnName("table_key");

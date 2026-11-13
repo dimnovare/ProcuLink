@@ -369,6 +369,98 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
     }
 
     [Fact]
+    public async Task A_standard_output_keeps_its_standard_and_names_what_a_document_lacks()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, docId) = await Seed(confirmed: true);
+
+        var created = await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "Orders", format = "", standard = "cxml-1-2", layout = new { title = "x" } });
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        var output = (await created.Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+        (output.Format, output.Standard, output.Layout).Should().Be(("xml", "cxml-1-2", (OutputLayout?)null));
+        output.Needs.Should().Contain(FieldMeanings.LineItemCode);
+
+        // An update can never turn a standard output into a template output, nor give it a template.
+        var csv = new OutputNodeTemplate { Format = OutputFormat.Csv };
+        var put = await http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{output.Id}", new { name = "Orders 2", format = "csv", standard = (string?)null, template = csv });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        var updated = (await put.Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+        (updated.Name, updated.Format, updated.Standard).Should().Be(("Orders 2", "xml", "cxml-1-2"));
+        using (var scope = factory.Services.CreateScope())
+            (await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowOutput>().AsNoTracking().SingleAsync(o => o.Id == output.Id))
+                .TemplateJson.Should().Be("{}");
+
+        var unknown = await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "Orders", format = "", standard = "nope" });
+        unknown.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await unknown.Content.ReadAsStringAsync()).Should().Contain("unsupported_format");
+
+        // A test send through the standard is refused the same way, never sent as the request's csv template.
+        // The render refuses before any destination is looked up, so none needs to exist.
+        var preview = await http.PostAsync($"/api/documents/{docId}/outputs/{output.Id}/preview", null);
+        var testSend = await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/test",
+            new { format = "csv", tableKey = (string?)null, destinationId = Guid.NewGuid(), template = csv, standard = "cxml-1-2" });
+        foreach (var res in new[] { preview, testSend })
+        {
+            res.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+            var refused = await res.Content.ReadFromJsonAsync<JsonElement>();
+            refused.GetProperty("error").GetString().Should().Be("output_invalid");
+            refused.GetProperty("detail").GetString().Should().StartWith("This standard needs");
+        }
+    }
+
+    [Fact]
+    public async Task Sending_through_a_standard_output_stores_the_standard_file()
+    {
+        var http = factory.ClientFor(Org);
+        (string Key, string Meaning, string Value)[] header =
+            [("po", FieldMeanings.DocumentNumber, "PO-1"), ("date", FieldMeanings.IssueDate, "13.11.2026"), ("cur", FieldMeanings.Currency, "eur")];
+        (string Key, string Meaning, string Value)[] line =
+            [("code", FieldMeanings.LineItemCode, "A-1"), ("qty", FieldMeanings.LineQuantity, "3"), ("price", FieldMeanings.LineUnitPrice, "9,99")];
+        var flow = new Flow
+        {
+            Id = Guid.NewGuid(), OrgId = Org, Name = "Synthetic flow", FieldsConfirmed = true,
+            FieldsJson = DocumentJson.Serialize(new FlowFieldList(
+                header.Select(f => new FlowField(f.Key, f.Key, FieldTypes.Text, f.Meaning, false)).ToList(),
+                [new FlowTable("lines", "Lines", line.Select(f => new FlowField(f.Key, f.Key, FieldTypes.Text, f.Meaning, false)).ToList())])),
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        };
+        // The read carries no meanings of its own: the flow's are what the standard is filled from.
+        var read = new ReadResult("Purchase order",
+            header.Select(f => new ReadField(f.Key, f.Key, f.Value, FieldTypes.Text, null, 1, null, false, true, false)).ToList(),
+            [new ReadTable("lines", "Lines", line.Select(f => new ReadColumn(f.Key, f.Key, FieldTypes.Text, null)).ToList(),
+                [new ReadRow(line.ToDictionary(f => f.Key, f => new ReadCell(f.Value, 1, null, false, false)))], true)]);
+        var doc = new FlowDocument
+        {
+            Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, FileName = "synthetic.pdf", ContentType = "application/pdf",
+            Status = DocumentStatus.Ready, ReadJson = DocumentJson.Serialize(read), ReadAt = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        };
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.Flows.Add(flow);
+            db.FlowDocuments.Add(doc);
+            await db.SaveChangesAsync();
+        }
+
+        // X12 is stored as txt, the one standard format a layout would otherwise apply to.
+        var created = await http.PostAsJsonAsync($"/api/flows/{flow.Id}/outputs", new { name = "X12", format = "", standard = "x12-850", tableKey = "lines", layout = new { title = "x" } });
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        (await created.Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!.Layout.Should().BeNull();
+
+        (await http.PostAsync($"/api/documents/{doc.Id}/send", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        using var check = factory.Services.CreateScope();
+        var delivery = await check.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowDelivery>().AsNoTracking().SingleAsync(d => d.DocumentId == doc.Id);
+        delivery.Status.Should().Be(FlowDeliveryStatus.Stored);
+        delivery.FileName.Should().EndWith(DeliveryMediaTypes.For(OutputFormat.X12).FileExtension);
+        var upload = factory.Storage.Invocations.Last(i => i.Method.Name == "UploadAsync" && (string)i.Arguments[1] == delivery.ArtifactKey);
+        var body = (Stream)upload.Arguments[0];
+        body.Position = 0;
+        (await new StreamReader(body).ReadToEndAsync()).Should().StartWith("ISA");
+    }
+
+    [Fact]
     public async Task Fixed_output_needs_a_width_on_every_column()
     {
         var http = factory.ClientFor(Org);

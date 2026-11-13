@@ -16,6 +16,13 @@ using ProcuLink.Infrastructure;
 
 namespace ProcuLink.Api.Tests.Documents;
 
+public sealed class FakeStandardValidator : ProcuLink.Core.Documents.IStandardValidator
+{
+    public ProcuLink.Core.Documents.ValidationOutcome Outcome { get; set; } = new(ProcuLink.Core.Documents.ValidationStatus.Passed, []);
+
+    public Task<ProcuLink.Core.Documents.ValidationOutcome> ValidateAsync(string vesid, byte[] xml, CancellationToken ct) => Task.FromResult(Outcome);
+}
+
 /// <summary>
 /// The document-engine API host: the real app on EF InMemory + Hangfire InMemory, authenticated by
 /// <see cref="RbacTestAuthHandler"/> headers. Orgs A and B have the engine on; Off does not.
@@ -42,6 +49,9 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
 
     /// <summary>Replaces <see cref="ProcuLink.Core.Documents.IOutputDesigner"/>; tests set up the AI matches.</summary>
     public Mock<ProcuLink.Core.Documents.IOutputDesigner> Designer { get; } = new();
+
+    /// <summary>Replaces <see cref="ProcuLink.Core.Documents.IStandardValidator"/>; tests set the outcome.</summary>
+    public FakeStandardValidator Validator { get; } = new();
 
     /// <summary>Replaces <see cref="IBackgroundJobClient"/>; tests count the jobs created.</summary>
     public Mock<IBackgroundJobClient> Jobs { get; } = new();
@@ -78,6 +88,7 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             ["DocumentEngine:ScanOrgIds:0"] = OrgB.ToString(),
             ["DocumentEngine:FormatOrgIds:0"] = OrgB.ToString(),
             ["DocumentEngine:DocsOutputOrgIds:0"] = OrgA.ToString(),
+            ["DocumentEngine:PeppolOrgIds:0"] = OrgA.ToString(),
         }));
 
         builder.ConfigureServices(services =>
@@ -112,6 +123,9 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             foreach (var d in services.Where(d => d.ServiceType == typeof(ProcuLink.Core.Documents.IOutputDesigner)).ToList())
                 services.Remove(d);
             services.AddSingleton(Designer.Object);
+            foreach (var d in services.Where(d => d.ServiceType == typeof(ProcuLink.Core.Documents.IStandardValidator)).ToList())
+                services.Remove(d);
+            services.AddSingleton<ProcuLink.Core.Documents.IStandardValidator>(Validator);
             services.AddSingleton(Storage.Object);
             services.AddSingleton(Jobs.Object);
 

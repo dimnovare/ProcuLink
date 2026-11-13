@@ -100,6 +100,8 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
     // ── UBL 2.1 namespaces ─────────────────────────────────────────────────────
     private static readonly XNamespace UblNs =
         "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2";
+    private static readonly XNamespace CreditNoteNs =
+        "urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2";
     private static readonly XNamespace CbcNs =
         "urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2";
     private static readonly XNamespace CacNs =
@@ -135,6 +137,15 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
     /// can inspect the tree without re-parsing bytes.
     /// </summary>
     public XDocument BuildDocument(InvoiceEntity invoice, IReadOnlyList<InvoiceLineEntity> lines)
+        => BuildDocument(invoice, lines, _opts, creditNote: false);
+
+    /// <summary>
+    /// The same document with the parties given per call, as an Invoice or (creditNote) a CreditNote-2 document:
+    /// type code 381, CreditNoteLine and CreditedQuantity, and no DueDate (a credit note has none; the rules name
+    /// any that trip). Also writes each party's country and the order reference when given.
+    /// Rule-checked against the official Peppol rules by PeppolRulesProofTests; that is not access-point acceptance.
+    /// </summary>
+    public XDocument BuildDocument(InvoiceEntity invoice, IReadOnlyList<InvoiceLineEntity> lines, PeppolPartyOptions parties, bool creditNote)
     {
         var cbc = CbcNs;
         var cac = CacNs;
@@ -151,7 +162,7 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
         var categoryCode  = taxAmount > 0m ? "S" : "Z";
         var percent       = DerivePercent(invoice, lines);
 
-        var root = new XElement(UblNs + "Invoice",
+        var root = new XElement((creditNote ? CreditNoteNs : UblNs) + (creditNote ? "CreditNote" : "Invoice"),
             new XAttribute(XNamespace.Xmlns + "cbc", CbcNs.NamespaceName),
             new XAttribute(XNamespace.Xmlns + "cac", CacNs.NamespaceName),
 
@@ -162,24 +173,27 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
             // ── Header business terms ────────────────────────────────────────
             new XElement(cbc + "ID", invoice.InvoiceNumber),                                 // BT-1
             new XElement(cbc + "IssueDate", invoice.IssueDate.ToString("yyyy-MM-dd")),       // BT-2
-            invoice.DueDate.HasValue
+            invoice.DueDate.HasValue && !creditNote
                 ? new XElement(cbc + "DueDate", invoice.DueDate.Value.ToString("yyyy-MM-dd"))// BT-9
                 : null,
-            new XElement(cbc + "InvoiceTypeCode", "380"),                                    // BT-3 (commercial invoice)
+            creditNote ? new XElement(cbc + "CreditNoteTypeCode", "381") : new XElement(cbc + "InvoiceTypeCode", "380"),                                 // BT-3 (commercial invoice)
             new XElement(cbc + "DocumentCurrencyCode", currency),                            // BT-5
             !string.IsNullOrWhiteSpace(invoice.BuyerRef)
                 ? new XElement(cbc + "BuyerReference", invoice.BuyerRef)                     // BT-10
                 : null,
+            !string.IsNullOrWhiteSpace(parties.OrderReference)
+                ? new XElement(cac + "OrderReference", new XElement(cbc + "ID", parties.OrderReference))
+                : null,
 
             // ── Seller party (AccountingSupplierParty) ───────────────────────
             BuildParty(cac, cbc, "AccountingSupplierParty",
-                _opts.SellerEndpointId, _opts.SellerEndpointScheme,
-                _opts.SellerName, _opts.SellerVatId),
+                parties.SellerEndpointId, parties.SellerEndpointScheme,
+                parties.SellerName, parties.SellerVatId, parties.SellerCountry),
 
             // ── Buyer party (AccountingCustomerParty) ────────────────────────
             BuildParty(cac, cbc, "AccountingCustomerParty",
-                _opts.BuyerEndpointId, _opts.BuyerEndpointScheme,
-                _opts.BuyerName, _opts.BuyerVatId),
+                parties.BuyerEndpointId, parties.BuyerEndpointScheme,
+                parties.BuyerName, parties.BuyerVatId, parties.BuyerCountry),
 
             // ── Tax total + breakdown (BG-23) ────────────────────────────────
             new XElement(cac + "TaxTotal",
@@ -202,7 +216,7 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
                 Amount(cbc + "PayableAmount",       invoice.GrandTotal, currency)),          // BT-115
 
             // ── Invoice lines (BG-25) ────────────────────────────────────────
-            lines.OrderBy(l => l.LineNumber).Select(l => BuildLine(cac, cbc, l, currency))
+            lines.OrderBy(l => l.LineNumber).Select(l => BuildLine(cac, cbc, l, currency, creditNote))
         );
 
         return new XDocument(new XDeclaration("1.0", "UTF-8", null), root);
@@ -210,7 +224,7 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
 
     private static XElement BuildParty(
         XNamespace cac, XNamespace cbc, string wrapperName,
-        string? endpointId, string? endpointScheme, string? name, string? vatId)
+        string? endpointId, string? endpointScheme, string? name, string? vatId, string? country = null)
     {
         var party = new XElement(cac + "Party");
 
@@ -230,6 +244,11 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
             party.Add(new XElement(cac + "PartyName",
                 new XElement(cbc + "Name", name)));
 
+        // BT-40 / BT-55 country (PostalAddress, between the name and the tax scheme).
+        if (!string.IsNullOrWhiteSpace(country))
+            party.Add(new XElement(cac + "PostalAddress",
+                new XElement(cac + "Country", new XElement(cbc + "IdentificationCode", country))));
+
         // BT-31 / BT-48 VAT identifier (PartyTaxScheme).
         if (!string.IsNullOrWhiteSpace(vatId))
             party.Add(new XElement(cac + "PartyTaxScheme",
@@ -247,11 +266,11 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
     }
 
     private static XElement BuildLine(
-        XNamespace cac, XNamespace cbc, InvoiceLineEntity l, string currency)
+        XNamespace cac, XNamespace cbc, InvoiceLineEntity l, string currency, bool creditNote = false)
     {
-        return new XElement(cac + "InvoiceLine",
+        return new XElement(cac + (creditNote ? "CreditNoteLine" : "InvoiceLine"),
             new XElement(cbc + "ID", l.LineNumber),                                          // BT-126
-            new XElement(cbc + "InvoicedQuantity",
+            new XElement(cbc + (creditNote ? "CreditedQuantity" : "InvoicedQuantity"),
                 new XAttribute("unitCode", string.IsNullOrWhiteSpace(l.UnitCode) ? "EA" : l.UnitCode),
                 l.Quantity.ToString("F4", CultureInfo.InvariantCulture)),                    // BT-129/130
             Amount(cbc + "LineExtensionAmount", l.LineTotal, currency),                      // BT-131
@@ -287,7 +306,7 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
     /// present and non-zero; otherwise fall back to the max line tax rate. Returned
     /// as a whole percentage (e.g. 20.00 for 20%).
     /// </summary>
-    private static decimal DerivePercent(InvoiceEntity inv, IReadOnlyList<InvoiceLineEntity> lines)
+    internal static decimal DerivePercent(InvoiceEntity inv, IReadOnlyList<InvoiceLineEntity> lines)
     {
         if (inv.SubTotal > 0m && inv.TaxTotal > 0m)
             return Math.Round(inv.TaxTotal / inv.SubTotal * 100m, 2);
@@ -299,6 +318,6 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
     /// Line TaxRate is stored as a fraction in some paths (0.20) and as a whole
     /// percent in others (20). Normalize: values ≤ 1 are treated as fractions.
     /// </summary>
-    private static decimal NormalizePercent(decimal rate)
+    internal static decimal NormalizePercent(decimal rate)
         => rate > 0m && rate <= 1m ? Math.Round(rate * 100m, 2) : Math.Round(rate, 2);
 }

@@ -43,6 +43,24 @@ public class FlowVersionTests(DocumentEngineTestFactory factory) : IClassFixture
     }
 
     [Fact]
+    public void A_version_freezes_the_standard_and_older_versions_read_without_one()
+    {
+        var flow = new Flow { Id = Guid.NewGuid(), OrgId = Org, Name = "Synthetic flow", FieldsJson = DocumentJson.Serialize(FlowFieldList.Empty) };
+        var output = Output(flow.Id, "{}");
+        output.Standard = "x12-850";
+        var json = FlowSnapshot.Of(flow, [output]).Canonical();
+        DocumentJson.Deserialize<FlowSnapshot>(json).Outputs.Single().ToEntity(Org, flow.Id).Standard.Should().Be("x12-850");
+
+        // A version published before outputs had a standard has no such property.
+        var older = System.Text.Json.Nodes.JsonNode.Parse(json)!;
+        older["outputs"]![0]!.AsObject().Remove("standard").Should().BeTrue();
+        var read = DocumentJson.Deserialize<FlowSnapshot>(older.ToJsonString());
+        read.Outputs.Single().Standard.Should().BeNull();
+        output.Standard = null;
+        read.Canonical().Should().Be(FlowSnapshot.Of(flow, [output]).Canonical());
+    }
+
+    [Fact]
     public async Task Current_config_is_the_live_setup_until_first_publish()
     {
         using var scope = factory.Services.CreateScope();

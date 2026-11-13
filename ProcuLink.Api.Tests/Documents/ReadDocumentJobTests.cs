@@ -109,7 +109,7 @@ public sealed class ReadDocumentJobTests
         var ocr = new Mock<IDocumentOcrService>();
         ocr.Setup(o => o.ReadWordsAsync(It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>())).ReturnsAsync(ocrWords ?? []);
         var gate = new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions { EnabledForAll = true, ScansForAll = scans }));
-        var job = new ReadDocumentJob(db, storage.Object, reader.Object, new DocumentRechecker(db), Mock.Of<Hangfire.IBackgroundJobClient>(),
+        var job = new ReadDocumentJob(db, storage.Object, reader.Object, new DocumentRechecker(db, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), Moq.Mock.Of<ProcuLink.Core.Documents.IStandardValidator>()), Mock.Of<Hangfire.IBackgroundJobClient>(),
             rasterizer ?? Mock.Of<IPdfRasterizer>(), ocr.Object, gate, new ProcuLink.Transform.Tokenizing.SourceTokenizer(), NullLogger<ReadDocumentJob>.Instance);
         return (job, db, reader, doc.Id);
     }

@@ -7,8 +7,8 @@ namespace ProcuLink.Core.Services.Delivery;
 /// <para>Why derived. <see cref="OutputFormat"/> carries more values than there are transforms:
 /// <see cref="OutputFormat.UblOrder"/>, <see cref="OutputFormat.X12_850"/> and
 /// <see cref="OutputFormat.EdifactOrders"/> exist to NAME a standards profile for the conformance
-/// layer, and EDIFACT is inbound-only — <c>EdifactOrderParser</c> reads it and no transform writes
-/// it. A format-shaped string is therefore not evidence that a document can be produced for it, and
+/// layer, and no supplier transform writes EDIFACT — the flow standard output does.
+/// A format-shaped string is therefore not evidence that a document can be produced for it, and
 /// <c>Enum.TryParse(ignoreCase: true)</c> happily re-hydrates every one of those names. A config
 /// pinned to one of them reaches
 /// <c>OrderTransformService</c>'s "No transform service registered for format '…'" and the order
