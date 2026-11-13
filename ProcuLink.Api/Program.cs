@@ -801,6 +801,7 @@ builder.Services.AddScoped<IDeliveryDispatcher, SftpDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, FtpsDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, S3DeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, GoogleDriveDeliveryDispatcher>();
+builder.Services.AddScoped<IDeliveryDispatcher, GoogleSheetsDeliveryDispatcher>();
 // Email delivery via HTTP email API (Postmark) — works where outbound SMTP is blocked.
 builder.Services.AddScoped<IDeliveryDispatcher, EmailApiDeliveryDispatcher>();
 // Legacy raw-SMTP dispatcher: RETIRED from offered channels (blocked on the cloud host). Registered
