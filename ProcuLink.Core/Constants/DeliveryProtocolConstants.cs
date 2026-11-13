@@ -36,6 +36,12 @@ public static class DeliveryProtocolConstants
     /// </summary>
     public const string Manual = "manual";
 
+    /// <summary>Google Drive folder (plan 9b), through a <c>LinkedAccount</c>. Flow destinations only.</summary>
+    public const string GoogleDrive = "google_drive";
+
+    /// <summary>Google Sheets append (plan 9b), through a <c>LinkedAccount</c>. Flow destinations only.</summary>
+    public const string GoogleSheets = "google_sheets";
+
     public static readonly string[] All =
     [
         Http,
@@ -47,7 +53,9 @@ public static class DeliveryProtocolConstants
         Email,
         ErpErply,
         ErpDirecto,
-        Manual
+        Manual,
+        GoogleDrive,
+        GoogleSheets
     ];
 
     /// <summary>

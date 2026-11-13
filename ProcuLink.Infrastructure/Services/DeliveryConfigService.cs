@@ -21,7 +21,7 @@ public sealed class DeliveryConfigService : IDeliveryConfigService
     };
 
     private static readonly HashSet<string> AllowedProtocols = new(
-        DeliveryProtocolConstants.All.Where(p => p != DeliveryProtocolConstants.S3),
+        DeliveryProtocolConstants.All.Where(p => p is not (DeliveryProtocolConstants.S3 or DeliveryProtocolConstants.GoogleDrive or DeliveryProtocolConstants.GoogleSheets)),
         StringComparer.OrdinalIgnoreCase);
 
     private static readonly HashSet<string> UrlBasedProtocols = new(

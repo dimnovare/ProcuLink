@@ -229,6 +229,27 @@ internal static class OrgAdminGateIlScanner
           + "the vendor's destination with nobody checking them first. Its caller gates in-method, because "
           + "every member may still rename the flow."),
 
+        // 2026-11-13, plan 9b: connecting a Google account (+4).
+        new("GoogleConnectService.Start",
+            OnInterface<ProcuLink.Api.Services.Google.GoogleConnectService>(nameof(ProcuLink.Api.Services.Google.GoogleConnectService.Start)),
+            "Opens a grant of the organisation's access to a Google account: the first half of connecting a "
+          + "place its documents can be sent to."),
+
+        new("GoogleConnectService.CompleteAsync",
+            OnInterface<ProcuLink.Api.Services.Google.GoogleConnectService>(nameof(ProcuLink.Api.Services.Google.GoogleConnectService.CompleteAsync)),
+            "Stores a long-lived Google refresh token for the organisation, which every Google Drive or Sheets "
+          + "destination then sends documents through."),
+
+        new("GoogleConnectService.DeleteAsync",
+            OnInterface<ProcuLink.Api.Services.Google.GoogleConnectService>(nameof(ProcuLink.Api.Services.Google.GoogleConnectService.DeleteAsync)),
+            "Deletes the organisation's stored Google token; nothing can be sent to that account afterwards "
+          + "until someone reconnects it."),
+
+        new("ILinkedAccountTokens.GetGoogleAccessTokenAsync",
+            OnInterface<ProcuLink.Core.Services.Google.ILinkedAccountTokens>(nameof(ProcuLink.Core.Services.Google.ILinkedAccountTokens.GetGoogleAccessTokenAsync)),
+            "Hands a live Google access token to the browser: it reads and writes every Drive file ProcuLink "
+          + "can see in the organisation's connected account."),
+
         new("new IntegrationSubscription / DbSet<IntegrationSubscription>.Add",
             CreatesIntegrationSubscription,
             "Stands up an outbound subscription that ships the payload of every matching order to "

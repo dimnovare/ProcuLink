@@ -65,7 +65,7 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
             await using var db = NewDb();
             var encryption = new DeliveryEncryptionService(new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?> { ["Delivery:EncryptionKey"] = Convert.ToBase64String(new byte[32]) }).Build());
-            var job = new DeliverDocumentJob(db, new MemoryStorage(), new FlowDestinationService(db, encryption, []), [Dispatcher],
+            var job = new DeliverDocumentJob(db, new MemoryStorage(), new FlowDestinationService(db, encryption, [], new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), Microsoft.Extensions.Options.Options.Create(new ProcuLink.Infrastructure.Services.Google.GoogleOptions())), [Dispatcher],
                 Jobs.Object, new DeliveryReliabilityOptions { MaxAttempts = 3 }, NullLogger<DeliverDocumentJob>.Instance);
             await job.ExecuteAsync(DeliveryId, Org, CancellationToken.None);
         }

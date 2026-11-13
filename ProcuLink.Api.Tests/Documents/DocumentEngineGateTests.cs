@@ -29,6 +29,16 @@ public class DocumentEngineGateTests
     }
 
     [Fact]
+    public void NativeConnectorsOn_needs_the_engine_and_the_org_or_ForAll()
+    {
+        var org = Guid.NewGuid();
+        Gate(new() { NativeConnectorOrgIds = [org.ToString()] }).NativeConnectorsOn(org).Should().BeFalse();
+        Gate(new() { EnabledOrgIds = [org.ToString()] }).NativeConnectorsOn(org).Should().BeFalse();
+        Gate(new() { EnabledOrgIds = [org.ToString()], NativeConnectorOrgIds = [org.ToString()] }).NativeConnectorsOn(org).Should().BeTrue();
+        Gate(new() { EnabledForAll = true, NativeConnectorsForAll = true }).NativeConnectorsOn(Guid.NewGuid()).Should().BeTrue();
+    }
+
+    [Fact]
     public void IsEnabled_true_for_any_org_when_EnabledForAll()
     {
         Assert.True(Gate(new() { EnabledForAll = true }).IsEnabled(Guid.NewGuid()));
