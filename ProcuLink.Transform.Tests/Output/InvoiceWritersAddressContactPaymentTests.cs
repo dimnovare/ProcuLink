@@ -53,6 +53,19 @@ public class InvoiceWritersAddressContactPaymentTests
         Assert.Equal(["30", "DE02120300000000202051"], Leaves(CiiInvoiceWriter.Build(usd, Lines, p, false), "SpecifiedTradeSettlementPaymentMeans"));
     }
 
+    // UBL is an xs:sequence: Delivery sits after the buyer and before the payment means, or the rule check refuses the file.
+    [Fact]
+    public void Ubl_writes_actual_delivery_date_before_payment_means()
+    {
+        var ubl = new PeppolBisInvoiceTransformService().BuildDocument(Inv, Lines,
+            new PeppolPartyOptions { SellerName = "Seller", BuyerName = "Buyer", PayeeIban = "DE02120300000000202051", DeliveryDate = new DateOnly(2026, 11, 5) }, false);
+        var order = ubl.Root!.Elements().Select(e => e.Name.LocalName).ToList();
+        Assert.Equal(["2026-11-05"], Leaves(ubl, "Delivery"));
+        Assert.Equal(["2026-11-05"], Names(ubl, "ActualDeliveryDate"));
+        Assert.InRange(order.IndexOf("Delivery"), order.IndexOf("AccountingCustomerParty") + 1, order.IndexOf("PaymentMeans") - 1);
+        Assert.DoesNotContain(Render(new PeppolPartyOptions { SellerName = "Seller" }).Ubl.Descendants(), e => e.Name.LocalName == "Delivery");
+    }
+
     [Fact]
     public void Only_a_city_writes_no_empty_elements()
     {

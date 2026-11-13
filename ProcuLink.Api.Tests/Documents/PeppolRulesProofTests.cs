@@ -144,9 +144,10 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
                 var outcome = await validator.ValidateAsync(StandardOutputs.Find(id)!.Vesid!, bytes.ToArray(), default);
                 Assert.True(outcome.Status == ValidationStatus.Passed,
                     $"{id}: {outcome.Status} {string.Join("; ", outcome.Issues.Where(i => i.Severity == "error").Select(i => $"{i.RuleId} {i.Message}"))}");
-                // phorm only warns on a wrong XRechnung CustomizationID (BR-DE-21), so a clean run must have no warnings either.
-                Assert.True(!outcome.Issues.Any(i => i.Severity == "warning"),
-                    $"{id}: {string.Join("; ", outcome.Issues.Where(i => i.Severity == "warning").Select(i => $"{i.RuleId} {i.Message}"))}");
+                // phorm only warns on a wrong XRechnung CustomizationID (BR-DE-21) and only notes a UBL XRechnung without a delivery date
+                // (BR-DE-TMP-32, info), so a clean run must have no warnings or info either.
+                Assert.True(outcome.Issues.Count == 0,
+                    $"{id}: {string.Join("; ", outcome.Issues.Select(i => $"{i.Severity} {i.RuleId} {i.Message}"))}");
                 checkedRenders++;
             }
         }
