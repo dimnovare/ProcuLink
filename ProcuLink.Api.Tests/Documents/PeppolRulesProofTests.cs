@@ -97,6 +97,15 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
             read.Tables);
     }
 
+    // The XRechnung rules accept an email electronic address (EAS EM), so the seller is also read with one.
+    private static ReadResult RichReadWithEmailSeller()
+    {
+        var read = RichRead();
+        return new ReadResult(read.KindLabel,
+            [.. read.Fields.Select(f => f.Meaning == FieldMeanings.SenderEndpointId ? Field("Sender Peppol ID", "EM:billing@example.com", FieldMeanings.SenderEndpointId) : f)],
+            read.Tables);
+    }
+
     [DockerRequiredFact]
     public async Task Both_documents_pass_the_official_rules()
     {
@@ -110,6 +119,7 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
         {
             // The CII reads with and without electronic addresses; the Peppol ids need them.
             var reads = id.StartsWith("en16931", StringComparison.Ordinal) ? new[] { Read(), ReadWithoutEndpoints() }
+                : id is "xrechnung-ubl" or "xrechnung-cii" ? new[] { RichRead(), RichReadWithEmailSeller() }
                 : id.StartsWith("xrechnung", StringComparison.Ordinal) ? new[] { RichRead() } : id == "peppol-bis-billing-3" ? new[] { Read(), RichRead() } : new[] { Read() };
             foreach (var read in reads)
             {
@@ -128,7 +138,7 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
             }
         }
 
-        // Two Peppol renders + two CII ids read with and without electronic addresses + four XRechnung ids + the Peppol invoice read with addresses too.
-        Assert.Equal(11, checkedRenders);
+        // Two Peppol renders + two CII ids read with and without electronic addresses + four XRechnung ids (the UBL and CII invoices also read with an email seller address) + the Peppol invoice read with addresses too.
+        Assert.Equal(13, checkedRenders);
     }
 }

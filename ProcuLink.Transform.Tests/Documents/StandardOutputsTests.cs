@@ -114,6 +114,13 @@ public class StandardOutputsTests
     }
 
     [Fact]
+    public async Task A_missing_IBAN_is_named_in_capitals()
+    {
+        var detail = (await Render("xrechnung-ubl", InvoiceRead())).Detail;
+        detail.Should().Contain("IBAN").And.NotContain("Iban");
+    }
+
+    [Fact]
     public async Task An_endpoint_without_a_scheme_is_missing()
     {
         var render = await Render("peppol-bis-billing-3", InvoiceRead(senderEndpoint: "5790000435951"));

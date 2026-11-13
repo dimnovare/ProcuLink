@@ -64,7 +64,7 @@ public static class CiiInvoiceWriter
                     string.IsNullOrWhiteSpace(parties.PaymentReference) ? null : new XElement(Ram + "PaymentReference", parties.PaymentReference),
                     new XElement(Ram + "InvoiceCurrencyCode", currency),
                     string.IsNullOrWhiteSpace(parties.PayeeIban) ? null : new XElement(Ram + "SpecifiedTradeSettlementPaymentMeans",
-                        new XElement(Ram + "TypeCode", "58"),
+                        new XElement(Ram + "TypeCode", PeppolBisInvoiceTransformService.PaymentMeansCode(currency)),
                         new XElement(Ram + "PayeePartyCreditorFinancialAccount", new XElement(Ram + "IBANID", parties.PayeeIban))),
                     new XElement(Ram + "ApplicableTradeTax",
                         new XElement(Ram + "CalculatedAmount", Num(invoice.TaxTotal)), new XElement(Ram + "TypeCode", "VAT"),

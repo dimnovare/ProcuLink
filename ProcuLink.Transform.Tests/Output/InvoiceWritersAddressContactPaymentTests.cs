@@ -45,6 +45,15 @@ public class InvoiceWritersAddressContactPaymentTests
     }
 
     [Fact]
+    public void A_non_euro_invoice_writes_payment_means_code_30()
+    {
+        var usd = new InvoiceEntity { InvoiceNumber = "INV-2", IssueDate = new DateOnly(2026, 11, 1), Currency = "USD", SubTotal = 100m, TaxTotal = 19m, GrandTotal = 119m };
+        var p = new PeppolPartyOptions { SellerName = "Seller", PayeeIban = "DE02120300000000202051" };
+        Assert.Equal(["30", "DE02120300000000202051"], Leaves(new PeppolBisInvoiceTransformService().BuildDocument(usd, Lines, p, false), "PaymentMeans"));
+        Assert.Equal(["30", "DE02120300000000202051"], Leaves(CiiInvoiceWriter.Build(usd, Lines, p, false), "SpecifiedTradeSettlementPaymentMeans"));
+    }
+
+    [Fact]
     public void Only_a_city_writes_no_empty_elements()
     {
         var (ubl, cii) = Render(new PeppolPartyOptions { SellerName = "Seller", SellerCity = "Berlin" });

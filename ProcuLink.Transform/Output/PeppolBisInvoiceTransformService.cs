@@ -139,10 +139,13 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
     public XDocument BuildDocument(InvoiceEntity invoice, IReadOnlyList<InvoiceLineEntity> lines)
         => BuildDocument(invoice, lines, _opts, creditNote: false);
 
+    // 58 is a SEPA credit transfer, so only a euro invoice may claim it; any other currency is a plain credit transfer.
+    internal static string PaymentMeansCode(string currency) => string.Equals(currency, "EUR", StringComparison.OrdinalIgnoreCase) ? "58" : "30";
+
     /// <summary>
     /// The same document with the parties given per call, as an Invoice or (creditNote) a CreditNote-2 document:
     /// type code 381, CreditNoteLine and CreditedQuantity, and no DueDate (a credit note has none; the rules name
-    /// any that trip). Also writes each party's country and the order reference when given.
+    /// any that trip). Also writes each party's country, street, city and postcode, the seller contact, IBAN payment means and the order reference when given.
     /// Rule-checked against the official Peppol rules by PeppolRulesProofTests; that is not access-point acceptance.
     /// </summary>
     public XDocument BuildDocument(InvoiceEntity invoice, IReadOnlyList<InvoiceLineEntity> lines, PeppolPartyOptions parties, bool creditNote, string? customizationId = null)
@@ -200,7 +203,7 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
 
             // ── Payment means (BG-16), only with an IBAN ─────────────────────
             string.IsNullOrWhiteSpace(parties.PayeeIban) ? null : new XElement(cac + "PaymentMeans",
-                new XElement(cbc + "PaymentMeansCode", "58"),
+                new XElement(cbc + "PaymentMeansCode", PaymentMeansCode(currency)),
                 string.IsNullOrWhiteSpace(parties.PaymentReference) ? null : new XElement(cbc + "PaymentID", parties.PaymentReference),
                 new XElement(cac + "PayeeFinancialAccount", new XElement(cbc + "ID", parties.PayeeIban))),
 
