@@ -1,5 +1,4 @@
 using System.Text.Json;
-using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Transform.Output;
@@ -15,23 +14,9 @@ namespace ProcuLink.Transform.Tests.Output;
 /// </summary>
 public class OutputTreeRenderabilityTests
 {
-    private static PurchaseOrderEntity ResolvedOrder()
-    {
-        var orderId = Guid.NewGuid();
-        return new PurchaseOrderEntity
-        {
-            Id = orderId, OrgId = Guid.NewGuid(), SupplierId = Guid.NewGuid(),
-            PoNumber = "PO-1", Currency = "EUR", OrderDate = new DateOnly(2026, 6, 15),
-            Lines =
-            {
-                new PurchaseOrderLineEntity
-                {
-                    Id = Guid.NewGuid(), OrderId = orderId, LineNumber = 1,
-                    SupplierItemCode = "S-1", Quantity = 3m, UnitPrice = 10m, NeedsReview = false,
-                },
-            },
-        };
-    }
+    /// <summary>The shared header with one line, S-1 × 3.</summary>
+    private static TransformResult Emit(OutputNodeTemplate tree) =>
+        EmitterRows.Emit(tree, EmitterRows.Header(), EmitterRows.Line(1, "S-1", 3m, 10m));
 
     private static OutputFieldRule Canon(string field) => new() { OutputPath = field, CanonicalField = field };
 
@@ -47,10 +32,7 @@ public class OutputTreeRenderabilityTests
     {
         try
         {
-            new OutputTemplateEmitter().Emit(
-                new OutputNodeTemplate { Format = format, Root = DrawnRoot() },
-                ResolvedOrder(),
-                new OrderMappingOverride());
+            Emit(new OutputNodeTemplate { Format = format, Root = DrawnRoot() });
             return true;
         }
         catch (ArgumentException)
@@ -96,10 +78,7 @@ public class OutputTreeRenderabilityTests
     {
         // The other half of the pair: the assertion above is only meaningful because the emitter
         // genuinely throws here. Executed, not assumed.
-        Assert.Throws<ArgumentException>(() => new OutputTemplateEmitter().Emit(
-            new OutputNodeTemplate { Format = format, Root = DrawnRoot() },
-            ResolvedOrder(),
-            new OrderMappingOverride()));
+        Assert.Throws<ArgumentException>(() => Emit(new OutputNodeTemplate { Format = format, Root = DrawnRoot() }));
     }
 
     [Theory]
@@ -132,7 +111,7 @@ public class OutputTreeRenderabilityTests
                 }),
         };
 
-        var result = new OutputTemplateEmitter().Emit(tree, ResolvedOrder(), new OrderMappingOverride());
+        var result = Emit(tree);
 
         using var reader = new StreamReader(result.Content);
         using var doc = JsonDocument.Parse(reader.ReadToEnd());
@@ -154,7 +133,7 @@ public class OutputTreeRenderabilityTests
             Root = OutputNode.Obj("root", OutputNode.FieldOf("orderNumber", Canon("PoNumber"))),
         };
 
-        var result = new OutputTemplateEmitter().Emit(tree, ResolvedOrder(), new OrderMappingOverride());
+        var result = Emit(tree);
 
         using var reader = new StreamReader(result.Content);
         Assert.Contains("orderNumber", reader.ReadToEnd());

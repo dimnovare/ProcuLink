@@ -182,7 +182,6 @@ public class ScribanExpressionMappingTests
     [Fact]
     public void Output_Expression_TakesPrecedenceOverCanonicalFieldAndFixedValue()
     {
-        var order = BuildOrder();
         var ov = new OrderMappingOverride
         {
             Output = new OutputMappingConfig
@@ -205,7 +204,7 @@ public class ScribanExpressionMappingTests
             },
         };
 
-        var rows = Rows(new MappedTransformService().Build(order, ov, OutputFormat.Csv));
+        var rows = Rows(EmitterRows.FlatCsv(ov.Output!));
 
         rows[0].Should().Be("Ref,Code");
         rows[1].Should().Be("ORD-PO-9001,SUP-1");
@@ -214,7 +213,6 @@ public class ScribanExpressionMappingTests
     [Fact]
     public void Output_LineExpression_Arithmetic_ComputesLineTotal()
     {
-        var order = BuildOrder();
         var ov = new OrderMappingOverride
         {
             Output = new OutputMappingConfig
@@ -230,7 +228,7 @@ public class ScribanExpressionMappingTests
             },
         };
 
-        var rows = Rows(new MappedTransformService().Build(order, ov, OutputFormat.Csv));
+        var rows = Rows(EmitterRows.FlatCsv(ov.Output!));
 
         rows[0].Should().Be("Total");
         rows[1].Should().Be("30");    // 3 * 10 (decimal scale 0)
@@ -240,7 +238,6 @@ public class ScribanExpressionMappingTests
     [Fact]
     public void Output_Expression_ThenManipulatorChain_AppliesInOrder()
     {
-        var order = BuildOrder();
         var ov = new OrderMappingOverride
         {
             Output = new OutputMappingConfig
@@ -258,7 +255,7 @@ public class ScribanExpressionMappingTests
             },
         };
 
-        var rows = Rows(new MappedTransformService().Build(order, ov, OutputFormat.Csv));
+        var rows = Rows(EmitterRows.FlatCsv(ov.Output!));
 
         rows[0].Should().Be("Code");
         rows[1].Should().Be("SUP-1");
@@ -268,7 +265,6 @@ public class ScribanExpressionMappingTests
     [Fact]
     public void Output_HeaderExpression_InJson()
     {
-        var order = BuildOrder();
         var ov = new OrderMappingOverride
         {
             Output = new OutputMappingConfig
@@ -278,14 +274,22 @@ public class ScribanExpressionMappingTests
             },
         };
 
-        using var doc = ReadJson(new MappedTransformService().Build(order, ov, OutputFormat.Json));
+        // The same {header, lines} shape, drawn as a tree.
+        var tree = new OutputNodeTemplate
+        {
+            Format = OutputFormat.Json,
+            Root = OutputNode.Obj("root",
+                OutputNode.Obj("header", OutputNode.FieldOf("orderRef", ov.Output!.Header["ref"])),
+                OutputNode.Arr("lines", OutputNode.Obj("line", OutputNode.FieldOf("itemCode", ov.Output.Lines["code"])))),
+        };
+
+        using var doc = ReadJson(EmitterRows.Emit(tree, EmitterRows.Po9001Header(), EmitterRows.Po9001Lines()));
         doc.RootElement.GetProperty("header").GetProperty("orderRef").GetString().Should().Be("PO-9001/EUR");
     }
 
     [Fact]
     public void Output_InvalidExpression_FallsBackToCanonicalField_DoesNotCrash()
     {
-        var order = BuildOrder();
         var ov = new OrderMappingOverride
         {
             Output = new OutputMappingConfig
@@ -302,7 +306,7 @@ public class ScribanExpressionMappingTests
             },
         };
 
-        var act = () => new MappedTransformService().Build(order, ov, OutputFormat.Csv);
+        var act = () => EmitterRows.FlatCsv(ov.Output!);
         var result = act.Should().NotThrow().Subject;
 
         var rows = Rows(result);
@@ -448,8 +452,8 @@ public class ScribanExpressionMappingTests
     [Fact]
     public void Output_ScribanExpression_ReadsBoundSourceToken_ViaIndexer()
     {
-        var order  = BuildOrder();
-        var tokens = new List<SourceToken> { new("cell:r1c9", "Buyer VAT", "EE777", "header") };
+        var header = EmitterRows.Po9001Header();
+        header["src::cell:r1c9"] = "EE777";
 
         var ov = new OrderMappingOverride
         {
@@ -461,7 +465,7 @@ public class ScribanExpressionMappingTests
             },
         };
 
-        var rows = Rows(new MappedTransformService().Build(order, ov, OutputFormat.Csv, tokens));
+        var rows = Rows(EmitterRows.FlatCsv(ov.Output!, header, EmitterRows.Po9001Lines()));
         rows[0].Should().Be("Vat,Code");
         rows[1].Should().Be("VAT:EE777,SUP-1");
     }
@@ -469,8 +473,7 @@ public class ScribanExpressionMappingTests
     [Fact]
     public void Output_ScribanExpression_MissingSrcKey_RendersEmpty_FailOpen()
     {
-        var order  = BuildOrder();
-        var tokens = new List<SourceToken>(); // no tokens → src::missing is absent from the bag
+        // src::missing is absent from the bag.
 
         var ov = new OrderMappingOverride
         {
@@ -481,7 +484,7 @@ public class ScribanExpressionMappingTests
             },
         };
 
-        var rows = Rows(new MappedTransformService().Build(order, ov, OutputFormat.Csv, tokens));
+        var rows = Rows(EmitterRows.FlatCsv(ov.Output!));
         rows[0].Should().Be("X,Code");
         rows[1].Should().Be("[],SUP-1");   // relaxed member access → empty, never throws
     }
@@ -491,8 +494,6 @@ public class ScribanExpressionMappingTests
     [Fact]
     public void NoExpression_Csv_IsByteForByteIdenticalToCanonicalFieldMapping()
     {
-        var order = BuildOrder();
-
         // Identical rules, one WITHOUT Expression, one WITH a NULL Expression — must match.
         var withoutExpr = new OrderMappingOverride
         {
@@ -519,8 +520,8 @@ public class ScribanExpressionMappingTests
             },
         };
 
-        var a = ReadCsv(new MappedTransformService().Build(order, withoutExpr, OutputFormat.Csv));
-        var b = ReadCsv(new MappedTransformService().Build(order, withNullExpr, OutputFormat.Csv));
+        var a = ReadCsv(EmitterRows.FlatCsv(withoutExpr.Output!));
+        var b = ReadCsv(EmitterRows.FlatCsv(withNullExpr.Output!));
 
         b.Should().Be(a);
         // And the concrete expected content (guards against both paths changing together).
@@ -533,7 +534,6 @@ public class ScribanExpressionMappingTests
     [Fact]
     public void NoExpression_BlankExpression_IsIgnored_FallsBackToField()
     {
-        var order = BuildOrder();
         var ov = new OrderMappingOverride
         {
             Output = new OutputMappingConfig
@@ -546,7 +546,7 @@ public class ScribanExpressionMappingTests
             },
         };
 
-        var rows = Rows(new MappedTransformService().Build(order, ov, OutputFormat.Csv));
+        var rows = Rows(EmitterRows.FlatCsv(ov.Output!));
         rows[0].Should().Be("Code");
         rows[1].Should().Be("SUP-1");
     }

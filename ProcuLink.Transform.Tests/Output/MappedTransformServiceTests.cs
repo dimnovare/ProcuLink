@@ -135,9 +135,8 @@ public class MappedTransformServiceTests
     }
 
     [Fact]
-    public void Build_Csv_AppliesManipulators_LikePoMappingEngine()
+    public void Csv_AppliesManipulators()
     {
-        var order = BuildOrder();
         var ov = new OrderMappingOverride
         {
             Output = new OutputMappingConfig
@@ -159,7 +158,7 @@ public class MappedTransformServiceTests
             },
         };
 
-        var csv = ReadCsv(new MappedTransformService().Build(order, ov, OutputFormat.Csv));
+        var csv = ReadCsv(EmitterRows.FlatCsv(ov.Output!));
         var rows = csv.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
 
         rows[0].Should().Be("Code,PriceCents");
@@ -198,9 +197,8 @@ public class MappedTransformServiceTests
     }
 
     [Fact]
-    public void Build_Csv_FixedValue_IsEmitted()
+    public void Csv_FixedValue_IsEmitted()
     {
-        var order = BuildOrder();
         var ov = new OrderMappingOverride
         {
             Output = new OutputMappingConfig
@@ -210,7 +208,7 @@ public class MappedTransformServiceTests
             },
         };
 
-        var csv = ReadCsv(new MappedTransformService().Build(order, ov, OutputFormat.Csv));
+        var csv = ReadCsv(EmitterRows.FlatCsv(ov.Output!));
         var rows = csv.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
 
         rows[0].Should().Be("Source,Code");
@@ -223,7 +221,7 @@ public class MappedTransformServiceTests
     [InlineData("-5,50")]
     [InlineData("-1 234,50")]
     [InlineData("-1\u00A0234,50")]
-    public void Build_Csv_FormulaNeutralised_PlainNumberStaysNumeric(string number)
+    public void Csv_FormulaNeutralised_PlainNumberStaysNumeric(string number)
     {
         var ov = new OrderMappingOverride
         {
@@ -234,7 +232,7 @@ public class MappedTransformServiceTests
             },
         };
 
-        var rows = ReadCsv(new MappedTransformService().Build(BuildOrder(), ov, OutputFormat.Csv)).Replace("\r\n", "\n").Split('\n');
+        var rows = ReadCsv(EmitterRows.FlatCsv(ov.Output!)).Replace("\r\n", "\n").Split('\n');
 
         rows[1].Should().Be($"\"'=HYPERLINK(\"\"x\"\")\",\"{number}\"");
     }
@@ -715,8 +713,8 @@ public class MappedTransformServiceTests
     [Fact]
     public void ResolveRule_SourceTokenPrecedence_WinsOverFixedValue()
     {
-        var order  = BuildOrder();
-        var tokens = new List<SourceToken> { new("cell:r1c2", "X", "FROM-TOKEN", "header") };
+        var header = EmitterRows.Po9001Header();
+        header["src::cell:r1c2"] = "FROM-TOKEN";
 
         var ov = new OrderMappingOverride
         {
@@ -731,7 +729,7 @@ public class MappedTransformServiceTests
             },
         };
 
-        var csv  = ReadCsv(new MappedTransformService().Build(order, ov, OutputFormat.Csv, tokens));
+        var csv  = ReadCsv(EmitterRows.FlatCsv(ov.Output!, header, EmitterRows.Po9001Lines()));
         var rows = csv.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
 
         rows[1].Should().StartWith("FROM-TOKEN,");
@@ -740,9 +738,6 @@ public class MappedTransformServiceTests
     [Fact]
     public void ResolveRule_NotFoundSourceToken_FallsThroughToFixedValue_NeverEmitsLiteralSrc()
     {
-        var order  = BuildOrder();
-        var tokens = new List<SourceToken>(); // no tokens → the bound id is absent from the bag
-
         var ov = new OrderMappingOverride
         {
             Output = new OutputMappingConfig
@@ -755,7 +750,7 @@ public class MappedTransformServiceTests
             },
         };
 
-        var csv  = ReadCsv(new MappedTransformService().Build(order, ov, OutputFormat.Csv, tokens));
+        var csv  = ReadCsv(EmitterRows.FlatCsv(ov.Output!));
         var rows = csv.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
 
         rows[1].Should().StartWith("FALLBACK,");        // fell through to FixedValue
@@ -765,9 +760,6 @@ public class MappedTransformServiceTests
     [Fact]
     public void ResolveRule_NotFoundSourceToken_NoFixed_FallsThroughToCanonicalField()
     {
-        var order  = BuildOrder();
-        var tokens = new List<SourceToken>();
-
         var ov = new OrderMappingOverride
         {
             Output = new OutputMappingConfig
@@ -781,24 +773,15 @@ public class MappedTransformServiceTests
             },
         };
 
-        var csv  = ReadCsv(new MappedTransformService().Build(order, ov, OutputFormat.Csv, tokens));
+        var csv  = ReadCsv(EmitterRows.FlatCsv(ov.Output!));
         var rows = csv.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
 
         rows[1].Should().StartWith("PO-9001,");
     }
 
     [Fact]
-    public void Build_Csv_EscapesValuesContainingCommas()
+    public void Csv_EscapesValuesContainingCommas()
     {
-        var order = BuildOrder(new[]
-        {
-            new PurchaseOrderLineEntity
-            {
-                LineNumber = 1, BuyerItemCode = "B-1", SupplierItemCode = "SUP-1",
-                Description = "Widget, large", Quantity = 1, UnitPrice = 1, NeedsReview = false,
-            },
-        });
-
         var ov = new OrderMappingOverride
         {
             Output = new OutputMappingConfig
@@ -807,7 +790,8 @@ public class MappedTransformServiceTests
             },
         };
 
-        var csv = ReadCsv(new MappedTransformService().Build(order, ov, OutputFormat.Csv));
+        var csv = ReadCsv(EmitterRows.FlatCsv(ov.Output!, EmitterRows.Po9001Header(),
+            new Dictionary<string, string> { ["Description"] = "Widget, large" }));
         var rows = csv.Replace("\r\n", "\n").TrimEnd('\n').Split('\n');
 
         rows[1].Should().Be("\"Widget, large\"");

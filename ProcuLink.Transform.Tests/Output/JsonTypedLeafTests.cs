@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Text;
-using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Transform.Output;
@@ -23,20 +22,12 @@ namespace ProcuLink.Transform.Tests.Output;
 /// </summary>
 public class JsonTypedLeafTests
 {
-    private static PurchaseOrderEntity Order(string? buyer = null, decimal qty = 3m)
+    /// <summary>The shared header with <paramref name="buyer"/> as the buyer name, the leaf these cases read.</summary>
+    private static Dictionary<string, string> Buyer(string? buyer)
     {
-        var id = Guid.NewGuid();
-        return new PurchaseOrderEntity
-        {
-            Id = id, OrgId = Guid.NewGuid(), SupplierId = Guid.NewGuid(),
-            PoNumber = "PO-1", Currency = "EUR", OrderDate = new DateOnly(2026, 6, 15),
-            BuyerName = buyer,
-            Lines =
-            {
-                new PurchaseOrderLineEntity { Id = Guid.NewGuid(), OrderId = id, LineNumber = 1,
-                    SupplierItemCode = "S-1", Quantity = qty, UnitPrice = 10m, NeedsReview = false },
-            },
-        };
+        var header = EmitterRows.Header();
+        header["BuyerName"] = buyer ?? string.Empty;
+        return header;
     }
 
     /// <summary>A one-object tree with a single leaf, so each case is about that leaf and nothing else.</summary>
@@ -53,13 +44,8 @@ public class JsonTypedLeafTests
         }),
     };
 
-    private static string Emit(OutputNodeTemplate t, PurchaseOrderEntity? order = null)
-    {
-        var r = new OutputTemplateEmitter().Emit(t, order ?? Order(), new OrderMappingOverride());
-        r.Content.Position = 0;
-        using var sr = new StreamReader(r.Content, Encoding.UTF8);
-        return sr.ReadToEnd();
-    }
+    private static string Emit(OutputNodeTemplate t, Dictionary<string, string>? header = null) =>
+        EmitterRows.Emit(t, header ?? Buyer(null), EmitterRows.Line(1, "S-1", 3m, 10m)).Text();
 
     // ── The parity guarantee ─────────────────────────────────────────────────
 
@@ -88,7 +74,7 @@ public class JsonTypedLeafTests
     {
         // Bound to a HEADER field: the leaf sits directly under the root object, so a line-scope
         // canonical name would resolve to empty here and the test would be about scope, not typing.
-        var json = Emit(Tree("BuyerName", valueType: "number"), Order(buyer: "3"));
+        var json = Emit(Tree("BuyerName", valueType: "number"), Buyer("3"));
         Assert.Contains("\"value\": 3", json);
         Assert.DoesNotContain("\"value\": \"3\"", json);
     }
@@ -96,13 +82,13 @@ public class JsonTypedLeafTests
     [Fact]
     public void NumberValueType_KeepsDecimals()
     {
-        Assert.Contains("\"value\": 2.5", Emit(Tree("BuyerName", valueType: "number"), Order(buyer: "2.5")));
+        Assert.Contains("\"value\": 2.5", Emit(Tree("BuyerName", valueType: "number"), Buyer("2.5")));
     }
 
     [Fact]
     public void NumberValueType_EmitsANegative()
     {
-        Assert.Contains("\"value\": -4", Emit(Tree("BuyerName", valueType: "number"), Order(buyer: "-4")));
+        Assert.Contains("\"value\": -4", Emit(Tree("BuyerName", valueType: "number"), Buyer("-4")));
     }
 
     /// <summary>
@@ -113,7 +99,7 @@ public class JsonTypedLeafTests
     [Fact]
     public void NumberValueType_OnAnEmptyValue_EmitsNull()
     {
-        var json = Emit(Tree("BuyerName", valueType: "number"), Order(buyer: null));
+        var json = Emit(Tree("BuyerName", valueType: "number"), Buyer(null));
         Assert.Equal(JsonValueKind.Null, JsonDocument.Parse(json).RootElement.GetProperty("value").ValueKind);
     }
 
@@ -124,7 +110,7 @@ public class JsonTypedLeafTests
     [Fact]
     public void NumberValueType_WithOmit_DropsTheFieldInsteadOfFailingTheOrder()
     {
-        var json = Emit(Tree("BuyerName", valueType: "number", emptyValue: "omit"), Order(buyer: null));
+        var json = Emit(Tree("BuyerName", valueType: "number", emptyValue: "omit"), Buyer(null));
         Assert.DoesNotContain("\"value\"", json);
     }
 
@@ -138,7 +124,7 @@ public class JsonTypedLeafTests
     public void NumberValueType_OnANonNumber_Throws_RatherThanQuietlyEmittingAString()
     {
         var ex = Assert.Throws<InvalidOperationException>(
-            () => Emit(Tree("BuyerName", valueType: "number"), Order(buyer: "10 pcs")));
+            () => Emit(Tree("BuyerName", valueType: "number"), Buyer("10 pcs")));
 
         Assert.Contains("value", ex.Message);
         Assert.Contains("10 pcs", ex.Message);
@@ -153,7 +139,7 @@ public class JsonTypedLeafTests
     public void NumberValueType_DoesNotReinterpretALocalisedNumber()
     {
         Assert.Throws<InvalidOperationException>(
-            () => Emit(Tree("BuyerName", valueType: "number"), Order(buyer: "1.234,50")));
+            () => Emit(Tree("BuyerName", valueType: "number"), Buyer("1.234,50")));
     }
 
     // ── boolean ──────────────────────────────────────────────────────────────
@@ -166,7 +152,7 @@ public class JsonTypedLeafTests
     [InlineData("1")]
     public void BooleanValueType_AcceptsTheSpellingsAFeedReallyCarries_True(string raw)
     {
-        Assert.Contains("\"value\": true", Emit(Tree("BuyerName", valueType: "boolean"), Order(buyer: raw)));
+        Assert.Contains("\"value\": true", Emit(Tree("BuyerName", valueType: "boolean"), Buyer(raw)));
     }
 
     [Theory]
@@ -176,14 +162,14 @@ public class JsonTypedLeafTests
     [InlineData("0")]
     public void BooleanValueType_AcceptsTheSpellingsAFeedReallyCarries_False(string raw)
     {
-        Assert.Contains("\"value\": false", Emit(Tree("BuyerName", valueType: "boolean"), Order(buyer: raw)));
+        Assert.Contains("\"value\": false", Emit(Tree("BuyerName", valueType: "boolean"), Buyer(raw)));
     }
 
     [Fact]
     public void BooleanValueType_OnSomethingElse_Throws_AndSaysWhatItAccepts()
     {
         var ex = Assert.Throws<InvalidOperationException>(
-            () => Emit(Tree("BuyerName", valueType: "boolean"), Order(buyer: "maybe")));
+            () => Emit(Tree("BuyerName", valueType: "boolean"), Buyer("maybe")));
 
         Assert.Contains("maybe", ex.Message);
         Assert.Contains("yes/no", ex.Message);
@@ -208,7 +194,7 @@ public class JsonTypedLeafTests
     [Fact]
     public void OmitWhenEmpty_DropsThePropertyEntirely()
     {
-        var json = Emit(Tree("BuyerName", emptyValue: "omit"), Order(buyer: null));
+        var json = Emit(Tree("BuyerName", emptyValue: "omit"), Buyer(null));
 
         Assert.DoesNotContain("\"value\"", json);
         Assert.Contains("{", json);
@@ -217,7 +203,7 @@ public class JsonTypedLeafTests
     [Fact]
     public void OmitWhenEmpty_KeepsThePropertyWhenThereIsAValue()
     {
-        Assert.Contains("\"value\": \"Acme\"", Emit(Tree("BuyerName", emptyValue: "omit"), Order(buyer: "Acme")));
+        Assert.Contains("\"value\": \"Acme\"", Emit(Tree("BuyerName", emptyValue: "omit"), Buyer("Acme")));
     }
 
     /// <summary>
@@ -227,20 +213,20 @@ public class JsonTypedLeafTests
     [Fact]
     public void OmitWhenEmpty_TreatsWhitespaceAsEmpty()
     {
-        Assert.DoesNotContain("\"value\"", Emit(Tree("BuyerName", emptyValue: "omit"), Order(buyer: "   ")));
+        Assert.DoesNotContain("\"value\"", Emit(Tree("BuyerName", emptyValue: "omit"), Buyer("   ")));
     }
 
     [Fact]
     public void WithoutOmit_AnEmptyValueStillWritesTheProperty()
     {
-        Assert.Contains("\"value\": \"\"", Emit(Tree("BuyerName"), Order(buyer: null)));
+        Assert.Contains("\"value\": \"\"", Emit(Tree("BuyerName"), Buyer(null)));
     }
 
     /// <summary>An unrecognised emptyValue behaves as absent, like every other unknown here.</summary>
     [Fact]
     public void UnknownEmptyValue_WritesThePropertyAsBefore()
     {
-        Assert.Contains("\"value\": \"\"", Emit(Tree("BuyerName", emptyValue: "blank"), Order(buyer: null)));
+        Assert.Contains("\"value\": \"\"", Emit(Tree("BuyerName", emptyValue: "blank"), Buyer(null)));
     }
 
     // ── format isolation ─────────────────────────────────────────────────────
@@ -263,6 +249,6 @@ public class JsonTypedLeafTests
             }),
         };
 
-        Assert.Contains("10 pcs", Emit(csv, Order(buyer: "10 pcs")));
+        Assert.Contains("10 pcs", Emit(csv, Buyer("10 pcs")));
     }
 }

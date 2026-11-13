@@ -36,6 +36,10 @@ public class OutputTemplateEmitterTests
 
     private static OutputFieldRule Canon(string field) => new() { OutputPath = field, CanonicalField = field };
 
+    /// <summary>The shared rows with line 2's quantity at 0.</summary>
+    private static TransformResult ZeroQuantitySecondLine(OutputNodeTemplate template) =>
+        EmitterRows.Emit(template, EmitterRows.Header(), EmitterRows.Line(1, "S-1", 3m, 10m), EmitterRows.Line(2, "S-2", 0m, 5m));
+
     [Fact]
     public void Json_RendersNestedObjects_RepeatingArray_AndRenamedKeys()
     {
@@ -53,8 +57,7 @@ public class OutputTemplateEmitterTests
                         OutputNode.FieldOf("qty", Canon("Quantity"))))),
         };
 
-        var result = new OutputTemplateEmitter().Emit(template, ResolvedOrder(), new OrderMappingOverride());
-        var json = ReadAll(result);
+        var json = EmitterRows.Emit(template).Text();
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
@@ -86,8 +89,7 @@ public class OutputTemplateEmitterTests
                         OutputNode.FieldOf("Qty", Canon("Quantity"))))),
         };
 
-        var result = new OutputTemplateEmitter().Emit(template, ResolvedOrder(), new OrderMappingOverride());
-        var xml = XDocument.Parse(ReadAll(result));
+        var xml = XDocument.Parse(EmitterRows.Emit(template).Text());
         var order = xml.Root!;
 
         Assert.Equal("Order", order.Name.LocalName);
@@ -134,7 +136,7 @@ public class OutputTemplateEmitterTests
                 OutputNode.FieldOf("usdNote", Canon("Currency"))   with { IncludeWhen = "order.Currency == \"USD\"" }),
         };
 
-        var json = ReadAll(new OutputTemplateEmitter().Emit(template, ResolvedOrder(), new OrderMappingOverride()));
+        var json = EmitterRows.Emit(template).Text();
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
@@ -147,9 +149,6 @@ public class OutputTemplateEmitterTests
     public void Json_IncludeWhen_OnArrayItem_SkipsLines_FailingThePredicate()
     {
         // The classic "drop zero-quantity lines" recipe. Line 1 qty 3, line 2 qty 0 → only line 1 emits.
-        var order = ResolvedOrder();
-        order.Lines[1].Quantity = 0m;
-
         var template = new OutputNodeTemplate
         {
             Format = OutputFormat.Json,
@@ -160,7 +159,7 @@ public class OutputTemplateEmitterTests
                         OutputNode.FieldOf("qty", Canon("Quantity"))) with { IncludeWhen = "line.Quantity > 0" })),
         };
 
-        var json = ReadAll(new OutputTemplateEmitter().Emit(template, order, new OrderMappingOverride()));
+        var json = ZeroQuantitySecondLine(template).Text();
         using var doc = JsonDocument.Parse(json);
         var items = doc.RootElement.GetProperty("items");
 
@@ -180,7 +179,7 @@ public class OutputTemplateEmitterTests
                 OutputNode.FieldOf("Po", Canon("PoNumber"))),
         };
 
-        var xml = XDocument.Parse(ReadAll(new OutputTemplateEmitter().Emit(template, ResolvedOrder(), new OrderMappingOverride())));
+        var xml = XDocument.Parse(EmitterRows.Emit(template).Text());
         var order = xml.Root!;
 
         Assert.Equal("PO-1", order.Attribute("ref")!.Value);
@@ -191,9 +190,6 @@ public class OutputTemplateEmitterTests
     [Fact]
     public void Csv_IncludeWhen_OnLineItem_DropsRows_FailingThePredicate()
     {
-        var order = ResolvedOrder();
-        order.Lines[1].Quantity = 0m;
-
         var template = new OutputNodeTemplate
         {
             Format = OutputFormat.Csv,
@@ -205,7 +201,7 @@ public class OutputTemplateEmitterTests
                         OutputNode.FieldOf("Qty", Canon("Quantity"))) with { IncludeWhen = "line.Quantity > 0" })),
         };
 
-        var csv = ReadAll(new OutputTemplateEmitter().Emit(template, order, new OrderMappingOverride()));
+        var csv = ZeroQuantitySecondLine(template).Text();
         var rows = csv.Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
         Assert.Equal("OrderRef,ItemCode,Qty", rows[0]);
@@ -228,8 +224,8 @@ public class OutputTemplateEmitterTests
             Root = WithoutPredicate() with { IncludeWhen = null },   // explicit null
         };
 
-        var a = ReadBytes(new OutputTemplateEmitter().Emit(baseline, ResolvedOrder(), new OrderMappingOverride()));
-        var b = ReadBytes(new OutputTemplateEmitter().Emit(withNull, ResolvedOrder(), new OrderMappingOverride()));
+        var a = EmitterRows.Emit(baseline).Bytes();
+        var b = EmitterRows.Emit(withNull).Bytes();
         Assert.Equal(a, b);
     }
 
@@ -244,7 +240,7 @@ public class OutputTemplateEmitterTests
                 OutputNode.FieldOf("po", Canon("PoNumber")) with { IncludeWhen = "this is not valid (((" }),
         };
 
-        var json = ReadAll(new OutputTemplateEmitter().Emit(template, ResolvedOrder(), new OrderMappingOverride()));
+        var json = EmitterRows.Emit(template).Text();
         using var doc = JsonDocument.Parse(json);
         Assert.Equal("PO-1", doc.RootElement.GetProperty("po").GetString());   // kept despite broken predicate
     }
@@ -272,7 +268,8 @@ public class OutputTemplateEmitterTests
     [Fact]
     public void Xml_AstField_BoundToTypedSourceToken_EmitsTokenValue()
     {
-        var tokens = new List<SourceToken> { new("seg:RFF[1].el2", "RFF reference", "REF-99", "header") };
+        var header = EmitterRows.Header();
+        header["src::seg:RFF[1].el2"] = "REF-99";
         var template = new OutputNodeTemplate
         {
             Format = OutputFormat.Xml,
@@ -282,7 +279,7 @@ public class OutputTemplateEmitterTests
                     OutputNode.FieldOf("Sku", Canon("SupplierItemCode"))))),
         };
 
-        var xml = XDocument.Parse(ReadAll(new OutputTemplateEmitter().Emit(template, ResolvedOrder(), new OrderMappingOverride(), tokens)));
+        var xml = XDocument.Parse(EmitterRows.Emit(template, header, EmitterRows.TwoLines()).Text());
         Assert.Equal("REF-99", xml.Root!.Element("Ref")!.Value);
     }
 

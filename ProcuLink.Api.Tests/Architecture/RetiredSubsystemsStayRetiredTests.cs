@@ -179,9 +179,9 @@ public class RetiredSubsystemsStayRetiredTests
         // ── The OutputNode AST emitter — LIVE, and the near-namesake of the retired OutputTemplate
         //    ENTITY. Assert its rendering entry point, not its name.
         LiveType("ProcuLink.Transform", "ProcuLink.Transform.Output.OutputTemplateEmitter",
-            "the OutputNode AST emitter is the live structured-output path (OrdersController preview + " +
-            "OrderTransformService); it is unrelated to the retired OutputTemplate ENTITY")
-            .GetMethod("Emit").Should().NotBeNull("OutputTemplateEmitter.Emit is that path's entry point");
+            "the OutputNode AST emitter is the live structured-output path (DocumentOutputRenderer, " +
+            "every flow output); it is unrelated to the retired OutputTemplate ENTITY")
+            .GetMethod("EmitRows").Should().NotBeNull("OutputTemplateEmitter.EmitRows is that path's entry point");
 
         // ── The outbound-webhook billing gate. An enum member alone proves nothing (an orphan member
         //    compiles fine) — what makes the feature real is that the plan gate answers for it. Parsed

@@ -1,6 +1,5 @@
 using System.Text;
 using System.Xml.Linq;
-using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Transform.Output;
@@ -16,24 +15,10 @@ namespace ProcuLink.Transform.Tests.Output;
 /// </summary>
 public class OutputTemplateB12ReviewFixesTests
 {
-    private static PurchaseOrderEntity OrderWith(int lines)
-    {
-        var id = Guid.NewGuid();
-        var o = new PurchaseOrderEntity { Id = id, OrgId = Guid.NewGuid(), SupplierId = Guid.NewGuid(),
-            PoNumber = "PO-1", Currency = "EUR", OrderDate = new DateOnly(2026, 6, 15) };
-        for (var n = 1; n <= lines; n++)
-            o.Lines.Add(new PurchaseOrderLineEntity { Id = Guid.NewGuid(), OrderId = id, LineNumber = n,
-                SupplierItemCode = "S-" + n, Quantity = n, UnitPrice = 1m, NeedsReview = false });
-        return o;
-    }
-
-    private static string Emit(OutputNodeTemplate t, PurchaseOrderEntity o)
-    {
-        var r = new OutputTemplateEmitter().Emit(t, o, new OrderMappingOverride());
-        r.Content.Position = 0;
-        using var sr = new StreamReader(r.Content, Encoding.UTF8);
-        return sr.ReadToEnd();
-    }
+    /// <summary>The shared header with <paramref name="lines"/> lines, line n being S-n × n.</summary>
+    private static string EmitLines(OutputNodeTemplate t, int lines) =>
+        EmitterRows.Emit(t, EmitterRows.Header(),
+            Enumerable.Range(1, lines).Select(n => (IReadOnlyDictionary<string, string>)EmitterRows.Line(n, "S-" + n, n, 1m)).ToArray()).Text();
 
     // ── Fix A: repeated header elements are NOT collapsed into a second per-line array ──────────────
 
@@ -56,7 +41,7 @@ public class OutputTemplateB12ReviewFixesTests
         Assert.Equal(2, t.Root.Children.Count(c => c.Name == "Note"));
 
         // Emit against a 3-LINE order: 2 Notes (header, once each) + 3 Lines (one per order line).
-        var doc = XDocument.Parse(Emit(t, OrderWith(3)));
+        var doc = XDocument.Parse(EmitLines(t, 3));
         Assert.Equal(2, doc.Root!.Elements("Note").Count());   // header count unchanged, NOT 3
         Assert.Equal(3, doc.Root.Elements("Line").Count());    // line group fans per order line
     }
@@ -85,7 +70,7 @@ public class OutputTemplateB12ReviewFixesTests
             Format = format,
             Root = OutputNode.Obj("order", OutputNode.FieldOf("po", new OutputFieldRule { OutputPath = "po", CanonicalField = "PoNumber" })),
         };
-        var ex = Assert.Throws<ArgumentException>(() => Emit(t, OrderWith(1)));
+        var ex = Assert.Throws<ArgumentException>(() => EmitLines(t, 1));
         Assert.Contains(format.ToString(), ex.Message);
     }
 
@@ -102,7 +87,7 @@ public class OutputTemplateB12ReviewFixesTests
                 Children = { new OutputNode { Name = "Plain", NodeType = OutputNodeType.Field,
                     Rule = new OutputFieldRule { OutputPath = "Plain", CanonicalField = "PoNumber" } } } },
         };
-        var doc = XDocument.Parse(Emit(t, OrderWith(1)));
+        var doc = XDocument.Parse(EmitLines(t, 1));
         Assert.Equal(XNamespace.Get(OTHER) + "Root", doc.Root!.Name);
         // The no-namespace child must be in NO namespace — never silently in the parent default.
         Assert.Equal("", doc.Root.Elements().First().Name.NamespaceName);
@@ -118,6 +103,6 @@ public class OutputTemplateB12ReviewFixesTests
                 Children = { new OutputNode { Name = "ID", NodeType = OutputNodeType.Field, Prefix = "cbc", /* Namespace null */
                     Rule = new OutputFieldRule { OutputPath = "ID", CanonicalField = "PoNumber" } } } },
         };
-        Assert.Throws<ArgumentException>(() => Emit(t, OrderWith(1)));
+        Assert.Throws<ArgumentException>(() => EmitLines(t, 1));
     }
 }

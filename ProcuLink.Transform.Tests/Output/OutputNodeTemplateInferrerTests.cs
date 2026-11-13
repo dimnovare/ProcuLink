@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Transform.Output;
@@ -176,16 +175,14 @@ public class OutputNodeTemplateInferrerTests
         const string sample = """
         {"orderNumber":"X","EANCode":"X","items":[{"sku":"X","qty":0}]}
         """;
-        var order = MakeResolvedOrder();
-
         // Inferred tree: EANCode comes back UNBOUND under F-2.
         var inferred = OutputNodeTemplateInferrer.FromSample(sample, OutputFormat.Json);
-        var inferredBytes = Emit(inferred, order);
+        var inferredBytes = Emit(inferred);
 
         // Same tree but EANCode explicitly set to FixedValue == "" (the pre-F-2 inferred shape, and
         // exactly what a user setting an empty constant produces).
         var explicitEmpty = WithEanFixedValue(OutputNodeTemplateInferrer.FromSample(sample, OutputFormat.Json), "");
-        var explicitBytes = Emit(explicitEmpty, order);
+        var explicitBytes = Emit(explicitEmpty);
 
         Assert.Equal(explicitBytes, inferredBytes);   // identical delivered bytes
 
@@ -207,26 +204,11 @@ public class OutputNodeTemplateInferrerTests
         return t;
     }
 
-    private static PurchaseOrderEntity MakeResolvedOrder()
-    {
-        var orderId = Guid.NewGuid();
-        return new PurchaseOrderEntity
-        {
-            Id = orderId, OrgId = Guid.NewGuid(), SupplierId = Guid.NewGuid(),
-            PoNumber = "PO-42", Currency = "EUR", OrderDate = new DateOnly(2026, 6, 15),
-            Lines = { new PurchaseOrderLineEntity { Id = Guid.NewGuid(), OrderId = orderId, LineNumber = 1,
-                SupplierItemCode = "S-9", Quantity = 7m, UnitPrice = 1m, NeedsReview = false } },
-        };
-    }
+    /// <summary>PO-42 with one line, S-9 × 7.</summary>
+    private static TransformResult EmitPo42(OutputNodeTemplate template) =>
+        EmitterRows.Emit(template, EmitterRows.Header("PO-42"), EmitterRows.Line(1, "S-9", 7m, 1m));
 
-    private static byte[] Emit(OutputNodeTemplate template, PurchaseOrderEntity order)
-    {
-        var result = new OutputTemplateEmitter().Emit(template, order, new OrderMappingOverride());
-        result.Content.Position = 0;
-        using var ms = new MemoryStream();
-        result.Content.CopyTo(ms);
-        return ms.ToArray();
-    }
+    private static byte[] Emit(OutputNodeTemplate template) => EmitPo42(template).Bytes();
 
     [Fact]
     public void Inferred_Json_RoundTrips_ThroughEmitter_WithSameShape()
@@ -238,19 +220,7 @@ public class OutputNodeTemplateInferrerTests
         """;
         var template = OutputNodeTemplateInferrer.FromSample(sample, OutputFormat.Json);
 
-        var orderId = Guid.NewGuid();
-        var order = new PurchaseOrderEntity
-        {
-            Id = orderId, OrgId = Guid.NewGuid(), SupplierId = Guid.NewGuid(),
-            PoNumber = "PO-42", Currency = "EUR", OrderDate = new DateOnly(2026, 6, 15),
-            Lines = { new PurchaseOrderLineEntity { Id = Guid.NewGuid(), OrderId = orderId, LineNumber = 1,
-                SupplierItemCode = "S-9", Quantity = 7m, UnitPrice = 1m, NeedsReview = false } },
-        };
-
-        var result = new OutputTemplateEmitter().Emit(template, order, new OrderMappingOverride());
-        result.Content.Position = 0;
-        using var sr = new StreamReader(result.Content, Encoding.UTF8);
-        using var doc = JsonDocument.Parse(sr.ReadToEnd());
+        using var doc = JsonDocument.Parse(EmitPo42(template).Text());
 
         Assert.Equal("PO-42", doc.RootElement.GetProperty("orderNumber").GetString());   // bound to real PoNumber
         var items = doc.RootElement.GetProperty("items");
