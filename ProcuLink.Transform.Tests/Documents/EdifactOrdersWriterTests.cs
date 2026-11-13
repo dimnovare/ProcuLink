@@ -52,6 +52,14 @@ public class EdifactOrdersWriterTests
     }
 
     [Fact]
+    public async Task Control_characters_become_spaces()
+    {
+        var text = await Render("Bolt\nnut");
+
+        text.Should().Contain("Bolt nut").And.NotContain("Bolt\n");
+    }
+
+    [Fact]
     public async Task Text_with_delimiters_is_released()
     {
         var text = await Render("Bolt 5' + nut: M?");

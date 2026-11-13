@@ -70,7 +70,7 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
              Field("Seller", "Seller Co", FieldMeanings.SenderName), Field("Buyer", "Buyer Co", FieldMeanings.ReceiverName),
              Field("Sender Peppol ID", "0088:0000000000000", FieldMeanings.SenderEndpointId), Field("Receiver Peppol ID", "0088:0000000000017", FieldMeanings.ReceiverEndpointId),
              Field("Seller country", "LV", FieldMeanings.SenderCountry), Field("Buyer country", "LV", FieldMeanings.ReceiverCountry),
-             Field("Seller VAT", "LV00000000000", FieldMeanings.SenderVatId), Field("Buyer reference", "BUYER-REF-1", FieldMeanings.BuyerReference),
+             Field("Delivery date", "05.11.2026", FieldMeanings.DeliveryDate), Field("Seller VAT", "LV00000000000", FieldMeanings.SenderVatId), Field("Buyer reference", "BUYER-REF-1", FieldMeanings.BuyerReference),
              Field("Net", "100.00", FieldMeanings.TotalNet), Field("Tax", "21.00", FieldMeanings.TotalTax), Field("Gross", "121.00", FieldMeanings.TotalGross)],
             [new ReadTable("lines", "Lines", Columns.Select(c => new ReadColumn(FieldKey.Normalise(c.Label), c.Label, "text", c.Meaning)).ToList(),
                 [Row("Bolt", "3", "C62", "20.00", "60.00"), Row("Nut", "2", "C62", "20.00", "40.00")], true)]);
@@ -92,14 +92,19 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
 
         foreach (var id in new[] { "peppol-bis-billing-3", "peppol-bis-billing-3-credit-note", "en16931-cii", "en16931-cii-credit-note" })
         {
-            var render = await StandardOutputs.RenderAsync(id, id.StartsWith("en16931", StringComparison.Ordinal) ? ReadWithoutEndpoints() : Read(), FlowFieldList.Empty, "lines", Guid.Empty, default);
-            Assert.True(render.Ok, render.Detail);
-            using var bytes = new MemoryStream();
-            await render.Result!.Content.CopyToAsync(bytes);
+            // The CII reads with and without electronic addresses; the Peppol ids need them.
+            var reads = id.StartsWith("en16931", StringComparison.Ordinal) ? new[] { Read(), ReadWithoutEndpoints() } : new[] { Read() };
+            foreach (var read in reads)
+            {
+                var render = await StandardOutputs.RenderAsync(id, read, FlowFieldList.Empty, "lines", Guid.Empty, default);
+                Assert.True(render.Ok, render.Detail);
+                using var bytes = new MemoryStream();
+                await render.Result!.Content.CopyToAsync(bytes);
 
-            var outcome = await validator.ValidateAsync(StandardOutputs.Find(id)!.Vesid!, bytes.ToArray(), default);
-            Assert.True(outcome.Status == ValidationStatus.Passed,
-                $"{id}: {outcome.Status} {string.Join("; ", outcome.Issues.Where(i => i.Severity == "error").Select(i => $"{i.RuleId} {i.Message}"))}");
+                var outcome = await validator.ValidateAsync(StandardOutputs.Find(id)!.Vesid!, bytes.ToArray(), default);
+                Assert.True(outcome.Status == ValidationStatus.Passed,
+                    $"{id}: {outcome.Status} {string.Join("; ", outcome.Issues.Where(i => i.Severity == "error").Select(i => $"{i.RuleId} {i.Message}"))}");
+            }
         }
     }
 }

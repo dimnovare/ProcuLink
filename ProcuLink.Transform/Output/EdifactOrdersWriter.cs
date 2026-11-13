@@ -12,7 +12,7 @@ public sealed record EdifactEnvelope(
 /// <summary>Writes an EDIFACT ORDERS D.96A message (UNOC, default delimiters) from an order. Free text is released with <c>?</c>.</summary>
 public static class EdifactOrdersWriter
 {
-    private static string Esc(string? text) => string.Concat((text ?? "").Select(c => ":+?'".Contains(c) ? "?" + c : c.ToString()));
+    private static string Esc(string? text) => string.Concat((text ?? "").Select(c => char.IsControl(c) ? " " : ":+?'".Contains(c) ? "?" + c : c.ToString()));
 
     private static string Num(decimal d) => d.ToString("0.####", CultureInfo.InvariantCulture);
 

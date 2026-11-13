@@ -4,7 +4,7 @@ using ProcuLink.Transform.Documents;
 namespace ProcuLink.Api.Services.Documents;
 
 /// <summary>
-/// Official-rule checks for a flow's Peppol outputs. A broken rule is a visible check, never a block: an unreachable checker,
+/// Official-rule checks for a flow's flagged standard outputs. A broken rule is a visible check, never a block: an unreachable checker,
 /// a render failure (the send reports it as output_invalid) and a pass all add nothing.
 /// </summary>
 public static class OutputRuleChecks

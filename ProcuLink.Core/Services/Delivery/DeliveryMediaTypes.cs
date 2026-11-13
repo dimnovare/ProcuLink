@@ -61,8 +61,8 @@ public static class DeliveryMediaTypes
             // Named standards-profile identifiers (conformance layer). Same documents, same envelopes.
             //
             // NOT AN OFFER. These three name a conformance PROFILE; no ITransformService in this
-            // solution builds a document for any of them, and EDIFACT in particular is inbound-only —
-            // EdifactOrderParser reads it, nothing writes it. A row here is required (the table is
+            // solution builds a document for any of them; EDIFACT is now written by the flow standard output
+            // (EdifactOrdersWriter), not by a supplier transform. A row here is required (the table is
             // exhaustive over OutputFormat by design, so a value cannot be silently mis-typed) and it
             // is what these bytes WOULD travel as; it is not evidence the bytes can be produced.
             //
