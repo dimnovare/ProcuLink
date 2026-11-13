@@ -17,7 +17,7 @@ public static class CiiInvoiceWriter
     private static readonly XNamespace Ram = "urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100";
     private static readonly XNamespace Udt = "urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100";
 
-    public static XDocument Build(InvoiceEntity invoice, IReadOnlyList<InvoiceLineEntity> lines, PeppolPartyOptions parties, bool creditNote)
+    public static XDocument Build(InvoiceEntity invoice, IReadOnlyList<InvoiceLineEntity> lines, PeppolPartyOptions parties, bool creditNote, string? guidelineId = null)
     {
         var currency = string.IsNullOrWhiteSpace(invoice.Currency) ? "EUR" : invoice.Currency;
         var category = invoice.TaxTotal > 0m ? "S" : "Z";
@@ -31,7 +31,9 @@ public static class CiiInvoiceWriter
             new XAttribute(XNamespace.Xmlns + "ram", Ram.NamespaceName),
             new XAttribute(XNamespace.Xmlns + "udt", Udt.NamespaceName),
             new XElement(Rsm + "ExchangedDocumentContext",
-                new XElement(Ram + "GuidelineSpecifiedDocumentContextParameter", new XElement(Ram + "ID", "urn:cen.eu:en16931:2017"))),
+                // A named guideline (XRechnung) also carries the Peppol business process, which its rules require first.
+                guidelineId is null ? null : new XElement(Ram + "BusinessProcessSpecifiedDocumentContextParameter", new XElement(Ram + "ID", PeppolBisInvoiceTransformService.ProfileId)),
+                new XElement(Ram + "GuidelineSpecifiedDocumentContextParameter", new XElement(Ram + "ID", guidelineId ?? "urn:cen.eu:en16931:2017"))),
             new XElement(Rsm + "ExchangedDocument",
                 new XElement(Ram + "ID", invoice.InvoiceNumber),
                 new XElement(Ram + "TypeCode", creditNote ? "381" : "380"),
@@ -51,13 +53,19 @@ public static class CiiInvoiceWriter
                         new XElement(Ram + "SpecifiedTradeSettlementLineMonetarySummation", new XElement(Ram + "LineTotalAmount", Num(l.LineTotal)))))),
                 new XElement(Ram + "ApplicableHeaderTradeAgreement",
                     string.IsNullOrWhiteSpace(invoice.BuyerRef) ? null : new XElement(Ram + "BuyerReference", invoice.BuyerRef),
-                    Party("SellerTradeParty", parties.SellerName, parties.SellerCountry, parties.SellerEndpointId, parties.SellerEndpointScheme, parties.SellerVatId),
-                    Party("BuyerTradeParty", parties.BuyerName, parties.BuyerCountry, parties.BuyerEndpointId, parties.BuyerEndpointScheme, parties.BuyerVatId),
+                    Party("SellerTradeParty", parties.SellerName, parties.SellerCountry, parties.SellerEndpointId, parties.SellerEndpointScheme, parties.SellerVatId,
+                        parties.SellerStreet, parties.SellerCity, parties.SellerPostcode, parties.SellerContactName, parties.SellerContactPhone, parties.SellerContactEmail),
+                    Party("BuyerTradeParty", parties.BuyerName, parties.BuyerCountry, parties.BuyerEndpointId, parties.BuyerEndpointScheme, parties.BuyerVatId,
+                        parties.BuyerStreet, parties.BuyerCity, parties.BuyerPostcode),
                     string.IsNullOrWhiteSpace(parties.OrderReference) ? null : new XElement(Ram + "BuyerOrderReferencedDocument", new XElement(Ram + "IssuerAssignedID", parties.OrderReference))),
                 new XElement(Ram + "ApplicableHeaderTradeDelivery",
                     parties.DeliveryDate is { } d ? new XElement(Ram + "ActualDeliverySupplyChainEvent", new XElement(Ram + "OccurrenceDateTime", Date(d))) : null),
                 new XElement(Ram + "ApplicableHeaderTradeSettlement",
+                    string.IsNullOrWhiteSpace(parties.PaymentReference) ? null : new XElement(Ram + "PaymentReference", parties.PaymentReference),
                     new XElement(Ram + "InvoiceCurrencyCode", currency),
+                    string.IsNullOrWhiteSpace(parties.PayeeIban) ? null : new XElement(Ram + "SpecifiedTradeSettlementPaymentMeans",
+                        new XElement(Ram + "TypeCode", PeppolBisInvoiceTransformService.PaymentMeansCode(currency)),
+                        new XElement(Ram + "PayeePartyCreditorFinancialAccount", new XElement(Ram + "IBANID", parties.PayeeIban))),
                     new XElement(Ram + "ApplicableTradeTax",
                         new XElement(Ram + "CalculatedAmount", Num(invoice.TaxTotal)), new XElement(Ram + "TypeCode", "VAT"),
                         new XElement(Ram + "BasisAmount", Num(invoice.SubTotal)), new XElement(Ram + "CategoryCode", category),
@@ -70,12 +78,26 @@ public static class CiiInvoiceWriter
         return new XDocument(new XDeclaration("1.0", "UTF-8", null), root);
     }
 
-    private static XElement Party(string wrapper, string? name, string? country, string? endpointId, string? scheme, string? vatId) => new(Ram + wrapper,
-        string.IsNullOrWhiteSpace(name) ? null : new XElement(Ram + "Name", name),
-        string.IsNullOrWhiteSpace(country) ? null : new XElement(Ram + "PostalTradeAddress", new XElement(Ram + "CountryID", country)),
-        string.IsNullOrWhiteSpace(endpointId) ? null : new XElement(Ram + "URIUniversalCommunication",
-            new XElement(Ram + "URIID", scheme is null ? null : new XAttribute("schemeID", scheme), endpointId)),
-        string.IsNullOrWhiteSpace(vatId) ? null : new XElement(Ram + "SpecifiedTaxRegistration", new XElement(Ram + "ID", new XAttribute("schemeID", "VA"), vatId)));
+    private static XElement Party(string wrapper, string? name, string? country, string? endpointId, string? scheme, string? vatId,
+        string? street = null, string? city = null, string? postcode = null,
+        string? contactName = null, string? contactPhone = null, string? contactEmail = null)
+    {
+        static bool Has(string? s) => !string.IsNullOrWhiteSpace(s);
+        return new(Ram + wrapper,
+            Has(name) ? new XElement(Ram + "Name", name) : null,
+            Has(contactName) || Has(contactPhone) || Has(contactEmail) ? new XElement(Ram + "DefinedTradeContact",
+                Has(contactName) ? new XElement(Ram + "PersonName", contactName) : null,
+                Has(contactPhone) ? new XElement(Ram + "TelephoneUniversalCommunication", new XElement(Ram + "CompleteNumber", contactPhone)) : null,
+                Has(contactEmail) ? new XElement(Ram + "EmailURIUniversalCommunication", new XElement(Ram + "URIID", contactEmail)) : null) : null,
+            Has(street) || Has(city) || Has(postcode) || Has(country) ? new XElement(Ram + "PostalTradeAddress",
+                Has(postcode) ? new XElement(Ram + "PostcodeCode", postcode) : null,
+                Has(street) ? new XElement(Ram + "LineOne", street) : null,
+                Has(city) ? new XElement(Ram + "CityName", city) : null,
+                Has(country) ? new XElement(Ram + "CountryID", country) : null) : null,
+            Has(endpointId) ? new XElement(Ram + "URIUniversalCommunication",
+                new XElement(Ram + "URIID", scheme is null ? null : new XAttribute("schemeID", scheme), endpointId)) : null,
+            Has(vatId) ? new XElement(Ram + "SpecifiedTaxRegistration", new XElement(Ram + "ID", new XAttribute("schemeID", "VA"), vatId)) : null);
+    }
 
     private static XElement Date(DateOnly d) => new(Udt + "DateTimeString", new XAttribute("format", "102"), d.ToString("yyyyMMdd", CultureInfo.InvariantCulture));
     private static string Num(decimal v) => v.ToString("F2", CultureInfo.InvariantCulture);

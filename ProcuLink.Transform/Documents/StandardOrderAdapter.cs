@@ -99,14 +99,16 @@ public static partial class StandardOrderAdapter
         FieldMeanings.LineUnitPrice => FieldValueParser.Number(value) >= 0,
         FieldMeanings.TotalNet or FieldMeanings.TotalTax or FieldMeanings.TotalGross or FieldMeanings.LineAmount
             => FieldValueParser.Number(value) is not null,
-        FieldMeanings.SenderEndpointId or FieldMeanings.ReceiverEndpointId => PeppolId().IsMatch(value),
+        FieldMeanings.SenderEndpointId or FieldMeanings.ReceiverEndpointId => ElectronicAddress().IsMatch(value),
         _ => true,
     };
 
-    [GeneratedRegex(@"^\d{4}:\S+$")]
-    private static partial Regex PeppolId();
+    // A scheme and an id. EM (email) counts as present because XRechnung accepts it; Peppol reports EM through the
+    // rule check (CL008) like any other bad scheme, so it is never refused before writing.
+    [GeneratedRegex(@"^(\d{4}|EM):\S+$")]
+    private static partial Regex ElectronicAddress();
 
     private static string? Blank(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
-    private static string Humanise(string meaning) => char.ToUpperInvariant(meaning[0]) + meaning[1..].Replace('_', ' ');
+    private static string Humanise(string meaning) => meaning == FieldMeanings.Iban ? "IBAN" : char.ToUpperInvariant(meaning[0]) + meaning[1..].Replace('_', ' ');
 }

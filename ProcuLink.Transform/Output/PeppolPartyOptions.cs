@@ -42,4 +42,19 @@ public sealed class PeppolPartyOptions
     public string? OrderReference { get; init; }
     /// <summary>BT-72 - actual delivery date; only the CII writer emits it.</summary>
     public DateOnly? DeliveryDate { get; init; }
+
+    // Address, seller contact and payment (XRechnung BR-DE-2..9); each is written only when present.
+    public string? SellerStreet { get; init; }
+    public string? SellerCity { get; init; }
+    public string? SellerPostcode { get; init; }
+    public string? BuyerStreet { get; init; }
+    public string? BuyerCity { get; init; }
+    public string? BuyerPostcode { get; init; }
+    public string? SellerContactName { get; init; }
+    public string? SellerContactPhone { get; init; }
+    public string? SellerContactEmail { get; init; }
+    /// <summary>BT-84 - payee IBAN. Payment means are written only when this is present.</summary>
+    public string? PayeeIban { get; init; }
+    /// <summary>BT-83 - payment reference.</summary>
+    public string? PaymentReference { get; init; }
 }

@@ -139,13 +139,16 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
     public XDocument BuildDocument(InvoiceEntity invoice, IReadOnlyList<InvoiceLineEntity> lines)
         => BuildDocument(invoice, lines, _opts, creditNote: false);
 
+    // 58 is a SEPA credit transfer, so only a euro invoice may claim it; any other currency is a plain credit transfer.
+    internal static string PaymentMeansCode(string currency) => string.Equals(currency, "EUR", StringComparison.OrdinalIgnoreCase) ? "58" : "30";
+
     /// <summary>
     /// The same document with the parties given per call, as an Invoice or (creditNote) a CreditNote-2 document:
     /// type code 381, CreditNoteLine and CreditedQuantity, and no DueDate (a credit note has none; the rules name
-    /// any that trip). Also writes each party's country and the order reference when given.
+    /// any that trip). Also writes each party's country, street, city and postcode, the seller contact, IBAN payment means and the order reference when given.
     /// Rule-checked against the official Peppol rules by PeppolRulesProofTests; that is not access-point acceptance.
     /// </summary>
-    public XDocument BuildDocument(InvoiceEntity invoice, IReadOnlyList<InvoiceLineEntity> lines, PeppolPartyOptions parties, bool creditNote)
+    public XDocument BuildDocument(InvoiceEntity invoice, IReadOnlyList<InvoiceLineEntity> lines, PeppolPartyOptions parties, bool creditNote, string? customizationId = null)
     {
         var cbc = CbcNs;
         var cac = CacNs;
@@ -167,7 +170,7 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
             new XAttribute(XNamespace.Xmlns + "cac", CacNs.NamespaceName),
 
             // ── BIS identifiers ──────────────────────────────────────────────
-            new XElement(cbc + "CustomizationID", CustomizationId),   // BT-24
+            new XElement(cbc + "CustomizationID", customizationId ?? CustomizationId),   // BT-24
             new XElement(cbc + "ProfileID",       ProfileId),         // ProfileID
 
             // ── Header business terms ────────────────────────────────────────
@@ -188,12 +191,21 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
             // ── Seller party (AccountingSupplierParty) ───────────────────────
             BuildParty(cac, cbc, "AccountingSupplierParty",
                 parties.SellerEndpointId, parties.SellerEndpointScheme,
-                parties.SellerName, parties.SellerVatId, parties.SellerCountry),
+                parties.SellerName, parties.SellerVatId, parties.SellerCountry,
+                parties.SellerStreet, parties.SellerCity, parties.SellerPostcode,
+                parties.SellerContactName, parties.SellerContactPhone, parties.SellerContactEmail),
 
             // ── Buyer party (AccountingCustomerParty) ────────────────────────
             BuildParty(cac, cbc, "AccountingCustomerParty",
                 parties.BuyerEndpointId, parties.BuyerEndpointScheme,
-                parties.BuyerName, parties.BuyerVatId, parties.BuyerCountry),
+                parties.BuyerName, parties.BuyerVatId, parties.BuyerCountry,
+                parties.BuyerStreet, parties.BuyerCity, parties.BuyerPostcode),
+
+            // ── Payment means (BG-16), only with an IBAN ─────────────────────
+            string.IsNullOrWhiteSpace(parties.PayeeIban) ? null : new XElement(cac + "PaymentMeans",
+                new XElement(cbc + "PaymentMeansCode", PaymentMeansCode(currency)),
+                string.IsNullOrWhiteSpace(parties.PaymentReference) ? null : new XElement(cbc + "PaymentID", parties.PaymentReference),
+                new XElement(cac + "PayeeFinancialAccount", new XElement(cbc + "ID", parties.PayeeIban))),
 
             // ── Tax total + breakdown (BG-23) ────────────────────────────────
             new XElement(cac + "TaxTotal",
@@ -224,8 +236,11 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
 
     private static XElement BuildParty(
         XNamespace cac, XNamespace cbc, string wrapperName,
-        string? endpointId, string? endpointScheme, string? name, string? vatId, string? country = null)
+        string? endpointId, string? endpointScheme, string? name, string? vatId, string? country = null,
+        string? street = null, string? city = null, string? postcode = null,
+        string? contactName = null, string? contactPhone = null, string? contactEmail = null)
     {
+        static bool Has(string? s) => !string.IsNullOrWhiteSpace(s);
         var party = new XElement(cac + "Party");
 
         // BT-34 / BT-49 endpoint ID. schemeID carries the EAS code (e.g. 0088 GLN,
@@ -245,9 +260,12 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
                 new XElement(cbc + "Name", name)));
 
         // BT-40 / BT-55 country (PostalAddress, between the name and the tax scheme).
-        if (!string.IsNullOrWhiteSpace(country))
+        if (Has(street) || Has(city) || Has(postcode) || Has(country))
             party.Add(new XElement(cac + "PostalAddress",
-                new XElement(cac + "Country", new XElement(cbc + "IdentificationCode", country))));
+                Has(street) ? new XElement(cbc + "StreetName", street) : null,
+                Has(city) ? new XElement(cbc + "CityName", city) : null,
+                Has(postcode) ? new XElement(cbc + "PostalZone", postcode) : null,
+                Has(country) ? new XElement(cac + "Country", new XElement(cbc + "IdentificationCode", country)) : null));
 
         // BT-31 / BT-48 VAT identifier (PartyTaxScheme).
         if (!string.IsNullOrWhiteSpace(vatId))
@@ -261,6 +279,13 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
         if (!string.IsNullOrWhiteSpace(name))
             party.Add(new XElement(cac + "PartyLegalEntity",
                 new XElement(cbc + "RegistrationName", name)));
+
+        // Seller contact (BG-6), after PartyLegalEntity.
+        if (Has(contactName) || Has(contactPhone) || Has(contactEmail))
+            party.Add(new XElement(cac + "Contact",
+                Has(contactName) ? new XElement(cbc + "Name", contactName) : null,
+                Has(contactPhone) ? new XElement(cbc + "Telephone", contactPhone) : null,
+                Has(contactEmail) ? new XElement(cbc + "ElectronicMail", contactEmail) : null));
 
         return new XElement(cac + wrapperName, party);
     }
