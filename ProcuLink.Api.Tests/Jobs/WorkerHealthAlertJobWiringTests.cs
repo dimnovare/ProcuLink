@@ -51,8 +51,7 @@ public sealed class WorkerHealthAlertJobWiringTests
         await using var provider = BuildAlertingGraph(
             mail,
             health: new StubOpsHealth(new WorkerHealthSnapshot(
-                WorkerHealthy: false, ActiveWorkers: 0, SecondsSinceWorkerHeartbeat: 900,
-                DeadLetterOrders: 0, FailedDeliveryOrders: 0)));
+                WorkerHealthy: false, ActiveWorkers: 0, SecondsSinceWorkerHeartbeat: 900)));
 
         using var scope = provider.CreateScope();
         await scope.ServiceProvider.GetRequiredService<WorkerHealthAlertJob>().ExecuteAsync(default);
@@ -117,7 +116,7 @@ public sealed class WorkerHealthAlertJobWiringTests
         var mail = new RecordingEmailApiClient();
         await using var provider = BuildAlertingGraph(
             mail,
-            health: new StubOpsHealth(new WorkerHealthSnapshot(false, 0, 900, 0, 0)),
+            health: new StubOpsHealth(new WorkerHealthSnapshot(false, 0, 900)),
             alertEmailTo: null);
 
         using var scope = provider.CreateScope();
@@ -141,7 +140,7 @@ public sealed class WorkerHealthAlertJobWiringTests
     {
         await using var provider = BuildAlertingGraph(
             new RecordingEmailApiClient(),
-            health: new StubOpsHealth(new WorkerHealthSnapshot(false, 0, 900, 0, 0)),
+            health: new StubOpsHealth(new WorkerHealthSnapshot(false, 0, 900)),
             alertEmailTo: null);
 
         using var scope = provider.CreateScope();
@@ -158,7 +157,7 @@ public sealed class WorkerHealthAlertJobWiringTests
     {
         var mail = new RecordingEmailApiClient();
         await using var provider = BuildAlertingGraph(
-            mail, new StubOpsHealth(new WorkerHealthSnapshot(false, 0, 900, 0, 0)));
+            mail, new StubOpsHealth(new WorkerHealthSnapshot(false, 0, 900)));
 
         for (var i = 0; i < 3; i++)
         {
@@ -199,7 +198,6 @@ public sealed class WorkerHealthAlertJobWiringTests
 
     [Theory]
     [InlineData(typeof(IOperationalAlertProbe), typeof(OperationalAlertProbe))]
-    [InlineData(typeof(IRecurringJobLastExecutionSource), typeof(HangfireRecurringJobLastExecutionSource))]
     [InlineData(typeof(IWorkerHealthAlertService), typeof(WorkerHealthAlertService))]
     public void Worker_resolvesEachAlertingComponent_asTheProductionType(Type contract, Type expected)
     {
@@ -281,7 +279,7 @@ public sealed class WorkerHealthAlertJobWiringTests
 
     // ── Helpers ──────────────────────────────────────────────────────────────────
 
-    private static WorkerHealthSnapshot Healthy() => new(true, 2, 3, 0, 0);
+    private static WorkerHealthSnapshot Healthy() => new(true, 2, 3);
 
     /// <summary>
     /// Builds the graph through the PRODUCTION registration seam — the same one line
@@ -355,17 +353,8 @@ public sealed class WorkerHealthAlertJobWiringTests
         private readonly WorkerHealthSnapshot _snapshot;
         public StubOpsHealth(WorkerHealthSnapshot snapshot) => _snapshot = snapshot;
 
-        public TimeSpan StuckThreshold => TimeSpan.FromMinutes(30);
-
         public Task<WorkerHealthSnapshot> GetWorkerHealthSnapshotAsync(CancellationToken ct) =>
             Task.FromResult(_snapshot);
-
-        public Task<OpsHealthSummary> GetHealthAsync(Guid organisationId, CancellationToken ct) =>
-            throw new NotSupportedException("not used by the alert sweep");
-
-        public Task<IReadOnlyList<DeadLetterOrder>> ListDeadLetterAsync(
-            Guid organisationId, bool includeFailed, CancellationToken ct) =>
-            throw new NotSupportedException("not used by the alert sweep");
     }
 
     private sealed class StubAiUsageTracker : IAiUsageTracker

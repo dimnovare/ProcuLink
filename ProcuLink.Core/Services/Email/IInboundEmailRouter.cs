@@ -170,16 +170,3 @@ public sealed record InboundEmailResult(
     IReadOnlyList<Guid> CreatedOrderIds,
     string? Error,
     InboundEmailRejectionKind RejectionKind = InboundEmailRejectionKind.Unspecified);
-
-/// <summary>
-/// Decouples the router (which lives in <c>ProcuLink.Infrastructure</c>) from
-/// the Hangfire-bound <c>ParseOrderJob</c> (which lives in <c>ProcuLink.Api</c>).
-/// The Api project supplies the concrete adapter that calls
-/// <c>ParseOrderJob.Enqueue(IBackgroundJobClient, orderId, orgId)</c>; tests
-/// supply a recording fake.
-/// </summary>
-public interface IParseJobEnqueuer
-{
-    /// <summary>Enqueues a parse job for the given order stub.</summary>
-    Task EnqueueAsync(Guid orderId, Guid orgId, CancellationToken ct);
-}

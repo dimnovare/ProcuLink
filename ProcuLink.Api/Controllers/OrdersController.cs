@@ -2604,21 +2604,6 @@ public sealed class OrdersController : ControllerBase
         return Ok(MapToDto(result.Value!));
     }
 
-    // ── GET /api/orders/dead-letter-count ────────────────────────────────────
-
-    /// <summary>
-    /// Ops metric: count of orders in <c>delivery_dead_letter</c> state for this org.
-    /// </summary>
-    [HttpGet("dead-letter-count")]
-    [ProducesResponseType(typeof(DeadLetterCountResponse), StatusCodes.Status200OK)]
-    public async Task<IActionResult> GetDeadLetterCount(CancellationToken ct)
-    {
-        var orgId = _tenant.OrganisationId;
-        var count = await _db.PurchaseOrders
-            .CountAsync(o => o.OrgId == orgId && o.Status == OrderStatusConstants.DeliveryDeadLetter, ct);
-        return Ok(new DeadLetterCountResponse(count));
-    }
-
     // ── GET /api/orders/{id}/artifacts/{artifactId}/download ─────────────────
 
     /// <summary>

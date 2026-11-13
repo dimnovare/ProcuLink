@@ -83,7 +83,6 @@ public sealed class DeliverableArtifactSelectionIsRoutedTests
         "ProcuLink.Api.Services.ReplayService.ReprocessAsync",
         "ProcuLink.Core.Services.OutboundArtifactSelection.NewestDeliverable",
         "ProcuLink.Infrastructure.Services.DeliveryService.RetryDeliveryAsync",
-        "ProcuLink.Infrastructure.Services.StrandedReadyOrderDetectionService.RunAsync",
     ];
 
     /// <summary>
@@ -391,8 +390,8 @@ public sealed class DeliverableArtifactSelectionIsRoutedTests
     public void ADelegatedSelectionIsNotReportedBecauseItNoLongerSelects()
     {
         Fixture(nameof(OutboundArtifactSelectionFixtures.RoutedThroughNewestDeliverable)).Should().BeNull(
-            "handing the whole question to the rule leaves no ordering behind to judge. Three "
-            + "production sites are written this way — the ops requeue and both OrdersController "
+            "handing the whole question to the rule leaves no ordering behind to judge. Two "
+            + "production sites are written this way — both OrdersController "
             + "resend paths — which is why the anti-vacuity floor pins the sites that DO still order, "
             + "not a count of everything WP-35 touched.");
     }

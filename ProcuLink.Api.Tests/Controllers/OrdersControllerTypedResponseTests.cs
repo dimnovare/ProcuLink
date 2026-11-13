@@ -16,8 +16,8 @@ namespace ProcuLink.Api.Tests.Controllers;
 
 /// <summary>
 /// Behaviour-preserving coverage for the typed success records that replaced the inline
-/// <c>Ok(new { ... })</c> anonymous objects on three OrdersController endpoints
-/// (GET /status, POST /accept-ai-suggestions, GET /dead-letter-count). Each test asserts
+/// <c>Ok(new { ... })</c> anonymous objects on two OrdersController endpoints
+/// (GET /status, POST /accept-ai-suggestions). Each test asserts
 /// (a) the endpoint now returns the named record, and (b) that record serializes to the
 /// EXACT same camelCase JSON the frontend maps by property — proving zero wire change.
 /// </summary>
@@ -120,42 +120,5 @@ public class OrdersControllerTypedResponseTests
 
         var json = JsonSerializer.Serialize(dto, WireOptions);
         Assert.Equal("""{"accepted":3}""", json);
-    }
-
-    [Fact]
-    public async Task GetDeadLetterCount_ReturnsTypedRecord_SerializingToCountOnly()
-    {
-        var orgId = Guid.NewGuid();
-
-        await using var db = NewDb();
-        // Two dead-letter orders for this org → count must be 2.
-        for (var i = 0; i < 2; i++)
-        {
-            db.PurchaseOrders.Add(new PurchaseOrderEntity
-            {
-                Id            = Guid.NewGuid(),
-                OrgId         = orgId,
-                SupplierId    = Guid.NewGuid(),
-                PoNumber      = $"PO-DL-{i}",
-                OrderDate     = DateOnly.FromDateTime(DateTime.UtcNow),
-                Currency      = "EUR",
-                Status        = OrderStatusConstants.DeliveryDeadLetter,
-                SourceFileKey = $"{orgId}/dl-{i}/file.csv",
-                CreatedAt     = DateTime.UtcNow,
-                UpdatedAt     = DateTime.UtcNow,
-            });
-        }
-        await db.SaveChangesAsync();
-
-        var ctrl = Build(new Mock<IOrderService>(), orgId, db);
-
-        var result = await ctrl.GetDeadLetterCount(CancellationToken.None);
-
-        var ok  = Assert.IsType<OkObjectResult>(result);
-        var dto = Assert.IsType<DeadLetterCountResponse>(ok.Value);
-        Assert.Equal(2, dto.Count);
-
-        var json = JsonSerializer.Serialize(dto, WireOptions);
-        Assert.Equal("""{"count":2}""", json);
     }
 }

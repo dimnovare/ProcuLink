@@ -385,8 +385,7 @@ public sealed record WatchedRecurringJob(string Id, int CronMinutes, int Deadlin
 /// storage instead of from a log stream.</para>
 ///
 /// <para><b>MECHANISM — no new table, no new job.</b> Hangfire already records
-/// <c>LastExecution</c> per recurring job, which is the same reasoning that lets the SFTP/S3
-/// pull-freshness signal work without a column of its own
+/// <c>LastExecution</c> per recurring job
 /// (<c>HangfireRecurringJobLastExecutionSource</c>). The API shares the Worker's Postgres storage,
 /// so it can read the Worker's scheduler record directly.</para>
 ///

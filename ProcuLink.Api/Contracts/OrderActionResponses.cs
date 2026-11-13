@@ -20,9 +20,3 @@ public record OrderStatusResponse(string Status);
 /// Serializes to <c>{ "accepted": N }</c> — <c>Accepted</c> is the count of lines accepted.
 /// </summary>
 public record AcceptAiSuggestionsResponse(int Accepted);
-
-/// <summary>
-/// Ops metric for <c>GET /api/orders/dead-letter-count</c>.
-/// Serializes to <c>{ "count": N }</c> — number of orders in the delivery dead-letter state.
-/// </summary>
-public record DeadLetterCountResponse(int Count);

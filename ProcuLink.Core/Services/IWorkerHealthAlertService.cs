@@ -1,10 +1,10 @@
 namespace ProcuLink.Core.Services;
 
 /// <summary>
-/// Probes cross-tenant worker / dead-letter health (via <see cref="IOpsHealthService"/>) and
+/// Probes cross-tenant worker health (via <see cref="IOpsHealthService"/>) and
 /// raises an operator alert (via <see cref="IWorkerAlertSink"/>) when health is degraded:
-/// no worker has a recent heartbeat, OR the all-org dead-letter + failed-delivery backlog
-/// crosses the configured threshold.
+/// no worker has a recent heartbeat, delivery attempts fail above the configured rate, or an
+/// AI token cap is latched.
 /// <para>
 /// Anti-spam: alerts immediately on a healthy→bad transition, then at most once per the
 /// configured interval while it stays bad; recovering re-arms the transition alert. Runs as a

@@ -47,27 +47,6 @@ public class SampleExclusionIsDeclaredNotAssumedTests
     /// </summary>
     private static readonly Dictionary<string, (int Sites, string Why)> SampleInclusiveByDesign = new()
     {
-        ["ProcuLink.Api/Controllers/OrdersController.cs"] =
-            (1,
-             "GET /api/orders/dead-letter-count. Counts work NEEDING ATTENTION, not volume " +
-             "processed, so it is not one of the numbers that has to reconcile with the billing " +
-             "meter. A practice order that dead-lettered is a genuinely broken thing on the " +
-             "user's screen; excluding it would hide a real delivery failure."),
-
-        ["ProcuLink.Infrastructure/Services/OpsHealthService.cs"] =
-            (8,
-             "GET /api/ops/health (4 org-scoped: the status GROUP BY, parsing-stuck, " +
-             "delivering-stuck, SLA-breached) plus 4 deliberately CROSS-TENANT worker probes " +
-             "that are not org-scoped at all: dead-letter and delivery-failed, and — feeding " +
-             "the pipeline_failure_backlog alert — the pre-delivery failed and transform_failed " +
-             "backlogs. Same reasoning as dead-letter-count: these count problems, not " +
-             "throughput. A practice order that genuinely hit failed or transform_failed IS a " +
-             "real pipeline failure the founder should hear about, so the alert counts it on " +
-             "purpose. KNOWN CONSEQUENCE, recorded rather than hidden — a stuck or failed " +
-             "practice order does appear on operations health and does break the 'All clear' " +
-             "gate. That is arguably correct (the job really is stuck) but it has not been " +
-             "decided; it is not the P0-5 defect, which was a VOLUME count."),
-
         ["ProcuLink.Infrastructure/Services/BuyerService.cs"] =
             (1,
              "GET /api/buyers per-buyer orderCount. KNOWN GAP, not a justification. The practice " +
@@ -111,7 +90,9 @@ public class SampleExclusionIsDeclaredNotAssumedTests
     /// it and failed the per-file assertions too. If a future red build here cannot point at a
     /// specific collapsed query, the scan is broken — fix that, do not move these numbers.</para>
     /// </summary>
-    private const int MinimumAggregateSitesExpected = 19;
+    // 19 -> 12 on 2026-11-13: the order-ops cut deleted the stuck/stranded/SLA sweeps, OpsHealthService's
+    // order counts and the dead-letter count; those held the sites that disappeared.
+    private const int MinimumAggregateSitesExpected = 12;
 
     /// <summary>Companion floor: the convention must be visibly PRESENT, not merely unviolated.</summary>
     private const int MinimumSampleAwareSitesExpected = 8;

@@ -22,8 +22,7 @@ namespace ProcuLink.Api.Tests.Services;
 /// failure paths in <c>OrderTransformService</c> (broken template → <c>TransformTemplateException</c>,
 /// unusable mapping → <c>TransformValidationException</c>) reverted the order to <c>ready</c>, which is
 /// indistinguishable from "never transformed". Everything downstream keyed on the status was therefore
-/// structurally dead: <c>OpsHealthService.TransformFailed</c> could only ever count 0, so it contributed
-/// 0 to <c>TotalProblemOrders</c> and /operations/health rendered a green "All clear" while POs were
+/// structurally dead: the operations health count could only ever read 0 while POs were
 /// stranded; <c>OrderExceptionService</c> never emitted its <c>transform_failed</c> row; the
 /// <c>"TransformFailed"</c> audit action <c>OrdersController</c> reads for <c>errorMessage</c> was never
 /// written. A broken supplier template silently stranded EVERY order for that supplier, invisibly.</para>
@@ -208,29 +207,6 @@ public class TransformFailureVisibilityTests
         Assert.Equal("Transform", ex.Stage);
         Assert.Equal("error", ex.Severity);
         Assert.Equal("open", ex.State);
-    }
-
-    [Fact]
-    public async Task TransformAsync_BrokenTemplate_IsCountedByOpsHealth_AndBreaksAllClear()
-    {
-        // The headline consequence: the /operations/health tile read zero (and TotalProblemOrders
-        // summed a structural 0) while transforms failed → a green "All clear" over stranded POs.
-        await using var db = NewDb();
-        var (orgId, orderId) = await SeedResolvedOrderAsync(db);
-        await StoreBrokenTemplateAsync(db, orgId, orderId);
-
-        var before = await new OpsHealthService(db).GetHealthAsync(orgId, CancellationToken.None);
-        Assert.Equal(0, before.TransformFailed);
-        Assert.Equal(0, before.TotalProblemOrders); // all clear — correctly, nothing has failed yet
-
-        var result = await Build(db).TransformAsync(orgId, orderId, OutputFormat.Csv, CancellationToken.None);
-        Assert.False(result.IsSuccess);
-
-        var after = await new OpsHealthService(db).GetHealthAsync(orgId, CancellationToken.None);
-        Assert.Equal(1, after.TransformFailed);
-        // transform_failed is a GENUINE fault (unlike delivery_held, a deliberate self-releasing
-        // pause that is excluded on purpose), so it must raise the problem total that gates All-clear.
-        Assert.Equal(1, after.TotalProblemOrders);
     }
 
     // ── Recovery: a transform_failed order must never be STUCK ─────────────────

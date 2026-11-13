@@ -162,45 +162,6 @@ public sealed class AcceptanceGateBlocksDeliveryTests
         jobs.Verify(j => j.Create(It.IsAny<Job>(), It.IsAny<IState>()), Times.Once);
     }
 
-    // ── POST /api/ops/orders/{id}/requeue-delivery — the ops escalation ───────
-
-    /// <summary>
-    /// The ops requeue must be refused BEFORE it mutates anything: it supersedes the attempt cap and
-    /// rewrites the order's status in one SaveChanges. A refusal that arrived after that write would
-    /// leave the order's cap reset and its status rewritten for a send that never happens.
-    /// </summary>
-    [Fact]
-    public async Task OpsRequeue_ofAnOrderTheSupplierRefuses_isRejected_andChangesNothing()
-    {
-        await using var db = NewDb();
-        var seed = await SeedAsync(db, currency: "USD", status: OrderStatusConstants.DeliveryDeadLetter);
-        var (ctrl, jobs) = BuildOpsController(db, seed);
-
-        AssertRefused(await ctrl.RequeueDelivery(seed.OrderId, CancellationToken.None));
-
-        jobs.Verify(j => j.Create(It.IsAny<Job>(), It.IsAny<IState>()), Times.Never);
-
-        var status = await db.PurchaseOrders.AsNoTracking()
-            .Where(o => o.Id == seed.OrderId).Select(o => o.Status).FirstAsync();
-        Assert.Equal(OrderStatusConstants.DeliveryDeadLetter, status);
-
-        Assert.Empty(await db.AuditEvents.AsNoTracking()
-            .Where(a => a.EntityId == seed.OrderId && a.Action == "DeliveryRequeuedByOperator")
-            .ToListAsync());
-    }
-
-    [Fact]
-    public async Task OpsRequeue_whenTheOrderSatisfiesTheRule_isAccepted()
-    {
-        await using var db = NewDb();
-        var seed = await SeedAsync(db, currency: "EUR", status: OrderStatusConstants.DeliveryDeadLetter);
-        var (ctrl, jobs) = BuildOpsController(db, seed);
-
-        Assert.Equal(StatusCodes.Status202Accepted,
-            StatusOf(await ctrl.RequeueDelivery(seed.OrderId, CancellationToken.None)));
-        jobs.Verify(j => j.Create(It.IsAny<Job>(), It.IsAny<IState>()), Times.Once);
-    }
-
     // ── Harness ───────────────────────────────────────────────────────────────
 
     private sealed record Seeded(Guid OrgId, Guid OrderId, PurchaseOrderEntity Order);
@@ -264,29 +225,6 @@ public sealed class AcceptanceGateBlocksDeliveryTests
             new Mock<IFileStorageService>().Object,
             new Mock<ISourceTokenizer>().Object,
             Array.Empty<ITransformService>());
-
-        return (ctrl, jobs);
-    }
-
-    private static (OpsController Ctrl, Mock<IBackgroundJobClient> Jobs) BuildOpsController(
-        ProcuLinkDbContext db, Seeded seed)
-    {
-        var tenant = new Mock<ICurrentTenantService>();
-        tenant.SetupGet(t => t.OrganisationId).Returns(seed.OrgId);
-
-        var orders = new Mock<IOrderService>();
-        orders.Setup(o => o.GetByIdAsync(seed.OrgId, seed.OrderId, It.IsAny<CancellationToken>()))
-              .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(seed.Order));
-
-        var jobs = new Mock<IBackgroundJobClient>();
-
-        var ctrl = new OpsController(
-            new Mock<IOpsHealthService>().Object,
-            tenant.Object,
-            orders.Object,
-            jobs.Object,
-            db,
-            NullLogger<OpsController>.Instance);
 
         return (ctrl, jobs);
     }

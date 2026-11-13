@@ -595,17 +595,6 @@ public sealed class IngestDedupePostgresTests : IClassFixture<IngestDedupeFixtur
             => throw new NotImplementedException();
     }
 
-    private sealed class CountingEnqueuer : IParseJobEnqueuer
-    {
-        private int _count;
-        public int Count => Volatile.Read(ref _count);
-        public Task EnqueueAsync(Guid orderId, Guid orgId, CancellationToken ct)
-        {
-            Interlocked.Increment(ref _count);
-            return Task.CompletedTask;
-        }
-    }
-
     /// <summary>
     /// Runs <c>race</c> exactly once, immediately after the first SELECT that touches
     /// <c>table</c> — putting the winner's whole request inside the loser's window, identically

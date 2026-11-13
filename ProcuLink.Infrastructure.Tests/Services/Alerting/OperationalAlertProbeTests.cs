@@ -89,18 +89,6 @@ public class OperationalAlertProbeTests
             "the operator alert is a system probe, deliberately cross-tenant");
     }
 
-    // ── Pull channels ────────────────────────────────────────────────────────────
-
-    [Fact]
-    public async Task PullChannels_AreRetired_SoNoChannelCanReportStalled()
-    {
-        await using var db = NewDb();
-
-        var signals = await Probe(db).GetSignalsAsync(default);
-
-        signals.PullChannels.Should().BeEmpty();
-    }
-
     // ── AI token-cap latch ───────────────────────────────────────────────────────
 
     [Fact]

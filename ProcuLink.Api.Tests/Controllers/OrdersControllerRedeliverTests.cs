@@ -604,10 +604,6 @@ public class OrdersControllerMarkDeliveredTests
         var ex = await db.OrderExceptions.AsNoTracking().SingleAsync(e => e.OrderId == order.Id);
         ex.State.Should().Be("resolved",
             "the operator confirmed delivery — the park's warning is exactly what that confirmation resolves");
-
-        var health = await new OpsHealthService(db).GetHealthAsync(orgId, CancellationToken.None);
-        health.OpenExceptions.Should().Be(0,
-            "the operator did the one correct thing; the org must return to all-clear, not stay stuck open forever");
     }
 
     private static string? AuditPayloadActor(AuditEvent audit) =>

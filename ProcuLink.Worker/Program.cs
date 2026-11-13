@@ -274,7 +274,6 @@ builder.Services.AddScoped<IAcceptanceGate, AcceptanceGate>();
 // decision is actually made; AutoSendDryRunCannotSendTests.BothHosts_registerTheEvaluator pins both.
 builder.Services.AddScoped<IAutoSendDryRunEvaluator, AutoSendDryRunEvaluator>();
 builder.Services.AddScoped<IDeliveryService, DeliveryService>();
-builder.Services.AddScoped<IDeliverySlaService, DeliverySlaService>();
 
 // ── Wave 4 reliability/observability: worker-health alert sweep + retention ──
 // The recurring jobs are scheduled in Worker.cs; these are their DI deps.
@@ -387,37 +386,10 @@ else
 // second DI fix.
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, ProcuLink.Infrastructure.Services.Detection.FormatDetectorService>();
 
-// P0 reliability: stuck-order detection sweep + operator retry job.
-builder.Services.AddScoped<IStuckOrderDetectionService, StuckOrderDetectionService>();
-builder.Services.AddScoped<StuckOrderDetectionJob>();
-// Group O reliability: automatic delivery retry queue (scheduled here) + SLA breach sweep.
+// Group O reliability: automatic delivery retry queue (scheduled here).
 builder.Services.AddScoped<RetryDeliveryJob>();
-builder.Services.AddScoped<DeliverySlaSweepJob>();
-// Delivery-path hardening: recover orders stranded in 'delivering' (e.g. a Worker restart /
-// download throw / dispatcher hang between the status write and the terminal attempt persist).
-// The sweep re-drives them through RetryDeliveryJob via IRetryDeliveryEnqueuer up to a bounded
-// cap, then dead-letters — guaranteeing a delivering→terminal transition. The Hangfire adapter
-// needs only IBackgroundJobClient, which this Worker already provides.
 builder.Services.AddScoped<IRetryDeliveryEnqueuer, ProcuLink.Infrastructure.Jobs.HangfireRetryDeliveryEnqueuer>();
-builder.Services.AddScoped<IStuckDeliveryDetectionService, StuckDeliveryDetectionService>();
-builder.Services.AddScoped<StuckDeliveryDetectionJob>();
-// B1 lost-order backstop: recover orders stranded in 'ready_to_deliver' whose delivery enqueue was
-// lost between TransformOrderJob's commit and DeliverOrderJob.Enqueue (crash / DB blip). Re-drives
-// AUTO-deliver orders with no delivery attempt through the normal first-delivery job; idempotent
-// (DeliverOrderJob's atomic claim prevents any double-send). The dispatch adapter lives in
-// ProcuLink.Api alongside DeliverOrderJob and needs only IBackgroundJobClient, which this Worker
-// already provides.
 builder.Services.AddScoped<IDeliveryDispatchEnqueuer, ProcuLink.Api.Jobs.HangfireDeliveryDispatchEnqueuer>();
-builder.Services.AddScoped<IStrandedReadyOrderDetectionService, StrandedReadyOrderDetectionService>();
-builder.Services.AddScoped<StrandedReadyDeliveryDetectionJob>();
-// B5 silent-no-more-retries backstop: recover orders stranded in 'delivery_failed' with attempts
-// remaining whose automatic next-retry was lost between the failed-attempt write and the backoff
-// BackgroundJob.Schedule (crash / lost enqueue). Re-drives them through RetryDeliveryJob via the same
-// IRetryDeliveryEnqueuer the stuck-delivery sweep uses; idempotent (RetryDeliveryAsync's atomic claim
-// + attempt-cap prevent any double-send). The aged threshold is set well past the max retry backoff
-// so a legitimately-scheduled retry is never raced.
-builder.Services.AddScoped<IStrandedFailedDeliveryDetectionService, StrandedFailedDeliveryDetectionService>();
-builder.Services.AddScoped<StrandedFailedDeliveryDetectionJob>();
 builder.Services.AddScoped<BillingReconciliationJob>();
 // ParseOrderJob (executed here) records schema fingerprints — register the service it depends on.
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();

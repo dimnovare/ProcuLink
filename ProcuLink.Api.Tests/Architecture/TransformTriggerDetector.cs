@@ -48,7 +48,7 @@ internal static class TransformTriggerDetector
         typeof(IOrderService).Assembly,                                               // ProcuLink.Core
         typeof(ProcuLink.Infrastructure.ProcuLinkDbContext).Assembly,                 // ProcuLink.Infrastructure
         typeof(ProcuLink.Transform.Output.MappedTransformService).Assembly,           // ProcuLink.Transform
-        typeof(ProcuLink.Worker.Jobs.StrandedReadyDeliveryDetectionJob).Assembly,     // ProcuLink.Worker
+        typeof(ProcuLink.Worker.Jobs.WorkerHealthAlertJob).Assembly,                   // ProcuLink.Worker
     };
 
     /// <summary>Stable, readable identity for a type: "AssemblyName::Namespace.Type".</summary>

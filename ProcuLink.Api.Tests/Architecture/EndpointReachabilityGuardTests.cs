@@ -203,12 +203,6 @@ public sealed class EndpointReachabilityGuardTests
             + "\"available at GET /api/orders/{id}/ai-decisions\" — a sentence that promises a "
             + "surface no screen provides. Either the review screen shows the trail or both the "
             + "endpoint and the sentence go."),
-        new("GET /api/orders/{}/delivery-attempts",
-            "PENDING A DECISION, 2026-08-13 — per-order delivery attempts "
-            + "(ProcuLink.Api/Controllers/DeliveriesController.cs:33). The review screen renders "
-            + "delivery state from the order itself and the org-wide trail is GET /api/audit, which "
-            + "project-proculink/src/components/bridge/CrossingsLog.tsx reads, so this per-order "
-            + "view has no reader. Decide whether the order page grows an attempts panel."),
         new("POST /api/orders/{}/mark-rejected",
             "PENDING A DECISION, 2026-08-13 — marks an order rejected by the supplier. The review "
             + "screen RENDERS the resulting rejected_by_supplier status "
@@ -293,7 +287,6 @@ public sealed class EndpointReachabilityGuardTests
             "POST /api/inbound-email/postmark-bounce",
             "GET /api/order-confirmations/{}",
             "GET /api/orders/{}/ai-decisions",
-            "GET /api/orders/{}/delivery-attempts",
             "GET /api/orders/{}/status",
             "GET /health",
             "POST /api/admin/organisations/{}/account-status",
@@ -355,8 +348,8 @@ public sealed class EndpointReachabilityGuardTests
     // count of something the DETECTOR itself produced — not a count of files on disk. A prior
     // packet in this repo re-pointed a sweep at a project with no matches and its file-count floor
     // passed anyway; a file-count floor proves the directory exists, not that anything was found.
-    private const int MinimumEndpoints = 125;          // 131 today
-    private const int MinimumControllers = 30;         // 37 today
+    private const int MinimumEndpoints = 110;          // 125 today; 131 before the order-ops cut of 2026-11-13 removed six
+    private const int MinimumControllers = 24;         // 27 today; 30 before the order-ops cut of 2026-11-13 deleted three
     private const int MinimumCallerFiles = 300;        // 418 today
     private const long MinimumCallerBytes = 2_000_000; // 3.30 MB today
     private const int MinimumCallsExtracted = 100;     // 159 today

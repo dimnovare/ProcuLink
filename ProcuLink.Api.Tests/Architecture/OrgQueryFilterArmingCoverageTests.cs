@@ -70,8 +70,9 @@ public sealed class OrgQueryFilterArmingCoverageTests
     /// </summary>
     private const int MinimumCrossOrganisationEndpointsDetected = 4;
 
-    /// <summary>Corpus floor — 37 controllers today.</summary>
-    private const int MinimumControllersScanned = 30;
+    /// <summary>Corpus floor — 27 controllers today (30 floor lowered 2026-11-13: the order-ops cut deleted
+    /// OpsController, ExceptionsController and DeliveriesController).</summary>
+    private const int MinimumControllersScanned = 24;
 
     [Fact]
     public void EveryCrossOrganisationEndpoint_IsDeclaredWithAReason()

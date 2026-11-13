@@ -8,8 +8,7 @@ namespace ProcuLink.Api.Tests.Jobs;
 
 /// <summary>
 /// Guards the concurrency lock on the recurring cross-tenant sweep jobs. Two overlapping runs of
-/// the same sweep duplicate audit rows (StuckRequeued / DeliverySlaBreached) and lose the
-/// RequeueCount read-modify-write.
+/// the same sweep duplicate rows and lose a read-modify-write.
 ///
 /// <para>On OSS Hangfire, <see cref="DisableConcurrentExecutionAttribute"/> keys its distributed
 /// lock on the job TYPE + METHOD ONLY — never on the job's arguments (per-argument mutexing needs
@@ -36,11 +35,6 @@ namespace ProcuLink.Api.Tests.Jobs;
 public class SweepJobConcurrencyGuardTests
 {
     [Theory]
-    [InlineData(typeof(StuckOrderDetectionJob))]
-    [InlineData(typeof(DeliverySlaSweepJob))]
-    [InlineData(typeof(StuckDeliveryDetectionJob))]
-    [InlineData(typeof(StrandedFailedDeliveryDetectionJob))]
-    [InlineData(typeof(StrandedReadyDeliveryDetectionJob))]
     [InlineData(typeof(BillingReconciliationJob))]
     public void ExecuteAsync_HasDisableConcurrentExecution(Type jobType)
     {

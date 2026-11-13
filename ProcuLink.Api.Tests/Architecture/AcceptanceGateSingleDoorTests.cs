@@ -115,7 +115,7 @@ public sealed class AcceptanceGateSingleDoorTests
     /// <summary>
     /// The endpoints that dispatch an ALREADY-STORED artifact on a human's say-so must consult the
     /// gate: <c>OrdersController</c> (redeliver — the inbox bulk-send and a parked order's "Send
-    /// again" — and retry-delivery) and <c>OpsController</c> (the operator requeue escalation).
+    /// again" — and retry-delivery).
     ///
     /// <para>This is the assertion the corrected <see cref="KnownEnqueuers"/> justification owes:
     /// the reason it is now honest to say "the inbox bulk-send does not call /transform" is that the
@@ -127,21 +127,19 @@ public sealed class AcceptanceGateSingleDoorTests
         var consulting = TransformTriggerDetector.TypesThatConsultTheGate();
 
         Assert.Contains(typeof(OrdersController), consulting);
-        Assert.Contains(typeof(OpsController), consulting);
     }
 
     /// <summary>
     /// Only known types may enqueue a DELIVERY of a stored artifact bypassing AutoDeliver
-    /// (<c>DeliverOrderJob.EnqueueRedeliver</c>). Both of them are the manual-send endpoints above,
-    /// and both are gated — so a third one appearing is a new ungated send path, which is exactly
+    /// (<c>DeliverOrderJob.EnqueueRedeliver</c>). The only one is the manual-send endpoint above,
+    /// and it is gated — so a third one appearing is a new ungated send path, which is exactly
     /// the defect this work package was reopened for.
     /// </summary>
     [Fact]
     public void OnlyTheGatedEndpoints_canForceARedelivery()
     {
-        var forced = ForcedRedeliverCall.Matches(Text("ProcuLink.Api/Controllers/OrdersController.cs")).Count
-                   + ForcedRedeliverCall.Matches(Text("ProcuLink.Api/Controllers/OpsController.cs")).Count;
-        Assert.True(forced >= 2, "the two known forced-redelivery call sites are gone — did they move?");
+        var forced = ForcedRedeliverCall.Matches(Text("ProcuLink.Api/Controllers/OrdersController.cs")).Count;
+        Assert.True(forced >= 1, "the known forced-redelivery call site is gone — did it move?");
 
         var callers = Sources()
             .Where(f => ForcedRedeliverCall.IsMatch(f.Text))
@@ -154,7 +152,6 @@ public sealed class AcceptanceGateSingleDoorTests
         Assert.True(
             callers.SequenceEqual(new[]
             {
-                "ProcuLink.Api/Controllers/OpsController.cs",
                 "ProcuLink.Api/Controllers/OrdersController.cs",
             }, StringComparer.Ordinal),
             "The set of files that can force a delivery of a stored artifact changed; found: "

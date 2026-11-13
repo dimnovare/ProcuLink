@@ -23,7 +23,12 @@ public class RetiredRecurringJobsTests
         await worker.StopAsync(CancellationToken.None);
 
         ProcuLink.Worker.Worker.RetiredRecurringJobIds.Should().BeEquivalentTo(
-            new[] { "email-polling", "sftp-polling", "s3-polling", "catalog-sync" });
+            new[]
+            {
+                "email-polling", "sftp-polling", "s3-polling", "catalog-sync",
+                "stuck-order-detection", "delivery-sla-sweep", "stuck-delivery-detection",
+                "stranded-ready-delivery-detection", "stranded-failed-delivery-detection",
+            });
         jobs.Removed.Should().BeEquivalentTo(ProcuLink.Worker.Worker.RetiredRecurringJobIds);
         jobs.Added.Should().NotBeEmpty("StartAsync must really have registered something");
         jobs.Added.Intersect(ProcuLink.Worker.Worker.RetiredRecurringJobIds).Should().BeEmpty();

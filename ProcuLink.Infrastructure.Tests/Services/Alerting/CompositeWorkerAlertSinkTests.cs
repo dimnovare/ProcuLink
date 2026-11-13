@@ -32,7 +32,7 @@ public class CompositeWorkerAlertSinkTests
         var good = new RecordingSink();
         var composite = Composite(new ThrowingSink(), good);
 
-        var act = async () => await composite.AlertAsync(OperationalAlertKeys.DeadLetterBacklog, "backlog");
+        var act = async () => await composite.AlertAsync(OperationalAlertKeys.DeliveryFailureRate, "backlog");
 
         await act.Should().NotThrowAsync();
         good.Calls.Should().ContainSingle(
@@ -56,7 +56,7 @@ public class CompositeWorkerAlertSinkTests
     {
         var composite = Composite();
 
-        var act = async () => await composite.AlertAsync(OperationalAlertKeys.PullChannelStalled, "stale");
+        var act = async () => await composite.AlertAsync(OperationalAlertKeys.AiTokenCapLatched, "stale");
 
         await act.Should().NotThrowAsync();
     }
@@ -90,7 +90,7 @@ public class CompositeWorkerAlertSinkTests
     {
         var composite = Composite(new ThrowingSink(), new ThrowingSink());
 
-        var delivered = await composite.AlertAsync(OperationalAlertKeys.DeadLetterBacklog, "backlog");
+        var delivered = await composite.AlertAsync(OperationalAlertKeys.DeliveryFailureRate, "backlog");
 
         delivered.Should().BeFalse();
     }
@@ -98,7 +98,7 @@ public class CompositeWorkerAlertSinkTests
     [Fact]
     public async Task AlertAsync_NoSinksConfigured_ReportsNotDelivered()
     {
-        var delivered = await Composite().AlertAsync(OperationalAlertKeys.PullChannelStalled, "stale");
+        var delivered = await Composite().AlertAsync(OperationalAlertKeys.AiTokenCapLatched, "stale");
 
         delivered.Should().BeFalse("an empty composite reaches nobody");
     }

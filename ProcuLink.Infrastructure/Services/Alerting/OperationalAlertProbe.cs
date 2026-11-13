@@ -9,7 +9,7 @@ using ProcuLink.Core.Services.Alerting;
 namespace ProcuLink.Infrastructure.Services.Alerting;
 
 /// <summary>
-/// Reads the three alert signals no existing health surface computed. EF Core only, no raw SQL.
+/// Reads the alert signals no existing health surface computed. EF Core only, no raw SQL.
 /// <para>
 /// EVERY query here is deliberately CROSS-TENANT — deliberately NOT scoped by <c>org_id</c>. This is
 /// a system health probe for the single operator, exactly like
@@ -48,8 +48,6 @@ public sealed class OperationalAlertProbe : IOperationalAlertProbe
 
         return new OperationalAlertSignals(
             await ReadDeliveryFailureRateAsync(now, ct),
-            // The pull channels (IMAP / SFTP / S3 for orders) are retired; flow pickups are not watched here.
-            Array.Empty<PullChannelSignal>(),
             await ReadAiTokenLatchAsync(now, ct));
     }
 

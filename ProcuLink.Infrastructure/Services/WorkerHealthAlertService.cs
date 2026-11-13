@@ -48,7 +48,7 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
     /// </para>
     /// <para>
     /// The failure of one input costs only the conditions it feeds — a broken probe must not take
-    /// the heartbeat and backlog conditions with it, and a timed-out snapshot query must not take
+    /// the heartbeat condition with it, and a timed-out snapshot query must not take
     /// the probe's three with it.
     /// </para>
     /// </summary>
@@ -79,26 +79,22 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
         if (snapshot is { } snap)
         {
             conditions.Add(EvaluateWorkerHeartbeat(snap));
-            conditions.Add(EvaluateDeadLetterBacklog(snap));
-            conditions.Add(EvaluatePipelineFailureBacklog(snap));
         }
         else
         {
             blindSources.Add(
-                "the worker health snapshot query (worker heartbeat, dead-letter backlog, "
-              + "pipeline failure backlog)");
+                "the worker health snapshot query (worker heartbeat)");
         }
 
         if (signals is { } sig)
         {
             conditions.Add(EvaluateDeliveryFailureRate(sig.DeliveryFailureRate));
-            conditions.Add(EvaluatePullChannels(sig.PullChannels));
             conditions.Add(EvaluateAiTokenLatch(sig.AiTokenLatch));
         }
         else
         {
             blindSources.Add(
-                "the operational probe (delivery failure rate, pull-channel freshness, AI token cap)");
+                "the operational probe (delivery failure rate, AI token cap)");
         }
 
         conditions.Add(EvaluateSweepDegraded(blindSources));
@@ -153,10 +149,9 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
         if (!anyBad && snapshot is { } okSnap && signals is { } okSignals)
         {
             _logger.LogInformation(
-                "WorkerHealthAlert: healthy — workers={ActiveWorkers}, deadLetter+failed={DeadLetter}, "
-              + "pipelineFailed={PipelineFailed}, "
+                "WorkerHealthAlert: healthy — workers={ActiveWorkers}, "
               + "deliveryAttempts={Attempts}/failures={Failures}, latchedAiOrgs={Latched}.",
-                okSnap.ActiveWorkers, okSnap.DeadLetterOrFailed, okSnap.PipelineFailedOrders,
+                okSnap.ActiveWorkers,
                 okSignals.DeliveryFailureRate.Attempts, okSignals.DeliveryFailureRate.Failures,
                 okSignals.AiTokenLatch.LatchedOrgs);
         }
@@ -188,8 +183,8 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
         catch (Exception ex)
         {
             _logger.LogError(ex,
-                "WorkerHealthAlert: worker health snapshot query failed — worker heartbeat and "
-              + "dead-letter backlog are NOT evaluated this run.");
+                "WorkerHealthAlert: worker health snapshot query failed — worker heartbeat "
+              + "is NOT evaluated this run.");
             return null;
         }
     }
@@ -216,8 +211,8 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
         catch (Exception ex)
         {
             _logger.LogError(ex,
-                "WorkerHealthAlert: operational alert probe failed — delivery failure rate, "
-              + "pull-channel freshness and AI token-cap latch are NOT evaluated this run.");
+                "WorkerHealthAlert: operational alert probe failed — delivery failure rate "
+              + "and AI token-cap latch are NOT evaluated this run.");
             return null;
         }
     }
@@ -265,59 +260,6 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
           + "Background parse/transform/deliver jobs are not running; uploads will land and sit.");
     }
 
-    /// <summary>
-    /// Deliberately scored on an ALL-TIME count, unlike
-    /// <see cref="EvaluatePipelineFailureBacklog"/>. A dead-lettered or failed-delivery order is a
-    /// purchase order the supplier never received, and it stays that way until a human requeues it
-    /// — <c>OrderStatusMachine.RequeueableFrom</c> admits both statuses, so the count HAS a drain
-    /// and falls when the incident is actually handled. Ageing it out instead would mean the
-    /// operator stops being paged about a supplier that is still not receiving orders, which is the
-    /// opposite of the pipeline condition's problem.
-    /// </summary>
-    private (string, bool, string) EvaluateDeadLetterBacklog(WorkerHealthSnapshot snap)
-    {
-        var threshold = _options.EffectiveDeadLetterThreshold;
-        var isBad = snap.DeadLetterOrFailed >= threshold;
-
-        return (OperationalAlertKeys.DeadLetterBacklog, isBad,
-            $"ProcuLink delivery backlog: dead-letter+failed deliveries = {snap.DeadLetterOrFailed} "
-          + $"(threshold {threshold}) [deadLetter={snap.DeadLetterOrders}, failedDelivery={snap.FailedDeliveryOrders}]. "
-          + "Review and requeue from the operations health page.");
-    }
-
-    /// <summary>
-    /// Scored on a TRAILING WINDOW of recent failures, which is what gives this condition a drain.
-    /// <para>
-    /// The count used to be all-time, and <c>failed</c> is terminal with an empty transition set, so
-    /// the condition could never return to healthy once anything landed there. One pilot user's
-    /// abandoned unparseable upload therefore alerted on every cooldown expiry indefinitely.
-    /// <see cref="WorkerHealthAlertOptions.PipelineFailureWindowMinutes"/> carries the full
-    /// rationale; the threshold stayed at 1 because the bar was never the problem.
-    /// </para>
-    /// <para>
-    /// The window is read off the SNAPSHOT rather than off <c>_options</c>, so the sentence states
-    /// the window the counts were actually taken over instead of the one this process happens to be
-    /// configured with. A snapshot reporting <c>0</c> is one produced without a window at all —
-    /// the message says "all time" rather than inventing a number.
-    /// </para>
-    /// </summary>
-    private (string, bool, string) EvaluatePipelineFailureBacklog(WorkerHealthSnapshot snap)
-    {
-        var threshold = _options.EffectivePipelineFailureThreshold;
-        var isBad = snap.PipelineFailedOrders >= threshold;
-
-        var window = snap.PipelineFailureWindowMinutes > 0
-            ? $"in the last {snap.PipelineFailureWindowMinutes} min"
-            : "all time";
-
-        return (OperationalAlertKeys.PipelineFailureBacklog, isBad,
-            $"ProcuLink pipeline failure backlog: failed+transform_failed orders = {snap.PipelineFailedOrders} "
-          + $"{window} (threshold {threshold}) "
-          + $"[failed={snap.FailedOrders}, transformFailed={snap.TransformFailedOrders}]. "
-          + "These orders failed BEFORE the delivery step, so no delivery alert covers them — "
-          + "check parser and output-template errors in the Worker logs.");
-    }
-
     private (string, bool, string) EvaluateDeliveryFailureRate(DeliveryFailureRateSignal signal)
     {
         var minAttempts = _options.EffectiveDeliveryFailureMinAttempts;
@@ -335,31 +277,6 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
             $"ProcuLink delivery failure rate {pct}% over the last {signal.WindowMinutes} min "
           + $"({signal.Failures}/{signal.Attempts} concluded attempts failed; trips at {tripPercent}% "
           + $"with at least {minAttempts} attempts). Suppliers may be rejecting or unreachable.");
-    }
-
-    private (string, bool, string) EvaluatePullChannels(IReadOnlyList<PullChannelSignal> channels)
-    {
-        var staleMinutes = _options.EffectivePullChannelStaleMinutes;
-
-        // A channel nobody has switched on cannot be a live incident, and a channel that has never
-        // recorded a success has simply not run yet — paging on either would be a false alarm on
-        // every fresh setup.
-        var stale = channels
-            .Where(c => c.EnabledSources > 0
-                     && c.MinutesSinceLastSuccess is { } age
-                     && age >= staleMinutes)
-            .OrderByDescending(c => c.MinutesSinceLastSuccess)
-            .ToList();
-
-        var detail = stale.Count == 0
-            ? "none"
-            : string.Join(", ", stale.Select(c =>
-                $"{c.Channel} (last success {c.MinutesSinceLastSuccess!.Value:F0} min ago, "
-              + $"{c.EnabledSources} enabled source(s))"));
-
-        return (OperationalAlertKeys.PullChannelStalled, stale.Count > 0,
-            $"ProcuLink inbound pull channel stalled: {detail}. Threshold {staleMinutes} min. "
-          + "Purchase orders sent to that channel are not being picked up.");
     }
 
     private static (string, bool, string) EvaluateAiTokenLatch(AiTokenLatchSignal signal) =>

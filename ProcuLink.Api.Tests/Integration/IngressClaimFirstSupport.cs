@@ -106,16 +106,3 @@ internal sealed class NoOpFileStorage : IFileStorageService
     public Task<Stream> DownloadAsync(string key, CancellationToken ct) => Task.FromResult<Stream>(new MemoryStream());
     public Task DeleteAsync(string key, CancellationToken ct) => Task.CompletedTask;
 }
-
-/// <summary>Thread-safe counting <see cref="IParseJobEnqueuer"/> for the SFTP/S3 ingress tests.</summary>
-internal sealed class CountingParseEnqueuer : IParseJobEnqueuer
-{
-    private int _count;
-    public int Count => Volatile.Read(ref _count);
-
-    public Task EnqueueAsync(Guid orderId, Guid orgId, CancellationToken ct)
-    {
-        Interlocked.Increment(ref _count);
-        return Task.CompletedTask;
-    }
-}

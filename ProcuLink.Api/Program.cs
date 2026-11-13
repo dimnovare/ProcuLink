@@ -581,7 +581,6 @@ builder.Services.AddScoped<ProcuLink.Core.Services.Mapping.IOrderMappingOverride
 builder.Services.AddScoped<ProcuLink.Core.Services.Mapping.IPromoteMappingService,
                            ProcuLink.Infrastructure.Services.PromoteMappingService>();
 builder.Services.AddScoped<IOrderExceptionService, OrderExceptionService>();
-builder.Services.AddScoped<IOpsHealthService, OpsHealthService>();
 builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();
 // WP-17 — the server-side acceptance gate. Registered in BOTH hosts (see Worker/Program.cs): the
 // Worker is where TransformOrderJob actually runs, so a gate registered only here would be
@@ -758,7 +757,6 @@ builder.Services.AddScoped<IDeliveryService, DeliveryService>();
 // Hangfire adapter needs only IBackgroundJobClient, which the Api already provides. Also injected
 // into DeliveryService.
 builder.Services.AddScoped<IRetryDeliveryEnqueuer, ProcuLink.Infrastructure.Jobs.HangfireRetryDeliveryEnqueuer>();
-builder.Services.AddScoped<IDeliverySlaService, DeliverySlaService>();
 builder.Services.AddScoped<IErpConnector, ErplyConnector>();
 builder.Services.AddScoped<IErpConnector, DirectoConnector>();
 builder.Services.AddScoped<IDeliveryDispatcher, HttpDeliveryDispatcher>();
