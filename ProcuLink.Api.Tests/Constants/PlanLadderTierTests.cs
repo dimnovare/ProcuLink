@@ -20,18 +20,18 @@ namespace ProcuLink.Api.Tests.Constants;
 ///     expectations is derived from <c>GetMinimumPlan(feature)</c> itself, so it re-derives around
 ///     any new value. Its one absolute claim is the Pilot lower bound.
 ///   • <c>BillingFeatureEnforcementTests</c> asserts the named sites really refuse, and matches the
-///     403 against <c>^..._requires_{GetMinimumPlan(feature)}$</c> — again derived.
+///     403 exactly against <c>BillingGateErrors.RequiresPlan(capability, feature)</c> — again derived.
 ///
-/// Measured consequence: moving <c>[BillingFeature.CustomSupplierRules]</c> from Enterprise to
+/// Measured consequence (history: <c>CustomSupplierRules</c> was deleted in plan 13b, 2026-11-13):
+/// moving <c>[BillingFeature.CustomSupplierRules]</c> from Enterprise to
 /// Growth left the entire backend suite green, and the frontend's hand-typed mirror
 /// (<c>src/lib/gatedCapabilities.ts</c>) green with it. A capability sold at the top of the ladder
 /// could be given away in a one-word edit with nothing anywhere objecting.
 ///
-/// WHY EVERY FEATURE AND NOT JUST THAT ONE. Five of the ten had some absolute pin already, spread
-/// across three files and written incidentally: the four decoupled channels are held at Growth by
-/// <c>PlanFeatureGateTests</c>, and SSO at Enterprise by three separate suites. The other five —
-/// BulkMapping, Cxml, AdvancedAudit, ErpConnectors, CustomSupplierRules — were held by nothing
-/// beyond "not on Pilot". A price list defended in patches is a price list with holes in it, and
+/// WHY EVERY FEATURE AND NOT JUST THAT ONE. When there were ten, five had some absolute pin
+/// already, spread across three files and written incidentally (SSO at Enterprise by three separate
+/// suites, the four decoupled channels at Growth). The other five were held by nothing beyond
+/// "not on Pilot". Two features remain (plan 13b, 2026-11-13). A price list defended in patches is a price list with holes in it, and
 /// which rows happen to be covered is an accident of what someone was fixing at the time. So the
 /// whole table is pinned here, in one place, and <see cref="EveryFeature_IsPinned"/> makes it
 /// impossible to add a capability without stating what it costs.

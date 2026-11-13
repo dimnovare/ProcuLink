@@ -9,7 +9,7 @@ namespace ProcuLink.Api.Tests.Controllers;
 /// <summary>
 /// GUARD: the BuyerName / header read path is COLUMN-FIRST.
 ///
-/// The async parse path (<c>OrderIngestionService.ParseStoredFileAsync</c>) writes the
+/// The async parse path (deleted in plan 13b, 2026-11-13) wrote the
 /// TYPED COLUMNS (BuyerName, …) and DELIBERATELY never writes <c>canonical_json</c>;
 /// the typed columns are the single source of truth for an order's header. Only the
 /// SYNC ingress paths populate <c>canonical_json</c>, which readers must treat strictly

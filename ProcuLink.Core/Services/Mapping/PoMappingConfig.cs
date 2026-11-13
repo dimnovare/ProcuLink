@@ -10,52 +10,18 @@ public record PoMappingConfig
     public Dictionary<string, FieldMappingEntry> Lines { get; init; } = new();
 
     /// <summary>
-    /// Optional reusable OUTPUT mapping (canonical → output-field path) promoted from a per-order
-    /// <see cref="OrderMappingOverride.Output"/> so the supplier's preferred output layout persists
-    /// across re-uploads. Null (the default) means no supplier-level output override — the existing
-    /// fixed transformers stay in control, byte-for-byte identical to today.
-    ///
-    /// <para>
-    /// Additive + safe: this property serialises into the SAME <c>SupplierPoMapping.ConfigJson</c>
-    /// JSONB column (no new table, no EF migration). Older configs that predate it simply deserialise
-    /// it as null. It IS consumed by the transform path (launch batch 4A): when an order carries no
-    /// usable per-order template/output override, <c>OrderTransformService</c> (and the
-    /// mapping-override preview / replay current side) apply this promoted output mapping; the
-    /// per-order override always stays the higher-priority seam, and a malformed/unusable value
-    /// falls back to the fixed transformer.
-    /// </para>
+    /// Optional supplier-level OUTPUT mapping (canonical → output-field path). Serialises into the
+    /// SAME <c>SupplierPoMapping.ConfigJson</c> JSONB column; older configs deserialise it as null.
+    /// Still accepted on the wire, but nothing in production reads it: the per-order transform path
+    /// that applied it was deleted in plan 13b (2026-11-13).
     /// </summary>
     public OutputMappingConfig? Output { get; init; }
 
     /// <summary>
-    /// Optional reusable STRUCTURED output template (the OutputNode AST) promoted from a per-order
-    /// <see cref="OrderMappingOverride.OutputTree"/>, so a layout designed once in the visual output
-    /// designer persists across re-uploads instead of dying with the order it was drawn on. Null
-    /// (the default) means no supplier-level tree — the existing fixed transformers stay in control,
-    /// byte-for-byte identical to today.
-    ///
-    /// <para>
-    /// Additive + safe, exactly like <see cref="Output"/>: it serialises into the SAME
-    /// <c>SupplierPoMapping.ConfigJson</c> JSONB column (no new table, no EF migration), and older
-    /// configs that predate it simply deserialise it as null.
-    /// </para>
-    ///
-    /// <para>
-    /// Consumed by <c>OrderTransformService</c> in the supplier-promoted layer, which sits BELOW every
-    /// per-order seam and ABOVE the fixed transformer. Within that layer the tree outranks
-    /// <see cref="Output"/>, mirroring the per-order ladder. A malformed or unusable value falls back
-    /// to the fixed transformer with a logged warning — never a throw.
-    /// </para>
-    ///
-    /// <para>
-    /// TWO conditions decide whether a stored tree actually drives a document, and BOTH are asked of
-    /// the shared predicates so promote can never claim what delivery will not honour: the emitter must
-    /// render the tree's <see cref="OutputNodeTemplate.Format"/> at all
-    /// (<see cref="OutputTreeFormats.IsRenderable"/> — JSON/XML/CSV), AND that format must be the one
-    /// the connection delivers. A tree failing either is refused at promote, dropped at adoption, and
-    /// cleaned off this config by the next promote; <c>DELETE {id}/po-mapping/output-tree</c> removes
-    /// it outright.
-    /// </para>
+    /// Optional supplier-level STRUCTURED output template (the OutputNode AST). Serialises into the
+    /// SAME <c>SupplierPoMapping.ConfigJson</c> JSONB column; older configs deserialise it as null.
+    /// Still accepted on the wire, but nothing in production reads it: the promote / adopt path that
+    /// applied it was deleted in plan 13b (2026-11-13). Flow outputs carry their own template.
     /// </summary>
     public OutputNodeTemplate? OutputTree { get; init; }
 }
@@ -68,7 +34,7 @@ public record FieldMappingEntry
     public string? FixedValue { get; init; }
     public List<ManipulatorEntry> FieldManipulators { get; init; } = new();
 
-    /// <remarks>At runtime, at least one of <see cref="ExternalField"/> or <see cref="FixedValue"/> should be set; if both are null and no manipulators exist, the resolved field value will be null. <c>PoMappingEngine</c> enforces this at apply time.</remarks>
+    /// <remarks>At runtime, at least one of <see cref="ExternalField"/> or <see cref="FixedValue"/> should be set; if both are null and no manipulators exist, the resolved field value will be null.</remarks>
 }
 
 public record ManipulatorEntry

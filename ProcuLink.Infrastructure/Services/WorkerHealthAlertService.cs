@@ -49,7 +49,7 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
     /// <para>
     /// The failure of one input costs only the conditions it feeds — a broken probe must not take
     /// the heartbeat condition with it, and a timed-out snapshot query must not take
-    /// the probe's three with it.
+    /// the probe's two with it.
     /// </para>
     /// </summary>
     public async Task<bool> RunAsync(CancellationToken ct)

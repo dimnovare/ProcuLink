@@ -15,8 +15,7 @@ namespace ProcuLink.Api.Tests.Architecture;
 ///   <c>SentryRequest</c>; <c>ProcuLink.Worker/Program.cs</c> had <b>no BeforeSend at all</b>,
 ///   while being the host that fires customer webhooks. Two <c>Program.cs</c> files drifting is a
 ///   recurring defect class here, so the wiring is one shared call and this guard is parameterised
-///   over both hosts — the same shape as <c>AcceptanceGateSingleDoorTests.BothHosts_registerTheGate</c>
-///   and <c>PushIngressSeamRegistrationTests</c>.</description></item>
+///   over both hosts — the same shape as <c>StartupConfigurationValidatorTests.EveryHost_CallsTheStartupValidator</c>.</description></item>
 ///   <item><description><b>The callbacks are really attached, and really redact.</b> A source
 ///   guard alone would pass on a call that installs a no-op. These tests pull the delegates back
 ///   off the configured <see cref="SentryOptions"/> and run a realistic Slack webhook URL through

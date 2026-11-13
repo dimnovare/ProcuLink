@@ -4,9 +4,8 @@ namespace ProcuLink.Core.Services.Ingress;
 
 /// <summary>
 /// Constructs an <see cref="IAmazonS3"/> bound to per-organisation credentials.
-/// Introduced so <see cref="IS3IngressService"/> can authenticate against each
-/// org's bucket using the decrypted credentials stored on its
-/// <c>S3IngressConfig</c>, instead of a single shared platform client.
+/// Lets the S3 pickup source and the S3 delivery dispatcher authenticate against each
+/// org's bucket with its own decrypted credentials, instead of a single shared platform client.
 /// </summary>
 public interface IAmazonS3ClientFactory
 {

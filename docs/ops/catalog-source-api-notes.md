@@ -1,6 +1,8 @@
 # Catalog source API — quirks and the add-a-vendor recipe
 
-**Status:** durable. Lifted 2026-08-09 out of a live vendor-feed QA transcript that was deleted
+**Status:** historical. Plan 13b (2026-11-13) deleted the supplier catalog stack, the catalog-source
+endpoints and the `catalog-sync` recurring job; only the vendor-feed quirks below remain as reference.
+Lifted 2026-08-09 out of a live vendor-feed QA transcript that was deleted
 because it carried live operational data (vendor hostnames, resolved addresses, service banners,
 an account-keyed feed URL, production supplier record ids and confidential dealer pricing). This
 repository is public; nothing below names a counterparty or an endpoint.

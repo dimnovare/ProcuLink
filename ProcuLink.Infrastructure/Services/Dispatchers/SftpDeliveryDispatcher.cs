@@ -62,7 +62,7 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
     //
     // It does NOT mean the re-send completes. With overwriteExisting off it refuses, which would
     // walk the order into dead-letter while the supplier may already hold the document, so
-    // DeliveryService parks that combination for a human rather than re-driving it
+    // DeliverDocumentJob parks that combination for a human rather than re-driving it
     // (CannotRepairItsOwnFile). See OverwriteExistingFromConfig for the trade-off the off setting makes.
     public ResendSafety ResendSafety => ResendSafety.Safe;
 
@@ -276,7 +276,7 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
 
     /// <summary>
     /// Carries a first-use host-key observation out of the transport and onto the result, so
-    /// <c>DeliveryService</c> — which owns the config row and the transaction — can record it.
+    /// the caller — which owns the config row and the transaction — can record it.
     /// Null verifier (the test session seam) and nothing-new-to-learn both leave the result alone.
     /// </summary>
     private static DeliveryResult Stamp(DeliveryResult result, SshHostKeyVerifier? verifier) =>

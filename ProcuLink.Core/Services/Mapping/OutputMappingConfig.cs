@@ -16,7 +16,7 @@ public record OutputMappingConfig
 /// <summary>
 /// One output field's recipe: where the output column lands (<see cref="OutputPath"/>), the source
 /// value (a canonical field, a custom field, or a fixed literal), and an optional manipulator chain
-/// applied with EXACTLY the same semantics as <c>PoMappingEngine.ResolveField</c>.
+/// applied by <c>MappedTransformService.ResolveRule</c>.
 /// </summary>
 public record OutputFieldRule
 {
@@ -48,7 +48,7 @@ public record OutputFieldRule
     /// <see cref="FixedValue"/> only. Recognised canonical names mirror the fixed transformers
     /// (header: PoNumber/OrderDate/BuyerName/Currency/SupplierName; line:
     /// LineNumber/BuyerItemCode/SupplierItemCode/Description/Quantity/Unit/UnitPrice/LineTotal).
-    /// Any other name is resolved against the override's CustomFields by key.
+    /// Any other name is looked up in the value bag by key.
     /// </summary>
     public string? CanonicalField { get; init; }
 
@@ -61,7 +61,7 @@ public record OutputFieldRule
     /// <summary>
     /// Ordered manipulator chain applied to the resolved value. REUSES the existing
     /// <see cref="ManipulatorEntry"/> type (no duplication); each entry is resolved through
-    /// <c>ManipulatorRegistry</c> at transform time, identical to the per-supplier mapping engine.
+    /// <c>ManipulatorRegistry</c> at transform time.
     /// </summary>
     public List<ManipulatorEntry> FieldManipulators { get; init; } = new();
 }

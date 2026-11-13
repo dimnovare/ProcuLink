@@ -337,7 +337,7 @@ public static class StartupConfigurationValidator
     /// precise defect being fixed here. In particular <c>Delivery:EnableSmtp</c> does NOT satisfy
     /// this check even though it is also "email": <c>SmtpDeliveryDispatcher.Protocol</c> is
     /// <c>smtp</c> and <c>EmailApiDeliveryDispatcher.Protocol</c> is <c>email</c>, and
-    /// <c>DeliveryService</c> keys dispatchers by protocol — so enabling SMTP delivers nothing for
+    /// <c>DeliverDocumentJob</c> keys dispatchers by protocol — so enabling SMTP delivers nothing for
     /// a supplier saved on the offered <c>email</c> channel. Letting it pass this gate would
     /// rebuild the original bug with a different pair of keys.</para>
     ///

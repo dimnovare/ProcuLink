@@ -216,7 +216,7 @@ builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
 builder.Services.AddSingleton<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>();
 // Group O reliability: retry-queue backoff + SLA window tunables (section Delivery:Reliability).
-// Mirrors API/Program.cs. The Worker executes the scheduled RetryDeliveryJob and the SLA sweep.
+// Mirrors API/Program.cs. The Worker executes DeliverDocumentJob, which reads them.
 builder.Services.AddSingleton(sp =>
 {
     var opts = new DeliveryReliabilityOptions();
@@ -264,7 +264,7 @@ builder.Services.AddScoped<DisposableOrgSweepJob>();
 
 builder.Services.AddScoped<IErpConnector, ErplyConnector>();
 builder.Services.AddScoped<IErpConnector, DirectoConnector>();
-// Email API (Postmark over HTTPS) — the Worker runs TransformOrderJob → DeliveryService, so the
+// Email API (Postmark over HTTPS) — the Worker runs DeliverDocumentJob, so the
 // email delivery dispatcher resolves IEmailApiClient HERE too (DI foot-gun precedent 4607d6d).
 builder.Services.AddHttpClient(PostmarkEmailApiClient.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddScoped<IEmailApiClient, PostmarkEmailApiClient>();
@@ -317,7 +317,7 @@ builder.Services.AddHostedService<ProcuLink.Worker.OcrWarmupHostedService>();
 var host = builder.Build();
 
 // ── Analytics graceful flush on shutdown ─────────────────────────────────
-// Mirrors API/Program.cs lines 405-409 — drain queued PostHog events on
+// Mirrors API/Program.cs — drain queued PostHog events on
 // SIGTERM before the Hangfire server stops accepting work.
 host.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping.Register(() =>
 {

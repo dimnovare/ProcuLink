@@ -35,8 +35,7 @@ public class OrderValidationResult
     /// <see cref="StatusPass"/> | <see cref="StatusFail"/> | <see cref="StatusNotEvaluated"/>.
     /// <para>The third value is not a shade of pass. It means the rule DID NOT RUN because the input
     /// it judges was absent from the order — and it exists because reporting those as "pass" told a
-    /// customer a check had cleared when nothing had been examined. See
-    /// <c>SupplierAcceptanceService.RuleOutcome</c>.</para>
+    /// customer a check had cleared when nothing had been examined. </para>
     /// </summary>
     public string   Status     { get; set; } = StatusPass;
 
@@ -48,8 +47,8 @@ public class OrderValidationResult
 
     /// <summary>
     /// The rule COULD NOT RUN: the value it judges was not present on the order, so there was
-    /// nothing to check. Never blocks — <c>GetBlockingFailuresAsync</c> only collects
-    /// <see cref="StatusFail"/> — but it must never be reported as a pass either.
+    /// nothing to check. Never blocks — only <see cref="StatusFail"/>
+    /// blocks — but it must never be reported as a pass either.
     /// </summary>
     public const string StatusNotEvaluated = "not_evaluated";
     public string   Code       { get; set; } = string.Empty;

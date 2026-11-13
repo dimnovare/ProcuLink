@@ -48,44 +48,14 @@ public static class OrderStatusConstants
     public const string Failed = "failed";
 
     /// <summary>
-    /// Routing hold state: the source file was extracted but no supplier could be determined,
-    /// so the order is parked awaiting a human (or content-matcher) to assign one. NOT a failure —
-    /// a user-action backlog, resolvable by assigning a supplier, which re-enters the parse flow.
+    /// Routing hold state: the source file was extracted but no supplier could be determined, so the
+    /// order was parked awaiting a human to assign one. NOT a failure.
     /// <para>
-    /// REACHABLE IN PRODUCTION TODAY — do not treat this as a future state. The single writer is
-    /// <c>OrderIngestionService.cs</c> (<c>if (entity.SupplierId is null) newStatus = Unrouted</c>) on
-    /// the main parse path, fed by four ingress channels when an org has no valid default supplier
-    /// (unset, or soft-deleted after ingress was enabled): the three pull channels
-    /// <c>SftpIngressService</c>, <c>S3IngressService</c> and <c>EmailPollOrgJob</c>, plus the
-    /// PUSH channel <c>InboundEmailRouter</c> (the Postmark inbound webhook — added 2026-07-24;
-    /// it previously answered 422 and dropped the mail). Each imports such files via
-    /// <c>IOrderService.CreateUnroutedStubAsync</c> rather than dropping them.
-    /// <para>
-    /// Reachability caveat, now closed — cite this before trusting the paragraph above for a
-    /// date before 2026-07-26. Between 2026-07-24 and 2026-07-26 <c>InboundEmailRouter</c> was
-    /// listed as a producer but could not actually reach this status on any org owning at least
-    /// one supplier: its resolver fell back to the org's OLDEST ACTIVE SUPPLIER, so instead of
-    /// parking, mail was attributed to a counterparty nobody chose. Measured on production
-    /// (finding F1 of <c>docs/qa/2026-07-fable5-push/2026-07-25-routing-matrix-live-proof.md</c>).
-    /// Upload and REST ingress both reject a supplier-less request outright and the pull channels
-    /// were not configured on production, so email was the only push route to this status — and it
-    /// guessed. The sole exception was an org owning NO supplier at all, where the fallback found
-    /// nothing to pick; production had three such orgs, none of which had ever ingested an order.
-    /// The fallback has been deleted, so the four-producer list above is true for the push channel
-    /// as well as the pull ones.
-    /// </para>
-    /// Corroborating live
-    /// consumers: <c>OrdersController</c>'s assign-supplier endpoint is gated on this status,
-    /// <c>OpsHealthService</c> reports it as <c>PendingRouting</c>, and <c>OrderExceptionService</c>
-    /// opens an <c>unrouted_order</c> exception for it with precedence over unresolved lines.
-    /// </para>
-    /// <para>
-    /// This doc previously read "No order reaches this state until the content-routing ingest paths
-    /// are wired (Phase 1)". That was true when written and became false when Phase 1b shipped, and
-    /// nothing failed — a frontend author then trusted it and shipped a status map that renders a
-    /// parked, awaiting-assignment order as brand-new "New" at stage 0, hiding the one order in the
-    /// inbox that needs a human. If you change who writes this status, change this paragraph: it is
-    /// read as a reachability contract by code in the other repo.
+    /// ARCHIVE-ONLY since 2026-11-13: plan 13b deleted the order ingest path, so nothing writes this
+    /// status any more and no endpoint resolves it. Rows written earlier remain readable, and
+    /// <c>OrderExceptionService</c> still opens an <c>unrouted_order</c> exception for one, with
+    /// precedence over unresolved lines. Frontend code reads this as a status contract: if you change
+    /// who writes it, change this paragraph.
     /// </para>
     /// </summary>
     public const string Unrouted = "unrouted";

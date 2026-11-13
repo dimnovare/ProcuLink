@@ -22,10 +22,6 @@ namespace ProcuLink.Infrastructure.Tests;
 ///      If anyone re-adds <c>b.Ignore(...)</c>, FindProperty returns null and this fails.
 ///   2. A value assigned before SaveChanges survives a reload from a FRESH context — proving it is
 ///      persisted, not discarded. Under EF-Ignore the reloaded value would be null (the exact prod bug).
-///
-/// The full ingest → ExecuteUpdateAsync → reload → transform round-trip (which the InMemory provider
-/// cannot translate) is covered against real Postgres in
-/// <c>ProcuLink.Api.Tests/Integration/EndToEndPipelineTests.ParseStoredFileAsync_Idoc_PersistsHeaderRequestedDeliveryDate</c>.
 /// </summary>
 public class PurchaseOrderRequestedDeliveryDateMappingTests
 {

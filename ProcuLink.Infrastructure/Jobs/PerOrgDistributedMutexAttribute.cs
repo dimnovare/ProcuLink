@@ -15,7 +15,7 @@ namespace ProcuLink.Infrastructure.Jobs;
 /// tenant endpoint blocks every other tenant for up to the lock timeout. Per-argument mutexing
 /// otherwise needs the paid <c>Hangfire.Pro</c> <c>[Mutex]</c>. This filter delivers the per-org
 /// mutex on the OSS <c>Hangfire.PostgreSql</c> storage already in use — the same mechanism
-/// <see cref="PerOrderDistributedMutexAttribute"/> uses for the per-order case.
+/// the per-order mutex used before plan 13b deleted it.
 /// </para>
 ///
 /// <para>

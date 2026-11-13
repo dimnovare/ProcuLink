@@ -11,7 +11,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Expose internal helpers (ScribanOrderModel, the shared sandbox builder) to the unit tests
+    <!-- Expose internal helpers (e.g. the shared sandbox builder) to the unit tests
          without widening the public API surface. -->
     <InternalsVisibleTo Include="ProcuLink.Transform.Tests" />
   </ItemGroup>

@@ -21,9 +21,7 @@ public static class MappedTransformService
     ///   <item><b>FixedValue</b>.</item>
     ///   <item><b>CanonicalField</b> looked up in <paramref name="row"/>.</item>
     /// </list>
-    /// The chosen value is then run through the manipulator chain — identical order and semantics to
-    /// <c>PoMappingEngine.ResolveField</c>. The expression layer is purely additive: with no
-    /// <c>Expression</c> set, behaviour is byte-for-byte identical to before.
+    /// The chosen value is then run through the manipulator chain.
     /// </summary>
     internal static string? ResolveRule(
         OutputFieldRule rule, IReadOnlyDictionary<string, string> row, bool lineScope)
@@ -83,7 +81,7 @@ public static class MappedTransformService
     /// CSV field escaping for an authored dialect (WP-15) — the ONE CSV cell escaper; the fixed
     /// CSV reaches it through <see cref="CsvTransformService.Escape"/>.
     ///
-    /// <para><c>Escape(v, ",", quoteAlways: false)</c> is the one-arg overload, which delegates here
+    /// <para><see cref="CsvTransformService.Escape(string)"/> is the one-arg overload, which delegates here
     /// rather than the two drifting apart.</para>
     ///
     /// <para>The delimiter is a STRING, not a char: a dialect may legitimately be a tab or a

@@ -4,7 +4,7 @@ namespace ProcuLink.Infrastructure.Services.Ingress;
 
 /// <summary>
 /// Abstraction over SFTP connectivity, introduced to allow unit-testing
-/// <see cref="SftpIngressService"/> without a live SSH connection.
+/// <c>SftpPickupSource</c> without a live SSH connection.
 /// The production implementation uses <c>Renci.SshNet.SftpClient</c>.
 /// </summary>
 public interface ISftpClientFactory

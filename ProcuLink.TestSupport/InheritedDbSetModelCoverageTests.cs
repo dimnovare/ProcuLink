@@ -108,7 +108,9 @@ public class InheritedDbSetModelCoverageTests
         // shared number was right for one of them and let most of the other's population vanish.
         // Api.Tests went 10 -> 6 -> 4 on 2026-11-13 (plan 13b deleted the order endpoints and then
         // OrderTransformService, with the tests that held those subclasses). Infrastructure.Tests
-        // holds 7 (2026-11-13, plan 13b Task 9). Floor = today's count minus one.
+        // went 17 -> 16 (5de7c286, Task 6b) -> 10 (5db07ca1, Task 7a) -> 8 (58b7dd23, Task 7b) -> 7
+        // (ad26d483, Task 7b pass 2) as test files whose subjects were deleted took their context
+        // subclasses with them; the shared floor could not see it. Floor = today's count minus one.
         var assembly = ThisTestAssembly.GetName().Name!;
         KnownContextCount.Should().ContainKey(assembly,
             "every assembly that compiles this guard must state its own population");

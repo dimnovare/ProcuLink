@@ -103,7 +103,7 @@ public sealed class EmailApiDeliveryDispatcher : IDeliveryDispatcher
         // A3 idempotency: a deterministic Message-ID (stable across a re-send of the same artifact)
         // lets a receiving MTA de-duplicate. Best-effort only — MTA dedup on a caller-supplied
         // Message-ID is rarely applied, which is why this dispatcher declares ResendSafety.Unsafe
-        // and DeliveryService parks an unknown-outcome re-drive rather than risking a duplicate email.
+        // and DeliverDocumentJob parks an unknown-outcome re-drive rather than risking a duplicate email.
         var headers = string.IsNullOrWhiteSpace(idempotencyKey)
             ? null
             : new[] { new EmailApiHeader("Message-ID", $"<{idempotencyKey}@proculink.eu>") };

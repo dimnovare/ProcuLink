@@ -24,7 +24,7 @@ default no Slack message. **The alert is exactly as good as this repo's GitHub A
 notification settings**, which are account-level and are not stored in the repo, so this
 document cannot tell you whether they are currently on. Verify them (§4) — do not assume.
 
-There is a **second, independent** alert path — a recurring Hangfire job that evaluates **six
+There is a **second, independent** alert path — a recurring Hangfire job that evaluates **three
 health conditions plus one meta-condition** and reports to Sentry **and to an email address you
 choose** (§3). It has its own blind spot, described there. The two paths are complementary, not
 redundant, and neither is a pager.
@@ -58,8 +58,6 @@ Fails on:
 - curl failure / timeout (25 s) → `::error title=API unreachable::`
 - any status other than 200 → `::error title=API readiness not 200::`
 - a 200 body whose `.workerHealthy` is not `true` → `::error title=Worker unhealthy::`
-- a 200 body whose `.revisionAuthority` is not `true` → `::error title=Revision authority is OFF::`
-  (WP-21 — see [`revision-authority-production-smoke.md`](../ops/revision-authority-production-smoke.md))
 - a 200 body whose `.status` is not `Healthy` → `Unhealthy` fails outright (belt-and-braces — it
   also 503s); `Degraded` emits a `::warning::` naming the degraded `checks[]` **and still fails
   the run**, because e.g. a storage (R2) failure is Degraded-with-HTTP-200 by design and a red
@@ -67,7 +65,7 @@ Fails on:
 
 That third condition is the point of the whole workflow. `/health/ready` runs the
 `ready`-tagged health checks (database, storage, migration flag, Worker heartbeat,
-recurring-job dispatcher liveness, and the revision-authority flag's effective value) and maps
+recurring-job dispatcher liveness) and maps
 **Healthy *and* Degraded → HTTP 200**, Unhealthy → 503. A dead Worker is deliberately
 **Degraded, not Unhealthy** — see `WorkerHeartbeatHealthCheck` in
 `ProcuLink.Api/Controllers/HealthController.cs`: a Worker outage must not evict the API from
@@ -91,10 +89,9 @@ is registered at all**, or when the newest heartbeat is **older than 60 s**
 deadline is kept in lock-step with `OpsHealthService.WorkerHeartbeatDeadline` so the health
 endpoint and the in-app ops screens never disagree.
 
-**Absent reads as false.** All three flattened booleans (`workerHealthy`, `recurringJobsHealthy`,
-`revisionAuthority`) render `false` when their check entry is missing from `checks[]`.
+**Absent reads as false.** Both flattened booleans (`workerHealthy`, `recurringJobsHealthy`) render `false` when their check entry is missing from `checks[]`.
 `workerHealthy` used to do the opposite — a missing `worker` entry rendered `true` — so "the
-Worker monitor was dropped from the registration" produced a green probe. To tell "flag off" from
+Worker monitor was dropped from the registration" produced a green probe. To tell "unhealthy" from
 "check missing", look for the entry in `checks[]`.
 
 ### `recurringJobsHealthy` — what the heartbeat cannot tell you
@@ -110,7 +107,7 @@ and uploads land and sit.
 closed it **only for a human** — its own remarks say ops greps the Railway logs for the string.
 `RecurringJobDispatcherHealthCheck` is that same evidence read automatically: it reads Hangfire's
 own `LastExecution` record for the watched jobs out of the shared Postgres storage (no new table,
-no new job — the same trick the SFTP/S3 pull-freshness signal uses).
+no new job).
 
 | Watched job | Cadence | Stale at |
 |---|---|---|
@@ -178,7 +175,7 @@ production until someone redeploys it.
 ## 3. The second alert path: `WorkerHealthAlertJob` → Sentry + email
 
 Independent of GitHub Actions, the Worker runs `worker-health-alert` **every 5 minutes**
-(`ProcuLink.Worker/Worker.cs`). It calls `WorkerHealthAlertService`, which evaluates six health
+(`ProcuLink.Worker/Worker.cs`). It calls `WorkerHealthAlertService`, which evaluates three health
 conditions and one meta-condition. Each has its own trip rule and its own independent 30-minute
 cooldown (`WorkerHealthAlertOptions.MinAlertIntervalMinutes`), so a long-running incident on one
 condition can never swallow the first notification of another.
@@ -186,43 +183,16 @@ condition can never swallow the first notification of another.
 | Alert key | Fires when | Triage | Tunable |
 |---|---|---|---|
 | `worker_heartbeat_lost` | no Hangfire server has beaten within 60 s (same rule as `/health/ready`) | Railway Worker service — is the process up? | — |
-| `dead_letter_backlog` | all-org `delivery_dead_letter` + `delivery_failed` orders ≥ **1**, **all time** (lowered from 25 on 2026-08-25: a Pilot org is capped at 20 orders total, so 25 could never fire during a pilot; one dead-lettered order already encodes three concluded failures over ~90 min of backoff) | Operations health page → review and requeue | `DeadLetterThreshold` |
-| `pipeline_failure_backlog` | all-org `failed` + `transform_failed` orders ≥ **1** **whose `UpdatedAt` is inside the last 24 h** | Worker logs — parser and output-template errors. These orders failed BEFORE the delivery step, so no delivery alert covers them | `PipelineFailureThreshold`, `PipelineFailureWindowMinutes` |
 | `delivery_failure_rate` | ≥ **10** concluded delivery attempts in the last **60 min** and ≥ **50 %** of them failed | Supplier endpoints — rejecting or unreachable | `DeliveryFailureMinAttempts`, `DeliveryFailureWindowMinutes`, `DeliveryFailurePercent` |
-| `pull_channel_stalled` | an inbound pull channel with ≥ 1 org enabled has no observed success for ≥ **60 min** | IMAP / SFTP / S3 credentials and the polling jobs | `PullChannelStaleMinutes` |
 | `ai_token_cap_latched` | ≥ 1 org **in good standing** is at/over its monthly OpenAI token budget | Raise the limit or wait for the month to roll over | — |
 | `alert_sweep_degraded` | the sweep could not read one of its own inputs, so the conditions that input feeds were **not evaluated** | See below — treat as MORE urgent than a health alert | — |
 
-`pipeline_failure_backlog` was missing from this table until 2026-08-25, which is how the row most
-likely to fire ended up being the one nobody had documented.
+Plan 13b (2026-11-13) removed three conditions with the order pipeline: `dead_letter_backlog`,
+`pipeline_failure_backlog` and `pull_channel_stalled` (their order rows and polling jobs no longer
+exist), along with their `WorkerHealthAlertOptions` tunables.
 
 All tunables live under the `WorkerHealthAlert` configuration section. None of them appears in
 any `appsettings.json` — the defaults above are what runs.
-
-### Why one condition is windowed and its neighbour is not
-
-`pipeline_failure_backlog` counts only the **last 24 hours** (`PipelineFailureWindowMinutes`,
-measured on each order's `UpdatedAt`). `dead_letter_backlog` counts **all time**. The two look
-alike and are not, and the difference is in the status machine rather than in the alert:
-
-- `failed` is **declared terminal** — `OrderStatusMachine.Transitions[Failed]` is the empty set,
-  so nothing can ever move an order out of it. An all-time count of it can only go up. Paired
-  with a threshold of 1, one pilot user who uploaded a single unparseable file and walked away
-  pinned the condition bad **permanently**: it could never transition back to healthy, so it
-  re-alerted on every cooldown expiry — roughly 48 emails a day, forever, about one abandoned
-  file. The window is the drain the condition never had; 24 h after the last failure it clears
-  itself and re-arms for the next real one. **The threshold stayed at 1** — the bar was never the
-  problem.
-- `delivery_dead_letter` and `delivery_failed` both appear in `OrderStatusMachine.RequeueableFrom`,
-  so the operations health page's requeue action moves an order out of that count: the number
-  falls when the incident is actually handled. And an undelivered purchase order is a *standing*
-  incident in a way an abandoned unparseable upload is not — ageing it out would mean the operator
-  stops being paged about a supplier that is still not receiving orders. So it stays all-time,
-  deliberately.
-
-**What the window costs:** an operator who ignores a real parser outage for 24 h stops being
-paged about it. The orders are still counted on the org-scoped operations health page, which is
-the surface meant to hold a standing backlog.
 
 ### `alert_sweep_degraded` — the alarm reporting on itself
 
@@ -233,8 +203,8 @@ sweep was partially blind is raised as `alert_sweep_degraded` through the same s
 cooldown as any other alert. The all-clear log line is suppressed for that run.
 
 This exists because the previous behaviour was the opposite on both counts. A failing probe
-degraded to an all-clear value — zero attempts, no channels, no latched orgs — which evaluates as
-*not bad* on all three conditions it feeds, and the same run logged `healthy`. A failing snapshot
+degraded to an all-clear value — zero attempts, no latched orgs — which evaluates as
+*not bad* on the conditions it feeds, and the same run logged `healthy`. A failing snapshot
 read was not guarded at all and, with `[AutomaticRetry(Attempts = 0)]` on the job, took every
 condition down for that cycle in silence. A permanently broken query was therefore indistinguishable
 from a permanently healthy system.
@@ -247,20 +217,10 @@ not page.
 
 ### Where each condition's evidence comes from
 
-- **Heartbeat and dead-letter** — `OpsHealthService.GetWorkerHealthSnapshotAsync`, unchanged.
+- **Heartbeat** — `OpsHealthService.GetWorkerHealthSnapshotAsync`, unchanged.
 - **Delivery failure rate** — `delivery_attempts` rows in the trailing window, all orgs.
   `dispatching` (still in flight) and `unconfirmed` (outcome lost to a crash) are **excluded**,
   so a send that has not resolved is never counted as a failure.
-- **Pull channels** — the condition is **channel-level, not per-org**, on purpose. For IMAP the
-  evidence is `EmailPollingConfig.LastPolledAt` (a real success stamp written by
-  `EmailPollOrgJob` after a clean disconnect), taken as the **newest across all enabled orgs** —
-  so it answers "is anyone still successfully polling this channel", and one org with broken
-  credentials among several healthy ones will **not** trip it. **SFTP and S3 persist no
-  last-success timestamp at all**, so their signal is the `sftp-polling` / `s3-polling` recurring
-  dispatcher's own last execution from Hangfire storage. That proves the channel is still being
-  polled; it does **not** prove any org's SFTP/S3 credentials still work. Closing the per-org gap
-  needs a schema change (a `last_successful_poll_at` column on the ingress configs) and is not
-  done here.
 - **AI token cap** — the verdict is `IAiUsageTracker.IsAtOrOverLimitAsync`, i.e. the exact
   predicate production checks before every OpenAI call, so the `Ai:OpenAI:MonthlyTokenLimitPerOrg`
   override and the delinquency clamp are honoured automatically.
@@ -272,9 +232,6 @@ reads it to ignore all of them.
 
 - A **high failure rate on a tiny sample** does not trip — 1 failure of 1 attempt is 100 % and
   means nothing. Ten concluded attempts is the floor.
-- A pull channel **nobody has switched on** never trips, however stale it looks.
-- A pull channel that has **never** recorded a success never trips — a channel configured
-  minutes ago has simply not polled yet.
 - **Delinquent orgs** (`read_only` / `cancelled` / `trial_expired` / `past_due`) are excluded
   from the AI-latch count: their budget is clamped on purpose by the billing rules, so counting
   them would be a permanent page nobody can action.
@@ -381,8 +338,7 @@ ProcuLink at all.
    cover the second, which is why `uptime.yml` probes from outside and why the live-send test
    above exists.
 2. **The job runs *on* the Worker.** If the Worker is dead, the job that would report the
-   Worker dead is also dead. This path detects a *backlog spike*, a *failure-rate spike*, a
-   *stalled channel* and a *latched cap* well, and a *hung* Worker sometimes; it cannot detect a
+   Worker dead is also dead. This path detects a *failure-rate spike* and a *latched cap* well, and a *hung* Worker sometimes; it cannot detect a
    *stopped* one. That asymmetry is precisely why `uptime.yml` probes from outside — and, since
    2026-08-25, why `/health/ready`'s `recurringJobs` check watches `worker-health-alert`'s own
    last execution (§1). A sweep that has stopped running now shows up on an endpoint that is not
@@ -489,14 +445,11 @@ land and then sit. The API is *fine*, which is why this is easy to miss.
    API readiness check would normally be failing too, so check *which* alert fired.
 5. **Recovery:** restart the Worker service in Railway. Enqueued jobs resume — Hangfire jobs
    in this codebase are required to be idempotent, and delivery is at-least-once with a claim
-   guard, so a restart does not double-send. Once it is beating, watch the backlog drain in
-   `/api/ops/health` (below) rather than declaring victory off a green probe.
+   guard, so a restart does not double-send. Once it is beating, watch the delivery log
+   drain rather than declaring victory off a green probe.
 
-**Operator surface:** `GET /api/ops/health` (authenticated, org-scoped) returns the
-problem-state counts an operator actually wants — `parsingStuck`, `deliveringStuck`,
-`transformFailed`, `deliveryFailed`, `deliveryDeadLetter`, `slaBreached`, `openExceptions`,
-plus `activeWorkers` / `secondsSinceWorkerHeartbeat` / `workerHealthy`.
-`GET /api/ops/dead-letter` lists the dead-letter queue with each order's last delivery error.
+**Operator surface:** `GET /api/ops/health` and `GET /api/ops/dead-letter` were deleted in plan 13b
+(2026-11-13) with the order pipeline; use `/health/ready`, the delivery log and Worker logs.
 The Hangfire dashboard at `/hangfire` is **local dev only** — it is not exposed in production.
 
 ### `recurringJobs` Degraded — `recurringJobsHealthy=false`
@@ -550,30 +503,13 @@ nothing.
 The alert carries the ratio and the window. Half the traffic failing is almost never one bad
 supplier — look for a shared cause first.
 
-1. `/api/ops/health` and the delivery log: is the failure concentrated on **one supplier**, or
+1. The delivery log: is the failure concentrated on **one supplier**, or
    spread across all of them?
 2. Spread across all → suspect the Worker's outbound path: expired credentials, a DNS/egress
    change, or `OutboundRequestGuard` refusing a newly-resolved address.
 3. One supplier → their endpoint or their credentials. The attempt rows carry the response code
    and body verbatim; a 401/403 is a credential rotation, a 5xx is theirs.
-4. Nothing is lost while you triage — failed attempts retry on the existing backoff, and orders
-   that exhaust it land in the dead-letter queue, which has its own alert.
-
-### `pull_channel_stalled` — inbound POs are not being picked up
-
-The alert names each stalled channel and the age of its last observed success.
-
-1. **email** — the stamp is real, and the alert means the *newest* success across every enabled
-   org has aged out, so this is normally all orgs at once, not one. Check the `EmailPollOrgJob`
-   logs first, then per-org IMAP settings; a single org's wrong password or moved folder stalls
-   that org silently and does **not** raise this alert.
-2. **sftp / s3** — the signal is the dispatcher's own last execution, so a stall here means the
-   *recurring job* stopped, not that one org's credentials broke. Confirm with the Worker logs
-   (`WORKER-HEARTBEAT` present but no `sftp-polling` line) and check the Hangfire `polling`
-   queue for a wedged job.
-3. Nothing is dropped: the source files/messages stay where they are and are picked up on the
-   next successful poll. The dedupe ledgers (`imported_sftp_files`, `imported_s3_objects`,
-   `email_import_records`) prevent a re-import of anything already ingested.
+4. Nothing is lost while you triage — failed attempts retry on the existing backoff.
 
 ### `ai_token_cap_latched` — an org's AI budget is exhausted
 
@@ -602,7 +538,7 @@ read-only, capped at 20 matches, exact stored spellings first and then newest fi
 match is the exact `po_number` **or** its normalized key (trim + upper-case), so a casing
 or padding difference between the ticket and the document still resolves. Each row carries
 `orgId` / `orgName` / `orgSlug`, `orderId`, `status`, `supplierName` and timestamps — enough
-to open the right org's context and keep triaging with `/api/ops/health` or the order itself.
+to open the right org's context and keep triaging with the order itself.
 Two rows in two different orgs is not an error; the same customer PO number can legitimately
 exist on both sides of a buyer/supplier pair. A blank `po` is refused with 400.
 
@@ -618,16 +554,8 @@ Stated plainly so nobody mistakes a green Actions tab for coverage:
   lag).
 - **Some per-org symptoms are still invisible.** One supplier's endpoint refusing deliveries
   and one connection's mapping silently producing empty fields do not move `workerHealthy` and
-  are not among the §3 conditions. They surface in `/api/ops/health` and the in-app exceptions,
+  are not among the §3 conditions. They surface in the in-app delivery log,
   which nothing polls externally. (A latched AI budget *is* now covered — see §3.)
-- **A broken SFTP/S3 credential per org is not detected.** §3's pull-channel condition proves
-  the channel is still being polled, not that any given org's poll succeeds. Only IMAP has a
-  real per-org success stamp.
-- **The dead-letter threshold is all-org and absolute** (1 since 2026-08-25; was 25). At 1 the
-  old caveat — a small org drowning unnoticed inside a healthy fleet — no longer applies to the
-  backlog condition: any org's first dead-lettered order trips it. It still applies to the
-  delivery failure rate, which is a system-wide ratio, so one supplier failing inside a lot of
-  healthy traffic will not trip *that* condition; the backlog condition is what catches it now.
 - **No synthetic end-to-end transaction.** Nothing uploads a test order every N minutes and
   asserts it was delivered. `workerHealthy` proves the Worker is *beating*, not that the
   pipeline is *correct*.

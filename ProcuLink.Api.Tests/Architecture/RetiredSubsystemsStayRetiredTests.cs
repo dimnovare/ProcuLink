@@ -29,8 +29,8 @@ namespace ProcuLink.Api.Tests.Architecture;
 /// <para><b>Disambiguation is the whole game here</b> — three near-namesakes survive on purpose and
 /// MUST NOT be matched by these patterns:</para>
 /// <list type="bullet">
-///   <item><c>OutputTemplateEmitter</c> / <c>OrderMappingOverride.OutputTemplate</c> — the live
-///     OutputNode AST emitter and the per-order Scriban escape hatch. Unrelated to the retired
+///   <item><c>OutputTemplateEmitter</c> — the live
+///     OutputNode AST emitter. Unrelated to the retired
 ///     <c>OutputTemplate</c> ENTITY.</item>
 ///   <item><c>RuleDefinition</c> + <c>SupplierAcceptanceRule</c> — the rule engine that actually
 ///     runs. The retired one is <c>ValidationRule</c>.</item>

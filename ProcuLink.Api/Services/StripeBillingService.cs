@@ -62,8 +62,7 @@ public sealed class StripeBillingService : IBillingService
         _logger = logger;
         _analytics = analytics;
         _stripeClient = stripeClient;
-        // Raw read + bool.TryParse (no Binder dependency) — same pattern as the
-        // Connections:RevisionAuthority flag. Anything but "true", including the key being
+        // Raw read + bool.TryParse (no Binder dependency). Anything but "true", including the key being
         // absent (the safe production default), leaves the flag OFF and the billing meter
         // byte-identical to the pre-flag created-at behaviour.
         _countDeliveredOnly = bool.TryParse(config[CountDeliveredOnlyFlagKey], out var deliveredOnly) && deliveredOnly;

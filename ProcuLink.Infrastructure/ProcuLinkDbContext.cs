@@ -22,8 +22,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     // still the active control. Defaulting to ARMED would have been wrong in both directions —
     //
     //   * Fail-closed-silently is the worse failure. A cross-org sweep that suddenly matches no
-    //     rows looks like a clean run, not an outage. The Worker runs 13 such sweeps (billing
-    //     reconciliation, stuck/stranded/SLA detection, IMAP+SFTP+S3 polling, retention, alerting)
+    //     rows looks like a clean run, not an outage. The Worker runs such sweeps (billing
+    //     reconciliation, flow pickup, delivery sweep, retention, alerting)
     //     and every one of them would have reported success over an empty set.
     //
     //   * Several API paths legitimately read across organisations WITH a tenant resolved —

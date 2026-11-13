@@ -347,7 +347,7 @@ public sealed class OrdersController : ControllerBase
     /// </summary>
     internal static string? ExtractBuyerName(PurchaseOrderEntity e)
     {
-        // Prefer the denormalized column — always populated by ParseStoredFileAsync.
+        // Prefer the denormalized column — the parse path populated it and never wrote canonical_json.
         if (!string.IsNullOrWhiteSpace(e.BuyerName)) return e.BuyerName;
 
         // Fall back to CanonicalJson for orders created via the sync (non-file) path.

@@ -49,7 +49,8 @@ public sealed class BillingGateEnforcementIsRealTests
     ///
     /// <para>Where a feature has several sites, the one named is the one a customer hits first;
     /// <see cref="EveryGateCallInProduction_IsAccountedFor"/> covers the rest by walking the code in
-    /// the opposite direction, so a second site cannot be deleted unnoticed either.</para>
+    /// the opposite direction, so a gate call for an undeclared feature cannot appear unnoticed. It
+    /// works at the feature level: it cannot tell that a second site for a declared feature went.</para>
     /// </summary>
     private static readonly IReadOnlyDictionary<BillingFeature, Site> Sites =
         new Dictionary<BillingFeature, Site>
@@ -191,6 +192,13 @@ public sealed class BillingGateEnforcementIsRealTests
         callSites.Should().NotBeEmpty(
             "production must contain at least one HasFeatureAsync call — an empty result means the "
           + "scanner failed to load the production assemblies, not that the ladder is clean");
+
+        // The reverse walk below reads only the call sites whose feature is a compile-time constant.
+        // A call that passes the feature through a variable would otherwise be dropped silently, so
+        // every production gate call must name its feature at the call site.
+        callSites.Should().OnlyContain(c => c.Feature != null,
+            "every HasFeatureAsync call in production must name a constant BillingFeature at the call "
+          + "site; one that passes it through a variable is invisible to the walk below");
 
         var gatedFeatures = callSites.Select(c => c.Feature).OfType<BillingFeature>().Distinct().ToArray();
 

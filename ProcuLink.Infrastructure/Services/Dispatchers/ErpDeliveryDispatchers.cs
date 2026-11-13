@@ -63,9 +63,9 @@ public abstract class ErpDeliveryDispatcherBase : IDeliveryDispatcher
         // model or lookup API to dedupe against. So idempotencyKey is intentionally unused here.
         //
         // The duplicate-order risk this used to carry is now handled upstream rather than ignored:
-        // this dispatcher declares ResendSafety.Unsafe, so DeliveryService PARKS a crash-recovery
-        // re-drive (delivery_unconfirmed) for an operator decision instead of blindly re-sending.
-        // A duplicate is still possible if the operator chooses "Send again" — that is their
+        // this dispatcher declares ResendSafety.Unsafe, so DeliverDocumentJob stops a crash-recovery
+        // re-drive and tells the operator to check with the recipient instead of blindly re-sending.
+        // A duplicate is still possible if the operator sends again — that is their
         // informed call, not something the system does behind their back.
         var result = await _connector.SendAsync(
             new ErpDeliveryRequest(content, fileName, contentType, config, decryptedCredentials),

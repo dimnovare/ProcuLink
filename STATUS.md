@@ -28,6 +28,10 @@ _Update this file at the end of every session. Keep it lean — no full code, no
 
 ## Snapshot (2026-07-31) — revision authority is ON in production, and now says so out loud
 
+> **Removed in plan 13b (2026-11-13).** The revision-authority flag, its resolver, host roster, readiness
+> surface and tests were deleted with the order pipeline, and the runbook below is gone. This section
+> is history; `Connections__RevisionAuthority` is an inert Railway variable.
+
 **The correction first.** The 2026-07-27 audit filed a P0: "revision authority is off in
 production — the entire versioning/reproducibility story is inert where it matters." That finding
 is **REFUTED**. `Connections__RevisionAuthority = true` on **both** Railway services — the API
@@ -58,11 +62,8 @@ to v1's old endpoint, an **unpinned** order goes to the new one, and the test as
 DIFFER. Its companion runs the identical scenario with the flag off and asserts both orders land on
 the same endpoint — so the difference is produced by revision authority and nothing else.
 
-**Still open — a founder action.** The live production observation was **NOT** performed. Production
-data mutation was not authorized in that run, so instead there is a written runbook:
-[`docs/ops/revision-authority-production-smoke.md`](docs/ops/revision-authority-production-smoke.md)
-— pre-list, disposable request bins, pass/fail table, and undo. §2 alone (two read-only commands)
-answers "is the flag on right now" in under a minute.
+**Was open — a founder action.** The live production observation was **NOT** performed. The written
+runbook for it was deleted in plan 13b.
 
 **Known adjacent gap, unchanged:** `DeliveryService.TestFireAsync` still validates the LIVE delivery
 config, not the pinned one, so a green test-fire can vet a different channel than a pinned order

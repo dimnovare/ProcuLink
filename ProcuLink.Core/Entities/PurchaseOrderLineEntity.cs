@@ -45,7 +45,7 @@ public class PurchaseOrderLineEntity
     /// </summary>
     public string? ReviewReason { get; set; }
 
-    /// <summary>Origin of <see cref="SupplierItemCode"/>; see <c>LineResolvedViaConstants</c>. Null when unresolved.</summary>
+    /// <summary>Origin of <see cref="SupplierItemCode"/>. Null when unresolved.</summary>
     public string? ResolvedVia { get; set; }
     public string? AiSuggestedSupplierItemCode { get; set; }
     public float? AiSuggestionConfidence { get; set; }

@@ -20,7 +20,7 @@ namespace ProcuLink.Api.Tests.Controllers;
 /// <summary>
 /// Regression coverage for <c>GET /api/orders</c> honouring REST-style
 /// <c>limit</c>/<c>offset</c> paging, end-to-end through the controller + a real
-/// <see cref="OrderService"/> over a shared DbContext. Reproduces the live bug where the
+/// <see cref="OrderQueryService"/> over a shared DbContext. Reproduces the live bug where the
 /// endpoint silently ignored <c>limit</c>/<c>offset</c> and always returned the default
 /// first 25 rows, so a user with thousands of orders could only ever see 25 of them.
 /// </summary>

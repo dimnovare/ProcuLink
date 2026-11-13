@@ -5,7 +5,7 @@ namespace ProcuLink.Transform.Tokenizing;
 /// </summary>
 /// <param name="Id">
 ///   Stable, format-specific address for the token — used as the lookup key in
-///   <c>SourceFieldRule.SourceToken</c>. Must be deterministic for a given file so the
+///   <c>OutputFieldRule.SourceToken</c>. Must be deterministic for a given file so the
 ///   user's saved rule still resolves after a re-parse of the same file type.
 ///   <list type="bullet">
 ///     <item>CSV: <c>"cell:r{row}c{col}"</c> (1-based row and column indices, e.g. <c>"cell:r2c3"</c>).</item>

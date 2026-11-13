@@ -12,14 +12,12 @@ public sealed record CsvGrid(IReadOnlyList<string>? Header, IReadOnlyList<IReadO
 
 /// <summary>
 /// Phase B — the format-aware emitter that renders an <see cref="OutputNodeTemplate"/> (a recursive
-/// <see cref="OutputNode"/> tree) to bytes. Unlike <see cref="MappedTransformService"/> (which emits
-/// a FLAT {header, lines} shape for CSV/JSON only), this walks an arbitrary tree, so a supplier's
+/// <see cref="OutputNode"/> tree) to bytes. Unlike a flat {header, lines} builder, this walks an arbitrary tree, so a supplier's
 /// exact required STRUCTURE — nesting, repeating groups, attributes, custom wrapper/root names — can
 /// be produced for the structured formats too.
 ///
-/// It REUSES <see cref="MappedTransformService"/>'s leaf-value resolution verbatim
-/// (<c>BuildHeaderRow</c> / <c>BuildLineRow</c> / <c>ResolveRule</c> + the SourceMap re-derive), so
-/// every leaf value is byte-identical to the flat builder — only the surrounding structure differs.
+/// Leaf values resolve through <see cref="MappedTransformService"/>'s <c>ResolveRule</c>, so the
+/// surrounding structure is the only thing that differs from a flat build.
 ///
 /// v1 (B3) implements the structured family: JSON + XML (the XML emitter is the base for cXML/UBL).
 /// CSV (delimited) and X12 (segment) emitters + the per-format default templates follow in B4.

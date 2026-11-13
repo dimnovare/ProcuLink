@@ -29,7 +29,7 @@ namespace ProcuLink.Api.Tests.Auth;
 ///    the resolved INTERNAL organisation UUID into <c>HttpContext.Items</c> under the
 ///    SAME key the JWT path uses — not just the org_id claim.
 ///  • <see cref="CurrentTenantService"/> (the single resolver shared with JWT
-///    controllers) reads that value, so <see cref="IngressController"/> resolves the
+///    controllers) reads that value, so ingress resolves the
 ///    correct internal org WITHOUT parsing its own claim.
 ///  • Ingress still works AND stays idempotent when driven through this unified path.
 ///

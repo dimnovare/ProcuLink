@@ -20,8 +20,7 @@ namespace ProcuLink.Api.Tests.Architecture;
 /// <para><b>Why IL and not source text.</b> The repo has been bitten before by regex source
 /// scanning (the orphan guard's comment stripper silently hid ~680 lines of <c>Program.cs</c>).
 /// Metadata tokens cannot be fooled by a comment, a string literal, a <c>#if</c>, or a rename that
-/// updates one of two spellings. <c>AcceptanceGateSingleDoorTests</c> made the same call for the
-/// same reason.</para>
+/// updates one of two spellings.</para>
 ///
 /// <para><b>Async is the wrinkle that matters.</b> Every gate site in this codebase is an
 /// <c>async</c> method, whose visible body is a compiler-generated stub that hands off to a state
@@ -81,7 +80,9 @@ internal static class BillingGateIlScanner
     /// <paramref name="maxDepth"/> levels.
     ///
     /// <para>Depth lets a gate sit in a helper the named site calls, so a refactor that extracts the
-    /// check does not read as a deleted gate.</para>
+    /// check into a helper that names the feature itself does not read as a deleted gate. A helper
+    /// that takes <see cref="BillingFeature"/> as a parameter does read as one: it consults the
+    /// ladder, but not about this feature. That is fail-closed, and intended.</para>
     ///
     /// <para>Only the feature handed to the primitive AT its call site counts. Until plan 13b
     /// (2026-11-13) any feature constant on a gating path counted too, a widening that existed for the

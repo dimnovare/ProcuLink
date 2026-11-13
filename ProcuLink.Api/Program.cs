@@ -512,7 +512,7 @@ builder.Services.AddCors(options =>
               // headers still gets the number.
               //
               // Content-Disposition is exposed for the same reason. GET
-              // /api/orders/{id}/source streams the original document and names it in that
+              // /api/documents/{id}/source streams the original document and names it in that
               // header, but the frontend is a different origin and reaches the endpoint by
               // authenticated fetch (a bare <iframe src> cannot carry the bearer token), so
               // without this the one consumer the header exists for cannot read it.
@@ -632,7 +632,7 @@ if (builder.Configuration.GetValue<bool>("NoEgressOcr:Enabled"))
     builder.Services.AddSingleton<IDocumentOcrService, RapidOcrDocumentOcrService>();
 else
     builder.Services.AddSingleton<IDocumentOcrService, NoOpOcrService>();
-// ── Wave 4: API keys + integration subscriptions ──────────────────────────
+// ── Wave 4: API keys ──────────────────────────
 builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
 builder.Services.AddSingleton<OutboundRequestGuard>();
@@ -663,7 +663,8 @@ builder.Services.AddScoped<IDeliveryDispatcher, DirectoDeliveryDispatcher>();
 // ── Group V8: standards conformance reports ─────────────────────────────────
 // Validates a generated outbound document against its NAMED standard profile
 // (cXML 1.2 / UBL 2.1 / X12 850 / EDIFACT ORDERS D.96A / SAP IDoc ORDERS05).
-// Pure/stateless — used by OrdersController's GET /api/orders/{id}/conformance.
+// Pure/stateless. No endpoint resolves it since plan 13b (2026-11-13) deleted
+// GET /api/orders/{id}/conformance.
 builder.Services.AddSingleton<ProcuLink.Transform.Conformance.IConformanceService,
     ProcuLink.Transform.Conformance.ConformanceService>();
 

@@ -16,8 +16,8 @@ namespace ProcuLink.Api.Tests.Controllers;
 /// WP-27: <c>PurchaseOrderEntity.IsSample</c> must reach the order read model.
 ///
 /// <para>
-/// The flag has existed on the row since migration <c>20260528150709_AddIsSampleFlags</c> and is
-/// exposed on <see cref="PassportDto"/>, but it was NOT on <see cref="OrderDto"/> — the payload the
+/// The flag has existed on the row since migration <c>20260528150709_AddIsSampleFlags</c> and was
+/// exposed on the (since deleted) passport DTO, but it was NOT on <see cref="OrderDto"/> — the payload the
 /// review screen actually reads. So the frontend drove its "practice order" framing off a
 /// <c>?sample=1</c> query parameter instead, and a practice order opened from a bookmark, the
 /// back button, or an inbox row rendered as a real one. These tests pin the field so that

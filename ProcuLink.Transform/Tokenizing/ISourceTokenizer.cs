@@ -3,7 +3,7 @@ namespace ProcuLink.Transform.Tokenizing;
 /// <summary>
 /// Extracts every addressable value from a raw source file as a flat list of
 /// <see cref="SourceToken"/> records, each with a stable Id that can be saved in
-/// <c>SourceFieldRule.SourceToken</c> and resolved at re-derive time.
+/// <c>OutputFieldRule.SourceToken</c> and resolved at re-derive time.
 ///
 /// Implementations: <see cref="SourceTokenizer"/> (CSV + XML concrete; other formats return empty list).
 /// </summary>

@@ -107,8 +107,7 @@ public class V5DeepenCanonicalTests
     /// <summary>
     /// CSV and XML transforms produce the SAME byte-for-byte output regardless
     /// of whether V5 fields (RequestedDeliveryDate, TaxRate, DeliveryDate, etc.)
-    /// are populated. These transforms read entity typed columns only and never
-    /// touch the BuildHeaderRow/BuildLineRow row bags.
+    /// are populated. These transforms read entity typed columns only.
     /// </summary>
     [Theory]
     [InlineData(OutputFormat.Csv)]

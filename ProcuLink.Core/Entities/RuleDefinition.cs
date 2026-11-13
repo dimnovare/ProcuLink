@@ -49,8 +49,7 @@ public class RuleDefinition
 
     /// <summary>
     /// required | equals | in | min | max | not_equals | contains | greater_than | less_than | max_length.
-    /// Exactly the operators the existing <see cref="SupplierAcceptanceService"/> executor understands —
-    /// no new operators are introduced here.
+    /// The operators the rule executor understands.
     /// </summary>
     public string Operator { get; set; } = "required";
 

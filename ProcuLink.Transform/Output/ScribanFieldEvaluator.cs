@@ -7,8 +7,7 @@ namespace ProcuLink.Transform.Output;
 
 /// <summary>
 /// Sandboxed Scriban evaluator for the per-field <c>Expression</c> on an
-/// <see cref="ProcuLink.Core.Services.Mapping.OutputFieldRule"/> /
-/// <see cref="ProcuLink.Core.Services.Mapping.SourceFieldRule"/> (heart-piece-flex flexible mapping).
+/// <see cref="ProcuLink.Core.Services.Mapping.OutputFieldRule"/> (heart-piece-flex flexible mapping).
 ///
 /// <para>The founder wants the canonical→output mapping to be "flexible with Scriban templating" for
 /// ANY field. Today a rule resolves <c>canonicalField | fixedValue | manipulator-chain</c>; an
@@ -62,8 +61,8 @@ public static class ScribanFieldEvaluator
 
     /// <summary>
     /// Evaluate a line-scope expression. Both <c>order</c> and <c>line</c> are in scope. The
-    /// <paramref name="lineRow"/> bag carries header keys too (see <c>MappedTransformService.BuildLineRow</c>),
-    /// so <c>order.*</c> is still resolvable from it.
+    /// <paramref name="lineRow"/> bag carries header keys too, so <c>order.*</c> is still
+    /// resolvable from it.
     /// </summary>
     public static EvaluationResult EvaluateLine(
         string expression, IReadOnlyDictionary<string, string> lineRow)

@@ -74,7 +74,7 @@ public sealed class OrderQueryService : IOrderQueryService
     /// saying "1 orders received" and a table listing that order.
     ///
     /// <c>TotalCount - SampleCount</c> is the metered population, so it reconciles with
-    /// <c>OrdersSummaryDto.Total</c> by construction, and <c>SampleCount</c> is the label that
+    /// the metered order total by construction, and <c>SampleCount</c> is the label that
     /// lets a caller explain the difference instead of contradicting itself.</para>
     /// </summary>
     public async Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>> ListWindowAsync(

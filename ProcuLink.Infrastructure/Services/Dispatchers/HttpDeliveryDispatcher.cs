@@ -167,7 +167,7 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
                 // supplier never actioned has the endpoint's own words to read instead of nothing.
                 // Costs one already-read string: `body` was read at the line above and thrown away.
                 ? new DeliveryResult(true, null, code, ResponseBody: NullIfBlank(body))
-                // Pass the full (DeliveryService-bounded) body as ResponseBody for rejection capture,
+                // Pass the full (bounded) body as ResponseBody for rejection capture,
                 // while ErrorMessage stays a short human-readable summary. Retry-After is the
                 // supplier's own back-pressure and is honoured as a FLOOR on the next backoff step.
                 : new DeliveryResult(
