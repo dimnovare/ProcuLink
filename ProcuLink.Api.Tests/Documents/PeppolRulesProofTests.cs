@@ -133,10 +133,10 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
             var reads = id.StartsWith("en16931", StringComparison.Ordinal) ? new[] { Read(), ReadWithoutEndpoints() }
                 : id is "xrechnung-ubl" or "xrechnung-cii" ? new[] { RichRead(), RichReadWithEmailSeller() }
                 : id.StartsWith("xrechnung", StringComparison.Ordinal) ? new[] { RichRead() } : id == "peppol-bis-billing-3" ? new[] { Read(), RichRead() } : new[] { Read() };
-            // Every credit note is also read printed negative: Peppol and EN 16931 with only the amounts negative, XRechnung (with
-            // the rich fields it needs) with the quantities and prices negative too.
-            if (StandardOutputs.Find(id)!.CreditNote) reads = [.. reads, id.StartsWith("xrechnung", StringComparison.Ordinal)
-                ? Negated(RichRead(), [.. Amounts, FieldMeanings.LineQuantity, FieldMeanings.LineUnitPrice]) : Negated(Read(), Amounts)];
+            // Every credit note is also read printed negative (XRechnung with the rich fields it needs). The two whose rules check
+            // line amount = quantity x price per syntax (Peppol UBL, XRechnung CII: R120) read only the amounts negative; the rest everything.
+            string[] signed = id is "peppol-bis-billing-3-credit-note" or "xrechnung-cii-credit-note" ? Amounts : [.. Amounts, FieldMeanings.LineQuantity, FieldMeanings.LineUnitPrice];
+            if (StandardOutputs.Find(id)!.CreditNote) reads = [.. reads, Negated(id.StartsWith("xrechnung", StringComparison.Ordinal) ? RichRead() : Read(), signed)];
             foreach (var read in reads)
             {
                 var render = await StandardOutputs.RenderAsync(id, read, FlowFieldList.Empty, "lines", Guid.Empty, default);
@@ -156,7 +156,7 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
         }
 
         // Two Peppol renders + two CII ids read with and without electronic addresses + four XRechnung ids (the UBL and CII invoices also read with an email seller address) + the Peppol invoice read with addresses too
-        // + the four credit notes read printed negative (two with only the amounts negative, two with everything negative).
+        // + the four credit notes read printed negative (Peppol UBL and XRechnung CII with only the amounts negative, the other two with everything negative).
         Assert.Equal(17, checkedRenders);
     }
 }

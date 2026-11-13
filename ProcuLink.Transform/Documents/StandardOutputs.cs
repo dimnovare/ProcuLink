@@ -106,8 +106,8 @@ public static class StandardOutputs
 
     /// <summary>
     /// A credit note printed negative, written positive as EN 16931 credit notes carry it: each total and line amount changes sign
-    /// (so a re-charge line inside the credit stays negative), a quantity takes its line amount's sign, and a unit price is never negative.
-    /// The tax rate is left alone. The adapter's invoice is fresh and never attached to a DbContext, so it is corrected in place.
+    /// (so a re-charge line inside the credit stays negative), a quantity is negative only when its line amount is (a free item is credited,
+    /// so it stays positive), and a unit price is never negative. The tax rate is left alone. The adapter's invoice is fresh and never attached to a DbContext, so it is corrected in place.
     /// </summary>
     internal static void WritePositive(InvoiceEntity invoice, IReadOnlyList<InvoiceLineEntity> lines)
     {
@@ -115,7 +115,7 @@ public static class StandardOutputs
         foreach (var l in lines)
         {
             l.LineTotal = -l.LineTotal;
-            l.Quantity = l.LineTotal == 0 ? -l.Quantity : Math.Abs(l.Quantity) * Math.Sign(l.LineTotal);
+            l.Quantity = l.LineTotal < 0 ? -Math.Abs(l.Quantity) : Math.Abs(l.Quantity);
             l.UnitPrice = Math.Abs(l.UnitPrice);
         }
     }
