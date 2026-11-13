@@ -211,16 +211,18 @@ public sealed class UnresolvedTenantAnswers503Tests : IClassFixture<TenantClaimS
 
     /// <summary>
     /// An authenticated user whose token carries no organisation, with no row to resolve — the
-    /// brand-new-workspace shape — asks for the dashboard. Before the fix this was a 500.
+    /// brand-new-workspace shape — asks for its order list. Before the fix this was a 500.
+    /// (It asked for the dashboard until plan 13b deleted DashboardController on 2026-11-13;
+    /// the order list is the read that survived the cut.)
     /// </summary>
     [Fact]
-    public async Task NoOrganisationResolved_TheDashboardAnswers503WithRetryAfter_NotA500()
+    public async Task NoOrganisationResolved_TheOrderListAnswers503WithRetryAfter_NotA500()
     {
         // No org claim, and no legacy row keyed to this sub, so tenant resolution leaves the
         // request unresolved and the controller's first read of OrganisationId throws.
         var client = ClientWith(sub: "user_TENANT503_BRAND_NEW", org: null);
 
-        var response = await client.GetAsync("/api/dashboard/stats");
+        var response = await client.GetAsync("/api/orders");
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         Assert.NotEqual(HttpStatusCode.InternalServerError, response.StatusCode);
@@ -303,7 +305,7 @@ public sealed class UnresolvedTenantAnswers503Tests : IClassFixture<TenantClaimS
 
         var client = ClientWith(sub: legacySub, org: null);
 
-        var response = await client.GetAsync("/api/dashboard/stats");
+        var response = await client.GetAsync("/api/orders");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.False(response.Headers.Contains("Retry-After"));

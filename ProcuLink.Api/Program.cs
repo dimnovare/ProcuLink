@@ -34,7 +34,6 @@ using ProcuLink.Infrastructure.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Ocr;
 using ProcuLink.Infrastructure.Services.Security;
 using ProcuLink.Infrastructure;
-using ProcuLink.Infrastructure.Repositories;
 using ProcuLink.Infrastructure.Storage;
 using ProcuLink.Transform.Output;
 using ProcuLink.Transform.Parsing;
@@ -329,22 +328,9 @@ builder.Services.AddRateLimiter(options =>
     // client also paces + retries on a throttle, so larger batches self-throttle.
     options.AddPolicy("upload", ctx => Window(ctx, "upload", permit: 60, seconds: 60));
 
-    // Transform is CPU/IO-heavy (parse + standards serialization + enqueue
-    // delivery). Cap per-user so a tight client loop can't hammer the worker.
-    options.AddPolicy("transform", ctx => Window(ctx, "transform", permit: 30, seconds: 60));
-
     // AI mapping / schema-inference / suggestion endpoints call paid LLM APIs.
     // Tighter cap protects the OpenAI bill and latency budget.
     options.AddPolicy("ai", ctx => Window(ctx, "ai", permit: 15, seconds: 60));
-
-    // Deterministic mapping-preview reads (GET .../mapping-preview, POST
-    // .../mapping-override/preview). These do NO LLM work — they read stored
-    // suggestions / run an in-memory dry-run transform — but the live mapping
-    // editor polls them repeatedly (debounced as the user types/while parsing).
-    // They MUST NOT share the tight "ai" cap, or the editor trips a 429. Generous
-    // per-user ceiling so debounced polling never bites, still bounded so a
-    // runaway client can't hammer the transform path.
-    options.AddPolicy("preview", ctx => Window(ctx, "preview", permit: 120, seconds: 60));
 
     // Signed-URL / artifact-download generation. Each call mints a pre-signed R2
     // URL; cap so the surface can't be used to bulk-mint download links.
@@ -545,11 +531,6 @@ builder.Services.AddCors(options =>
               .AllowCredentials());
 });
 
-// ── Repositories ──────────────────────────────────────────────────────────
-// Supplier profiles still flow through the repository; orders and item mappings
-// use DbContext directly via their services (legacy order/item-mapping repos removed).
-builder.Services.AddScoped<ISupplierProfileRepository, EfSupplierProfileRepository>();
-
 // ── File storage ───────────────────────────────────────────────────────────
 // Use LocalFileStorageService in dev when R2 credentials are absent.
 // Set Storage:R2AccessKeyId in user-secrets or environment to switch to R2.
@@ -569,27 +550,12 @@ builder.Services.AddScoped<ISupplierCatalogService, SupplierCatalogService>();
 builder.Services.AddScoped<ICatalogRetrievalService, CatalogRetrievalService>();
 // Durable AI-suggestion accept/reject decision history (confidence calibration) — Scoped.
 builder.Services.AddScoped<IAiSuggestionDecisionService, AiSuggestionDecisionService>();
-// V9 — confidence calibration. Computes a per-org empirical reliability curve from the decision
-// history (display-only; never mutates the stored raw confidence). Needs IMemoryCache for the
-// short-TTL per-org curve cache; AddMemoryCache is idempotent if registered elsewhere.
-builder.Services.AddMemoryCache();
-builder.Services.AddScoped<IConfidenceCalibrationService, ConfidenceCalibrationService>();
-// heart-piece-flex Phase 1: per-order mapping/override stored in canonical_json (no new table).
-builder.Services.AddScoped<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService,
-                           ProcuLink.Infrastructure.Services.OrderMappingOverrideService>();
-// heart-piece-flex promote: persists a per-order SourceMap into the supplier's reusable inbound mapping.
-builder.Services.AddScoped<ProcuLink.Core.Services.Mapping.IPromoteMappingService,
-                           ProcuLink.Infrastructure.Services.PromoteMappingService>();
 builder.Services.AddScoped<IOrderExceptionService, OrderExceptionService>();
 builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();
 // WP-17 — the server-side acceptance gate. Registered in BOTH hosts (see Worker/Program.cs): the
 // Worker is where TransformOrderJob actually runs, so a gate registered only here would be
 // enforcement living in the API process and nowhere the transform happens.
 builder.Services.AddScoped<IAcceptanceGate, AcceptanceGate>();
-// WP-33 stage 1 — auto-send in dry run. Registered in BOTH hosts for the same reason as the gate
-// above: ParseOrderJob runs in the Worker, and that is where the decision is made. Registered here
-// too so the API's own in-process job execution is not a blind spot.
-builder.Services.AddScoped<IAutoSendDryRunEvaluator, AutoSendDryRunEvaluator>();
 // Group V4 — unified validation: reusable rule definitions + binding-aware read API + boot backfill.
 builder.Services.AddScoped<IRuleDefinitionService, RuleDefinitionService>();
 builder.Services.AddScoped<IRuleDefinitionBackfillService, RuleDefinitionBackfillService>();
@@ -618,8 +584,6 @@ builder.Services.AddScoped<IReplayService, ReplayService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 // Same scoped OrderService also serves the pull-ingress stub-creation seam (explicit order id).
 builder.Services.AddScoped<IStubOrderCreator>(sp => (OrderService)sp.GetRequiredService<IOrderService>());
-builder.Services.AddScoped<IPassportService, PassportService>();
-builder.Services.AddScoped<IOrderConfirmationService, OrderConfirmationService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
 // Parity with the Worker (which runs the daily reconciliation sweep); keeps Development DI
 // validation consistent across both hosts even though only the Worker executes the job.
@@ -684,7 +648,6 @@ builder.Services.AddSingleton<ProcuLink.Core.Documents.IOutputDesigner, ProcuLin
 // (default off → byte-identical deploy). Reuses Ai:OpenAI:ApiKey via the Responses web_search tool.
 builder.Services.AddSingleton<IProductCodeSearch, OpenAiProductCodeSearch>();
 builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
-builder.Services.AddScoped<IIdempotencyService, IdempotencyService>();
 builder.Services.AddScoped<ISchemaInferencer, OpenAiSchemaInferencer>();
 builder.Services.AddScoped<IInboundAddressService, InboundAddressService>();
 builder.Services.AddScoped<IInboundEmailRouter, InboundEmailRouter>();
@@ -914,9 +877,6 @@ builder.Services.AddSwaggerGen(options =>
         }
     });
 });
-
-// Magic-mapping field suggester: deterministic heuristic, optionally AI-augmented (no-op without an AI key).
-builder.Services.AddScoped<ProcuLink.Core.Services.Mapping.IFieldMappingSuggester, ProcuLink.Transform.Mapping.AiAugmentedFieldMappingSuggester>();
 
 // ──────────────────────────────────────────────────────────────────────────
 var app = builder.Build();

@@ -9,14 +9,12 @@ using Xunit;
 namespace ProcuLink.Api.Tests.Integration;
 
 // ════════════════════════════════════════════════════════════════════════════
-//  P2-4 follow-up: the named rate-limit policies ("transform", "ai",
-//  "signed-url", "preview") were DEFINED in Program.cs but (originally) never
-//  APPLIED — only the "upload" policy was wired to an action, so they were dead
-//  config. These tests guard that each expensive / cost-bearing / abusable
-//  action now carries the correct [EnableRateLimiting("<policy>")] attribute,
-//  AND that the policy is actually enforced end-to-end (a live 429 once the
-//  window is exhausted). The deterministic mapping-preview reads use the
-//  generous "preview" policy (they do no LLM work — the editor polls them).
+//  P2-4 follow-up: the named rate-limit policies ("ai", "signed-url") were
+//  DEFINED in Program.cs but (originally) never APPLIED — only the "upload"
+//  policy was wired to an action, so they were dead config. These tests guard
+//  that each expensive / cost-bearing / abusable action now carries the correct
+//  [EnableRateLimiting("<policy>")] attribute, AND that a policy is actually
+//  enforced end-to-end (a live 429 once the window is exhausted).
 //
 //  The attribute-presence checks are the primary regression guard: they prove
 //  the exact action↔policy wiring that the concern was about. The live 429 test
@@ -35,20 +33,14 @@ public sealed class RateLimitPolicyAppliedTests : IClassFixture<HardeningTestFac
     // ── Attribute-presence guards (the core fix for the dead-policy concern) ──
 
     [Theory]
-    // Transform is CPU/IO-heavy → "transform" (30/min).
-    [InlineData(typeof(OrdersController), nameof(OrdersController.Transform), "transform")]
     // AI-invoking endpoints → "ai" (15/min — protects the OpenAI bill).
-    [InlineData(typeof(OrdersController), nameof(OrdersController.AcceptAiSuggestions), "ai")]
-    // Deterministic mapping-preview reads do NO LLM work but the mapping editor polls them
-    // (debounced) → generous "preview" policy (120/min), NOT the tight "ai" cap.
-    [InlineData(typeof(OrdersController), nameof(OrdersController.GetMappingPreview), "preview")]
-    [InlineData(typeof(OrdersController), nameof(OrdersController.PreviewMappingOverride), "preview")]
+    [InlineData(typeof(DocumentsController), nameof(DocumentsController.RetryRead), "ai")]
     // Signed-URL / file-download surfaces → "signed-url" (60/min).
     [InlineData(typeof(OrdersController), nameof(OrdersController.Download), "signed-url")]
     // The source document is STREAMED rather than signed, but it is the same surface — a
     // document download — and shares the same budget deliberately, so one cap governs document
     // egress instead of two that drift apart.
-    [InlineData(typeof(OrderSourceDocumentController), nameof(OrderSourceDocumentController.GetSource), "signed-url")]
+    [InlineData(typeof(DocumentsController), nameof(DocumentsController.GetSource), "signed-url")]
     // Anonymous support form feeds an outbound email sender → "support" (5/min).
     [InlineData(typeof(SupportController), nameof(SupportController.Contact), "support")]
     public void Action_HasExpectedRateLimitPolicy(Type controller, string actionName, string expectedPolicy)
@@ -76,41 +68,6 @@ public sealed class RateLimitPolicyAppliedTests : IClassFixture<HardeningTestFac
 
         var attr = method!.GetCustomAttribute<EnableRateLimitingAttribute>();
         Assert.Null(attr); // no named policy — global backstop + Stripe signature only
-    }
-
-    // ── Live enforcement: the "transform" policy actually returns 429 ─────────
-    //
-    // Uses the anonymous HardeningTestFactory client (no auth). UseRateLimiter
-    // runs before UseAuthorization, so an over-limit caller is rejected with 429
-    // BEFORE the 401 it would otherwise get. The "transform" window is 30/min;
-    // firing > 30 requests synchronously within the same minute guarantees a 429.
-    [Fact]
-    public async Task Transform_Returns429_AfterExceedingPolicyLimit()
-    {
-        var client = _factory.CreateClient();
-
-        // Comfortably above the 30/min "transform" cap. The partition is shared
-        // by IP across the process, so prior tests can only make 429 arrive
-        // SOONER — never later — which keeps this assertion robust.
-        const int requests = 45;
-        var orderId = Guid.NewGuid();
-
-        var sawTooManyRequests = false;
-        for (var i = 0; i < requests; i++)
-        {
-            var resp = await client.PostAsync(
-                $"/api/orders/{orderId}/transform",
-                new StringContent("{}", System.Text.Encoding.UTF8, "application/json"));
-
-            if (resp.StatusCode == HttpStatusCode.TooManyRequests)
-            {
-                sawTooManyRequests = true;
-                break;
-            }
-        }
-
-        Assert.True(sawTooManyRequests,
-            "The 'transform' rate-limit policy must reject with 429 once its per-window limit is exceeded.");
     }
 
     // ── Live enforcement: the "support" policy actually returns 429 ───────────
@@ -158,14 +115,18 @@ public sealed class RateLimitPolicyAppliedTests : IClassFixture<HardeningTestFac
     public async Task RateLimitRejection_SaysHowLongToWait()
     {
         var client = _factory.CreateClient();
-        var orderId = Guid.NewGuid();
 
+        // The support form's 5/60s window is the tightest named policy left, so 12 attempts is
+        // comfortably past it (the partition is shared by IP, so earlier tests only make the 429
+        // arrive sooner).
         HttpResponseMessage? rejection = null;
-        for (var i = 0; i < 45 && rejection is null; i++)
+        for (var i = 0; i < 12 && rejection is null; i++)
         {
             var resp = await client.PostAsync(
-                $"/api/orders/{orderId}/transform",
-                new StringContent("{}", System.Text.Encoding.UTF8, "application/json"));
+                "/api/support/contact",
+                new StringContent(
+                    """{"category":"question","subject":"rate limit probe","message":"probe"}""",
+                    System.Text.Encoding.UTF8, "application/json"));
             if (resp.StatusCode == HttpStatusCode.TooManyRequests) rejection = resp;
         }
 

@@ -151,7 +151,8 @@ public sealed class ProgramHardeningTests : IClassFixture<HardeningTestFactory>
 
     [Theory]
     [InlineData("upload")]
-    [InlineData("transform")]
+    // "transform" and "preview" retired with the order API (plan 13b) — the order transform and
+    // mapping-preview actions were their only consumers.
     [InlineData("ai")]
     [InlineData("signed-url")]
     // "webhook" retired with inbound webhook ingress (Wave 1, WP-09) — it was the only

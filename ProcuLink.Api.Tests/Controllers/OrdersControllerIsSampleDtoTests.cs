@@ -37,18 +37,7 @@ public class OrdersControllerIsSampleDtoTests
         return new OrdersController(
             ordersSvc,
             tenant.Object,
-            new Mock<IBackgroundJobClient>().Object,
-            db,
-            NullLogger<OrdersController>.Instance,
-            new Mock<IBillingService>().Object,
-            new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
-            new Mock<IFileStorageService>().Object,
-            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
-            Array.Empty<ProcuLink.Core.Services.ITransformService>());
+            db);
     }
 
     private static PurchaseOrderEntity Order(Guid orgId, Guid orderId, Guid supplierId, bool isSample) => new()

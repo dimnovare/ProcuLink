@@ -1,9 +1,6 @@
 using FluentAssertions;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Moq;
 using ProcuLink.Api.Contracts;
-using ProcuLink.Api.Controllers;
 using ProcuLink.Api.Tests.TestSupport;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -15,51 +12,14 @@ namespace ProcuLink.Api.Tests.Controllers;
 // ════════════════════════════════════════════════════════════════════════════
 //  THE DEFECT (v2 audit P0-5)
 //
-//    "A first-run org that takes the promoted sample path sees 'Received 0'
-//     next to a card reading '1 orders received' and a table listing that
-//     order."
-//     — DashboardController.cs:61 vs OrderQueryService.cs:85-87, :134
+//  The order list RETURNS onboarding practice orders while every count reported
+//  beside it excluded them, and nothing on the screen said so. The fix was a
+//  label, not a filter: SampleCount on the list envelope and IsSample on every row.
 //
-//  Two queries, two populations, nothing on the screen saying so:
-//
-//    GET /api/orders/summary   .Where(o => o.OrgId == orgId && !o.IsSample)
-//    GET /api/orders (list)    .Where(o => o.OrgId == organisationId)
-//
-//  The summary side is the correct one and is NOT what changed. Every number
-//  the product reports already excludes practice orders — the billing meter
-//  (StripeBillingService.CountOrdersAsync :841/:847, and the invoiced overage
-//  :929), the plan gates that inherit it, the dashboard KPIs, the wire
-//  topology, and the onboarding milestones, whose contract states it outright:
-//
-//    "Every flag/count EXCLUDES sample data (IsSample suppliers/orders):
-//     running the sample order must never 'complete' onboarding with zero
-//     real data."                            — OnboardingController.cs:40-42
-//
-//  The list is the outlier, and it is right to RETURN the practice order — the
-//  user is deliberately sent to one to rehearse the review flow, so hiding it
-//  would strand work they were told to do. What it could not do was SAY so.
-//  So the fix is a label, not a filter: SampleCount on the list envelope,
-//  SampleTotal on the summary, IsSample on every row.
-//
-//  WHAT THIS FILE ASSERTS — a property over BOTH queries, never a pair of
-//  hard-coded expected numbers. "1 and 1" would still pass the day someone
-//  changes both to "0 and 0". The property is:
-//
-//      listTotal - listSampleCount == summaryTotal
-//
-//  computed from a corpus whose composition the test varies, with the expected
-//  values derived from what was seeded.
-//
-//  WHICH DIRECTION THE NEXT INSTANCE COMES FROM. Not this defect again — a
-//  THIRD count, over yet another population, added later and rendered beside
-//  these two. Two defences:
-//    • EveryOrgWideOrderCountSurface... below pins the four surfaces that exist
-//      today to ONE number, so a new count wired into any of them must agree.
-//    • SampleExclusionIsDeclaredNotAssumedTests (Architecture) fails the build
-//      when a new aggregate over PurchaseOrders appears anywhere in production
-//      without declaring which population it counts. There is no EF
-//      HasQueryFilter on IsSample — the exclusion is convention at 20-odd call
-//      sites — so nothing else would catch it.
+//  The counters this file once reconciled against the list (GET /api/orders/summary,
+//  /api/dashboard/stats, /api/onboarding/status) were removed with the order
+//  screens in plan 13b; the list survives as the read-only archive, so the per-row
+//  label is what is left to pin.
 // ════════════════════════════════════════════════════════════════════════════
 
 public class OrderCountsAndListDescribeOnePopulationTests
@@ -72,25 +32,16 @@ public class OrderCountsAndListDescribeOnePopulationTests
             .Options);
 
     private sealed record Harness(
-        ProcuLinkDbContext   Db,
-        DashboardController  Dashboard,
-        OnboardingController Onboarding,
-        IOrderService        Orders,
-        Guid                 OrgId);
+        ProcuLinkDbContext Db,
+        IOrderService      Orders,
+        Guid               OrgId);
 
     private static Harness Build()
     {
         var db     = MakeDb();
         var orgId  = Guid.NewGuid();
-        var tenant = new Mock<ICurrentTenantService>();
-        tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
 
-        return new Harness(
-            db,
-            new DashboardController(db, tenant.Object),
-            new OnboardingController(db, tenant.Object),
-            OrderListTestSupport.BuildOrderService(db),
-            orgId);
+        return new Harness(db, OrderListTestSupport.BuildOrderService(db), orgId);
     }
 
     private static PurchaseOrderEntity Order(Guid orgId, bool isSample, string status, int seq)
@@ -150,11 +101,6 @@ public class OrderCountsAndListDescribeOnePopulationTests
     private static string StatusFor(int i) =>
         (i % 3) switch { 0 => "pending_review", 1 => "delivered", _ => "ready" };
 
-    private static async Task<OrdersSummaryDto> SummaryAsync(Harness h) =>
-        (await h.Dashboard.GetSummary(CancellationToken.None))
-            .Should().BeOfType<OkObjectResult>().Subject
-            .Value.Should().BeOfType<OrdersSummaryDto>().Subject;
-
     private static async Task<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>
         ListAsync(Harness h)
     {
@@ -166,10 +112,6 @@ public class OrderCountsAndListDescribeOnePopulationTests
         result.IsSuccess.Should().BeTrue(result.Error);
         return result.Value;
     }
-
-    /// <summary>Reads a property off the anonymous object GetStats returns.</summary>
-    private static int Stat(object payload, string name) =>
-        (int)payload.GetType().GetProperty(name)!.GetValue(payload)!;
 
     // ── The corpora ───────────────────────────────────────────────────────────
     // First row IS the audit scenario: a first-run org whose ONLY order is the
@@ -184,64 +126,7 @@ public class OrderCountsAndListDescribeOnePopulationTests
         { 4, 0 },   // no practice order at all — the label must not invent one
     };
 
-    // ── 1. The property, over both queries ────────────────────────────────────
-
-    [Theory]
-    [MemberData(nameof(Corpora))]
-    public async Task SummaryTotalAndListTotalDescribeTheSamePopulation(int real, int samples)
-    {
-        var h = Build();
-        await SeedAsync(h, real, samples);
-
-        var summary                            = await SummaryAsync(h);
-        var (items, listTotal, listSampleCount) = await ListAsync(h);
-
-        // THE PROPERTY. Derived from the corpus, never hard-coded: with `real` and
-        // `samples` both varying, a test that pinned literals could not hold here.
-        (listTotal - listSampleCount).Should().Be(summary.Total,
-            "the list total minus its practice orders IS the population the summary counts — " +
-            "a screen that shows both numbers must be able to reconcile them");
-
-        (summary.Total + summary.SampleTotal).Should().Be(listTotal,
-            "and the same identity from the summary's side: every row the list will return is " +
-            "either counted in Total or declared in SampleTotal, never silently omitted");
-
-        listSampleCount.Should().Be(summary.SampleTotal,
-            "both endpoints must agree on how many practice orders exist");
-
-        // Cross-check against what was actually seeded, so the identity above cannot be
-        // satisfied by two equally-wrong numbers.
-        listTotal.Should().Be(real + samples);
-        summary.Total.Should().Be(real);
-        listSampleCount.Should().Be(samples);
-        items.Should().HaveCount(real + samples, "the window is wider than the corpus");
-    }
-
-    // ── 2. The defect verbatim, spelled out ───────────────────────────────────
-
-    [Fact]
-    public async Task OrgWhoseOnlyOrderIsThePromotedSample_DoesNotShowZeroBesideATableOfOne()
-    {
-        var h = Build();
-        await SeedAsync(h, real: 0, samples: 1);
-
-        var summary                            = await SummaryAsync(h);
-        var (items, listTotal, listSampleCount) = await ListAsync(h);
-
-        // The two numbers the audit caught contradicting each other.
-        summary.Total.Should().Be(0, "nothing real has been processed yet");
-        listTotal.Should().Be(1, "the practice order is still returned — the user was sent to it");
-
-        // …and the reconciliation that stops them being a contradiction.
-        listSampleCount.Should().Be(1, "the list must SAY that its one row is a practice order");
-        summary.SampleTotal.Should().Be(1, "and the '0' must say what it is excluding");
-        (listTotal - listSampleCount).Should().Be(summary.Total);
-
-        items.Should().ContainSingle().Which.IsSample.Should().BeTrue(
-            "a count alone is not enough — the screen must know WHICH row to label");
-    }
-
-    // ── 3. Every row declares itself ──────────────────────────────────────────
+    // ── Every row declares itself ──────────────────────────────────────────
 
     [Theory]
     [MemberData(nameof(Corpora))]
@@ -258,43 +143,5 @@ public class OrderCountsAndListDescribeOnePopulationTests
         items.Count(i => !i.IsSample).Should().Be(real);
         items.Count(i => i.IsSample).Should().Be(listSampleCount,
             "the envelope's count and the rows must not disagree with each other either");
-    }
-
-    // ── 4. The rotation: a THIRD count over yet another population ────────────
-
-    [Theory]
-    [MemberData(nameof(Corpora))]
-    public async Task EveryOrgWideOrderCountSurfaceDescribesTheSamePopulation(int real, int samples)
-    {
-        var h = Build();
-        await SeedAsync(h, real, samples);
-
-        var summary                    = await SummaryAsync(h);
-        var (_, listTotal, sampleCount) = await ListAsync(h);
-
-        var stats = (await h.Dashboard.GetStats(CancellationToken.None))
-            .Should().BeOfType<OkObjectResult>().Subject.Value!;
-
-        var onboarding = (await h.Onboarding.GetStatus(CancellationToken.None))
-            .Should().BeOfType<OkObjectResult>().Subject
-            .Value.Should().BeOfType<OnboardingStatusDto>().Subject;
-
-        // Four surfaces, one number. GET /api/dashboard/stats, GET /api/onboarding/status,
-        // GET /api/orders/summary and GET /api/orders are rendered together on the first-run
-        // screen; if a later change makes any one of them count a different set, this fails
-        // rather than shipping two numbers that disagree in front of the user.
-        var reported = new (string Surface, int Value)[]
-        {
-            ("GET /api/orders/summary → total",           summary.Total),
-            ("GET /api/dashboard/stats → totalOrders",    Stat(stats, "totalOrders")),
-            ("GET /api/onboarding/status → orderCount",   onboarding.OrderCount),
-            ("GET /api/orders → totalCount - sampleCount", listTotal - sampleCount),
-        };
-
-        reported.Select(r => r.Value).Distinct().Should().ContainSingle(
-            "every org-wide order count on the first-run screen must describe ONE population; " +
-            $"got {string.Join(", ", reported.Select(r => $"{r.Surface} = {r.Value}"))}");
-
-        reported.Should().AllSatisfy(r => r.Value.Should().Be(real));
     }
 }

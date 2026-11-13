@@ -133,7 +133,6 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<AppUser> Users => Set<AppUser>();
     public DbSet<Membership> Memberships => Set<Membership>();
     public DbSet<Supplier> Suppliers => Set<Supplier>();
-    public DbSet<SupplierProfileEntity> SupplierProfiles => Set<SupplierProfileEntity>();
     public DbSet<PurchaseOrderEntity> PurchaseOrders => Set<PurchaseOrderEntity>();
     public DbSet<PurchaseOrderLineEntity> PurchaseOrderLines => Set<PurchaseOrderLineEntity>();
     public DbSet<OrderParty> OrderParties => Set<OrderParty>();
@@ -145,7 +144,6 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<OutboundArtifact> OutboundArtifacts => Set<OutboundArtifact>();
     public DbSet<DeliveryAttempt> DeliveryAttempts => Set<DeliveryAttempt>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
-    public DbSet<AutoSendDryRun> AutoSendDryRuns => Set<AutoSendDryRun>();
     public DbSet<SupplierPoMapping> SupplierPoMappings => Set<SupplierPoMapping>();
     public DbSet<SupplierDeliveryConfig> SupplierDeliveryConfigs => Set<SupplierDeliveryConfig>();
     public DbSet<IdempotencyKey> IdempotencyKeys => Set<IdempotencyKey>();

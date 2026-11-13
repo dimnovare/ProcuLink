@@ -293,40 +293,6 @@ public sealed class ReplayReprocessPostgresTests : IClassFixture<ReplayReprocess
     }
 
     /// <summary>
-    /// The order passport keeps naming the artifact that was actually SENT.
-    ///
-    /// <para>The passport's output section is what an operator shows a supplier in a dispute: it
-    /// carries the artifact's SHA-256, and WP-34's tamper test pins that hash to the delivered
-    /// bytes. It picked the order's newest artifact — so a re-process, whose artifact is newest by
-    /// construction, would have swapped the headline document for one that was never sent and
-    /// published its hash as the record. This asserts the swap does not happen, and separately that
-    /// the preview is still LISTED, because hiding it would be its own dishonesty.</para>
-    /// </summary>
-    [DockerRequiredFact]
-    public async Task Reprocess_DoesNotChangeWhichArtifactThePassportSaysWasSent()
-    {
-        var seed    = await SeedAsync();
-        var storage = await NewStorageWithOriginalAsync(seed);
-
-        Guid reprocessedId;
-        await using (var db = NewContext())
-            reprocessedId = (await NewReplay(db, storage).ReprocessAsync(
-                seed.OrgId, seed.ConnectionId, seed.DraftRevisionId, seed.OrderId, "operator@test", default))
-                .Response!.ArtifactId;
-
-        await using var db2 = NewContext();
-        var passport = await new PassportService(db2).GetAsync(seed.OrgId, seed.OrderId, default);
-
-        Assert.True(passport.IsSuccess, passport.Error);
-        Assert.NotNull(passport.Value!.OutputArtifact);
-        Assert.Equal(seed.OriginalArtifactId, passport.Value.OutputArtifact!.ArtifactId);
-        Assert.Equal(
-            ProvenanceHash.TrySha256Hex(OriginalBytes),
-            passport.Value.OutputArtifact.ArtifactSha256);
-        Assert.NotEqual(seed.OriginalArtifactId, reprocessedId);
-    }
-
-    /// <summary>
     /// The AUTOMATIC backoff retry sends the order's own output, not a preview.
     ///
     /// <para>This is the path with no human in it: it fires long after the first attempt, by which

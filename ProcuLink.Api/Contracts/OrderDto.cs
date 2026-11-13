@@ -88,7 +88,7 @@ public record OrderDto(
     /// (<c>PurchaseOrderEntity.IsSample</c>). The review screen keys its "practice order" framing
     /// off THIS field.
     /// <para>
-    /// Before WP-27 the flag existed on the row and on <see cref="PassportDto"/> but not here, so
+    /// Before WP-27 the flag existed on the row and on the order passport but not here, so
     /// the frontend drove the framing off a <c>?sample=1</c> query parameter instead — which meant a
     /// bookmark, a back-button, or an inbox row click rendered a practice order as a real one. Do
     /// not remove this field without giving the frontend another server-side signal.

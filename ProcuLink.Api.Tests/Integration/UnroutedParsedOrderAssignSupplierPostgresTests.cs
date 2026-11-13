@@ -1,10 +1,6 @@
-using Hangfire;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
-using ProcuLink.Api.Contracts;
-using ProcuLink.Api.Controllers;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
@@ -28,6 +24,11 @@ namespace ProcuLink.Api.Tests.Integration;
 /// there, the operator's assignment would leave the order WEDGED in <c>parsing</c> for good: the
 /// job throws, burns its three Hangfire retries and lands red, and the order can never be
 /// re-assigned because assign-supplier only accepts an <c>unrouted</c> one.
+///
+/// <para>Plan 13b retired <c>POST /api/orders/{id}/assign-supplier</c> with the rest of the order
+/// API (a read-only archive now), and its end-to-end fact with it. The ingestion behaviour the
+/// endpoint leaned on stays pinned below: parking, the file-backed re-parse and the file-less
+/// refusal.</para>
 ///
 /// <para>Real Postgres is required, not incidental: the whole chain under test is Npgsql-only bulk
 /// SQL that EF InMemory cannot translate — assign-supplier's atomic status claim
@@ -85,70 +86,6 @@ public sealed class UnroutedParsedOrderAssignSupplierPostgresTests(PostgresConta
         Assert.Null(order.SourceFileKey);          // prose, not an attachment
         Assert.Equal(2, order.Lines.Count);        // the triage queue can show what arrived
         Assert.All(order.Lines, l => Assert.True(l.NeedsReview));
-    }
-
-    // ── 2. The whole point: the operator can resolve it ─────────────────────
-
-    [DockerRequiredFact]
-    public async Task AssignSupplier_thenParse_resolvesTheParkedLines_withoutDuplicatingThem()
-    {
-        var (orgId, supplierId, revisionId) = await SeedOrgAsync("resolve");
-
-        // 1. The webhook parks the prose order.
-        Guid orderId;
-        await using (var db = new ProcuLinkDbContext(Options()))
-        {
-            var result = await BuildIngestion(db).CreateStubFromParsedOrderAsync(
-                orgId, supplierId: null, BodyOrder(), "email_body_nlp", CancellationToken.None);
-            orderId = result.Value!.Id;
-        }
-
-        // 2. The operator picks a supplier through the REAL endpoint (atomic claim + revision pin).
-        await using (var db = new ProcuLinkDbContext(Options()))
-        {
-            var response = await BuildController(db, orgId)
-                .AssignSupplier(orderId, new AssignSupplierRequest(supplierId), CancellationToken.None);
-            Assert.IsType<OkObjectResult>(response);
-        }
-
-        await using (var claimed = new ProcuLinkDbContext(Options()))
-        {
-            var mid = await claimed.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == orderId);
-            Assert.Equal(OrderStatusConstants.Parsing, mid.Status);
-            Assert.Equal(supplierId, mid.SupplierId);
-            Assert.Equal(revisionId, mid.ConnectionRevisionId);   // pinned on assignment, not at ingest
-        }
-
-        // 3. The re-enqueued ParseOrderJob runs. There is no file to parse — the persisted lines
-        //    are the parsed data, and they must now resolve against the chosen supplier.
-        await using (var db = new ProcuLinkDbContext(Options()))
-        {
-            // Must not THROW either: the persist commits before the passport emit, so an exception
-            // raised after it would report a failed parse for an order that is actually resolved.
-            var result = await BuildIngestion(db).ParseStoredFileAsync(orgId, orderId, CancellationToken.None);
-            Assert.True(result.IsSuccess, result.Error);
-            Assert.NotEqual(OrderStatusConstants.Failed, result.Value!.Entity.Status);
-        }
-
-        await using var verify = new ProcuLinkDbContext(Options());
-        var order = await verify.PurchaseOrders.AsNoTracking().Include(o => o.Lines)
-            .SingleAsync(o => o.Id == orderId);
-
-        // Resolved against the assigned supplier's item mappings — the order left the hold.
-        Assert.Equal(OrderStatusConstants.Ready, order.Status);
-        Assert.Equal(supplierId, order.SupplierId);
-        Assert.All(order.Lines, l => Assert.False(l.NeedsReview));
-        Assert.Contains(order.Lines, l => l.BuyerItemCode == "WIDGET-A" && l.SupplierItemCode == "SUP-A");
-
-        // Two lines in, two lines out. The re-resolve replaces the parked set, it does not append —
-        // the same delete-then-insert the file-backed assign-supplier re-parse relies on.
-        Assert.Equal(2, order.Lines.Count);
-
-        // The header the extractor produced survives: there is no file to re-read it from, so a
-        // re-resolve that rebuilt the header from nothing would blank the PO number and buyer.
-        Assert.Equal("PO-BODY-NOSUP", order.PoNumber);
-        Assert.Equal("Acme Buyer", order.BuyerName);
-        Assert.Null(order.SourceFileKey);
     }
 
     // ── 3. The same contract for a parked ATTACHMENT (file-backed re-parse) ──
@@ -300,28 +237,6 @@ public sealed class UnroutedParsedOrderAssignSupplierPostgresTests(PostgresConta
         await db.SaveChangesAsync();
 
         return (orgId, supplierId, revisionId);
-    }
-
-    private static OrdersController BuildController(ProcuLinkDbContext db, Guid orgId)
-    {
-        var tenant = new Mock<ICurrentTenantService>();
-        tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
-
-        return new OrdersController(
-            new Mock<IOrderService>().Object,
-            tenant.Object,
-            new Mock<IBackgroundJobClient>().Object,
-            db,
-            NullLogger<OrdersController>.Instance,
-            new Mock<IBillingService>().Object,
-            new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object,
-            new Mock<IOrderMappingOverrideService>().Object,
-            new PromoteMappingService(db, new PoMappingService(db)),
-            new Mock<IFileStorageService>().Object,
-            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
-            Array.Empty<ITransformService>());
     }
 
     /// <summary>

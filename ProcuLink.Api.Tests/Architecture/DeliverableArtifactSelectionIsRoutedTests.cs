@@ -79,7 +79,6 @@ public sealed class DeliverableArtifactSelectionIsRoutedTests
     [
         "ProcuLink.Api.Controllers.OrdersController.MapToDto",
         "ProcuLink.Api.Services.OrderTransformService.TransformCoreAsync",
-        "ProcuLink.Api.Services.PassportService.GetAsync",
         "ProcuLink.Api.Services.ReplayService.ReprocessAsync",
         "ProcuLink.Core.Services.OutboundArtifactSelection.NewestDeliverable",
         "ProcuLink.Infrastructure.Services.DeliveryService.RetryDeliveryAsync",
@@ -391,8 +390,8 @@ public sealed class DeliverableArtifactSelectionIsRoutedTests
     {
         Fixture(nameof(OutboundArtifactSelectionFixtures.RoutedThroughNewestDeliverable)).Should().BeNull(
             "handing the whole question to the rule leaves no ordering behind to judge. Two "
-            + "production sites are written this way — both OrdersController "
-            + "resend paths — which is why the anti-vacuity floor pins the sites that DO still order, "
+            + "production sites were written this way — both OrdersController "
+            + "resend paths, deleted in plan 13b — which is why the anti-vacuity floor pins the sites that DO still order, "
             + "not a count of everything WP-35 touched.");
     }
 

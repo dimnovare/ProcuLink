@@ -171,59 +171,8 @@ public sealed class EndpointReachabilityGuardTests
     /// </summary>
     private static readonly IReadOnlyList<AccountedEndpoint> UncalledPendingDecision =
     [
-        // ── The recovery door the audit named. See Guard_SeesTheRecoveryDoorTheAuditNamed ────
-        new("POST /api/orders/{}/acceptance-gate/override",
-            "PENDING A DECISION, 2026-08-13 — named by the v2 audit as a caller-less recovery door. "
-            + "ProcuLink.Api/Controllers/OrderAcceptanceGateController.cs:70-78 documents it as the "
-            + "administrator's authorisation to send an order despite the supplier's blocking rules, "
-            + "with a required reason and a recorded identity — and no screen offers it. The GET "
-            + "beside it IS called, so an operator can see exactly why an order is blocked and has "
-            + "no way to act on it. Build the control or delete the endpoint."),
-
-        // ── Operator diagnostics that exist and cannot be looked at ──────────────────────
-        new("GET /api/auto-send/dry-runs",
-            "PENDING A DECISION, 2026-08-13 — the audit records the per-supplier auto-send flag as "
-            + "shipped with no indicator and no control; this is the evidence trail for it, and "
-            + "nothing reads that either. ProcuLink.Api/Controllers/AutoSendDryRunController.cs:145 "
-            + "exists in full, exercised by "
-            + "ProcuLink.Api.Tests/Integration/AutoSendDryRunPostgresTests.cs, behind no surface."),
-        new("GET /api/auto-send/dry-runs/summary",
-            "PENDING A DECISION, 2026-08-13 — the aggregate of the list above "
-            + "(ProcuLink.Api/Controllers/AutoSendDryRunController.cs:82); it stands or falls with "
-            + "the same decision and is listed separately so neither is lost."),
-
-        // ── Order-level reads with no screen ─────────────────────────────────────────────
-        new("GET /api/orders/{}/status",
-            "PENDING A DECISION, 2026-08-13 — a cheap poll-friendly status read. The review screen "
-            + "polls the full order instead (project-proculink/src/lib/api-client.ts fetches "
-            + "/api/orders/{id}), so this narrower endpoint is engine surface nobody adopted."),
-        new("GET /api/orders/{}/ai-decisions",
-            "PENDING A DECISION, 2026-08-13 — the AI decision trail for one order. "
-            + "ProcuLink.Api/Services/PassportService.cs:168 tells the operator in prose that it is "
-            + "\"available at GET /api/orders/{id}/ai-decisions\" — a sentence that promises a "
-            + "surface no screen provides. Either the review screen shows the trail or both the "
-            + "endpoint and the sentence go."),
-        new("POST /api/orders/{}/mark-rejected",
-            "PENDING A DECISION, 2026-08-13 — marks an order rejected by the supplier. The review "
-            + "screen RENDERS the resulting rejected_by_supplier status "
-            + "(project-proculink/src/lib/orderStatusManifest.ts) but offers no way to set it, so "
-            + "today the status can only arrive from a delivery response."),
-
-        // ── The supplier order-confirmation flow: built, never surfaced ──────────────────
-        new("POST /api/orders/{}/confirmation",
-            "PENDING A DECISION, 2026-08-13 — records a supplier order confirmation. "
-            + "ProcuLink.Api/Controllers/OrderConfirmationController.cs:45 is reachable only by an "
-            + "operator with a REST client. Decide whether inbound confirmation is a product "
-            + "surface."),
-        new("POST /api/orders/{}/confirmation/upload",
-            "PENDING A DECISION, 2026-08-13 — the file half of the confirmation flow above "
-            + "(OrderConfirmationController.cs:88). Same decision, listed separately so neither is "
-            + "lost."),
-        new("GET /api/order-confirmations/{}",
-            "PENDING A DECISION, 2026-08-13 — the read half of the same confirmation flow "
-            + "(OrderConfirmationController.cs:132). A GET, so the frontend's state-changing sweep "
-            + "never saw it; it makes the confirmation gap a whole feature rather than two writes."),
-
+        // Nine order-API entries left with their endpoints on 2026-11-13 (plan 13b: the order API
+        // is a read-only archive) — removed from the baseline below in the same change.
         // ── Engine surfaces the product never adopted ────────────────────────────────────
         new("GET /api/billing/ai-usage",
             "PENDING A DECISION, 2026-08-13 — per-organisation AI spend "
@@ -272,8 +221,6 @@ public sealed class EndpointReachabilityGuardTests
             // via the curl written into docs/deployment/monitoring-runbook.md §5 — a runbook curl,
             // the same class of out-of-band caller as the account-status entry above it.
             "GET /api/admin/orders/find",
-            "GET /api/auto-send/dry-runs",
-            "GET /api/auto-send/dry-runs/summary",
             "GET /api/billing/ai-usage",
             "GET /api/dev/files/{**}",
             // Moved into the baseline on 2026-11-07, deliberately and in the open: the file API is a
@@ -285,19 +232,12 @@ public sealed class EndpointReachabilityGuardTests
             // failure text asks: the Postmark bounce webhook is caller-less BY CONSTRUCTION — the
             // caller is the mail provider. It is the second provider webhook here, beside Stripe's.
             "POST /api/inbound-email/postmark-bounce",
-            "GET /api/order-confirmations/{}",
-            "GET /api/orders/{}/ai-decisions",
-            "GET /api/orders/{}/status",
             "GET /health",
             "POST /api/admin/organisations/{}/account-status",
             "POST /api/admin/organisations/{}/orders/bulk-erase",
             "POST /api/admin/organisations/{}/retention",
             "POST /api/billing/pilot/request-extension",
             "POST /api/billing/webhook",
-            "POST /api/orders/{}/acceptance-gate/override",
-            "POST /api/orders/{}/confirmation",
-            "POST /api/orders/{}/confirmation/upload",
-            "POST /api/orders/{}/mark-rejected",
         };
 
     /// <summary>
@@ -348,12 +288,14 @@ public sealed class EndpointReachabilityGuardTests
     // count of something the DETECTOR itself produced — not a count of files on disk. A prior
     // packet in this repo re-pointed a sweep at a project with no matches and its file-count floor
     // passed anyway; a file-count floor proves the directory exists, not that anything was found.
-    private const int MinimumEndpoints = 110;          // 125 today; 131 before the order-ops cut of 2026-11-13 removed six
-    private const int MinimumControllers = 24;         // 27 today; 30 before the order-ops cut of 2026-11-13 deleted three
-    private const int MinimumCallerFiles = 300;        // 418 today
-    private const long MinimumCallerBytes = 2_000_000; // 3.30 MB today
-    private const int MinimumCallsExtracted = 100;     // 159 today
-    private const int MinimumDistinctCalledEndpoints = 80;
+    // Lowered on 2026-11-13 when plan 13b cut the order API to a read-only archive: nine controllers
+    // and the order write actions went, and the frontend lost their client calls with them.
+    private const int MinimumEndpoints = 70;           // 81 today; 125 before plan 13b, 131 before the order-ops cut
+    private const int MinimumControllers = 16;         // 18 today; 27 before plan 13b deleted nine
+    private const int MinimumCallerFiles = 300;        // 377 today
+    private const long MinimumCallerBytes = 1_700_000; // 2.02 MB today
+    private const int MinimumCallsExtracted = 90;      // 110 today
+    private const int MinimumDistinctCalledEndpoints = 60; // 71 today
 
     // ── The guard ────────────────────────────────────────────────────────────────────────
 
@@ -370,21 +312,6 @@ public sealed class EndpointReachabilityGuardTests
         {
             Assert.Fail(Render(unexplained, scan.Endpoints.Count, scan.CallerFiles.Count, scan.Calls.Count));
         }
-    }
-
-    /// <summary>
-    /// The audit's own finding, pinned. This is the endpoint that remains of the two §3 pointed at
-    /// when it said "two documented recovery doors have zero callers" (the other, the un-promote-layout
-    /// door `DELETE /api/suppliers/{}/po-mapping/output-tree`, went with the supplier mapping endpoints), and it is the reason this file exists. If
-    /// it gains a control, delete its declaration AND its line here — the deletion is the win.
-    /// If the DETECTOR stops seeing it, the guard has regressed to the false green it replaced.
-    /// </summary>
-    [Fact]
-    public void Guard_SeesTheRecoveryDoorTheAuditNamed()
-    {
-        var unreachable = Scan.Value.Unreachable.Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
-
-        Assert.Contains("POST /api/orders/{}/acceptance-gate/override", unreachable);
     }
 
     /// <summary>
@@ -435,10 +362,10 @@ public sealed class EndpointReachabilityGuardTests
         // routed, which this service does not use and this scanner does not model.
         Assert.DoesNotContain(scan.Endpoints, e => e.Path == "/(NO-ATTRIBUTE-ROUTE)");
 
-        // Absolute templates DISCARD the controller prefix. Three actions rely on it, and a
+        // Absolute templates DISCARD the controller prefix. Two actions rely on it, and a
         // hand-rolled combiner is exactly where a source-text scanner gets this wrong: it would
-        // report /api/dashboard/api/orders/summary, which nothing calls, as a finding.
-        Assert.Contains(scan.Endpoints, e => e.Key == "GET /api/orders/summary" && e.Site == "DashboardController.GetSummary");
+        // report /api/documents/api/flows/{}/documents, which nothing calls, as a finding.
+        Assert.Contains(scan.Endpoints, e => e.Key == "POST /api/flows/{}/documents" && e.Site == "DocumentsController.Upload");
         Assert.Contains(scan.Endpoints, e => e.Key == "GET /health" && e.Site == "HealthController.Health");
     }
 

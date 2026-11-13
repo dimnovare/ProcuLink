@@ -26,12 +26,11 @@ namespace ProcuLink.Api.Tests.Services;
 /// <list type="bullet">
 ///   <item><description>the bytes the download path serves must HASH to the recorded
 ///   <c>ArtifactSha256</c> — asserting a hash merely exists proves nothing;</description></item>
-///   <item><description>the passport must say WHICH artifact each attempt dispatched (an order
-///   can hold several of each), and must say nothing when no dispatch evidence proves the
-///   link;</description></item>
 ///   <item><description>the download path must stay org-scoped — it serves customer
 ///   documents.</description></item>
 /// </list>
+/// The passport half (which artifact each attempt dispatched) retired with the passport endpoint
+/// in plan 13b.
 /// </summary>
 public class ProveWhatWasSentTests
 {
@@ -227,163 +226,5 @@ public class ProveWhatWasSentTests
         Assert.False(stolen.IsSuccess);
         Assert.Null(stolen.Value);
         storage.VerifyNoOtherCalls();
-    }
-
-    // ── The passport surfaces the fingerprint on the artifact ───────────────────
-
-    [Fact]
-    public async Task Passport_SurfacesTheFingerprint_OnTheOutputArtifact()
-    {
-        await using var db = NewDb();
-        var (orgId, orderId) = await SeedResolvedOrderAsync(db);
-
-        var artifactId = Guid.NewGuid();
-        var sha        = new string('b', 64);
-        db.OutboundArtifacts.Add(new OutboundArtifact
-        {
-            Id = artifactId, OrderId = orderId, OrgId = orgId, Format = "csv",
-            FileKey = $"{orgId}/{orderId}/artifacts/{artifactId}.csv", CreatedAt = DateTime.UtcNow,
-            ArtifactSha256 = sha,
-        });
-        await db.SaveChangesAsync();
-
-        var passport = await new PassportService(db).GetAsync(orgId, orderId, CancellationToken.None);
-
-        Assert.True(passport.IsSuccess, passport.Error);
-        Assert.Equal(artifactId, passport.Value!.OutputArtifact!.ArtifactId);
-        Assert.Equal(sha, passport.Value.OutputArtifact.ArtifactSha256);
-    }
-
-    // ── The passport says WHICH artifact each attempt dispatched ────────────────
-
-    [Fact]
-    public async Task Passport_LinksEachAttempt_ToTheArtifactItDispatched_AndCarriesTheSentFingerprint()
-    {
-        // Two artifacts, two attempts — the shape the UI must not flatten into "the" artifact.
-        await using var db = NewDb();
-        var (orgId, orderId) = await SeedResolvedOrderAsync(db);
-
-        var firstArtifact  = Guid.NewGuid();
-        var secondArtifact = Guid.NewGuid();
-        var firstSha       = new string('1', 64);
-        var secondSha      = new string('2', 64);
-        var now            = DateTime.UtcNow;
-
-        db.OutboundArtifacts.AddRange(
-            new OutboundArtifact
-            {
-                Id = firstArtifact, OrderId = orderId, OrgId = orgId, Format = "csv",
-                FileKey = $"{orgId}/{orderId}/artifacts/{firstArtifact}.csv",
-                CreatedAt = now.AddMinutes(-10), ArtifactSha256 = firstSha,
-            },
-            new OutboundArtifact
-            {
-                Id = secondArtifact, OrderId = orderId, OrgId = orgId, Format = "csv",
-                FileKey = $"{orgId}/{orderId}/artifacts/{secondArtifact}.csv",
-                CreatedAt = now, ArtifactSha256 = secondSha,
-            });
-
-        // The dispatch evidence that ties an attempt to its artifact: the deterministic
-        // idempotency key, written verbatim in the on-the-wire format (independent of the
-        // helper under test — the symmetry assertion below pins the two together).
-        db.DeliveryAttempts.AddRange(
-            new DeliveryAttempt
-            {
-                Id = Guid.NewGuid(), OrderId = orderId, OrgId = orgId, AttemptNumber = 1,
-                Channel = "http", Destination = "https://nordmark.example/po",
-                Status = DeliveryAttempt.StatusFailed, AttemptedAt = now.AddMinutes(-9),
-                IdempotencyKey = $"plk-dlv-{orderId:N}-{firstArtifact:N}",
-                ArtifactSha256 = firstSha,
-            },
-            new DeliveryAttempt
-            {
-                Id = Guid.NewGuid(), OrderId = orderId, OrgId = orgId, AttemptNumber = 2,
-                Channel = "http", Destination = "https://nordmark.example/po",
-                Status = DeliveryAttempt.StatusSuccess, AttemptedAt = now.AddMinutes(-1),
-                IdempotencyKey = $"plk-dlv-{orderId:N}-{secondArtifact:N}",
-                ArtifactSha256 = secondSha,
-            });
-        await db.SaveChangesAsync();
-
-        var passport = await new PassportService(db).GetAsync(orgId, orderId, CancellationToken.None);
-        Assert.True(passport.IsSuccess, passport.Error);
-
-        var attempts = passport.Value!.DeliveryAttempts.OrderBy(a => a.AttemptNumber).ToList();
-        Assert.Equal(2, attempts.Count);
-
-        // Each attempt points at the artifact IT sent — not at "the latest".
-        Assert.Equal(firstArtifact,  attempts[0].ArtifactId);
-        Assert.Equal(firstSha,       attempts[0].ArtifactSha256);
-        Assert.Equal(secondArtifact, attempts[1].ArtifactId);
-        Assert.Equal(secondSha,      attempts[1].ArtifactSha256);
-        Assert.NotEqual(attempts[0].ArtifactId, attempts[1].ArtifactId);
-    }
-
-    [Fact]
-    public void TheIdempotencyKey_BuiltByDelivery_ParsesBackToTheSameArtifactId()
-    {
-        // Build↔parse symmetry against the literal wire format used above, so the passport's
-        // attempt→artifact link cannot silently drift from what DeliveryService actually writes.
-        var orderId    = Guid.NewGuid();
-        var artifactId = Guid.NewGuid();
-
-        var built = DeliveryService.BuildIdempotencyKey(orderId, artifactId);
-        Assert.Equal($"plk-dlv-{orderId:N}-{artifactId:N}", built);
-
-        Assert.True(DeliveryIdempotencyKey.TryParseArtifactId(built, out var parsed));
-        Assert.Equal(artifactId, parsed);
-    }
-
-    [Fact]
-    public async Task Passport_LeavesTheArtifactLinkNull_WhenNoDispatchEvidenceProvesIt()
-    {
-        // A legacy / test-fire attempt carries no idempotency key and no dispatched-bytes hash.
-        // We must not guess: no link means the UI offers no "download what we sent".
-        await using var db = NewDb();
-        var (orgId, orderId) = await SeedResolvedOrderAsync(db);
-
-        db.DeliveryAttempts.Add(new DeliveryAttempt
-        {
-            Id = Guid.NewGuid(), OrderId = orderId, OrgId = orgId, AttemptNumber = 1,
-            Channel = "http", Destination = "https://nordmark.example/po",
-            Status = DeliveryAttempt.StatusFailed, AttemptedAt = DateTime.UtcNow,
-            IdempotencyKey = null, ArtifactSha256 = null,
-        });
-        await db.SaveChangesAsync();
-
-        var passport = await new PassportService(db).GetAsync(orgId, orderId, CancellationToken.None);
-        Assert.True(passport.IsSuccess, passport.Error);
-
-        var attempt = Assert.Single(passport.Value!.DeliveryAttempts);
-        Assert.Null(attempt.ArtifactId);
-        Assert.Null(attempt.ArtifactSha256);
-    }
-
-    [Fact]
-    public async Task Passport_DoesNotLinkAnAttempt_ToAnArtifactBelongingToAnotherOrder()
-    {
-        // A malformed / stale key that names an artifact this order does not own must not
-        // produce a download link — the passport would be pointing the operator at bytes the
-        // download endpoint will (correctly) refuse.
-        await using var db = NewDb();
-        var (orgId, orderId) = await SeedResolvedOrderAsync(db);
-
-        db.DeliveryAttempts.Add(new DeliveryAttempt
-        {
-            Id = Guid.NewGuid(), OrderId = orderId, OrgId = orgId, AttemptNumber = 1,
-            Channel = "http", Destination = "https://nordmark.example/po",
-            Status = DeliveryAttempt.StatusSuccess, AttemptedAt = DateTime.UtcNow,
-            IdempotencyKey = $"plk-dlv-{orderId:N}-{Guid.NewGuid():N}", // artifact row does not exist
-            ArtifactSha256 = new string('c', 64),
-        });
-        await db.SaveChangesAsync();
-
-        var passport = await new PassportService(db).GetAsync(orgId, orderId, CancellationToken.None);
-        Assert.True(passport.IsSuccess, passport.Error);
-
-        var attempt = Assert.Single(passport.Value!.DeliveryAttempts);
-        Assert.Null(attempt.ArtifactId);
-        // The dispatched-bytes fingerprint is still real evidence and stays.
-        Assert.Equal(new string('c', 64), attempt.ArtifactSha256);
     }
 }

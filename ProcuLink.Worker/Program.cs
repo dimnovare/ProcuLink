@@ -270,9 +270,6 @@ builder.Services.AddScoped<ICxmlCredentialResolver, CxmlCredentialResolver>();
 // AcceptanceGateHostRegistrationTests pins both hosts.
 builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();
 builder.Services.AddScoped<IAcceptanceGate, AcceptanceGate>();
-// WP-33 stage 1 — auto-send in dry run. This host runs ParseOrderJob, so this is where the
-// decision is actually made; AutoSendDryRunCannotSendTests.BothHosts_registerTheEvaluator pins both.
-builder.Services.AddScoped<IAutoSendDryRunEvaluator, AutoSendDryRunEvaluator>();
 builder.Services.AddScoped<IDeliveryService, DeliveryService>();
 
 // ── Wave 4 reliability/observability: worker-health alert sweep + retention ──
@@ -389,7 +386,6 @@ builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, Pr
 // Group O reliability: automatic delivery retry queue (scheduled here).
 builder.Services.AddScoped<RetryDeliveryJob>();
 builder.Services.AddScoped<IRetryDeliveryEnqueuer, ProcuLink.Infrastructure.Jobs.HangfireRetryDeliveryEnqueuer>();
-builder.Services.AddScoped<IDeliveryDispatchEnqueuer, ProcuLink.Api.Jobs.HangfireDeliveryDispatchEnqueuer>();
 builder.Services.AddScoped<BillingReconciliationJob>();
 // ParseOrderJob (executed here) records schema fingerprints — register the service it depends on.
 builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();

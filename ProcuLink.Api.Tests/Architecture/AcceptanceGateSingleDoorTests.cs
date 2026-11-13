@@ -1,5 +1,4 @@
 using System.Text.RegularExpressions;
-using ProcuLink.Api.Controllers;
 using ProcuLink.Api.Jobs;
 using ProcuLink.Api.Services;
 using Xunit;
@@ -23,8 +22,15 @@ namespace ProcuLink.Api.Tests.Architecture;
 /// caller and <c>TransformOrderJob</c> exactly one enqueuer. The day someone adds a second trigger —
 /// an auto-send after parse, a scheduled sweep, an ERP poller — the behavioural tests would keep
 /// passing while a real hole opened. Likewise, the delivery-side proofs
-/// (<c>AcceptanceGateBlocksDeliveryTests</c>) cover the three manual-send endpoints that exist; this
-/// is what notices a fourth.</para>
+/// covered the three manual-send endpoints that existed until plan 13b; this is what notices a new
+/// one.</para>
+///
+/// <para><b>After plan 13b.</b> The order API is a read-only archive: <c>POST
+/// /api/orders/{id}/transform</c>, <c>/redeliver</c> and <c>/retry-delivery</c> were deleted with
+/// it, so NO production type may start a transform or force a redelivery any more.
+/// <see cref="NoProductionType_canStartATransform"/> and <see cref="NothingCanForceARedelivery"/>
+/// now pin that empty set — the day either finds a member, a send path has come back without this
+/// file being told.</para>
 ///
 /// <para><b>Structural, by SYMBOL.</b> The failure being guarded is a call site nothing yet
 /// references, which no runtime test can observe. It is found by resolving the metadata tokens in
@@ -36,25 +42,14 @@ namespace ProcuLink.Api.Tests.Architecture;
 public sealed class AcceptanceGateSingleDoorTests
 {
     /// <summary>
-    /// Types allowed to START a transform, and why each one is legitimate.
-    ///
-    /// <para>Every claim in these strings is asserted somewhere. "The only transform trigger" is
-    /// this file's own <see cref="OnlyOneProductionType_canStartATransform"/>; "the workshop's Send
-    /// button calls it" is <c>AcceptanceGateEntryPathsPostgresTests.BrowserSend_isRefused</c>, which
-    /// drives the endpoint and the job it enqueues. What is NOT claimed — and used to be — is that
-    /// the inbox bulk-send calls it. It does not: it calls <c>/redeliver</c>, which is why that
-    /// endpoint is gated separately and pinned by
-    /// <see cref="TheManualSendEndpoints_consultTheGate"/>.</para>
+    /// Types allowed to START a transform, and why each one is legitimate. EMPTY since plan 13b:
+    /// its one member, <c>OrdersController</c> (<c>POST /api/orders/{id}/transform</c>), was the
+    /// order workshop's Send button and was deleted with the order API. A new entry here is a new
+    /// send path — it must go through <c>OrderTransformService.TransformAsync</c> and carry its
+    /// reason.
     /// </summary>
     private static readonly IReadOnlyDictionary<Type, string> KnownEnqueuers =
-        new Dictionary<Type, string>
-        {
-            [typeof(OrdersController)] =
-                "POST /api/orders/{id}/transform — the only trigger. The order workshop's Send button "
-              + "calls it, and orders arriving over REST ingress or inbound email are driven through "
-              + "the same job. The inbox's bulk 'Send selected' does NOT: it calls POST "
-              + "/api/orders/{id}/redeliver, gated separately in OrdersController.Redeliver.",
-        };
+        new Dictionary<Type, string>();
 
     /// <summary>Types allowed to RUN a transform once one has been started.</summary>
     private static readonly IReadOnlyDictionary<Type, string> KnownRunners =
@@ -68,7 +63,7 @@ public sealed class AcceptanceGateSingleDoorTests
     // ── The transform door ────────────────────────────────────────────────────
 
     [Fact]
-    public void OnlyOneProductionType_canStartATransform()
+    public void NoProductionType_canStartATransform()
     {
         var callers = TransformTriggerDetector.TypesThatCanStartATransform()
             // The job's own static factory is the definition, not a second trigger.
@@ -113,33 +108,17 @@ public sealed class AcceptanceGateSingleDoorTests
     // ── The delivery door ─────────────────────────────────────────────────────
 
     /// <summary>
-    /// The endpoints that dispatch an ALREADY-STORED artifact on a human's say-so must consult the
-    /// gate: <c>OrdersController</c> (redeliver — the inbox bulk-send and a parked order's "Send
-    /// again" — and retry-delivery).
-    ///
-    /// <para>This is the assertion the corrected <see cref="KnownEnqueuers"/> justification owes:
-    /// the reason it is now honest to say "the inbox bulk-send does not call /transform" is that the
-    /// path it DOES call is gated, and here is the check that it stays that way.</para>
+    /// Nothing may enqueue a DELIVERY of a stored artifact bypassing AutoDeliver
+    /// (<c>DeliverOrderJob.EnqueueRedeliver</c>). Its only caller was <c>OrdersController</c>'s
+    /// manual send (redeliver / retry-delivery), deleted with the order API in plan 13b — so a
+    /// caller appearing is a new ungated send path, which is exactly the defect this work package
+    /// was reopened for.
     /// </summary>
     [Fact]
-    public void TheManualSendEndpoints_consultTheGate()
+    public void NothingCanForceARedelivery()
     {
-        var consulting = TransformTriggerDetector.TypesThatConsultTheGate();
-
-        Assert.Contains(typeof(OrdersController), consulting);
-    }
-
-    /// <summary>
-    /// Only known types may enqueue a DELIVERY of a stored artifact bypassing AutoDeliver
-    /// (<c>DeliverOrderJob.EnqueueRedeliver</c>). The only one is the manual-send endpoint above,
-    /// and it is gated — so a third one appearing is a new ungated send path, which is exactly
-    /// the defect this work package was reopened for.
-    /// </summary>
-    [Fact]
-    public void OnlyTheGatedEndpoints_canForceARedelivery()
-    {
-        var forced = ForcedRedeliverCall.Matches(Text("ProcuLink.Api/Controllers/OrdersController.cs")).Count;
-        Assert.True(forced >= 1, "the known forced-redelivery call site is gone — did it move?");
+        // The pattern must still see the call shape, or an empty result below proves nothing.
+        Assert.Matches(ForcedRedeliverCall, "DeliverOrderJob.EnqueueRedeliver(_jobs, orderId, orgId, artifactId);");
 
         var callers = Sources()
             .Where(f => ForcedRedeliverCall.IsMatch(f.Text))
@@ -149,12 +128,8 @@ public sealed class AcceptanceGateSingleDoorTests
             .OrderBy(p => p, StringComparer.Ordinal)
             .ToList();
 
-        Assert.True(
-            callers.SequenceEqual(new[]
-            {
-                "ProcuLink.Api/Controllers/OrdersController.cs",
-            }, StringComparer.Ordinal),
-            "The set of files that can force a delivery of a stored artifact changed; found: "
+        Assert.True(callers.Count == 0,
+            "A file can force a delivery of a stored artifact again; found: "
           + string.Join(", ", callers)
           + ". A forced redelivery is a manual send — it must consult IAcceptanceGate before enqueuing, "
           + "or it reopens the hole where the inbox bulk-send shipped orders the supplier refuses.");

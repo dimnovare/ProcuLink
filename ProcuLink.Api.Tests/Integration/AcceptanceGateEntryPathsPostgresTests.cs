@@ -1,13 +1,7 @@
 using Hangfire;
-using Hangfire.Common;
-using Hangfire.States;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
-using ProcuLink.Api.Contracts;
-using ProcuLink.Api.Controllers;
 using ProcuLink.Api.Jobs;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Constants;
@@ -24,27 +18,18 @@ using Xunit;
 namespace ProcuLink.Api.Tests.Integration;
 
 /// <summary>
-/// WP-17 — a blocked order refuses to transform through EVERY entry path, on real Postgres.
+/// WP-17 — a blocked order refuses to transform through the job door, on real Postgres.
 ///
-/// <para><b>Why Postgres.</b> <c>OrdersController.Transform</c> claims the order with
-/// <c>ExecuteUpdateAsync</c>, which EF InMemory cannot translate — the browser path cannot be
-/// driven end to end anywhere else. The transform's own claim has an InMemory fallback, so only
-/// here do the controller claim and the service claim both run the way production runs them.</para>
+/// <para><b>What is left after plan 13b.</b> The order API is a read-only archive: the browser send
+/// (<c>POST /api/orders/{id}/transform</c>) and the inbox bulk send
+/// (<c>POST /api/orders/{id}/redeliver</c>) were deleted with it, and their facts went with them.
+/// What remains is the door they all led to — <c>TransformOrderJob</c> →
+/// <c>OrderTransformService.TransformAsync</c> → the acceptance gate — driven exactly as Hangfire
+/// runs it, for the REST-ingress and inbound-email shapes of order.</para>
 ///
-/// <para><b>What "entry paths" means after WP-17.</b> There is exactly ONE server-side TRANSFORM
-/// door — <c>OrderTransformService.TransformAsync</c>, reached only via <c>TransformOrderJob</c>,
-/// which only <c>OrdersController.Transform</c> enqueues (<c>AcceptanceGateSingleDoorTests</c> pins
-/// that structurally). Browser send, REST ingress and inbound email all reach the supplier through
-/// that door, so they inherit one answer.
-///
-/// <para>The inbox's bulk "Send selected" does NOT. It calls
-/// <c>POST /api/orders/{id}/redeliver</c> once per selected row, which dispatches a STORED artifact
-/// and never touches the transform. Because <c>Organisation.AutoDeliver</c> defaults to false,
-/// <c>ready_to_deliver</c> is the ordinary resting state of a live order and that endpoint is the
-/// mainline manual send in this product — so it is gated in its own right
-/// (<see cref="InboxBulkSend_refusesEveryOrderInTheBatch"/>, and the unit-level proof for it and
-/// its siblings in <c>AcceptanceGateBlocksDeliveryTests</c>). Driving the transform endpoint three
-/// times would have proved nothing about it.</para></para>
+/// <para><b>Why Postgres.</b> The transform claims the order with <c>ExecuteUpdateAsync</c>, which
+/// EF InMemory cannot translate (it takes a fallback), so only here does the claim run the way
+/// production runs it.</para>
 ///
 /// <para><b>The negative control is the load-bearing test here.</b> Everything else in this file
 /// would stay green if the orders were refused for an unrelated reason — a missing supplier, an
@@ -77,93 +62,10 @@ public sealed class AcceptanceGateEntryPathsPostgresTests(PostgresContainerFixtu
 
     private ProcuLinkDbContext NewContext() => new(_options!);
 
-    // ── The four entry paths ──────────────────────────────────────────────────
-
-    /// <summary>Path 1 — a coordinator clicks Send in the order workshop.</summary>
-    [DockerRequiredFact]
-    public async Task BrowserSend_isRefused()
-    {
-        var order = await SeedBlockedOrderAsync("browser");
-        var outcome = await SendThroughTheControllerAsync(order);
-
-        AssertRefused(outcome);
-        Assert.Equal(StatusCodes.Status202Accepted, outcome.HttpStatus);   // the API accepted the request…
-        Assert.Equal(OrderStatusConstants.TransformFailed, outcome.Status); // …and the server refused the send
-    }
+    // ── The entry paths ───────────────────────────────────────────────────────
 
     /// <summary>
-    /// Path 2 — the inbox's bulk "Send selected", driven through the endpoint it ACTUALLY calls:
-    /// <c>POST /api/orders/{id}/redeliver</c>, once per selected row, on orders that already hold a
-    /// stored artifact and sit in <c>ready_to_deliver</c>. This is the mainline manual send, and it
-    /// never goes near the transform.
-    ///
-    /// <para>The batch shape is the assertion that matters here: three orders selected together must
-    /// ALL be refused and NONE of them may enqueue a delivery. One row slipping through a shared
-    /// code path is precisely the failure a per-order test would not see.</para>
-    /// </summary>
-    [DockerRequiredFact]
-    public async Task InboxBulkSend_refusesEveryOrderInTheBatch()
-    {
-        var batch = new List<Seeded>();
-        for (var i = 0; i < 3; i++)
-            batch.Add(await SeedBlockedOrderAsync($"bulk-{i}",
-                status: OrderStatusConstants.ReadyToDeliver, withArtifact: true));
-
-        var enqueued = 0;
-        foreach (var order in batch)
-        {
-            var (status, error, created) = await BulkSendOneAsync(order);
-
-            Assert.Equal(StatusCodes.Status409Conflict, status);
-            Assert.NotNull(error);
-            Assert.Contains("Currency must be EUR", error!);
-            Assert.Contains("USD", error!);
-            Assert.Contains("Set currency to EUR", error!);
-            Assert.DoesNotContain("failed rule", error!);
-            enqueued += created;
-        }
-
-        Assert.Equal(0, enqueued);
-
-        // …and no order in the batch was moved on by the attempt: a refusal must leave the row
-        // exactly where the operator left it, still selectable, still fixable.
-        await using var db = NewContext();
-        foreach (var order in batch)
-        {
-            var status = await db.PurchaseOrders.AsNoTracking()
-                .Where(o => o.Id == order.OrderId && o.OrgId == order.OrgId)
-                .Select(o => o.Status).FirstAsync();
-            Assert.Equal(OrderStatusConstants.ReadyToDeliver, status);
-        }
-    }
-
-    /// <summary>
-    /// NEGATIVE CONTROL for the bulk send: same fixture, same endpoint, the ONE difference is the
-    /// currency the supplier's rule judges. Without this, "the bulk send is refused" and "the bulk
-    /// send is broken" look identical.
-    /// </summary>
-    [DockerRequiredFact]
-    public async Task InboxBulkSend_whenTheOrdersSatisfyTheRule_sendsEveryOne()
-    {
-        var batch = new List<Seeded>();
-        for (var i = 0; i < 3; i++)
-            batch.Add(await SeedBlockedOrderAsync($"bulk-ok-{i}", currency: "EUR",
-                status: OrderStatusConstants.ReadyToDeliver, withArtifact: true));
-
-        var enqueued = 0;
-        foreach (var order in batch)
-        {
-            var (status, error, created) = await BulkSendOneAsync(order);
-            Assert.Equal(StatusCodes.Status202Accepted, status);
-            Assert.Null(error);
-            enqueued += created;
-        }
-
-        Assert.Equal(batch.Count, enqueued);
-    }
-
-    /// <summary>
-    /// Path 3 — an order pushed in over REST ingress (<c>plk_</c> API key). It reaches the transform
+    /// An order pushed in over REST ingress (<c>plk_</c> API key). It reaches the transform
     /// through the Hangfire job, with no browser and no controller in the loop.
     /// </summary>
     [DockerRequiredFact]
@@ -174,7 +76,7 @@ public sealed class AcceptanceGateEntryPathsPostgresTests(PostgresContainerFixtu
     }
 
     /// <summary>
-    /// Path 4 — an order that arrived as inbound email ({slug}@orders.proculink.eu). Same job door,
+    /// An order that arrived as inbound email ({slug}@orders.proculink.eu). Same job door,
     /// no human in the loop at all, which is exactly the case the browser-only enforcement missed.
     /// </summary>
     [DockerRequiredFact]
@@ -183,33 +85,6 @@ public sealed class AcceptanceGateEntryPathsPostgresTests(PostgresContainerFixtu
         var order = await SeedBlockedOrderAsync("email-ingest",
             sourceFileKey: "ingress/email/po.csv", inboundSenderDomain: "acme.example");
         AssertRefused(await SendThroughTheJobAsync(order));
-    }
-
-    /// <summary>
-    /// The three TRANSFORM-door paths must AGREE. Asserting each one separately would still pass if
-    /// one of them started refusing for a different reason, or stopped refusing while the others
-    /// carried the suite; this compares them to each other, so any single path drifting fails the
-    /// test. (The inbox bulk-send is deliberately absent: it is not a transform-door path, and
-    /// folding it in here is exactly the conflation that let it go ungated.)
-    /// </summary>
-    [DockerRequiredFact]
-    public async Task AllTransformDoorPaths_reachTheSameRefusal()
-    {
-        var outcomes = new List<(string Path, Outcome Result)>
-        {
-            ("browser send",     await SendThroughTheControllerAsync(await SeedBlockedOrderAsync("agree-browser"))),
-            ("REST ingress",     await SendThroughTheJobAsync(await SeedBlockedOrderAsync("agree-rest", sourceFileKey: "ingress/rest/po.csv"))),
-            ("inbound email",    await SendThroughTheJobAsync(await SeedBlockedOrderAsync("agree-email", inboundSenderDomain: "acme.example"))),
-        };
-
-        var statuses = outcomes.Select(o => o.Result.Status).Distinct().ToList();
-        Assert.True(statuses.Count == 1,
-            "the entry paths disagree about the outcome: "
-          + string.Join(", ", outcomes.Select(o => $"{o.Path} → {o.Result.Status}")));
-        Assert.Equal(OrderStatusConstants.TransformFailed, statuses[0]);
-
-        Assert.All(outcomes, o => Assert.Empty(o.Result.Artifacts));
-        Assert.All(outcomes, o => Assert.Contains("Currency must be EUR", o.Result.ErrorMessage ?? ""));
     }
 
     // ── The negative control ──────────────────────────────────────────────────
@@ -224,8 +99,8 @@ public sealed class AcceptanceGateEntryPathsPostgresTests(PostgresContainerFixtu
     [DockerRequiredFact]
     public async Task NegativeControl_theOnlyDifferenceIsTheRule()
     {
-        var blocked = await SendThroughTheControllerAsync(await SeedBlockedOrderAsync("control-usd", currency: "USD"));
-        var allowed = await SendThroughTheControllerAsync(await SeedBlockedOrderAsync("control-eur", currency: "EUR"));
+        var blocked = await SendThroughTheJobAsync(await SeedBlockedOrderAsync("control-usd", currency: "USD"));
+        var allowed = await SendThroughTheJobAsync(await SeedBlockedOrderAsync("control-eur", currency: "EUR"));
 
         Assert.NotEqual(blocked.Status, allowed.Status);
 
@@ -245,9 +120,9 @@ public sealed class AcceptanceGateEntryPathsPostgresTests(PostgresContainerFixtu
     [DockerRequiredFact]
     public async Task NegativeControl_aWarningRuleDoesNotStopTheSend()
     {
-        var blocked = await SendThroughTheControllerAsync(
+        var blocked = await SendThroughTheJobAsync(
             await SeedBlockedOrderAsync("sev-error", severity: "error"));
-        var allowed = await SendThroughTheControllerAsync(
+        var allowed = await SendThroughTheJobAsync(
             await SeedBlockedOrderAsync("sev-warning", severity: "warning"));
 
         Assert.NotEqual(blocked.Status, allowed.Status);
@@ -266,7 +141,7 @@ public sealed class AcceptanceGateEntryPathsPostgresTests(PostgresContainerFixtu
     {
         var order = await SeedBlockedOrderAsync("override");
 
-        var refused = await SendThroughTheControllerAsync(order);
+        var refused = await SendThroughTheJobAsync(order);
         Assert.Equal(OrderStatusConstants.TransformFailed, refused.Status);
 
         await using (var db = NewContext())
@@ -278,7 +153,7 @@ public sealed class AcceptanceGateEntryPathsPostgresTests(PostgresContainerFixtu
             Assert.True(result.Recorded, result.Error);
         }
 
-        var sent = await SendThroughTheControllerAsync(order);
+        var sent = await SendThroughTheJobAsync(order);
         Assert.Equal(OrderStatusConstants.ReadyToDeliver, sent.Status);
         Assert.Single(sent.Artifacts);
 
@@ -309,7 +184,7 @@ public sealed class AcceptanceGateEntryPathsPostgresTests(PostgresContainerFixtu
     public async Task ARefusedOrder_sendsOnceTheDataIsFixed()
     {
         var order = await SeedBlockedOrderAsync("recover");
-        Assert.Equal(OrderStatusConstants.TransformFailed, (await SendThroughTheControllerAsync(order)).Status);
+        Assert.Equal(OrderStatusConstants.TransformFailed, (await SendThroughTheJobAsync(order)).Status);
 
         await using (var db = NewContext())
         {
@@ -318,7 +193,7 @@ public sealed class AcceptanceGateEntryPathsPostgresTests(PostgresContainerFixtu
             await db.SaveChangesAsync();
         }
 
-        var sent = await SendThroughTheControllerAsync(order);
+        var sent = await SendThroughTheJobAsync(order);
         Assert.Equal(OrderStatusConstants.ReadyToDeliver, sent.Status);
         Assert.Single(sent.Artifacts);
     }
@@ -327,8 +202,7 @@ public sealed class AcceptanceGateEntryPathsPostgresTests(PostgresContainerFixtu
 
     private sealed record Seeded(Guid OrgId, Guid OrderId);
 
-    private sealed record Outcome(
-        string Status, IReadOnlyList<Guid> Artifacts, string? ErrorMessage, int HttpStatus);
+    private sealed record Outcome(string Status, IReadOnlyList<Guid> Artifacts, string? ErrorMessage);
 
     private static void AssertRefused(Outcome outcome)
     {
@@ -344,70 +218,11 @@ public sealed class AcceptanceGateEntryPathsPostgresTests(PostgresContainerFixtu
         Assert.DoesNotContain("BlockOnFail", outcome.ErrorMessage!);
     }
 
-    /// <summary>
-    /// ONE row of the inbox's bulk "Send selected", through the endpoint the browser really calls:
-    /// <c>POST /api/orders/{id}/redeliver</c>. Returns the HTTP status, the `error` string the inbox
-    /// shows next to the PO when the call fails, and how many Hangfire jobs the call created —
-    /// because "refused" has to mean nothing was enqueued, not merely that the response looked bad.
-    /// </summary>
-    private async Task<(int Status, string? Error, int JobsCreated)> BulkSendOneAsync(Seeded order)
-    {
-        await using var db = NewContext();
-
-        var po = await db.PurchaseOrders.AsNoTracking()
-            .Include(o => o.Lines)
-            .Include(o => o.OutboundArtifacts)
-            .FirstAsync(o => o.Id == order.OrderId && o.OrgId == order.OrgId);
-
-        var (ctrl, jobs) = BuildController(db, order.OrgId, po);
-        var created = 0;
-        jobs.Setup(j => j.Create(It.IsAny<Job>(), It.IsAny<IState>()))
-            .Callback(() => created++)
-            .Returns(Guid.NewGuid().ToString());
-
-        var response = await ctrl.Redeliver(order.OrderId, CancellationToken.None);
-
-        var status = response switch
-        {
-            ObjectResult o     => o.StatusCode ?? StatusCodes.Status200OK,
-            StatusCodeResult s => s.StatusCode,
-            _                  => StatusCodes.Status200OK,
-        };
-
-        string? error = null;
-        if (response is ObjectResult { Value: { } body } && status >= 400)
-            error = body.GetType().GetProperty("error")?.GetValue(body) as string;
-
-        return (status, error, created);
-    }
-
-    /// <summary>Browser send: the real HTTP transform endpoint, then the job it enqueued.</summary>
-    private async Task<Outcome> SendThroughTheControllerAsync(Seeded order)
-    {
-        int httpStatus;
-        await using (var db = NewContext())
-        {
-            var po = await db.PurchaseOrders.AsNoTracking().Include(o => o.Lines)
-                .FirstAsync(o => o.Id == order.OrderId && o.OrgId == order.OrgId);
-
-            var (ctrl, jobs) = BuildController(db, order.OrgId, po);
-            var response = await ctrl.Transform(order.OrderId, new TransformRequest("csv"), CancellationToken.None);
-            httpStatus = (response as ObjectResult)?.StatusCode ?? StatusCodes.Status200OK;
-
-            // The endpoint must actually have enqueued work — otherwise the "refusal" below would be
-            // the transform never running, which is a different bug wearing the same clothes.
-            jobs.Verify(j => j.Create(It.IsAny<Job>(), It.IsAny<IState>()), Times.Once);
-        }
-
-        await RunTransformJobAsync(order);
-        return await ReadOutcomeAsync(order, httpStatus);
-    }
-
     /// <summary>REST ingress / inbound email: the Hangfire job, with no browser in the loop.</summary>
     private async Task<Outcome> SendThroughTheJobAsync(Seeded order)
     {
         await RunTransformJobAsync(order);
-        return await ReadOutcomeAsync(order, StatusCodes.Status202Accepted);
+        return await ReadOutcomeAsync(order);
     }
 
     /// <summary>
@@ -434,7 +249,7 @@ public sealed class AcceptanceGateEntryPathsPostgresTests(PostgresContainerFixtu
         }
     }
 
-    private async Task<Outcome> ReadOutcomeAsync(Seeded order, int httpStatus)
+    private async Task<Outcome> ReadOutcomeAsync(Seeded order)
     {
         await using var db = NewContext();
 
@@ -457,7 +272,7 @@ public sealed class AcceptanceGateEntryPathsPostgresTests(PostgresContainerFixtu
             ? err.GetString()
             : null;
 
-        return new Outcome(status, artifacts, message, httpStatus);
+        return new Outcome(status, artifacts, message);
     }
 
     private static OrderService Build(ProcuLinkDbContext db)
@@ -481,44 +296,6 @@ public sealed class AcceptanceGateEntryPathsPostgresTests(PostgresContainerFixtu
             new ProcuLink.Infrastructure.Services.Detection.FormatDetectorService());
     }
 
-    private static (OrdersController Ctrl, Mock<IBackgroundJobClient> Jobs) BuildController(
-        ProcuLinkDbContext db, Guid orgId, PurchaseOrderEntity order)
-    {
-        var tenant = new Mock<ICurrentTenantService>();
-        tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
-
-        var orders = new Mock<IOrderService>();
-        orders.Setup(o => o.GetByIdAsync(orgId, order.Id, It.IsAny<CancellationToken>()))
-              .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(order));
-
-        var billing = new Mock<IBillingService>();
-        billing.Setup(b => b.CheckOrderLimitAsync(orgId, It.IsAny<CancellationToken>()))
-               .ReturnsAsync(new LimitCheckResult(Allowed: true, PilotExpired: false, Plan: "operations", Limit: 1000));
-
-        var jobs = new Mock<IBackgroundJobClient>();
-
-        var ctrl = new OrdersController(
-            orders.Object,
-            tenant.Object,
-            jobs.Object,
-            db,
-            NullLogger<OrdersController>.Instance,
-            billing.Object,
-            new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object,
-            // The REAL acceptance service against the REAL DbContext: OrdersController builds its
-            // acceptance gate from these two when DI supplies none, so /redeliver is exercised with
-            // the same gate production uses rather than a stand-in that always says "clear".
-            new SupplierAcceptanceService(db),
-            new Mock<IOrderMappingOverrideService>().Object,
-            new PromoteMappingService(db, new PoMappingService(db)),
-            new Mock<IFileStorageService>().Object,
-            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
-            Array.Empty<ITransformService>());
-
-        return (ctrl, jobs);
-    }
-
     /// <summary>
     /// A fully-resolved, otherwise-perfect <c>ready</c> order with an ACTIVE acceptance profile whose
     /// single rule judges the currency. Every invariant passes and every line is resolved, so nothing
@@ -529,14 +306,11 @@ public sealed class AcceptanceGateEntryPathsPostgresTests(PostgresContainerFixtu
         string currency = "USD",
         string severity = "error",
         string? sourceFileKey = null,
-        string? inboundSenderDomain = null,
-        string? status = null,
-        bool withArtifact = false)
+        string? inboundSenderDomain = null)
     {
         var orgId = Guid.NewGuid();
         var supplierId = Guid.NewGuid();
         var orderId = Guid.NewGuid();
-        var artifactId = Guid.NewGuid();
         var now = DateTime.UtcNow;
 
         await using var db = NewContext();
@@ -552,7 +326,7 @@ public sealed class AcceptanceGateEntryPathsPostgresTests(PostgresContainerFixtu
         {
             Id = orderId, OrgId = orgId, SupplierId = supplierId,
             PoNumber = $"PO-GATE-{tag}", BuyerName = "Buyer Ltd", Currency = currency,
-            OrderDate = new DateOnly(2026, 7, 30), Status = status ?? OrderStatusConstants.Ready,
+            OrderDate = new DateOnly(2026, 7, 30), Status = OrderStatusConstants.Ready,
             SourceFileKey = sourceFileKey, InboundSenderDomain = inboundSenderDomain,
             InboundSenderDomainCapturedAt = inboundSenderDomain is null ? null : now,
             CreatedAt = now, UpdatedAt = now,
@@ -565,19 +339,6 @@ public sealed class AcceptanceGateEntryPathsPostgresTests(PostgresContainerFixtu
                     Quantity = 3m, Unit = "EA", UnitPrice = 10m, NeedsReview = false, Confidence = 1.0f,
                 },
             },
-            // A stored artifact + a delivery status is the shape the inbox bulk-send operates on:
-            // the order was transformed at some earlier point (possibly before the rule existed) and
-            // is now sitting in ready_to_deliver waiting for a human to press Send.
-            OutboundArtifacts = withArtifact
-                ? new List<OutboundArtifact>
-                  {
-                      new()
-                      {
-                          Id = artifactId, OrderId = orderId, OrgId = orgId, Format = "csv",
-                          FileKey = $"{orgId}/{orderId}/artifacts/{artifactId}.csv", CreatedAt = now,
-                      },
-                  }
-                : new List<OutboundArtifact>(),
         });
 
         db.SupplierAcceptanceProfiles.Add(new SupplierAcceptanceProfile

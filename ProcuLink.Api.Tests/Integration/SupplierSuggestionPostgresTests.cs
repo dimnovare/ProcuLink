@@ -1,11 +1,7 @@
-using Hangfire;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
-using ProcuLink.Api.Contracts;
-using ProcuLink.Api.Controllers;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -113,8 +109,8 @@ public sealed class SupplierSuggestionPostgresFixture(PostgresContainerFixture p
 /// <summary>
 /// Supplier auto-detect against real Postgres: the migration, the partial unique index, the
 /// cross-supplier catalog probe (whose index path InMemory cannot tell apart from a broken query),
-/// and <c>assign-supplier</c>'s decision recording — which cannot be tested on InMemory at all,
-/// because the atomic <c>unrouted → parsing</c> claim is an untranslatable <c>ExecuteUpdateAsync</c>.
+/// and the live file-backed parse that writes the suggestions. (The <c>assign-supplier</c>
+/// decision-recording facts retired with that endpoint in plan 13b.)
 /// </summary>
 [Collection("postgres-container")]
 public sealed class SupplierSuggestionPostgresTests : IClassFixture<SupplierSuggestionPostgresFixture>
@@ -186,28 +182,6 @@ public sealed class SupplierSuggestionPostgresTests : IClassFixture<SupplierSugg
         };
         db.OrderSupplierSuggestions.Add(row);
         return row;
-    }
-
-    private static OrdersController BuildController(ProcuLinkDbContext db, Guid orgId)
-    {
-        var tenant = new Mock<ICurrentTenantService>();
-        tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
-        tenant.SetupGet(t => t.ClerkUserId).Returns("user_test");
-        return new OrdersController(
-            new Mock<IOrderService>().Object,
-            tenant.Object,
-            new Mock<IBackgroundJobClient>().Object,
-            db,
-            NullLogger<OrdersController>.Instance,
-            new Mock<IBillingService>().Object,
-            new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
-            new Mock<IFileStorageService>().Object,
-            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
-            Array.Empty<ITransformService>());
     }
 
     private SupplierSuggestionService NewService(ProcuLinkDbContext db) =>
@@ -378,143 +352,6 @@ public sealed class SupplierSuggestionPostgresTests : IClassFixture<SupplierSugg
 
         Assert.Equal(usual.Id, result[0].SupplierId);
         Assert.Contains("3 earlier orders", result[0].Signals.Single(s => s.Signal == SupplierSignalKind.SenderDomainHistory).Detail);
-    }
-
-    // ── assign-supplier decision recording ────────────────────────────────────
-
-    [DockerRequiredFact]
-    public async Task AssignSupplier_withSuggestionId_acceptsThatRow_rejectsTheOthers_andAudits()
-    {
-        await using var db = new ProcuLinkDbContext(Options());
-        var orgId = await SeedOrgAsync(db, "accept");
-        var order  = AddOrder(db, orgId);
-        var chosen = AddSupplier(db, orgId, "Chosen Ltd");
-        var passed = AddSupplier(db, orgId, "Passed Over Ltd");
-        var chosenRow = AddSuggestion(db, orgId, order.Id, chosen.Id, 1, 0.72);
-        var passedRow = AddSuggestion(db, orgId, order.Id, passed.Id, 2, 0.30);
-        await db.SaveChangesAsync();
-
-        var result = await BuildController(db, orgId).AssignSupplier(
-            order.Id, new AssignSupplierRequest(chosen.Id, chosenRow.Id), default);
-        Assert.IsType<OkObjectResult>(result);
-
-        await using var verify = new ProcuLinkDbContext(Options());
-        var rows = await verify.OrderSupplierSuggestions.AsNoTracking()
-            .Where(s => s.OrderId == order.Id).ToListAsync();
-
-        Assert.Equal(OrderSupplierSuggestionDecision.Accepted, rows.Single(r => r.Id == chosenRow.Id).Decision);
-        Assert.Equal(OrderSupplierSuggestionDecision.Rejected, rows.Single(r => r.Id == passedRow.Id).Decision);
-        Assert.All(rows, r => Assert.Equal("user_test", r.DecidedBy));
-
-        Assert.Contains(await verify.AuditEvents.AsNoTracking().Where(e => e.EntityId == order.Id).ToListAsync(),
-            e => e.Action == "SupplierSuggestionAccepted");
-
-        // The routing itself still happened — the decision rows are a side record, not a gate.
-        Assert.Equal(chosen.Id, (await verify.PurchaseOrders.AsNoTracking().SingleAsync(o => o.Id == order.Id)).SupplierId);
-    }
-
-    [DockerRequiredFact]
-    public async Task AssignSupplier_withoutSuggestionId_stillAcceptsWhenThePickedSupplierWasSuggested()
-    {
-        await using var db = new ProcuLinkDbContext(Options());
-        var orgId = await SeedOrgAsync(db, "accept-uncited");
-        var order  = AddOrder(db, orgId);
-        var chosen = AddSupplier(db, orgId, "Chosen Ltd");
-        var chosenRow = AddSuggestion(db, orgId, order.Id, chosen.Id, 1, 0.72);
-        await db.SaveChangesAsync();
-
-        await BuildController(db, orgId).AssignSupplier(
-            order.Id, new AssignSupplierRequest(chosen.Id), default);
-
-        await using var verify = new ProcuLinkDbContext(Options());
-        Assert.Equal(OrderSupplierSuggestionDecision.Accepted,
-            (await verify.OrderSupplierSuggestions.AsNoTracking().SingleAsync(r => r.Id == chosenRow.Id)).Decision);
-    }
-
-    [DockerRequiredFact]
-    public async Task AssignSupplier_toASupplierNobodySuggested_recordsManual_andRejectsWhatWasShown()
-    {
-        await using var db = new ProcuLinkDbContext(Options());
-        var orgId = await SeedOrgAsync(db, "manual");
-        var order  = AddOrder(db, orgId);
-        var shown  = AddSupplier(db, orgId, "We Suggested This One");
-        var actual = AddSupplier(db, orgId, "Operator Picked This One");
-        var shownRow = AddSuggestion(db, orgId, order.Id, shown.Id, 1, 0.65);
-        await db.SaveChangesAsync();
-
-        await BuildController(db, orgId).AssignSupplier(
-            order.Id, new AssignSupplierRequest(actual.Id), default);
-
-        await using var verify = new ProcuLinkDbContext(Options());
-        var rows = await verify.OrderSupplierSuggestions.AsNoTracking()
-            .Where(s => s.OrderId == order.Id).ToListAsync();
-
-        Assert.Equal(OrderSupplierSuggestionDecision.Rejected, rows.Single(r => r.Id == shownRow.Id).Decision);
-
-        var manual = rows.Single(r => r.SupplierId == actual.Id);
-        Assert.Equal(OrderSupplierSuggestionDecision.Manual, manual.Decision);
-        Assert.Equal(0, manual.Rank);
-
-        Assert.Contains(await verify.AuditEvents.AsNoTracking().Where(e => e.EntityId == order.Id).ToListAsync(),
-            e => e.Action == "SupplierAssignedManually");
-    }
-
-    [DockerRequiredFact]
-    public async Task AssignSupplier_withNoSuggestionsAtAll_stillRecordsTheManualChoice()
-    {
-        // How often the scorer offers nothing is as much a measurement as how often it is wrong.
-        await using var db = new ProcuLinkDbContext(Options());
-        var orgId = await SeedOrgAsync(db, "manual-silent");
-        var order  = AddOrder(db, orgId);
-        var picked = AddSupplier(db, orgId, "Picked Ltd");
-        await db.SaveChangesAsync();
-
-        await BuildController(db, orgId).AssignSupplier(
-            order.Id, new AssignSupplierRequest(picked.Id), default);
-
-        await using var verify = new ProcuLinkDbContext(Options());
-        var row = await verify.OrderSupplierSuggestions.AsNoTracking().SingleAsync(s => s.OrderId == order.Id);
-        Assert.Equal(OrderSupplierSuggestionDecision.Manual, row.Decision);
-        Assert.Equal(picked.Id, row.SupplierId);
-    }
-
-    [DockerRequiredFact]
-    public async Task AssignSupplier_recordsNothing_whenTheClaimFindsNoUnroutedOrder()
-    {
-        // Someone else routed it first: no supplier changed hands here, so no decision was made.
-        await using var db = new ProcuLinkDbContext(Options());
-        var orgId = await SeedOrgAsync(db, "claim-lost");
-        var supplier = AddSupplier(db, orgId, "Too Late Ltd");
-        var order = AddOrder(db, orgId, OrderStatusConstants.PendingReview, supplier.Id);
-        var row = AddSuggestion(db, orgId, order.Id, supplier.Id, 1, 0.8);
-        await db.SaveChangesAsync();
-
-        var result = await BuildController(db, orgId).AssignSupplier(
-            order.Id, new AssignSupplierRequest(supplier.Id, row.Id), default);
-
-        Assert.IsType<ConflictObjectResult>(result);
-
-        await using var verify = new ProcuLinkDbContext(Options());
-        Assert.Null((await verify.OrderSupplierSuggestions.AsNoTracking().SingleAsync(s => s.Id == row.Id)).Decision);
-    }
-
-    [DockerRequiredFact]
-    public async Task AssignSupplier_neverTouchesAnotherOrdersSuggestions()
-    {
-        await using var db = new ProcuLinkDbContext(Options());
-        var orgId = await SeedOrgAsync(db, "scope");
-        var order      = AddOrder(db, orgId);
-        var otherOrder = AddOrder(db, orgId);
-        var supplier   = AddSupplier(db, orgId, "Shared Candidate Ltd");
-        var mine   = AddSuggestion(db, orgId, order.Id, supplier.Id, 1, 0.5);
-        var theirs = AddSuggestion(db, orgId, otherOrder.Id, supplier.Id, 1, 0.5);
-        await db.SaveChangesAsync();
-
-        await BuildController(db, orgId).AssignSupplier(
-            order.Id, new AssignSupplierRequest(supplier.Id, mine.Id), default);
-
-        await using var verify = new ProcuLinkDbContext(Options());
-        Assert.Null((await verify.OrderSupplierSuggestions.AsNoTracking().SingleAsync(s => s.Id == theirs.Id)).Decision);
     }
 
     // ── The live production path, end to end ──────────────────────────────────

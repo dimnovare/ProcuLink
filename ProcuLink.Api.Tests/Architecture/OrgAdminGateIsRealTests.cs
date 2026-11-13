@@ -40,19 +40,19 @@ public sealed class OrgAdminGateIsRealTests
     /// <para>Changing this number is the deliberate act of widening or narrowing what an
     /// organisation reserves to its administrators, and it should never move on its own.</para>
     /// </summary>
-    private const int ExpectedGatedEndpointCount = 24;
+    private const int ExpectedGatedEndpointCount = 22;
 
     /// <summary>
     /// How many operations are declared destructive. Every gated endpoint reaches a declared primitive.
     /// </summary>
-    private const int ExpectedDestructivePrimitiveCount = 22;
+    private const int ExpectedDestructivePrimitiveCount = 19;
 
     /// <summary>
-    /// Endpoints that gate only PART of a request, in-method: resolve (an invoice's IBAN, number and
-    /// seller), the organisation settings PUT (where invoices go; the order direction stays open) and
-    /// <c>FlowsController.Rename</c> (an automation change).
+    /// Endpoints that gate only PART of a request, in-method: the organisation settings PUT (where
+    /// invoices go; the order direction stays open) and <c>FlowsController.Rename</c> (an automation
+    /// change).
     /// </summary>
-    private const int ExpectedInMethodGatedCount = 3;
+    private const int ExpectedInMethodGatedCount = 2;
 
     private static HashSet<string> AllGated() =>
         GatedActions().Concat(InMethodGatedActions()).Select(a => a.Display).ToHashSet(StringComparer.Ordinal);

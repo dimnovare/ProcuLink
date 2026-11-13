@@ -85,9 +85,8 @@ public sealed class DeliveryService : IDeliveryService
     /// lets the supplier de-duplicate the re-send. A re-transform mints a new artifactId → a new key
     /// → a legitimately new delivery.
     /// <para>
-    /// The FORMAT lives in <see cref="DeliveryIdempotencyKey"/> alongside its parse counterpart, so
-    /// read models that recover "which artifact did this attempt send" cannot drift from what this
-    /// writes. This stays as the delivery-side name every existing caller and test already uses.
+    /// The FORMAT lives in <see cref="DeliveryIdempotencyKey"/>. This stays as the delivery-side
+    /// name every existing caller and test already uses.
     /// </para>
     /// </summary>
     internal static string BuildIdempotencyKey(Guid orderId, Guid artifactId)

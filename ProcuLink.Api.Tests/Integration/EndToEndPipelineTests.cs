@@ -29,7 +29,7 @@ namespace ProcuLink.Api.Tests.Integration;
 //  ONE serious end-to-end test of the core product loop:
 //
 //      upload PO → parse → validate → map → transform → deliver (HTTP) →
-//      record DeliveryAttempt → PO Passport shows the proof.
+//      record DeliveryAttempt (the passport step retired with the order API, plan 13b).
 //
 //  Why this shape:
 //   • The production pipeline is ASYNC via three Hangfire jobs
@@ -420,7 +420,7 @@ public sealed class EndToEndPipelineTests(PostgresContainerFixture postgres) : I
     // ════════════════════════════════════════════════════════════════════════
 
     [DockerRequiredFact]
-    public async Task FullPipeline_UploadParseValidateMapTransformDeliver_ProducesPassportWithDeliveryProof()
+    public async Task FullPipeline_UploadParseValidateMapTransformDeliver_RecordsDeliveryProof()
     {
         var factory = _factory!;
         var http = factory.HttpDispatcher;
@@ -686,63 +686,6 @@ public sealed class EndToEndPipelineTests(PostgresContainerFixture postgres) : I
             var order = await db.PurchaseOrders.AsNoTracking()
                 .SingleAsync(o => o.Id == orderId, ct);
             Assert.Equal(OrderStatusConstants.Delivered, order.Status);
-        }
-
-        // ── 8. PO PASSPORT shows the proof: delivery attempt + output artifact +
-        //       supplier "delivered" response + timeline of the pipeline. ───
-        using (var scope = factory.NewScope())
-        {
-            var passportSvc = scope.ServiceProvider.GetRequiredService<IPassportService>();
-            var pr = await passportSvc.GetAsync(orgGuid, orderId, ct);
-            Assert.True(pr.IsSuccess, $"Passport failed: {pr.Error}");
-            var p = pr.Value!;
-
-            // Header / canonical roll-up.
-            Assert.Equal(orderId, p.Order.OrderId);
-            Assert.Equal("PO-E2E-7788", p.Order.PoNumber);
-            Assert.Equal(supplierName, p.Order.SupplierName);
-            Assert.Equal(OrderStatusConstants.Delivered, p.FinalStatus);
-            Assert.Equal(2, p.Canonical.LineCount);
-            Assert.Equal(45.00m, p.Canonical.TotalValue);   // 10*2.5 + 4*5
-            Assert.Equal(14m, p.Canonical.TotalQuantity);   // 10 + 4
-
-            // Source artifact reference (csv) — referenced, not embedded.
-            Assert.Equal("csv", p.SourceArtifact!.DetectedFormat);
-            Assert.NotNull(p.SourceArtifact.StorageKey);
-
-            // Mapping decisions: both lines deterministic buyer→supplier.
-            Assert.Equal(2, p.MappingDecisions.Count);
-            Assert.All(p.MappingDecisions, m => Assert.Equal("deterministic", m.Source));
-            Assert.Contains(p.MappingDecisions, m => m.SupplierItemCode == "SUP-AAA");
-            Assert.Contains(p.MappingDecisions, m => m.SupplierItemCode == "SUP-BBB");
-
-            // Output artifact reference matches the transformed artifact.
-            Assert.NotNull(p.OutputArtifact);
-            Assert.Equal(artifactId, p.OutputArtifact!.ArtifactId);
-            Assert.Equal("csv", p.OutputArtifact.Format);
-
-            // Delivery proof: exactly one attempt, delivered to the supplier URL.
-            var pAttempt = Assert.Single(p.DeliveryAttempts);
-            Assert.Equal("success", pAttempt.Status);
-            Assert.Equal("http", pAttempt.Channel);
-            Assert.Equal(deliveryUrl, pAttempt.Destination);
-            Assert.Equal(200, pAttempt.ResponseCode);
-            Assert.NotNull(pAttempt.TransportAcceptedAt);
-
-            // Supplier response derived as acknowledged.
-            Assert.NotNull(p.SupplierResponse);
-            Assert.Equal("delivered", p.SupplierResponse!.Outcome);
-            Assert.Equal(200, p.SupplierResponse.ResponseCode);
-
-            // Supplier delivery profile surfaced (http protocol).
-            Assert.NotNull(p.SupplierProfile);
-            Assert.Equal("http", p.SupplierProfile!.Protocol);
-
-            // Timeline reconstructed from audit events covers the pipeline stages.
-            var actions = p.Timeline.Select(t => t.Action).ToList();
-            Assert.Contains("Created", actions);
-            Assert.Contains("Parsed", actions);
-            Assert.Contains("Transformed", actions);
         }
     }
 

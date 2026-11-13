@@ -90,26 +90,11 @@ internal static class OrgAdminGateIlScanner
             "The Stripe Billing Portal is where the subscription is CANCELLED, and cancelling stops "
           + "every ingest path at once with nothing queued for later."),
 
-        new("IAcceptanceGate.RecordOverrideAsync",
-            OnInterface<IAcceptanceGate>(nameof(IAcceptanceGate.RecordOverrideAsync)),
-            "Overrules the supplier's own stated terms; what follows cannot be recalled."),
-
-        new("OrderIngestionService.ApplyInvoiceProblemsAsync",
-            OnInternalStatic("ProcuLink.Api.Services.OrderIngestionService", "ApplyInvoiceProblemsAsync"),
-            "Releases an invoice held by its checks into the send flow, closing the checks that held it "
-          + "(\"send anyway\"); once it is released a document can reach the vendor's destination."),
-
         new("IOrganisationSettingsService.UpdateAsync",
             OnInterface<IOrganisationSettingsService>(nameof(IOrganisationSettingsService.UpdateAsync)),
             "Names the supplier every invoice is sent to, and its caller moves the parked invoices there: "
           + "a silent redirection of where invoices go. The order direction it also writes is open to "
           + "every member, so its caller gates in-method."),
-
-        new("IOrderService.ResolveAsync",
-            OnInterface<IOrderService>(nameof(IOrderService.ResolveAsync)),
-            "Can rewrite an invoice's IBAN, number and seller: who gets paid, under which number. Every "
-          + "member still resolves lines and edits the other fields, so its caller gates in-method on "
-          + "those four."),
 
         new("FlowDestinationService.SaveAsync",
             OnInterface<ProcuLink.Api.Services.Documents.FlowDestinationService>(nameof(ProcuLink.Api.Services.Documents.FlowDestinationService.SaveAsync)),

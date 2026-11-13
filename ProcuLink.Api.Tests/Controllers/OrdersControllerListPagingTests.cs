@@ -38,18 +38,7 @@ public class OrdersControllerListPagingTests
         return new OrdersController(
             orders,
             tenant.Object,
-            new Mock<IBackgroundJobClient>().Object,
-            db,
-            NullLogger<OrdersController>.Instance,
-            new Mock<IBillingService>().Object,
-            new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object,
-            new Mock<IOrderMappingOverrideService>().Object,
-            new Mock<IPromoteMappingService>().Object,
-            new Mock<IFileStorageService>().Object,
-            new Mock<ISourceTokenizer>().Object,
-            Array.Empty<ITransformService>());
+            db);
     }
 
     /// <summary>Seeds <paramref name="count"/> orders for one org; returns (db, orgId, all seeded ids).</summary>

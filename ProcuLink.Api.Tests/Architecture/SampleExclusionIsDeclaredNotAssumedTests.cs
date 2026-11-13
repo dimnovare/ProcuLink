@@ -92,10 +92,14 @@ public class SampleExclusionIsDeclaredNotAssumedTests
     /// </summary>
     // 19 -> 12 on 2026-11-13: the order-ops cut deleted the stuck/stranded/SLA sweeps, OpsHealthService's
     // order counts and the dead-letter count; those held the sites that disappeared.
-    private const int MinimumAggregateSitesExpected = 12;
+    // 12 -> 7 later on 2026-11-13 (plan 13b, the order API cut to a read-only archive): the deleted
+    // DashboardController KPI/summary queries, OnboardingController's order counts and
+    // OrdersController's write actions held the five sites. 7 today: 5 sample-aware, 2 inclusive.
+    private const int MinimumAggregateSitesExpected = 7;
 
-    /// <summary>Companion floor: the convention must be visibly PRESENT, not merely unviolated.</summary>
-    private const int MinimumSampleAwareSitesExpected = 8;
+    /// <summary>Companion floor: the convention must be visibly PRESENT, not merely unviolated.
+    /// 8 -> 5 with the same plan 13b cut (all five vanished sites above were sample-aware).</summary>
+    private const int MinimumSampleAwareSitesExpected = 5;
 
     [Fact]
     public void EveryAggregateOverPurchaseOrders_DeclaresWhichPopulationItCounts()

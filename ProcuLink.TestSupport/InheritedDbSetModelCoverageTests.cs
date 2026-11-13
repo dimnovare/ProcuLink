@@ -104,9 +104,11 @@ public class InheritedDbSetModelCoverageTests
             "the negative control ignores exactly these to reproduce the defect; an empty list "
             + "would make it ignore nothing and prove nothing");
 
-        scan.Contexts.Count(c => !c.IsControl).Should().BeGreaterThan(9,
-            "this assembly is known to hold well over a dozen ProcuLinkDbContext subclasses; a "
-            + "handful means type discovery is broken, not that the population shrank");
+        // 9 -> 4 on 2026-11-13: plan 13b deleted four of the ten subclasses with the order
+        // endpoints their tests covered (6 today).
+        scan.Contexts.Count(c => !c.IsControl).Should().BeGreaterThan(4,
+            "this assembly is known to hold six ProcuLinkDbContext subclasses; fewer means type "
+            + "discovery is broken, not that the population shrank");
     }
 
     /// <summary>
