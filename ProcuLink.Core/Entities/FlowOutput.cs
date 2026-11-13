@@ -17,6 +17,8 @@ public class FlowOutput
     public string? LayoutJson { get; set; }
     /// <summary>The PNG or JPEG printed at the top of a pdf output; null means none.</summary>
     public byte[]? Logo { get; set; }
+    /// <summary>The standard order file this output is (a <c>StandardOutputs</c> id); null means a template output. Set on create only.</summary>
+    public string? Standard { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }

@@ -68,4 +68,17 @@ public static class FieldMeanings
         [LineItemCode] = ["itemcode", "sku", "partnumber", "articlenumber", "productcode", "artikelnummer", "tootekood"],
         [LineNumber] = ["linenumber", "lineno", "position", "pos", "positionsnummer"],
     };
+
+    /// <summary>
+    /// What a read field means. Once the flow lists fields its meanings decide (a listed key's, null included;
+    /// unlisted extras mean nothing); before that the read's own meaning stands.
+    /// </summary>
+    public static string? Of(ReadField field, FlowFieldList flow) =>
+        flow.Fields.Count == 0 ? field.Meaning : flow.Fields.FirstOrDefault(x => x.Key == field.Key)?.Meaning;
+
+    /// <summary>What a read column means: the flow's once it lists tables, before that the read's own.</summary>
+    public static string? Of(ReadTable table, ReadColumn column, FlowFieldList flow) =>
+        flow.Tables.Count == 0
+            ? column.Meaning
+            : flow.Tables.FirstOrDefault(x => x.Key == table.Key)?.Columns.FirstOrDefault(x => x.Key == column.Key)?.Meaning;
 }
