@@ -132,6 +132,13 @@ public sealed class EndpointReachabilityGuardTests
             "ProcuLink.Infrastructure/Services/Delivery/DeliveryBounceHandler.cs and its sibling " + 
             "POST /api/inbound-email/postmark is the inbound half. " + 
             "Permanent entry."),
+        new("POST /api/inbound-email/postmark",
+            "2026-11-13 — Postmark calls this, not the browser: the inbound webhook, configured in the "
+            + "Postmark dashboard rather than in code, authenticated by the shared token, with the tenant "
+            + "derived from the recipient address (ProcuLink.Api/Controllers/InboundEmailController.cs, "
+            + "[HttpPost(\"postmark\")]). Its only in-repo caller was the live-matrix inbound-email "
+            + "harness, deleted by plan 13b task 8b; the provider was always the real caller. A frontend "
+            + "caller would be a bug. Permanent entry."),
 
         // ── Operator tooling with a documented out-of-band caller ─────────────────────────
         new("DELETE /api/admin/organisations/{}/orders/{}",
@@ -203,7 +210,7 @@ public sealed class EndpointReachabilityGuardTests
     /// <summary>
     /// The union as landed, 2026-08-15 (was 2026-08-13). Moved three times, each deliberately and in the open, and each
     /// marked at its entries with the date and the caller: 2026-08-15 (the Postmark bounce webhook), 2026-08-20 (the
-    /// support PO-number lookup) and 2026-11-07 (plan 4's file API, two routes). <b>SHRINK-ONLY.</b> An entry may be deleted — when the
+    /// support PO-number lookup), 2026-11-07 (plan 4's file API, two routes) and 2026-11-13 (the inbound Postmark webhook, whose harness went). <b>SHRINK-ONLY.</b> An entry may be deleted — when the
     /// endpoint gains a caller, or is removed — but nothing may ever be added: a NEW caller-less
     /// endpoint has to be fixed, not excused.
     ///
@@ -232,6 +239,10 @@ public sealed class EndpointReachabilityGuardTests
             // failure text asks: the Postmark bounce webhook is caller-less BY CONSTRUCTION — the
             // caller is the mail provider. It is the second provider webhook here, beside Stripe's.
             "POST /api/inbound-email/postmark-bounce",
+            // Moved into the baseline on 2026-11-13, deliberately and in the open: the inbound Postmark
+            // webhook lost its only in-repo caller when plan 13b task 8b deleted scripts/live-matrix/.
+            // Its real caller is the mail provider, exactly like postmark-bounce above.
+            "POST /api/inbound-email/postmark",
             "GET /health",
             "POST /api/admin/organisations/{}/account-status",
             "POST /api/admin/organisations/{}/orders/bulk-erase",
@@ -294,7 +305,9 @@ public sealed class EndpointReachabilityGuardTests
     private const int MinimumControllers = 16;         // 18 today; 27 before plan 13b deleted nine
     private const int MinimumCallerFiles = 300;        // 377 today
     private const long MinimumCallerBytes = 1_700_000; // 2.02 MB today
-    private const int MinimumCallsExtracted = 90;      // 110 today
+    // 90 -> 74 on 2026-11-13 (plan 13b task 8b): the frontend orphan sweep deleted the delivery-config,
+    // catalog-source and supplier client calls and the live-matrix harnesses. 74 is today's count.
+    private const int MinimumCallsExtracted = 74;      // 74 today
     private const int MinimumDistinctCalledEndpoints = 60; // 71 today
 
     // ── The guard ────────────────────────────────────────────────────────────────────────
@@ -483,11 +496,11 @@ public sealed class EndpointReachabilityGuardTests
         var files = Scan.Value.CallerFiles.Select(f => f.RelativePath.Replace('\\', '/')).ToList();
 
         Assert.Contains("src/lib/api-client.ts", files);
-        Assert.Contains("src/lib/api/delivery.ts", files);
-        Assert.True(files.Any(f => f.StartsWith("scripts/live-matrix/", StringComparison.Ordinal)),
-            "the live-matrix harnesses are gone from the corpus — they are the only in-repo caller "
-            + "of the ingress API and of the Postmark webhook, so losing them turns two working "
-            + "integrations into findings");
+        // 2026-11-13, plan 13b task 8b: src/lib/api/delivery.ts and scripts/live-matrix/ were deleted
+        // with the frontend orphan sweep. documents.ts is the apiFetch-wrapper module left.
+        Assert.Contains("src/lib/api/documents.ts", files);
+        Assert.True(files.Any(f => f.StartsWith("scripts/", StringComparison.Ordinal)),
+            "the scripts/ root is gone from the corpus");
     }
 
     // ── The declaration lists cannot rot ─────────────────────────────────────────────────
