@@ -54,6 +54,11 @@ public static class StandardInvoiceAdapter
                 BuyerVatId = a.Text(FieldMeanings.ReceiverVatId), BuyerCountry = a.Text(FieldMeanings.ReceiverCountry)?.ToUpperInvariant(),
                 OrderReference = a.Text(FieldMeanings.OrderReference),
                 DeliveryDate = a.OptionalDate(FieldMeanings.DeliveryDate),
+                SellerStreet = a.Text(FieldMeanings.SenderStreet), SellerCity = a.Text(FieldMeanings.SenderCity), SellerPostcode = a.Text(FieldMeanings.SenderPostcode),
+                BuyerStreet = a.Text(FieldMeanings.ReceiverStreet), BuyerCity = a.Text(FieldMeanings.ReceiverCity), BuyerPostcode = a.Text(FieldMeanings.ReceiverPostcode),
+                SellerContactName = a.Text(FieldMeanings.SenderContactName), SellerContactPhone = a.Text(FieldMeanings.SenderContactPhone),
+                SellerContactEmail = a.Text(FieldMeanings.SenderContactEmail),
+                PayeeIban = a.Text(FieldMeanings.Iban), PaymentReference = a.Text(FieldMeanings.PaymentReference),
             };
             return new Built(invoice, lines, parties);
         });
