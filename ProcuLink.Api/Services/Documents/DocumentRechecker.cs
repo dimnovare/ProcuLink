@@ -9,7 +9,7 @@ namespace ProcuLink.Api.Services.Documents;
 /// The one place that recomputes a document's checks and status. Does not save.
 /// A document is a duplicate only of an EARLIER one, so an original never turns into a duplicate of its later copy.
 /// </summary>
-public sealed class DocumentRechecker(ProcuLinkDbContext db)
+public sealed class DocumentRechecker(ProcuLinkDbContext db, DocumentEngineGate? gate = null, IStandardValidator? validator = null)
 {
     /// <summary>Rechecks the flow's documents waiting for review against its current config. Does not save.</summary>
     public async Task RecheckPendingAsync(Flow flow, CancellationToken ct)
@@ -41,8 +41,12 @@ public sealed class DocumentRechecker(ProcuLinkDbContext db)
         config ??= await FlowConfigLoader.CurrentAsync(db, flow, ct);
         doc.FlowVersion = config.VersionNo;
         var failed = DocumentChecks.Run(read, config.Fields, config.FieldsConfirmed, duplicate);
-        doc.ChecksJson = DocumentJson.Serialize(failed);
+        // Rule checks are a heads-up, never a block: they join the list after the status is decided.
         doc.Status = DocumentChecks.StatusFor(failed);
+        var withRules = gate is null || validator is null
+            ? failed
+            : [.. failed, .. await OutputRuleChecks.RunAsync(gate, validator, doc.OrgId, read, config, ct)];
+        doc.ChecksJson = DocumentJson.Serialize(withRules);
         doc.UpdatedAt = DateTime.UtcNow;
     }
 }

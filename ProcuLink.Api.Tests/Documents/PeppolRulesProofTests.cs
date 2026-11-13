@@ -55,7 +55,7 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
     ];
 
     // Latvia has no national rules; the GLN ids are checksum-valid test ids; a taxed invoice needs the seller VAT id.
-    private static ReadResult Read()
+    internal static ReadResult Read()
     {
         ReadRow Row(params string[] v) => new(Columns.Select((c, i) => (c, i)).ToDictionary(x => FieldKey.Normalise(x.c.Label), x => new ReadCell(v[x.i], 1, null, false, false)));
         return new ReadResult("Invoice",

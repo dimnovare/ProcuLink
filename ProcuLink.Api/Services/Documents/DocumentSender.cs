@@ -25,7 +25,7 @@ public sealed record SendOutcome(string? Error, object? Detail, IReadOnlyList<Fl
 /// Renders a read document through every output of its flow, stores the artifacts, and writes one delivery per output:
 /// <c>stored</c> for download-only outputs, <c>queued</c> for those with a destination (delivered by <see cref="DeliverDocumentJob"/>).
 /// </summary>
-public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billing, IFileStorageService storage, IBackgroundJobClient jobs, ILogger<DocumentSender> logger)
+public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billing, IFileStorageService storage, IBackgroundJobClient jobs, ILogger<DocumentSender> logger, DocumentEngineGate gate)
 {
     private sealed record Rendered(FlowOutput Output, byte[] Bytes, string ContentType, string Extension);
 
@@ -67,8 +67,11 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
         var rendered = new List<Rendered>();
         foreach (var (o, template) in outputs.Zip(templates))
         {
+            // A flagged standard whose flag has since gone off is refused like an unknown one, never rendered.
             var render = o.Standard is { } standard
-                ? await StandardOutputs.RenderAsync(standard, read, config.Fields, o.TableKey, doc.OrgId, ct)
+                ? StandardOutputs.Find(standard) is { Flagged: true } && !gate.PeppolOn(doc.OrgId)
+                    ? new DocumentRender(null, "output_invalid", null)
+                    : await StandardOutputs.RenderAsync(standard, read, config.Fields, o.TableKey, doc.OrgId, ct)
                 : DocumentOutputRenderer.Render(o.Format, template, read, o.TableKey, lookups,
                     o.LayoutJson is null ? null : DocumentJson.Deserialize<OutputLayout>(o.LayoutJson), o.Logo);
             if (!render.Ok)
