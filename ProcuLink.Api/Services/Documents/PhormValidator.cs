@@ -43,8 +43,8 @@ public sealed class PhormValidator(IHttpClientFactory clients, IOptions<Validato
 
             return Parse(await response.Content.ReadAsStringAsync(ct)) ?? Unavailable("validator answer was not understood");
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return Unavailable("validator timed out"); }
-        catch (HttpRequestException ex) { return Unavailable(ex.GetType().Name); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex) { return Unavailable(ex.GetType().Name); } // timeout, bad URL, network: never stop sending
     }
 
     private ValidationOutcome Unavailable(string reason)
@@ -79,7 +79,7 @@ public sealed class PhormValidator(IHttpClientFactory clients, IOptions<Validato
             var failed = !ok.GetBoolean() || issues.Any(i => i.Severity == "error");
             return new ValidationOutcome(failed ? ValidationStatus.Failed : ValidationStatus.Passed, issues);
         }
-        catch (JsonException) { return null; }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException) { return null; } // e.g. a non-object item
     }
 
     private static string Str(JsonElement e, string name) =>
