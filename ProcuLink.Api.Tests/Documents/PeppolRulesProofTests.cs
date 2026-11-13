@@ -90,6 +90,7 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
         var validator = new PhormValidator(new Factory(http),
             Options.Create(new ValidatorOptions { BaseUrl = http.BaseAddress.ToString(), Token = Token }), NullLogger<PhormValidator>.Instance);
 
+        var checkedRenders = 0;
         foreach (var id in new[] { "peppol-bis-billing-3", "peppol-bis-billing-3-credit-note", "en16931-cii", "en16931-cii-credit-note" })
         {
             // The CII reads with and without electronic addresses; the Peppol ids need them.
@@ -104,7 +105,11 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
                 var outcome = await validator.ValidateAsync(StandardOutputs.Find(id)!.Vesid!, bytes.ToArray(), default);
                 Assert.True(outcome.Status == ValidationStatus.Passed,
                     $"{id}: {outcome.Status} {string.Join("; ", outcome.Issues.Where(i => i.Severity == "error").Select(i => $"{i.RuleId} {i.Message}"))}");
+                checkedRenders++;
             }
         }
+
+        // Two Peppol renders + two CII ids read with and without electronic addresses.
+        Assert.Equal(6, checkedRenders);
     }
 }
