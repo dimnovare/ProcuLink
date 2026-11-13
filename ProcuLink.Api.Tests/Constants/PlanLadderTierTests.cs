@@ -34,7 +34,7 @@ namespace ProcuLink.Api.Tests.Constants;
 /// beyond "not on Pilot". A price list defended in patches is a price list with holes in it, and
 /// which rows happen to be covered is an accident of what someone was fixing at the time. So the
 /// whole table is pinned here, in one place, and <see cref="EveryFeature_IsPinned"/> makes it
-/// impossible to add an eleventh capability without stating what it costs.
+/// impossible to add a capability without stating what it costs.
 ///
 /// HOW TO CHANGE A TIER. Edit <c>PlanConstants.MinimumPlan</c>, edit the row below, and edit
 /// <c>MINIMUM_PLAN</c> in the frontend's <c>src/lib/gatedCapabilities.ts</c> (whose
@@ -55,22 +55,9 @@ public class PlanLadderTierTests
     public static readonly IReadOnlyDictionary<BillingFeature, string> SoldFrom =
         new Dictionary<BillingFeature, string>
         {
-            // Volume-tier capabilities.
-            [BillingFeature.BulkMapping]         = PlanConstants.Operations,
-            [BillingFeature.Cxml]                = PlanConstants.Operations,
+            // Plan 13b (2026-11-13) deleted the other eight rows with the legacy order surfaces
+            // they gated; the two left are the ones with a gate site.
             [BillingFeature.AdvancedAudit]       = PlanConstants.Operations,
-
-            // Delivery / ingestion CHANNELS are decoupled from VOLUME on purpose: picking a
-            // channel must never force a customer up a volume tier. All four sit on the cheapest
-            // paid plan and every paid plan above it.
-            [BillingFeature.WebhookDelivery]     = PlanConstants.Growth,
-            [BillingFeature.EmailIngestion]      = PlanConstants.Growth,
-            [BillingFeature.SftpIngestion]       = PlanConstants.Growth,
-            [BillingFeature.S3Ingestion]         = PlanConstants.Growth,
-
-            // Enterprise-only.
-            [BillingFeature.ErpConnectors]       = PlanConstants.Enterprise,
-            [BillingFeature.CustomSupplierRules] = PlanConstants.Enterprise,
             [BillingFeature.Sso]                 = PlanConstants.Enterprise,
         };
 

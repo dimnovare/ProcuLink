@@ -3,7 +3,6 @@ using FluentAssertions;
 using ProcuLink.Api.Controllers;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Constants;
-using ProcuLink.Worker.Jobs;
 using Xunit;
 using static ProcuLink.Api.Tests.Architecture.BillingGateIlScanner;
 
@@ -57,8 +56,8 @@ public sealed class BillingGateEnforcementIsRealTests
         {
             [BillingFeature.AdvancedAudit] = new(
                 typeof(AuditController), nameof(AuditController.GetAuditLog), Kind.ServerRefusal,
-                "The org-wide trail. The per-order audit stays open — gating it would take away "
-              + "something Growth already pays for."),
+                "The org-wide trail. A document's own history stays open — gating it would take "
+              + "away something every plan already has."),
 
             [BillingFeature.Sso] = new(
                 typeof(StripeBillingService), nameof(StripeBillingService.GetStatusAsync),
@@ -181,10 +180,8 @@ public sealed class BillingGateEnforcementIsRealTests
 
     /// <summary>
     /// The REVERSE direction. Everything above starts from the declared map, so a gate that exists
-    /// in production but is absent from the map is invisible to it — and an enforcement site that
-    /// is quietly deleted from one of the several-site features (the poll jobs, the second delivery
-    /// write path, the catalog source) would go unnoticed. This walks the code instead and demands
-    /// every real gate call belong to a feature we claim to enforce.
+    /// in production but is absent from the map is invisible to it. This walks the code instead and
+    /// demands every real gate call belong to a feature we claim to enforce.
     /// </summary>
     [Fact]
     public void EveryGateCallInProduction_IsAccountedFor()
@@ -203,9 +200,7 @@ public sealed class BillingGateEnforcementIsRealTests
 
         // A gate call naming a feature nobody declares means an enforcement site was added or moved
         // without updating the map — the map going stale in the direction the per-feature tests
-        // cannot see. (The delivery gates are absent from this list by design: they pass the feature
-        // through a list rather than as a constant at the call site, which is why the per-feature
-        // tests follow the call graph instead of reading call sites.)
+        // cannot see.
         gatedFeatures.Should().OnlyContain(f => Sites.ContainsKey(f),
             "every HasFeatureAsync call in production must be for a feature the gate table declares. "
           + "An undeclared one is a capability being refused that no plan card admits to gating.");

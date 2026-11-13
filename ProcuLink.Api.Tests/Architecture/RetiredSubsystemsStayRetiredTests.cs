@@ -34,9 +34,10 @@ namespace ProcuLink.Api.Tests.Architecture;
 ///     <c>OutputTemplate</c> ENTITY.</item>
 ///   <item><c>RuleDefinition</c> + <c>SupplierAcceptanceRule</c> — the rule engine that actually
 ///     runs. The retired one is <c>ValidationRule</c>.</item>
-///   <item><c>InboundEmailController</c> (Postmark, LIVE) and <c>BillingFeature.WebhookDelivery</c>
-///     (the http delivery channel, LIVE). The retired one is INBOUND webhook ingress.
-///     <c>IntegrationSubscription</c> (order-event webhooks the org pointed at THEIR systems) is
+///   <item><c>InboundEmailController</c> (Postmark, LIVE). The retired one is INBOUND webhook
+///     ingress. (<c>BillingFeature.WebhookDelivery</c> was listed here too until plan 13b deleted it
+///     with the legacy supplier delivery config it gated.) <c>IntegrationSubscription</c>
+///     (order-event webhooks the org pointed at THEIR systems) is
 ///     RETIRED too since plan 13b (2026-11-13): its rows are kept but inert, with no sender and no
 ///     revocation surface. <see cref="IntegrationSubscriptionSender_StaysRetired"/> keeps it so.</item>
 /// </list>
@@ -182,21 +183,6 @@ public class RetiredSubsystemsStayRetiredTests
             "the OutputNode AST emitter is the live structured-output path (DocumentOutputRenderer, " +
             "every flow output); it is unrelated to the retired OutputTemplate ENTITY")
             .GetMethod("EmitRows").Should().NotBeNull("OutputTemplateEmitter.EmitRows is that path's entry point");
-
-        // ── The outbound-webhook billing gate. An enum member alone proves nothing (an orphan member
-        //    compiles fine) — what makes the feature real is that the plan gate answers for it. Parsed
-        //    by name so deleting the member fails HERE rather than at compile time.
-        Enum.TryParse<BillingFeature>("WebhookDelivery", out var webhookDelivery)
-            // Precise on purpose: WebhookDelivery gates the http DELIVERY CHANNEL a purchase order
-            // is sent over (SuppliersController.UpsertDeliveryConfig, via DeliveryCapabilityGate).
-            // It never gated IntegrationSubscription, whose order.* event sender was deleted with the
-            // order pipeline (plan 13b, 2026-11-13). The old wording here conflated the two and read
-            // as a claim that POST /api/integrations is plan-gated.
-            .Should().BeTrue("BillingFeature.WebhookDelivery gates the http delivery channel, which is live");
-        PlanConstants.PlanHasFeature(PlanConstants.Growth, webhookDelivery)
-            .Should().BeTrue("outbound webhook delivery is a Growth+ feature and must stay gated, not removed");
-        PlanConstants.PlanHasFeature(PlanConstants.Pilot, webhookDelivery)
-            .Should().BeFalse("…and must still be withheld below Growth, or the gate was deleted rather than kept");
     }
 
     /// <summary>

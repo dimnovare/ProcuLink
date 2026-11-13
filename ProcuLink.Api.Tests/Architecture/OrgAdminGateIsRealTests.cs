@@ -40,11 +40,16 @@ public sealed class OrgAdminGateIsRealTests
     /// <para>Changing this number is the deliberate act of widening or narrowing what an
     /// organisation reserves to its administrators, and it should never move on its own.</para>
     /// </summary>
+    // 24 -> 22 on 2026-11-13 (plan 13b Task 6b): POST /api/orders/{id}/send-anyway and
+    // POST /api/orders/{id}/acceptance-gate/override were deleted with the order write API.
     private const int ExpectedGatedEndpointCount = 22;
 
     /// <summary>
     /// How many operations are declared destructive. Every gated endpoint reaches a declared primitive.
     /// </summary>
+    // 22 -> 19 on 2026-11-13 (plan 13b Task 6b): IAcceptanceGate.RecordOverrideAsync,
+    // OrderIngestionService.ApplyInvoiceProblemsAsync and IOrderService.ResolveAsync left the declared
+    // set with the three endpoints above, their only gated callers.
     private const int ExpectedDestructivePrimitiveCount = 19;
 
     /// <summary>
@@ -52,6 +57,8 @@ public sealed class OrgAdminGateIsRealTests
     /// invoices go; the order direction stays open) and <c>FlowsController.Rename</c> (an automation
     /// change).
     /// </summary>
+    // 3 -> 2 on 2026-11-13 (plan 13b Task 6b): POST /api/orders/{id}/resolve, which gated an
+    // invoice's IBAN, number and seller in-method, was deleted with the order write API.
     private const int ExpectedInMethodGatedCount = 2;
 
     private static HashSet<string> AllGated() =>

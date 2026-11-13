@@ -162,6 +162,7 @@ public sealed class RbacTestFactory : WebApplicationFactory<Program>
 public sealed class OrgAdminGateRefusesNonAdminsTests : IClassFixture<RbacTestFactory>
 {
     /// <summary>Must match <c>OrgAdminGateIsRealTests.ExpectedGatedEndpointCount</c>.</summary>
+    // 24 -> 22 on 2026-11-13 (plan 13b Task 6b): send-anyway and the acceptance-gate override deleted.
     private const int ExpectedGatedEndpointCount = 22;
 
     /// <summary>An organisation with a REAL Clerk organisation id — the modern shape.</summary>

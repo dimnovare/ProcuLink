@@ -37,8 +37,6 @@ namespace ProcuLink.Transform.Output;
 /// &lt;/cXML&gt;
 /// </code>
 ///
-/// Requires <see cref="BillingFeature.Cxml"/>; enforcement is at the controller/service level.
-///
 /// <para><b>Network credentials:</b> the <c>From</c> / <c>To</c> / <c>Sender</c> credentials are
 /// configurable per supplier connection via <paramref name="cxmlCredentials"/>. When a credential
 /// is configured the Header carries the supplier's REAL cXML network identity (e.g. a Coupa

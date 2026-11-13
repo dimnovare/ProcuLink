@@ -5,54 +5,12 @@ using Xunit;
 namespace ProcuLink.Api.Tests.Constants;
 
 /// <summary>
-/// Pricing-fix tests for the plan → capability gates in <see cref="PlanConstants"/>.
-///
-/// #2 decouples delivery/ingestion CHANNELS from VOLUME: webhook delivery, email
-/// (IMAP) polling, SFTP ingestion and S3 ingestion are now available on ALL paid
-/// self-serve plans (Growth+), so a customer never has to buy a bigger VOLUME tier
-/// just to unlock a channel. Pilot stays restricted (trial).
+/// Pricing-fix tests for the plan limits and the plan → capability gates in
+/// <see cref="PlanConstants"/>. The decoupled-channel theories (webhook delivery, email, SFTP and
+/// S3 ingestion on every paid plan) went with those four features in plan 13b (2026-11-13).
 /// </summary>
 public class PlanFeatureGateTests
 {
-    public static readonly BillingFeature[] DecoupledChannels =
-    {
-        BillingFeature.WebhookDelivery,
-        BillingFeature.EmailIngestion,
-        BillingFeature.SftpIngestion,
-        BillingFeature.S3Ingestion,
-    };
-
-    public static TheoryData<BillingFeature> ChannelData()
-    {
-        var data = new TheoryData<BillingFeature>();
-        foreach (var f in DecoupledChannels) data.Add(f);
-        return data;
-    }
-
-    [Theory]
-    [MemberData(nameof(ChannelData))]
-    public void Channel_IsAvailableOnAllPaidSelfServePlans(BillingFeature channel)
-    {
-        // The channels are no longer gated to Integration; every paid self-serve
-        // plan (Growth, Operations, Integration, Distributor) must have them.
-        PlanConstants.PlanHasFeature(PlanConstants.Growth, channel)
-            .Should().BeTrue($"{channel} must be available on Growth (decoupled from volume)");
-        PlanConstants.PlanHasFeature(PlanConstants.Operations, channel)
-            .Should().BeTrue($"{channel} must be available on Operations");
-        PlanConstants.PlanHasFeature(PlanConstants.Integration, channel)
-            .Should().BeTrue($"{channel} must be available on Integration");
-        PlanConstants.PlanHasFeature(PlanConstants.Distributor, channel)
-            .Should().BeTrue($"{channel} must be available on Distributor");
-    }
-
-    [Theory]
-    [MemberData(nameof(ChannelData))]
-    public void Channel_StaysRestrictedOnPilot(BillingFeature channel)
-    {
-        PlanConstants.PlanHasFeature(PlanConstants.Pilot, channel)
-            .Should().BeFalse($"{channel} must stay restricted on the Pilot trial");
-    }
-
     [Fact]
     public void OveragePerOrder_IsFiftyCents()
     {
@@ -93,8 +51,7 @@ public class PlanFeatureGateTests
     }
 
     // ── SSO (SAML/OIDC) — Enterprise-only capability gate ─────────────────────
-    // SSO is plan-gated to Enterprise exactly like ErpConnectors / CustomSupplierRules
-    // / SlaOnboarding. The capability is delivered by Clerk Enterprise Connections;
+    // SSO is plan-gated to Enterprise. The capability is delivered by Clerk Enterprise Connections;
     // this flag is the presentation/policy gate the Settings "Single sign-on" tab and
     // BillingStatus.SsoAvailable read. See docs/strategy/2026-06-08-sso-saml-implementation.md.
 

@@ -41,10 +41,10 @@ namespace ProcuLink.Api.Tests.Controllers;
 /// connector, author custom acceptance rules, bulk-import mappings, and read the org-wide
 /// audit trail — all sold as belonging to tiers between €149 and "contact sales".</para>
 ///
-/// <para><b>What deliberately stays open</b> is asserted too (see the "still open" region):
-/// per-order audit, single-mapping edits, and the stock delivery channels. Gating those would
-/// take away things lower tiers already pay for, which is the same dishonesty pointed the
-/// other way.</para>
+/// <para>Since plan 13b (2026-11-13) the ladder refuses one thing on the server, the org-wide
+/// audit trail, and SSO is presentation-only; the other eight features went with the legacy order
+/// surfaces they gated. A document's own history stays open on every plan, pinned as the IL
+/// scanner's negative control in <c>BillingGateEnforcementIsRealTests</c>.</para>
 /// </summary>
 public class BillingFeatureEnforcementTests
 {
@@ -73,39 +73,20 @@ public class BillingFeatureEnforcementTests
     }
 
     /// <summary>
-    /// Asserts the refusal is a 403 carrying a well-formed <c>{capability}_requires_{plan}</c> code
-    /// naming the plan that really unlocks <paramref name="feature"/>.
-    ///
-    /// <para><b>Why this is a full-shape match and not <c>EndWith</c>.</b> The original form checked
-    /// only the <c>_requires_&lt;plan&gt;</c> suffix, so a 403 whose capability segment named a
-    /// DIFFERENT capability passed — and the capability is a hand-written literal sitting next to
-    /// the feature at each gate (<c>RequiresPlan("s3_ingestion", BillingFeature.SftpIngestion)</c> is
-    /// a one-word copy-paste away). That mismatch is invisible to the plan check yet lands a
-    /// customer on an upsell for the wrong feature. Pass <paramref name="capability"/> wherever
-    /// production hardcodes one, and the exact string is pinned.</para>
+    /// Asserts the refusal is a 403 carrying exactly <c>{capability}_requires_{plan}</c>, naming both
+    /// the capability being refused and the plan that really unlocks <paramref name="feature"/>. A
+    /// suffix-only check would let a 403 naming a DIFFERENT capability pass, and land a customer on
+    /// an upsell for the wrong feature.
     /// </summary>
-    private static void Assert403NamingTheRightPlan(
-        IActionResult result, BillingFeature feature, string? capability = null)
+    private static void Assert403NamingTheRightPlan(IActionResult result, BillingFeature feature, string capability)
     {
         var status = result.Should().BeOfType<ObjectResult>(
             $"the {feature} gate must refuse, not fall through").Subject;
         status.StatusCode.Should().Be(403);
 
         var error = (string)((dynamic)status.Value!).error;
-
-        if (capability is not null)
-        {
-            error.Should().Be(BillingGateErrors.RequiresPlan(capability, feature),
-                "the 403 must name both the capability being refused and the plan that unlocks it");
-            return;
-        }
-
-        // No capability supplied (the delivery gates derive theirs from DeliveryCapabilityGate, and
-        // ConnectionLifecycleBillingGateTests pins those exactly): still require a well-formed code
-        // with a non-empty snake_case capability segment, so a malformed or bare code cannot pass.
-        error.Should().MatchRegex($"^[a-z0-9]+(_[a-z0-9]+)*_requires_{PlanConstants.GetMinimumPlan(feature)}$",
-            "the 403 must be a complete {capability}_requires_{plan} code naming the plan that "
-          + "actually unlocks the feature (WP-11 defect #1)");
+        error.Should().Be(BillingGateErrors.RequiresPlan(capability, feature),
+            "the 403 must name both the capability being refused and the plan that unlocks it");
     }
 
     private static void AssertNot403(IActionResult result, BillingFeature feature) =>
