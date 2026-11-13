@@ -207,24 +207,4 @@ public class OutputTemplateEmitterTests
         using var doc = JsonDocument.Parse(json);
         Assert.Equal("PO-1", doc.RootElement.GetProperty("po").GetString());   // kept despite broken predicate
     }
-
-    // ── F-1: an AST leaf bound to an arbitrary source field (src:: key OR typed SourceToken) ────────
-
-    [Fact]
-    public void Xml_AstField_BoundToTypedSourceToken_EmitsTokenValue()
-    {
-        var header = EmitterRows.Header();
-        header["src::seg:RFF[1].el2"] = "REF-99";
-        var template = new OutputNodeTemplate
-        {
-            Format = OutputFormat.Xml,
-            Root = OutputNode.Obj("Order",
-                OutputNode.FieldOf("Ref", new OutputFieldRule { OutputPath = "Ref", SourceToken = "seg:RFF[1].el2" }),
-                OutputNode.Arr("Lines", OutputNode.Obj("Line",
-                    OutputNode.FieldOf("Sku", Canon("SupplierItemCode"))))),
-        };
-
-        var xml = XDocument.Parse(EmitterRows.Emit(template, header, EmitterRows.TwoLines()).Text());
-        Assert.Equal("REF-99", xml.Root!.Element("Ref")!.Value);
-    }
 }

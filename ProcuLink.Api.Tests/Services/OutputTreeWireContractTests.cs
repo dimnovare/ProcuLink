@@ -14,11 +14,12 @@ namespace ProcuLink.Api.Tests.Services;
 public class OutputTreeWireContractTests
 {
     [Fact]
-    public void Bind_OrderMappingOverride_FromBody_WithStringEnums_Deserializes()
+    public void Bind_OutputNodeTemplate_FromBody_WithStringEnums_Deserializes()
     {
-        // REGRESSION (live walkthrough 2026-06-15): the preview/save endpoints take
-        // [FromBody] OrderMappingOverride. MVC model binding uses the GLOBAL web JSON options,
-        // which have NO string-enum converter. The frontend posts "nodeType":"object" / "format":"json".
+        // REGRESSION (live walkthrough 2026-06-15): the flow output endpoints take an
+        // OutputNodeTemplate inside [FromBody] (FlowOutputsController's OutputRequest, PreviewRequest,
+        // TestOutputRequest). MVC model binding uses the GLOBAL web JSON options, which have NO
+        // string-enum converter. The frontend posts "nodeType":"object" / "format":"json".
         // Before the [JsonConverter] attributes on OutputNodeType + OutputNodeTemplate.Format, this
         // threw (enum-from-string) → HTTP 400 "Preview failed". These options replicate [FromBody]
         // EXACTLY — bare web defaults, nothing added — so the attributes are what must carry it.
@@ -26,33 +27,30 @@ public class OutputTreeWireContractTests
 
         const string body = """
         {
-          "outputTree": {
-            "format": "json",
-            "root": {
-              "name": "root", "nodeType": "object", "children": [
-                { "name": "orderNumber", "nodeType": "field",
-                  "rule": { "outputPath": "orderNumber", "canonicalField": "PoNumber" } },
-                { "name": "lines", "nodeType": "array", "children": [
-                  { "name": "line", "nodeType": "object", "children": [
-                    { "name": "code", "nodeType": "field",
-                      "rule": { "outputPath": "code", "canonicalField": "SupplierItemCode" } },
-                    { "name": "ref", "nodeType": "attribute",
-                      "rule": { "outputPath": "ref", "fixedValue": "x" } }
-                  ] }
+          "format": "json",
+          "root": {
+            "name": "root", "nodeType": "object", "children": [
+              { "name": "orderNumber", "nodeType": "field",
+                "rule": { "outputPath": "orderNumber", "canonicalField": "PoNumber" } },
+              { "name": "lines", "nodeType": "array", "children": [
+                { "name": "line", "nodeType": "object", "children": [
+                  { "name": "code", "nodeType": "field",
+                    "rule": { "outputPath": "code", "canonicalField": "SupplierItemCode" } },
+                  { "name": "ref", "nodeType": "attribute",
+                    "rule": { "outputPath": "ref", "fixedValue": "x" } }
                 ] }
-              ]
-            }
+              ] }
+            ]
           }
         }
         """;
 
-        var ov = JsonSerializer.Deserialize<OrderMappingOverride>(body, webDefaults);
+        var tree = JsonSerializer.Deserialize<OutputNodeTemplate>(body, webDefaults);
 
-        Assert.NotNull(ov);
-        Assert.NotNull(ov!.OutputTree);
-        Assert.Equal(OutputFormat.Json, ov.OutputTree!.Format);
-        Assert.Equal(OutputNodeType.Object, ov.OutputTree.Root.NodeType);
-        var lines = ov.OutputTree.Root.Children[1];
+        Assert.NotNull(tree);
+        Assert.Equal(OutputFormat.Json, tree!.Format);
+        Assert.Equal(OutputNodeType.Object, tree.Root.NodeType);
+        var lines = tree.Root.Children[1];
         Assert.Equal(OutputNodeType.Array, lines.NodeType);
         Assert.Equal(OutputNodeType.Field, lines.Children[0].Children[0].NodeType);
         Assert.Equal(OutputNodeType.Attribute, lines.Children[0].Children[1].NodeType);

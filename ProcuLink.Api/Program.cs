@@ -660,16 +660,6 @@ if (builder.Configuration.GetValue<bool>("Delivery:EnableSmtp"))
 builder.Services.AddScoped<IDeliveryDispatcher, ErplyDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, DirectoDeliveryDispatcher>();
 
-// ── Transform layer (ProcuLink.Transform) ──────────────────────────────────
-// Every implementation registered as ITransformService. OrderService resolves the correct one at
-// runtime via IEnumerable<ITransformService> + CanTransform().
-//
-// Registered FROM OutputTransformRegistry.All rather than listed here, because the same list also
-// derives OutputTransformRegistry.Catalog — the allow-list every write path that stores an output
-// format checks against. Listing them separately is how the two drifted: the revision write path
-// accepted formats (UblOrder / X12_850 / EdifactOrders) that no transform below can build.
-builder.Services.AddOutputTransforms();
-
 // ── Group V8: standards conformance reports ─────────────────────────────────
 // Validates a generated outbound document against its NAMED standard profile
 // (cXML 1.2 / UBL 2.1 / X12 850 / EDIFACT ORDERS D.96A / SAP IDoc ORDERS05).

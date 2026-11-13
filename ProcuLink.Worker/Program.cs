@@ -283,10 +283,6 @@ builder.Services.AddScoped<IDeliveryDispatcher, DirectoDeliveryDispatcher>();
 // Source tokenizer: ReadDocumentJob reads structured formats through it (DocumentText.ReadAsync).
 // Singleton — stateless, mirrors the Api registration.
 builder.Services.AddSingleton<ProcuLink.Transform.Tokenizing.ISourceTokenizer, ProcuLink.Transform.Tokenizing.SourceTokenizer>();
-// Registered FROM OutputTransformRegistry.All — the same list that derives the buildable-format
-// allow-list every output-format write path checks against. See the Api registration for why the
-// two must not be typed out separately.
-builder.Services.AddOutputTransforms();
 
 // ── Wave 2: pull-ingress (SFTP / S3-R2) + OCR fallback ────────────────────
 builder.Services.AddSingleton<ISftpClientFactory, RenciSftpClientFactory>();

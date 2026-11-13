@@ -30,7 +30,6 @@ public static class MappedTransformService
     {
         string? value = ResolveExpressionOrField(
             rule.Expression,
-            fallbackSourceToken: rule.SourceToken,
             fallbackFixedValue: rule.FixedValue,
             fallbackCanonicalField: rule.CanonicalField,
             row: row,
@@ -46,16 +45,13 @@ public static class MappedTransformService
     }
 
     /// <summary>
-    /// Shared value-selection helper for the output-rule path. Precedence (F-1):
-    /// <c>Expression → SourceToken → FixedValue → CanonicalField</c>. Expression wins when present and
-    /// non-blank; then a bound source token (looked up as <c>row["src::"+token]</c>); then the supplied
-    /// fixed value; then the named field in <paramref name="row"/>. On an expression compile/eval
-    /// failure, falls through to the token/fixed/field value (never throws). A <paramref name="fallbackSourceToken"/>
-    /// id that is NOT present in the bag falls through too — it never emits a literal "src::…".
+    /// Shared value-selection helper for the output-rule path. Precedence:
+    /// <c>Expression → FixedValue → CanonicalField</c>. Expression wins when present and non-blank;
+    /// then the supplied fixed value; then the named field in <paramref name="row"/>. On an expression
+    /// compile/eval failure, falls through to the fixed/field value (never throws).
     /// </summary>
     internal static string? ResolveExpressionOrField(
         string? expression,
-        string? fallbackSourceToken,
         string? fallbackFixedValue,
         string? fallbackCanonicalField,
         IReadOnlyDictionary<string, string> row,
@@ -70,29 +66,22 @@ public static class MappedTransformService
             if (result.Ok)
                 return result.Value;
 
-            // Expression failed — fall through to the token/field/fixed value so the transform survives
+            // Expression failed — fall through to the fixed/field value so the transform survives
             // (fail-open is intentional and UNCHANGED). Log the failure so an authoring mistake in a
             // mapping expression is observable instead of silently producing the fallback value.
             TransformDiagnostics.CreateLogger(nameof(MappedTransformService)).LogWarning(
                 "Output-field expression failed to evaluate ({Scope}); falling back to the " +
-                "source-token/field/fixed value. Error: {Error}",
+                "fixed/field value. Error: {Error}",
                 lineScope ? "line" : "header", result.Error);
         }
-
-        // F-1 Seam B: a bound source token resolves through the reserved src:: namespace the row builder
-        // injects. A not-found token id falls through to FixedValue/CanonicalField (never crashes, never
-        // emits a literal "src::…").
-        if (!string.IsNullOrWhiteSpace(fallbackSourceToken)
-            && row.TryGetValue($"src::{fallbackSourceToken}", out var tokenValue))
-            return tokenValue;
 
         return fallbackFixedValue
             ?? (fallbackCanonicalField is not null && row.TryGetValue(fallbackCanonicalField, out var v) ? v : null);
     }
 
     /// <summary>
-    /// CSV field escaping for an authored dialect (WP-15) — the ONE CSV cell escaper; the fixed and
-    /// invoice CSV reach it through <see cref="CsvTransformService.Escape"/>.
+    /// CSV field escaping for an authored dialect (WP-15) — the ONE CSV cell escaper; the fixed
+    /// CSV reaches it through <see cref="CsvTransformService.Escape"/>.
     ///
     /// <para><c>Escape(v, ",", quoteAlways: false)</c> is the one-arg overload, which delegates here
     /// rather than the two drifting apart.</para>
