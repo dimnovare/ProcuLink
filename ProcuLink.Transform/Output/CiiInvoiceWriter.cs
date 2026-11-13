@@ -17,7 +17,7 @@ public static class CiiInvoiceWriter
     private static readonly XNamespace Ram = "urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100";
     private static readonly XNamespace Udt = "urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100";
 
-    public static XDocument Build(InvoiceEntity invoice, IReadOnlyList<InvoiceLineEntity> lines, PeppolPartyOptions parties, bool creditNote)
+    public static XDocument Build(InvoiceEntity invoice, IReadOnlyList<InvoiceLineEntity> lines, PeppolPartyOptions parties, bool creditNote, string? guidelineId = null)
     {
         var currency = string.IsNullOrWhiteSpace(invoice.Currency) ? "EUR" : invoice.Currency;
         var category = invoice.TaxTotal > 0m ? "S" : "Z";
@@ -31,7 +31,9 @@ public static class CiiInvoiceWriter
             new XAttribute(XNamespace.Xmlns + "ram", Ram.NamespaceName),
             new XAttribute(XNamespace.Xmlns + "udt", Udt.NamespaceName),
             new XElement(Rsm + "ExchangedDocumentContext",
-                new XElement(Ram + "GuidelineSpecifiedDocumentContextParameter", new XElement(Ram + "ID", "urn:cen.eu:en16931:2017"))),
+                // A named guideline (XRechnung) also carries the Peppol business process, which its rules require first.
+                guidelineId is null ? null : new XElement(Ram + "BusinessProcessSpecifiedDocumentContextParameter", new XElement(Ram + "ID", PeppolBisInvoiceTransformService.ProfileId)),
+                new XElement(Ram + "GuidelineSpecifiedDocumentContextParameter", new XElement(Ram + "ID", guidelineId ?? "urn:cen.eu:en16931:2017"))),
             new XElement(Rsm + "ExchangedDocument",
                 new XElement(Ram + "ID", invoice.InvoiceNumber),
                 new XElement(Ram + "TypeCode", creditNote ? "381" : "380"),

@@ -145,7 +145,7 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
     /// any that trip). Also writes each party's country and the order reference when given.
     /// Rule-checked against the official Peppol rules by PeppolRulesProofTests; that is not access-point acceptance.
     /// </summary>
-    public XDocument BuildDocument(InvoiceEntity invoice, IReadOnlyList<InvoiceLineEntity> lines, PeppolPartyOptions parties, bool creditNote)
+    public XDocument BuildDocument(InvoiceEntity invoice, IReadOnlyList<InvoiceLineEntity> lines, PeppolPartyOptions parties, bool creditNote, string? customizationId = null)
     {
         var cbc = CbcNs;
         var cac = CacNs;
@@ -167,7 +167,7 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
             new XAttribute(XNamespace.Xmlns + "cac", CacNs.NamespaceName),
 
             // ── BIS identifiers ──────────────────────────────────────────────
-            new XElement(cbc + "CustomizationID", CustomizationId),   // BT-24
+            new XElement(cbc + "CustomizationID", customizationId ?? CustomizationId),   // BT-24
             new XElement(cbc + "ProfileID",       ProfileId),         // ProfileID
 
             // ── Header business terms ────────────────────────────────────────

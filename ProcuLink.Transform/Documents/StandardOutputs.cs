@@ -11,7 +11,7 @@ namespace ProcuLink.Transform.Documents;
 /// unused) and names the official rule set it is checked against; <see cref="Flagged"/> standards sit behind the Peppol flag.
 /// </summary>
 public sealed record StandardOutput(string Id, OutputFormat Writer, string Format, IReadOnlyList<string> Needs,
-    string? Vesid = null, bool Flagged = false, bool CreditNote = false, InvoiceSyntax Syntax = InvoiceSyntax.Ubl, string RuleSet = "Peppol");
+    string? Vesid = null, bool Flagged = false, bool CreditNote = false, InvoiceSyntax Syntax = InvoiceSyntax.Ubl, string RuleSet = "Peppol", string? Customization = null);
 
 /// <summary>The XML syntax an invoice-model standard is written in.</summary>
 public enum InvoiceSyntax { Ubl, Cii }
@@ -38,6 +38,15 @@ public static class StandardOutputs
     private static readonly IReadOnlyList<string> CiiNeeds =
         [.. PeppolNeeds.Where(m => m is not (FieldMeanings.SenderEndpointId or FieldMeanings.ReceiverEndpointId))];
 
+    // XRechnung 3.0 (BR-DE-1..9, 15): the Peppol needs plus a buyer reference, both cities and postcodes, a seller contact and an IBAN. Street is optional.
+    private static readonly IReadOnlyList<string> XRechnungNeeds =
+    [
+        .. PeppolNeeds, FieldMeanings.BuyerReference, FieldMeanings.SenderCity, FieldMeanings.SenderPostcode, FieldMeanings.ReceiverCity, FieldMeanings.ReceiverPostcode,
+        FieldMeanings.SenderContactName, FieldMeanings.SenderContactPhone, FieldMeanings.SenderContactEmail, FieldMeanings.Iban,
+    ];
+
+    private const string XRechnungId = "urn:cen.eu:en16931:2017#compliant#urn:xeinkauf.de:kosit:xrechnung_3.0";
+
     public static readonly IReadOnlyList<StandardOutput> All =
     [
         new("cxml-1-2", OutputFormat.CXml, FlowOutputFormats.Xml, [.. OrderNeeds, FieldMeanings.LineUnit]),
@@ -48,6 +57,10 @@ public static class StandardOutputs
         new("edifact-orders", OutputFormat.EdifactOrders, FlowOutputFormats.Text, OrderNeeds),
         new("en16931-cii", OutputFormat.Ubl, FlowOutputFormats.Xml, CiiNeeds, "eu.cen.en16931:cii:1.3.17", true, Syntax: InvoiceSyntax.Cii, RuleSet: "EN 16931"),
         new("en16931-cii-credit-note", OutputFormat.Ubl, FlowOutputFormats.Xml, CiiNeeds, "eu.cen.en16931:cii:1.3.17", true, true, Syntax: InvoiceSyntax.Cii, RuleSet: "EN 16931"),
+        new("xrechnung-ubl", OutputFormat.Ubl, FlowOutputFormats.Xml, XRechnungNeeds, "de.xrechnung:ubl-invoice:3.0.2", true, RuleSet: "XRechnung", Customization: XRechnungId),
+        new("xrechnung-ubl-credit-note", OutputFormat.Ubl, FlowOutputFormats.Xml, XRechnungNeeds, "de.xrechnung:ubl-creditnote:3.0.2", true, true, RuleSet: "XRechnung", Customization: XRechnungId),
+        new("xrechnung-cii", OutputFormat.Ubl, FlowOutputFormats.Xml, XRechnungNeeds, "de.xrechnung:cii:3.0.2", true, Syntax: InvoiceSyntax.Cii, RuleSet: "XRechnung", Customization: XRechnungId),
+        new("xrechnung-cii-credit-note", OutputFormat.Ubl, FlowOutputFormats.Xml, XRechnungNeeds, "de.xrechnung:cii:3.0.2", true, true, Syntax: InvoiceSyntax.Cii, RuleSet: "XRechnung", Customization: XRechnungId),
     ];
 
     public static StandardOutput? Find(string? id) => All.FirstOrDefault(s => s.Id == id);
@@ -71,8 +84,8 @@ public static class StandardOutputs
             if (invoice.Invoice is { } inv)
             {
                 var doc = standard.Syntax == InvoiceSyntax.Cii
-                    ? CiiInvoiceWriter.Build(inv, invoice.Lines, invoice.Parties!, standard.CreditNote)
-                    : new PeppolBisInvoiceTransformService().BuildDocument(inv, invoice.Lines, invoice.Parties!, standard.CreditNote);
+                    ? CiiInvoiceWriter.Build(inv, invoice.Lines, invoice.Parties!, standard.CreditNote, standard.Customization)
+                    : new PeppolBisInvoiceTransformService().BuildDocument(inv, invoice.Lines, invoice.Parties!, standard.CreditNote, standard.Customization);
                 var bytes = System.Text.Encoding.UTF8.GetBytes(doc.Declaration + Environment.NewLine + doc);
                 return new(TransformResult.For(OutputFormat.Xml, new MemoryStream(bytes, writable: false)), null, null);
             }

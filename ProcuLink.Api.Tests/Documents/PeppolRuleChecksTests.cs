@@ -174,14 +174,18 @@ public class PeppolRuleChecksTests(DocumentEngineTestFactory factory) : IClassFi
     }
 
     [Fact]
-    public async Task Flag_off_refuses_an_en16931_output_too()
+    public async Task Flag_off_refuses_an_en16931_or_xrechnung_output_too()
     {
         var org = DocumentEngineTestFactory.OrgB;
         var (flowId, _) = await SeedDocument(org);
 
         var create = await factory.ClientFor(org).PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "CII", format = "", standard = "en16931-cii" });
 
+        var xr = await factory.ClientFor(org).PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "XR", format = "", standard = "xrechnung-cii" });
+
         create.StatusCode.Should().Be(HttpStatusCode.Forbidden);
         (await create.Content.ReadAsStringAsync()).Should().Contain("peppol_off");
+        xr.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await xr.Content.ReadAsStringAsync()).Should().Contain("peppol_off");
     }
 }
