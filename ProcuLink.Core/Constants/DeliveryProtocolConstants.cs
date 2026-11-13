@@ -53,7 +53,9 @@ public static class DeliveryProtocolConstants
         Email,
         ErpErply,
         ErpDirecto,
-        Manual
+        Manual,
+        GoogleDrive,
+        GoogleSheets
     ];
 
     /// <summary>

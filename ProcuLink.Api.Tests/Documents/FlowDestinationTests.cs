@@ -2,15 +2,19 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
+using ProcuLink.Infrastructure.Services.Google;
 using Xunit;
 using static ProcuLink.Api.Services.Documents.FlowDestinationService;
+using static ProcuLink.Api.Tests.Documents.DocumentEngineTestFactory;
 
 namespace ProcuLink.Api.Tests.Documents;
 
@@ -55,6 +59,53 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
         Body(blank).Should().Be("Attached: {fileName}. Sent by ProcuLink.");
     }
 
+    private async Task<Guid> SeedAccountAsync(Guid org)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        var id = Guid.NewGuid();
+        db.LinkedAccounts.Add(new LinkedAccount { Id = id, OrgId = org, Subject = "sub-" + id, Email = "user@example.com", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+        return id;
+    }
+
+    [Fact]
+    public async Task Google_destination_with_the_flag_off_is_unsupported()
+    {
+        await using var db = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        var service = new FlowDestinationService(db, null!, [],
+            new DocumentEngineGate(Options.Create(new DocumentEngineOptions { EnabledOrgIds = [OrgA.ToString()] })),
+            Options.Create(new GoogleOptions { ClientId = "c", ClientSecret = "s" }));
+        using var config = JsonDocument.Parse("""{"accountId":"x","folderId":"f"}""");
+
+        var act = () => service.SaveAsync(OrgA, null, new DestinationRequest("d", "google_drive", config.RootElement, null), default);
+
+        (await act.Should().ThrowAsync<DestinationException>()).Which.Code.Should().Be("unsupported_destination");
+    }
+
+    [Fact]
+    public async Task Google_drive_destination_needs_an_own_org_account_and_pins_it()
+    {
+        var http = factory.ClientFor(OrgA);
+        var other = await SeedAccountAsync(OrgB);
+        var own = await SeedAccountAsync(OrgA);
+
+        var foreign = await http.PostAsJsonAsync("/api/destinations", new { name = "Drive", protocol = "google_drive", config = new { accountId = other, folderId = "fold-1" } });
+        foreign.StatusCode.Should().Be((HttpStatusCode)422);
+        (await foreign.Content.ReadAsStringAsync()).Should().Contain("invalid_destination");
+
+        var created = await http.PostAsJsonAsync("/api/destinations", new
+        {
+            name = "Drive", protocol = "google_drive", config = new { accountId = own, folderId = "fold-1", folderName = "Invoices" }, credentials = new { password = "ignored" },
+        });
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        (await created.Content.ReadAsStringAsync()).Should().Contain("\"hasCredentials\":false");
+
+        var inUse = await http.DeleteAsync($"/api/linked-accounts/{own}");
+        inUse.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await inUse.Content.ReadAsStringAsync()).Should().Contain("account_in_use");
+    }
+
     [Fact]
     public async Task Credentials_are_bound_to_their_destination_and_never_returned()
     {
@@ -69,7 +120,7 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
         json.Should().NotContain("\"p\"").And.Contain("\"hasCredentials\":true");
 
         using var scope = factory.Services.CreateScope();
-        var row = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowDestination>().Single();
+        var row = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowDestination>().Single(d => d.Protocol == "sftp");
         var encryption = scope.ServiceProvider.GetRequiredService<DeliveryEncryptionService>();
         var act = () => encryption.Decrypt(row.EncryptedCredentials!,
             new CredentialScope(DocumentEngineTestFactory.OrgA, CredentialPurpose.FlowDestinationCredentials, Guid.NewGuid()));

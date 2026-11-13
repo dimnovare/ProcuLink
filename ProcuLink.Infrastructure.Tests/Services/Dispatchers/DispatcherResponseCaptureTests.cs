@@ -45,6 +45,8 @@ public class DispatcherResponseCaptureTests
         // S3 results do carry status codes (403, 503, ...); the error body is reduced to an
         // ErrorCode and flows do not route on it, so there is nothing to capture.
         { "s3", false },
+        // Drive answers are reduced to a fixed message; no body is captured (plan 9b, 2026-11-13).
+        { "google_drive", false },
         { "smtp", false },
     };
 
@@ -180,6 +182,7 @@ public class DispatcherResponseCaptureTests
         new SftpDeliveryDispatcher(NullLogger<SftpDeliveryDispatcher>.Instance, Guard()),
         new FtpsDeliveryDispatcher(NullLogger<FtpsDeliveryDispatcher>.Instance, Guard()),
         new S3DeliveryDispatcher(new Moq.Mock<ProcuLink.Core.Services.Ingress.IAmazonS3ClientFactory>().Object, Guard(), NullLogger<S3DeliveryDispatcher>.Instance),
+        new GoogleDriveDeliveryDispatcher(new StubHttpClientFactory(), new Moq.Mock<ProcuLink.Core.Services.Google.ILinkedAccountTokens>().Object, NullLogger<GoogleDriveDeliveryDispatcher>.Instance),
         new HttpDeliveryDispatcher(new StubHttpClientFactory(), Guard(), NullLogger<HttpDeliveryDispatcher>.Instance),
         new EmailApiDeliveryDispatcher(new FakeEmailApiClient(), NullLogger<EmailApiDeliveryDispatcher>.Instance),
         new SmtpDeliveryDispatcher(NullLogger<SmtpDeliveryDispatcher>.Instance, Guard()),

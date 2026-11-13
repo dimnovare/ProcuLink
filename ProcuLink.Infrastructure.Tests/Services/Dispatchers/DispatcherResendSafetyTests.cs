@@ -26,6 +26,8 @@ public class DispatcherResendSafetyTests
         { "sftp", ResendSafety.Safe },
         { "ftps", ResendSafety.Safe },
         { "s3", ResendSafety.Safe },
+        // Looks the name up in the folder first, so a re-send overwrites that file instead of adding another (plan 9b, 2026-11-13).
+        { "google_drive", ResendSafety.Safe },
         // Sends Idempotency-Key + X-Message-Id; honouring them is the supplier's choice.
         { "http", ResendSafety.BestEffort },
         // Message-ID dedup by a receiving MTA is best-effort and rarely applied.
@@ -68,6 +70,7 @@ public class DispatcherResendSafetyTests
         new SftpDeliveryDispatcher(NullLogger<SftpDeliveryDispatcher>.Instance, Guard()),
         new FtpsDeliveryDispatcher(NullLogger<FtpsDeliveryDispatcher>.Instance, Guard()),
         new S3DeliveryDispatcher(new Moq.Mock<ProcuLink.Core.Services.Ingress.IAmazonS3ClientFactory>().Object, Guard(), NullLogger<S3DeliveryDispatcher>.Instance),
+        new GoogleDriveDeliveryDispatcher(new FakeHttpClientFactory(), new Moq.Mock<ProcuLink.Core.Services.Google.ILinkedAccountTokens>().Object, NullLogger<GoogleDriveDeliveryDispatcher>.Instance),
         new HttpDeliveryDispatcher(new FakeHttpClientFactory(), Guard(), NullLogger<HttpDeliveryDispatcher>.Instance),
         new EmailApiDeliveryDispatcher(new FakeEmailApiClient(), NullLogger<EmailApiDeliveryDispatcher>.Instance),
         new SmtpDeliveryDispatcher(NullLogger<SmtpDeliveryDispatcher>.Instance, Guard()),

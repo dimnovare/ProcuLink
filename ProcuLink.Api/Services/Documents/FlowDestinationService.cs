@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
@@ -9,6 +10,7 @@ using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
+using ProcuLink.Infrastructure.Services.Google;
 using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Api.Services.Documents;
@@ -23,19 +25,24 @@ public sealed class DestinationException(string code, string? detail = null) : E
 
 /// <summary>Org-level reusable destinations. Delivery itself is the existing dispatchers'; this only stores, validates and test-sends.</summary>
 public sealed class FlowDestinationService(
-    ProcuLinkDbContext db, DeliveryEncryptionService encryption, IEnumerable<IDeliveryDispatcher> dispatchers)
+    ProcuLinkDbContext db, DeliveryEncryptionService encryption, IEnumerable<IDeliveryDispatcher> dispatchers,
+    DocumentEngineGate gate, IOptions<GoogleOptions> google)
 {
     public const string TestFileName = "TEST_proculink-test.txt";
     public const string TestFileContent = "ProcuLink test send. This file is a test and contains no document data.\n";
     private const string Purpose = CredentialPurpose.FlowDestinationCredentials;
 
     private static readonly string[] Allowed =
-        [DeliveryProtocolConstants.Http, DeliveryProtocolConstants.Sftp, DeliveryProtocolConstants.Ftps, DeliveryProtocolConstants.S3, DeliveryProtocolConstants.Email];
+        [DeliveryProtocolConstants.Http, DeliveryProtocolConstants.Sftp, DeliveryProtocolConstants.Ftps, DeliveryProtocolConstants.S3, DeliveryProtocolConstants.Email,
+         DeliveryProtocolConstants.GoogleDrive, DeliveryProtocolConstants.GoogleSheets];
 
     public async Task<FlowDestination> SaveAsync(Guid orgId, Guid? id, DestinationRequest req, CancellationToken ct)
     {
         var protocol = req.Protocol?.Trim().ToLowerInvariant() ?? "";
         if (!Allowed.Contains(protocol)) throw new DestinationException("unsupported_destination");
+        var isGoogle = protocol is DeliveryProtocolConstants.GoogleDrive or DeliveryProtocolConstants.GoogleSheets;
+        // The flag gates creation (R2), not running: an existing destination keeps delivering once it is off.
+        if (isGoogle && !(gate.NativeConnectorsOn(orgId) && google.Value.IsConfigured)) throw new DestinationException("unsupported_destination");
         if (string.IsNullOrWhiteSpace(req.Name) || req.Config.ValueKind != JsonValueKind.Object)
             throw new DestinationException("invalid_destination", "A name and a config object are required.");
 
@@ -45,7 +52,7 @@ public sealed class FlowDestinationService(
         if (id is not null && existing is null) throw new KeyNotFoundException();
 
         var configJson = req.Config.GetRawText();
-        var credentials = req.Credentials is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) } c ? c.GetRawText() : null;
+        var credentials = !isGoogle && req.Credentials is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) } c ? c.GetRawText() : null;
         try
         {
             DeliveryConfigRules.ValidateConfigJson(configJson);
@@ -57,6 +64,8 @@ public sealed class FlowDestinationService(
         {
             throw new DestinationException("invalid_destination", ex.Message);
         }
+
+        if (isGoogle) await ValidateGoogleAsync(orgId, protocol, req.Config, ct);
 
         // An S3 endpoint is a tenant-supplied URL outside the url-bearing protocols, so it is policed here (and again at dispatch).
         if (protocol == DeliveryProtocolConstants.S3 && req.Config.TryGetProperty("serviceUrl", out var endpoint)
@@ -84,6 +93,19 @@ public sealed class FlowDestinationService(
         return existing;
     }
 
+    /// <summary>The account must be this org's Google account, and the picked folder or spreadsheet must be named.</summary>
+    private async Task ValidateGoogleAsync(Guid orgId, string protocol, JsonElement config, CancellationToken ct)
+    {
+        var target = protocol == DeliveryProtocolConstants.GoogleDrive ? "folderId" : "spreadsheetId";
+        string? Prop(string name) => config.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(v.GetString()) ? v.GetString() : null;
+
+        if (!Guid.TryParse(Prop("accountId"), out var accountId)
+            || !await db.Set<LinkedAccount>().AnyAsync(a => a.OrgId == orgId && a.Id == accountId && a.Provider == LinkedAccountProviders.Google, ct))
+            throw new DestinationException("invalid_destination", "Choose a connected Google account.");
+        if (Prop(target) is null)
+            throw new DestinationException("invalid_destination", protocol == DeliveryProtocolConstants.GoogleDrive ? "Choose a Google Drive folder." : "Choose a Google spreadsheet.");
+    }
+
     /// <summary>Null when not this org's; false while an output still sends to it.</summary>
     public async Task<bool?> DeleteAsync(Guid orgId, Guid id, CancellationToken ct)
     {
@@ -106,6 +128,8 @@ public sealed class FlowDestinationService(
             json["bodyTemplate"] = Text(json, "bodyTemplate") ?? "Attached: {fileName}. Sent by ProcuLink.";
             json.Remove("attachmentFileName"); // the delivery's own file name (or the TEST_ name) wins
         }
+        else if (d.Protocol == DeliveryProtocolConstants.GoogleSheets)
+            json["checkOnly"] = test; // a test send never appends rows (R11), whatever the stored config says
         else if (test && d.Protocol == DeliveryProtocolConstants.Http)
         {
             var headers = json["headers"] as JsonObject ?? new JsonObject();
