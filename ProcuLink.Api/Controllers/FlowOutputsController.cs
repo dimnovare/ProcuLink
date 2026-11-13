@@ -311,6 +311,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         // A standard is filled by meaning from the live fields: the request's format, template and layout are ignored.
         if (request.Standard is { } standard)
         {
+            if (StandardOutputs.Find(standard) is { Flagged: true } && !gate.PeppolOn(orgId)) return StatusCode(403, new { error = "peppol_off" });
             var flow = await db.Flows.AsNoTracking().FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == doc.FlowId, ct);
             if (flow is null) return FlowNotFound();
             render = await StandardOutputs.RenderAsync(standard, read, (await FlowConfigLoader.LiveAsync(db, flow, ct)).Fields, request.TableKey, orgId, ct);

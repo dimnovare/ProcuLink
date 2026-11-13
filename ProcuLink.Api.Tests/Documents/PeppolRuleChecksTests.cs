@@ -68,7 +68,7 @@ public class PeppolRuleChecksTests(DocumentEngineTestFactory factory) : IClassFi
     {
         var org = DocumentEngineTestFactory.OrgA;
         var (flowId, docId) = await SeedDocument(org);
-        await AddOutput(org, flowId);
+        var outputId = await AddOutput(org, flowId);
         factory.Validator.Outcome = new(ValidationStatus.Failed,
             [.. Enumerable.Range(1, 4).Select(i => new ValidationIssue($"R-{i}", "error", $"text {i}")), new ValidationIssue("W-1", "warning", "ignored")]);
 
@@ -77,6 +77,8 @@ public class PeppolRuleChecksTests(DocumentEngineTestFactory factory) : IClassFi
         checks.Should().ContainSingle(c => c.Code == DocumentChecks.OutputRules).Which.Message
             .Should().Be("Peppol invoice doesn't meet 4 Peppol rule(s): R-1 text 1; R-2 text 2; R-3 text 3 and 1 more");
         status.Should().Be(DocumentStatus.Ready);
+        var shown = await (await factory.ClientFor(org).PostAsync($"/api/flows/{flowId}/outputs/{outputId}/check?documentId={docId}", null)).Content.ReadAsStringAsync();
+        shown.Should().Contain("\"status\":\"failed\"").And.Contain("\"issues\":[{\"ruleId\":\"R-1\"");
         (await factory.ClientFor(org).PostAsync($"/api/documents/{docId}/send", null)).StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
@@ -96,15 +98,49 @@ public class PeppolRuleChecksTests(DocumentEngineTestFactory factory) : IClassFi
     }
 
     [Fact]
+    public async Task An_outage_is_asked_about_once_per_batch()
+    {
+        var org = DocumentEngineTestFactory.OrgA;
+        var (flowId, first) = await SeedDocument(org);
+        await AddOutput(org, flowId);
+        var calls = 0;
+        var counting = new CountingValidator(() => calls++);
+        using var scope = factory.Services.CreateScope();
+        var gate = scope.ServiceProvider.GetRequiredService<DocumentEngineGate>();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        var flow = await db.Flows.FirstAsync(f => f.Id == flowId);
+        var config = await FlowConfigLoader.LiveAsync(db, flow, CancellationToken.None);
+        var read = PeppolRulesProofTests.Read();
+        var batch = new OutputRuleChecks.Batch();
+
+        for (var i = 0; i < 3; i++)
+            (await OutputRuleChecks.RunAsync(gate, counting, org, read, config, CancellationToken.None, batch)).Should().BeEmpty();
+
+        calls.Should().Be(1);
+    }
+
+    private sealed class CountingValidator(Action onCall) : IStandardValidator
+    {
+        public Task<ValidationOutcome> ValidateAsync(string vesid, byte[] xml, CancellationToken ct)
+        {
+            onCall();
+            return Task.FromResult(new ValidationOutcome(ValidationStatus.Unavailable, []));
+        }
+    }
+
+    [Fact]
     public async Task Flag_off_refuses_peppol()
     {
         var org = DocumentEngineTestFactory.OrgB;
         var http = factory.ClientFor(org);
         var (flowId, docId) = await SeedDocument(org);
         var outputId = await AddOutput(org, flowId);
+        factory.Validator.Outcome = new(ValidationStatus.Failed, [new ValidationIssue("R-1", "error", "text")]);
 
         var create = await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "Peppol", format = "", standard = Standard });
         var send = await http.PostAsync($"/api/documents/{docId}/send", null);
+        var test = await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/test",
+            new { format = "", destinationId = Guid.NewGuid(), template = new { }, standard = Standard, tableKey = "lines" });
         var check = await http.PostAsync($"/api/flows/{flowId}/outputs/{outputId}/check?documentId={docId}", null);
         var (checks, _) = await Recheck(flowId, docId);
 
@@ -113,6 +149,8 @@ public class PeppolRuleChecksTests(DocumentEngineTestFactory factory) : IClassFi
         send.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
         (await send.Content.ReadAsStringAsync()).Should().Contain("output_invalid");
         check.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        test.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await test.Content.ReadAsStringAsync()).Should().Contain("peppol_off");
         checks.Should().NotContain(c => c.Code == DocumentChecks.OutputRules);
     }
 }

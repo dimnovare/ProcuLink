@@ -9,13 +9,16 @@ namespace ProcuLink.Api.Services.Documents;
 /// </summary>
 public static class OutputRuleChecks
 {
+    /// <summary>One batch of rechecks: after the checker is found unreachable, the rest of the batch does not ask again.</summary>
+    public sealed class Batch { public bool CheckerDown { get; set; } }
+
     private const int Listed = 3;
 
     public static async Task<IReadOnlyList<DocumentCheck>> RunAsync(
-        DocumentEngineGate gate, IStandardValidator validator, Guid orgId, ReadResult read, FlowConfig config, CancellationToken ct)
+        DocumentEngineGate gate, IStandardValidator validator, Guid orgId, ReadResult read, FlowConfig config, CancellationToken ct, Batch? batch = null)
     {
         var failed = new List<DocumentCheck>();
-        if (!gate.PeppolOn(orgId)) return failed;
+        if (!gate.PeppolOn(orgId) || batch is { CheckerDown: true }) return failed;
 
         var header = DocumentRows.Build(read, null).Header;
         foreach (var o in config.Outputs)
@@ -30,6 +33,7 @@ public static class OutputRuleChecks
             await render.Result!.Content.CopyToAsync(buffer, ct);
 
             var outcome = await validator.ValidateAsync(vesid, buffer.ToArray(), ct);
+            if (outcome.Status == ValidationStatus.Unavailable && batch is not null) { batch.CheckerDown = true; break; }
             if (outcome.Status != ValidationStatus.Failed) continue;
             var errors = outcome.Issues.Where(i => i.Severity == "error").ToList();
             if (errors.Count == 0) continue;
