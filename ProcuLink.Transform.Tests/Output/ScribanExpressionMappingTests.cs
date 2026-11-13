@@ -1,11 +1,9 @@
 using System.Text;
 using System.Text.Json;
 using FluentAssertions;
-using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Transform.Output;
-using ProcuLink.Transform.Tokenizing;
 
 namespace ProcuLink.Transform.Tests.Output;
 
@@ -13,47 +11,13 @@ namespace ProcuLink.Transform.Tests.Output;
 /// Tests for the per-field Scriban <c>Expression</c> support (heart-piece-flex flexible mapping):
 ///   • the sandboxed <see cref="ScribanFieldEvaluator"/> itself (scope, arithmetic, interpolation,
 ///     invalid-expression safety, unknown-member relaxation);
-///   • the <see cref="OutputFieldRule.Expression"/> wiring in <see cref="MappedTransformService"/>
+///   • the <see cref="OutputFieldRule.Expression"/> wiring in the output tree
 ///     (precedence over canonicalField/fixedValue, chain-after-expression, header vs line scope);
-///   • the <see cref="SourceFieldRule.Expression"/> wiring in <see cref="SourceMapReDerive"/>;
 ///   • the additive invariant: with NO Expression set, output is byte-for-byte identical to before.
 /// </summary>
 public class ScribanExpressionMappingTests
 {
     // ── Helpers ───────────────────────────────────────────────────────────────
-
-    private static PurchaseOrderEntity BuildOrder(IEnumerable<PurchaseOrderLineEntity>? lines = null)
-    {
-        var order = new PurchaseOrderEntity
-        {
-            Id         = Guid.NewGuid(),
-            OrgId      = Guid.NewGuid(),
-            SupplierId = Guid.NewGuid(),
-            PoNumber   = "PO-9001",
-            BuyerName  = "Acme Buyer Ltd",
-            OrderDate  = new DateOnly(2026, 5, 1),
-            Currency   = "EUR",
-            Status     = "ready",
-        };
-
-        order.Lines = (lines ?? new[]
-        {
-            new PurchaseOrderLineEntity
-            {
-                LineNumber = 1, BuyerItemCode = "B-1", SupplierItemCode = "SUP-1",
-                Description = "Widget", Quantity = 3m, Unit = "EA", UnitPrice = 10m,
-                NeedsReview = false, Confidence = 1.0f,
-            },
-            new PurchaseOrderLineEntity
-            {
-                LineNumber = 2, BuyerItemCode = "B-2", SupplierItemCode = "SUP-2",
-                Description = "Gadget", Quantity = 2m, Unit = "EA", UnitPrice = 5.5m,
-                NeedsReview = false, Confidence = 1.0f,
-            },
-        }).ToList();
-
-        return order;
-    }
 
     private static string ReadCsv(TransformResult result)
     {
@@ -314,139 +278,6 @@ public class ScribanExpressionMappingTests
         rows[1].Should().Be("SUP-1");   // fell back to the canonical field
     }
 
-    [Fact]
-    public void Output_CustomHeaderField_ReachableFromExpression()
-    {
-        var order = BuildOrder();
-        var ov = new OrderMappingOverride
-        {
-            CustomFields =
-            {
-                new CustomField { Key = "buyerGln", Label = "GLN", Scope = "header", Value = "4012345" },
-            },
-            Output = new OutputMappingConfig
-            {
-                Header = { ["gln"] = new OutputFieldRule { OutputPath = "GLN", Expression = "GLN:{{ order.buyerGln }}" } },
-            },
-        };
-
-        var rows = Rows(new MappedTransformService().Build(order, ov, OutputFormat.Csv));
-        rows[0].Should().Be("GLN");
-        rows[1].Should().Be("GLN:4012345");
-    }
-
-    // ── SourceFieldRule.Expression wiring (SourceMapReDerive) ────────────────────
-
-    [Fact]
-    public void SourceMap_HeaderExpression_OverridesParsedValue()
-    {
-        var headerRow = new Dictionary<string, string>
-        {
-            ["PoNumber"]     = "ORIGINAL",
-            ["OrderDate"]    = "2026-01-01",
-            ["BuyerName"]    = "Acme",
-            ["Currency"]     = "EUR",
-            ["SupplierName"] = "Supplier Co",
-        };
-        var ov = new OrderMappingOverride
-        {
-            SourceMap = new Dictionary<string, SourceFieldRule>
-            {
-                ["PoNumber"] = new SourceFieldRule { Expression = "{{ order.Currency }}-{{ order.BuyerName }}" },
-            },
-        };
-
-        var result = SourceMapReDerive.ApplyToHeaderRow(headerRow, ov, Array.Empty<SourceToken>());
-
-        result["PoNumber"].Should().Be("EUR-Acme");
-    }
-
-    [Fact]
-    public void SourceMap_LineExpression_Arithmetic()
-    {
-        var lineRow = new Dictionary<string, string>
-        {
-            ["SupplierItemCode"] = "SUP-1",
-            ["Quantity"]         = "4",
-            ["UnitPrice"]        = "2.5",
-            ["LineTotal"]        = "10",
-        };
-        var ov = new OrderMappingOverride
-        {
-            SourceMap = new Dictionary<string, SourceFieldRule>
-            {
-                ["LineTotal"] = new SourceFieldRule { Expression = "{{ line.Quantity * line.UnitPrice }}" },
-            },
-        };
-
-        var result = SourceMapReDerive.ApplyToLineRow(lineRow, ov, Array.Empty<SourceToken>());
-
-        result["LineTotal"].Should().Be("10.0");  // 4 * 2.5 (decimal preserves scale → 10.0)
-    }
-
-    [Fact]
-    public void SourceMap_Expression_TakesPrecedenceOverSourceTokenAndFixedValue()
-    {
-        var headerRow = new Dictionary<string, string> { ["PoNumber"] = "ORIGINAL", ["Currency"] = "EUR" };
-        var tokens = new[] { new SourceToken(Id: "cell:r1c1", Label: "x", Value: "FROM-TOKEN", Group: "header") };
-        var ov = new OrderMappingOverride
-        {
-            SourceMap = new Dictionary<string, SourceFieldRule>
-            {
-                ["PoNumber"] = new SourceFieldRule
-                {
-                    Expression  = "EXPR-{{ order.Currency }}",
-                    SourceToken = "cell:r1c1",   // would win if no expression
-                    FixedValue  = "FIXED",        // would win if no token/expression
-                },
-            },
-        };
-
-        var result = SourceMapReDerive.ApplyToHeaderRow(headerRow, ov, tokens);
-
-        result["PoNumber"].Should().Be("EXPR-EUR");
-    }
-
-    [Fact]
-    public void SourceMap_Expression_ThenManipulatorChain()
-    {
-        var headerRow = new Dictionary<string, string> { ["PoNumber"] = "x", ["Currency"] = "eur" };
-        var ov = new OrderMappingOverride
-        {
-            SourceMap = new Dictionary<string, SourceFieldRule>
-            {
-                ["PoNumber"] = new SourceFieldRule
-                {
-                    Expression  = "{{ order.Currency }}",
-                    Manipulators = { new ManipulatorEntry { Type = "Replace", Params = { "eur", "EUR" } } },
-                },
-            },
-        };
-
-        var result = SourceMapReDerive.ApplyToHeaderRow(headerRow, ov, Array.Empty<SourceToken>());
-
-        result["PoNumber"].Should().Be("EUR");
-    }
-
-    [Fact]
-    public void SourceMap_InvalidExpression_FallsBackToTokenThenFixedThenPassThrough()
-    {
-        var headerRow = new Dictionary<string, string> { ["PoNumber"] = "PASS-THROUGH" };
-        var ov = new OrderMappingOverride
-        {
-            SourceMap = new Dictionary<string, SourceFieldRule>
-            {
-                ["PoNumber"] = new SourceFieldRule { Expression = "{{ order.PoNumber + * }}" }, // broken
-            },
-        };
-
-        var act = () => SourceMapReDerive.ApplyToHeaderRow(headerRow, ov, Array.Empty<SourceToken>());
-        var result = act.Should().NotThrow().Subject;
-
-        // No token, no fixed value → falls all the way through to the original parsed value.
-        result["PoNumber"].Should().Be("PASS-THROUGH");
-    }
-
     // ── F-1: Scriban indexer access to a bound source field via order["src::…"] ─────────────────
 
     [Fact]
@@ -551,27 +382,4 @@ public class ScribanExpressionMappingTests
         rows[1].Should().Be("SUP-1");
     }
 
-    [Fact]
-    public void NoExpression_SourceMap_FastPath_Unchanged()
-    {
-        // A SourceMap with no Expression and no token still resolves exactly as before (pass-through).
-        var lineRow = new Dictionary<string, string>
-        {
-            ["SupplierItemCode"] = "SUP-9",
-            ["Quantity"]         = "1",
-            ["UnitPrice"]        = "1",
-        };
-        var ov = new OrderMappingOverride
-        {
-            SourceMap = new Dictionary<string, SourceFieldRule>
-            {
-                ["Description"] = new SourceFieldRule { FixedValue = "Fixed Desc" },
-            },
-        };
-
-        var result = SourceMapReDerive.ApplyToLineRow(lineRow, ov, Array.Empty<SourceToken>());
-
-        result["SupplierItemCode"].Should().Be("SUP-9");   // untouched
-        result["Description"].Should().Be("Fixed Desc");   // the explicit fixed-value rule
-    }
 }

@@ -1,6 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
 using ProcuLink.Core.Services;
-using ProcuLink.Core.Services.Delivery;
 
 namespace ProcuLink.Transform.Output;
 
@@ -37,14 +36,6 @@ public static class OutputTransformRegistry
         new X12TransformService(),      // Group M — ANSI X12 850
         new PdfTransformService(),      // orders; invoices reach DocumentPdfOutput via InvoiceDefaultOutput
     };
-
-    /// <summary>
-    /// The output formats a caller may name, derived from <see cref="All"/>. Used by EVERY write path
-    /// that stores an output format — the live delivery-config row and the connection revision — so
-    /// the two cannot drift, and a third path added later inherits the same answer by using the same
-    /// object.
-    /// </summary>
-    public static OutputFormatCatalog Catalog { get; } = new(All);
 
     /// <summary>
     /// Register the transform layer. The hosts call THIS rather than listing the implementations, so

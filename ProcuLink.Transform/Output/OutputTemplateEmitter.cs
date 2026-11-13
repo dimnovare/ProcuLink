@@ -2,10 +2,8 @@ using System.Text;
 using System.Text.Json;
 using System.Xml;
 using Microsoft.Extensions.Logging;
-using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
-using ProcuLink.Transform.Tokenizing;
 
 namespace ProcuLink.Transform.Output;
 
@@ -28,49 +26,6 @@ public sealed record CsvGrid(IReadOnlyList<string>? Header, IReadOnlyList<IReadO
 /// </summary>
 public sealed class OutputTemplateEmitter
 {
-    /// <summary>
-    /// Render <paramref name="template"/> against <paramref name="order"/> using the same value
-    /// machinery as the flat builder. Throws <see cref="TransformValidationException"/> for an
-    /// unresolved order (identical guard to the fixed/flat transforms — never deliver a blind doc).
-    /// </summary>
-    public TransformResult Emit(
-        OutputNodeTemplate template,
-        PurchaseOrderEntity order,
-        OrderMappingOverride @override,
-        IReadOnlyList<SourceToken>? sourceTokens = null,
-        IReadOnlyDictionary<string, SupplierProduct>? catalogLookup = null)
-    {
-        GuardResolved(order);
-
-        var tokens = sourceTokens ?? Array.Empty<SourceToken>();
-
-        // Header value bag (resolved once), with the SourceMap re-derive applied — exactly as the flat
-        // builder does. Line bags are built lazily per line inside an Array node. F-1 Seam A: pass the
-        // token list one level deeper so the row builders inject the reserved src:: keys.
-        var headerRow = SourceMapReDerive.ApplyToHeaderRow(
-            MappedTransformService.BuildHeaderRow(order, @override, tokens), @override, tokens);
-
-        IReadOnlyDictionary<string, string> LineRowFor(PurchaseOrderLineEntity line) =>
-            SourceMapReDerive.ApplyToLineRow(
-                MappedTransformService.BuildLineRow(order, @override, line, catalogLookup, tokens), @override, tokens);
-
-        var orderedLines = order.Lines.OrderBy(l => l.LineNumber).ToList();
-
-        // ONE gate, asked of the SHARED predicate every caller uses to decide whether to route here at
-        // all (OutputTreeFormats.IsRenderable). Spelling the refusal as its own format list is exactly
-        // how the emitter and the "usable layout" predicate drifted: the predicate said "not cXML/X12"
-        // while this switch also refused Ubl, UblOrder, X12_850 and EdifactOrders through its `_` arm,
-        // so promoting a tree in one of those formats bricked every future order for the supplier.
-        //
-        // A non-renderable format needs the standard's own envelope/DOCTYPE (cXML's Header, Peppol's
-        // UBLVersionID/CustomizationID/ProfileID, X12's ISA/GS, EDIFACT's UNB/UNH), none of which a
-        // generic node tree carries. Emitting one anyway would deliver a well-formed document the
-        // receiver REJECTS (offer ⇔ works). Those formats deliver through their dedicated transform.
-        RequireRenderable(template);
-
-        return Render(template, headerRow, LineRowFor, orderedLines);
-    }
-
     /// <summary>
     /// Render already-built value bags (a document read has no order entity): one bag for the header,
     /// one per line. No unresolved-lines guard — there are no order lines to resolve.
@@ -533,18 +488,6 @@ public sealed class OutputTemplateEmitter
     }
 
     // ── Shared ─────────────────────────────────────────────────────────────────────
-
-    /// <summary>Same unresolved-lines guard as the fixed/flat transforms — never emit a blind document.</summary>
-    private static void GuardResolved(PurchaseOrderEntity order)
-    {
-        var unresolved = order.Lines
-            .Where(l => l.NeedsReview || string.IsNullOrWhiteSpace(l.SupplierItemCode))
-            .Select(l => l.LineNumber)
-            .OrderBy(n => n)
-            .ToList();
-        if (unresolved.Count > 0)
-            throw new TransformValidationException(unresolved);
-    }
 
     private static readonly OutputFieldRule Empty = new() { FixedValue = string.Empty };
 

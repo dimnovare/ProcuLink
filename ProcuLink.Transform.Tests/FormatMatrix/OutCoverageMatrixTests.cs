@@ -15,7 +15,7 @@ namespace ProcuLink.Transform.Tests.FormatMatrix;
 /// document (valid XML / parseable CSV / valid JSON) whose key fields round-trip.
 ///
 /// Covers the ITransformService family (consumes a resolved PurchaseOrderEntity):
-///   Csv, Json, Xml, CXml, Ubl, X12  — plus MappedTransformService (CSV/JSON overrides).
+///   Csv, Json, Xml, CXml, Ubl, X12.
 /// </summary>
 public class OutCoverageMatrixTests
 {
@@ -139,53 +139,5 @@ public class OutCoverageMatrixTests
         await csv.Should().ThrowAsync<TransformValidationException>();
         await json.Should().ThrowAsync<TransformValidationException>();
         await xml.Should().ThrowAsync<TransformValidationException>();
-    }
-
-    // ════════════════════════════════════════════════════════════════════════════
-    // MappedTransformService — override-driven CSV + JSON
-    // ════════════════════════════════════════════════════════════════════════════
-
-    private static OrderMappingOverride SampleOverride() => new()
-    {
-        Output = new OutputMappingConfig
-        {
-            Header = { ["po"] = new OutputFieldRule { OutputPath = "OrderRef", CanonicalField = "PoNumber" } },
-            Lines  =
-            {
-                ["code"] = new OutputFieldRule { OutputPath = "ItemCode", CanonicalField = "SupplierItemCode" },
-                ["qty"]  = new OutputFieldRule { OutputPath = "Qty",      CanonicalField = "Quantity" },
-            },
-        },
-    };
-
-    [Fact]
-    public void Out_MappedCsv_UsesOverridePaths_AndIsParseable()
-    {
-        var r = new MappedTransformService().Build(ResolvedEntity(), SampleOverride(), OutputFormat.Csv);
-        var text = ReadStream(r);
-
-        var rows = text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
-        rows[0].Should().Be("OrderRef,ItemCode,Qty");      // override output paths
-        rows[1].Should().StartWith("PO-OUT-1,SUP-1,10");
-    }
-
-    [Fact]
-    public void Out_MappedJson_UsesOverridePaths_AndIsValidJson()
-    {
-        var r = new MappedTransformService().Build(ResolvedEntity(), SampleOverride(), OutputFormat.Json);
-        r.Content.Position = 0;
-        using var doc = JsonDocument.Parse(r.Content);
-
-        doc.RootElement.GetProperty("header").GetProperty("OrderRef").GetString().Should().Be("PO-OUT-1");
-        var lines = doc.RootElement.GetProperty("lines");
-        lines.GetArrayLength().Should().Be(2);
-        lines[0].GetProperty("ItemCode").GetString().Should().Be("SUP-1");
-    }
-
-    [Fact]
-    public void Out_MappedTransform_RejectsNonFlatFormat()
-    {
-        var act = () => new MappedTransformService().Build(ResolvedEntity(), SampleOverride(), OutputFormat.Xml);
-        act.Should().Throw<ArgumentException>();
     }
 }

@@ -32,11 +32,10 @@ namespace ProcuLink.Transform.Tests.FormatMatrix;
 ///   • Json              → parses (JsonDocument.Parse) with poNumber + lines.
 ///   • X12               → ISA / ST*850 / BEG / SE / IEA mandatory segments present.
 ///   • Csv               → header line + ≥1 data row.
-///   • MappedCSV         → override-driven header columns + ≥1 data row.
 ///
 /// IN  parsers:  CSV, XLSX, UBL, cXML, IDoc ORDERS05, EDIFACT, X12, PDF-text   (8)
-/// OUT transforms: Csv, Xml, Json, CXml, Ubl, X12, MappedCSV                   (7)
-/// = 56 deterministic combinations.
+/// OUT transforms: Csv, Xml, Json, CXml, Ubl, X12                             (6)
+/// = 48 deterministic combinations.
 ///
 /// PDF is INCLUDED here via the deterministic text-layer path only: a text-layer
 /// PDF is built in-memory and parsed by <see cref="PdfOrderParser"/> (the regex
@@ -55,10 +54,9 @@ public class FullInOutMatrixTests
     private static readonly string[] InFormats =
         { "csv", "xlsx", "ubl", "cxml", "idoc", "edifact", "x12", "pdf" };
 
-    // ── The 7 entity-based outbound transforms under test. ────────────────────
-    // MappedCsv is a synthetic label routed to MappedTransformService(OutputFormat.Csv).
+    // ── The 6 entity-based outbound transforms under test. ────────────────────
     private static readonly string[] OutFormats =
-        { "Csv", "Xml", "Json", "CXml", "Ubl", "X12", "MappedCsv" };
+        { "Csv", "Xml", "Json", "CXml", "Ubl", "X12" };
 
     // The [Theory] data EXCLUDES known-invalid combos (SkipReasonFor != null), which are
     // accounted for in Matrix_HasNoUnexpectedFailures instead. Currently none are excluded.
@@ -156,19 +154,6 @@ public class FullInOutMatrixTests
     // Outbound: run one transform, return its text + a structural-validity check.
     // ════════════════════════════════════════════════════════════════════════
 
-    private static readonly OrderMappingOverride MappedCsvOverride = new()
-    {
-        Output = new OutputMappingConfig
-        {
-            Header = { ["po"] = new OutputFieldRule { OutputPath = "OrderRef", CanonicalField = "PoNumber" } },
-            Lines  =
-            {
-                ["code"] = new OutputFieldRule { OutputPath = "ItemCode", CanonicalField = "SupplierItemCode" },
-                ["qty"]  = new OutputFieldRule { OutputPath = "Qty",      CanonicalField = "Quantity" },
-            },
-        },
-    };
-
     /// <summary>Run the named outbound transform against the resolved entity, returning the document text.</summary>
     private static async Task<string> RunOutbound(string outFormat, PurchaseOrderEntity entity)
     {
@@ -186,8 +171,6 @@ public class FullInOutMatrixTests
                 return ReadAll(await new UblOrderTransformService().TransformAsync(entity, OutputFormat.Ubl, CancellationToken.None));
             case "X12":
                 return ReadAll(await new X12TransformService().TransformAsync(entity, OutputFormat.X12, CancellationToken.None));
-            case "MappedCsv":
-                return ReadAll(new MappedTransformService().Build(entity, MappedCsvOverride, OutputFormat.Csv));
             default:
                 throw new ArgumentOutOfRangeException(nameof(outFormat), outFormat, null);
         }
@@ -250,13 +233,6 @@ public class FullInOutMatrixTests
                 rows[0].Should().StartWith("PoNumber,OrderDate,Currency,BuyerName,SupplierItemCode,", "fixed CSV header carries the PO header fields then the line columns");
                 break;
             }
-            case "MappedCsv":
-            {
-                var rows = text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
-                rows.Should().HaveCountGreaterThanOrEqualTo(2, "MappedCSV must have a header row + ≥1 data row");
-                rows[0].Should().Be("OrderRef,ItemCode,Qty", "MappedCSV header columns come from the override OutputPaths");
-                break;
-            }
             default:
                 throw new ArgumentOutOfRangeException(nameof(outFormat), outFormat, null);
         }
@@ -293,19 +269,21 @@ public class FullInOutMatrixTests
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // Coverage guard — the matrix is the full 8×7 grid, not a quietly-shrunk subset.
+    // Coverage guard — the matrix is the full 8×6 grid, not a quietly-shrunk subset.
     // ════════════════════════════════════════════════════════════════════════
 
+    // 2026-11-13 (plan 13b): 8×7 → 8×6. The seventh column, MappedCsv, measured the order-only
+    // MappedTransformService.Build, deleted with the order render chain; every other column is unchanged.
     [Fact]
-    public void Matrix_Covers_AllEightInputs_TimesSevenOutputs()
+    public void Matrix_Covers_AllEightInputs_TimesSixOutputs()
     {
-        FullGrid().Should().HaveCount(56);
+        FullGrid().Should().HaveCount(48);
         FullGrid().Select(o => (string)o[0]).Distinct().Should().HaveCount(8);
-        FullGrid().Select(o => (string)o[1]).Distinct().Should().HaveCount(7);
+        FullGrid().Select(o => (string)o[1]).Distinct().Should().HaveCount(6);
 
         // The executable [Theory] grid = full grid minus any known-invalid (skipped) combos.
         var skipped = FullGrid().Count(o => SkipReasonFor((string)o[0], (string)o[1]) is not null);
-        Matrix().Should().HaveCount(56 - skipped);
+        Matrix().Should().HaveCount(48 - skipped);
     }
 
     // ════════════════════════════════════════════════════════════════════════
