@@ -10,7 +10,7 @@ namespace ProcuLink.Api.Jobs;
 /// Hangfire recurring job (every 5 minutes, all orgs): re-enqueues deliveries a lost job left behind (an unscoped Worker context, so no org filter applies), and repairs a
 /// document stuck in <c>sending</c> with nothing in flight. <see cref="DeliverDocumentJob"/> is idempotent, so a re-enqueue is safe.
 /// </summary>
-public class DocumentDeliverySweepJob(ProcuLinkDbContext db, IBackgroundJobClient jobs)
+public class DocumentDeliverySweepJob(ProcuLinkDbContext db, IBackgroundJobClient jobs, ILogger<DocumentDeliverySweepJob> logger)
 {
     public static readonly TimeSpan StrandedAfter = TimeSpan.FromMinutes(10);
 
@@ -27,18 +27,13 @@ public class DocumentDeliverySweepJob(ProcuLinkDbContext db, IBackgroundJobClien
 
         // A crash between the sender's claim and its save leaves a document in "sending" that nothing will ever move on.
         var stuck = await db.FlowDocuments
-            .Where(d => d.Status == DocumentStatus.Sending && d.UpdatedAt < cutoff)
+            .Where(d => d.Status == DocumentStatus.Sending && d.UpdatedAt < cutoff
+                && !db.Set<FlowDelivery>().Any(x => x.OrgId == d.OrgId && x.DocumentId == d.Id
+                    && (x.Status == FlowDeliveryStatus.Queued || x.Status == FlowDeliveryStatus.Delivering || x.Status == FlowDeliveryStatus.Failed)))
             .ToListAsync(ct);
-        foreach (var doc in stuck)
-        {
-            var rows = await db.Set<FlowDelivery>()
-                .Where(d => d.OrgId == doc.OrgId && d.DocumentId == doc.Id)
-                .Select(d => new { d.OutputId, d.Status }).ToListAsync(ct);
-            var counted = rows.Where(r => FlowDeliveryStatus.CountsTowardDocument(r.OutputId, r.Status)).Select(r => r.Status).ToList();
-            if (counted.Any(s => s is FlowDeliveryStatus.Queued or FlowDeliveryStatus.Delivering or FlowDeliveryStatus.Failed)) continue;
-            doc.Status = FlowDeliveryStatus.DocumentStatusFor(counted);
-            doc.UpdatedAt = DateTime.UtcNow;
-        }
+        var repaired = new List<(FlowDocument Doc, string Before)>();
+        foreach (var doc in stuck) repaired.Add((doc, await DeliverDocumentJob.RollUpAsync(db, doc, null, DateTime.UtcNow, ct)));
         await db.SaveChangesAsync(ct);
+        foreach (var (doc, before) in repaired) await DeliverDocumentJob.AnnounceAsync(db, jobs, doc, before, logger, ct);
     }
 }

@@ -4,6 +4,7 @@ using Hangfire.Common;
 using Hangfire.States;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Api.Jobs;
@@ -55,6 +56,7 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
         public required Guid DeliveryId { get; init; }
         public FakeDispatcher Dispatcher { get; } = new();
         public Mock<IBackgroundJobClient> Jobs { get; } = new();
+        public Mock<ILogger<DeliverDocumentJob>> Log { get; } = new();
 
         public ProcuLinkDbContext NewDb() =>
             new(new DbContextOptionsBuilder<ProcuLinkDbContext>().UseNpgsql(ConnectionString, n => n.CommandTimeout(180)).Options);
@@ -66,7 +68,7 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
             var encryption = new DeliveryEncryptionService(new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?> { ["Delivery:EncryptionKey"] = Convert.ToBase64String(new byte[32]) }).Build());
             var job = new DeliverDocumentJob(db, new MemoryStorage(), new FlowDestinationService(db, encryption, [], new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), Microsoft.Extensions.Options.Options.Create(new ProcuLink.Infrastructure.Services.Google.GoogleOptions())), [Dispatcher],
-                Jobs.Object, new DeliveryReliabilityOptions { MaxAttempts = 3 }, NullLogger<DeliverDocumentJob>.Instance);
+                Jobs.Object, new DeliveryReliabilityOptions { MaxAttempts = 3 }, Log.Object);
             await job.ExecuteAsync(DeliveryId, Org, CancellationToken.None);
         }
 
@@ -82,6 +84,23 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
             await db.Set<FlowDelivery>().Where(d => d.Id == DeliveryId)
                 .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, status).SetProperty(d => d.ClaimedAt, claimedAt).SetProperty(d => d.Attempts, attempts));
         }
+    }
+
+    [DockerRequiredFact]
+    public async Task A_dead_letter_logs_one_warning_and_no_error()
+    {
+        var h = await SeedAsync();
+        h.Dispatcher.Result = new DeliveryResult(false, "rejected", 422, Outcome: DeliveryOutcome.NotRetryable);
+
+        await h.RunAsync();
+
+        (await h.DeliveryAsync()).Status.Should().Be(FlowDeliveryStatus.DeadLetter);
+        h.Log.Verify(l => l.Log(LogLevel.Warning, It.IsAny<EventId>(),
+            It.Is<It.IsAnyType>((v, _) => v.ToString()!.Contains(h.DeliveryId.ToString()) && v.ToString()!.Contains(h.Org.ToString())
+                                          && v.ToString()!.Contains("http") && v.ToString()!.Contains("refused")),
+            null, It.IsAny<Func<It.IsAnyType, Exception?, string>>()), Times.Once);
+        h.Log.Verify(l => l.Log(LogLevel.Error, It.IsAny<EventId>(), It.IsAny<It.IsAnyType>(), It.IsAny<Exception?>(),
+            It.IsAny<Func<It.IsAnyType, Exception?, string>>()), Times.Never);
     }
 
     private async Task<Harness> SeedAsync()

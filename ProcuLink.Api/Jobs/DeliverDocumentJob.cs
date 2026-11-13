@@ -25,6 +25,8 @@ public class DeliverDocumentJob(
 {
     public static readonly TimeSpan ReclaimAfter = TimeSpan.FromMinutes(2);
 
+    public const string SendStoppedError = "Sending stopped before it finished. Open the document and send it again.";
+
     [Queue("critical")]
     [AutomaticRetry(Attempts = 0)]
     public async Task ExecuteAsync(Guid deliveryId, Guid organisationId, CancellationToken ct)
@@ -114,19 +116,14 @@ public class DeliverDocumentJob(
             }
         }
 
-        var siblings = await db.Set<FlowDelivery>().Where(d => d.OrgId == organisationId && d.DocumentId == doc.Id && d.Id != delivery.Id).ToListAsync(save);
-        doc.Status = FlowDeliveryStatus.DocumentStatusFor(
-            siblings.Append(delivery).Where(d => FlowDeliveryStatus.CountsTowardDocument(d.OutputId, d.Status)).Select(d => d.Status));
-        doc.UpdatedAt = finishedAt;
-        if (retryIn is null)
-            DocumentAudit.Add(db, doc, result.Success ? "document.delivered" : "document.delivery_failed",
-                new { output = delivery.OutputName, protocol = delivery.Protocol, responseCode = delivery.ResponseCode, error = delivery.LastError }, null);
+        var before = await RollUpAsync(db, doc, delivery, finishedAt, save);
         await db.SaveChangesAsync(save);
         await tx.CommitAsync(save);
 
+        if (delivery.Status == FlowDeliveryStatus.DeadLetter)
+            LogDeadLetter(logger, delivery, deadLetter is not null ? "precheck" : result.Outcome == DeliveryOutcome.NotRetryable ? "refused" : "attempts_exhausted");
         if (retryIn is { } delay) Schedule(jobs, deliveryId, organisationId, delay);
-        else if (doc.Status is DocumentStatus.Sent or DocumentStatus.SendFailed)
-            await FlowWebhook.EnqueueAsync(db, jobs, doc, doc.Status == DocumentStatus.Sent ? FlowWebhookEvent.Sent : FlowWebhookEvent.SendFailed, logger, save);
+        else await AnnounceAsync(db, jobs, doc, before, logger, save);
     }
 
     private Task<int> ClaimAsync(Guid deliveryId, Guid orgId, Expression<Func<FlowDelivery, bool>> eligible, DateTime now, CancellationToken ct) =>
@@ -142,4 +139,32 @@ public class DeliverDocumentJob(
 
     public static void Schedule(IBackgroundJobClient jobs, Guid deliveryId, Guid organisationId, TimeSpan delay) =>
         jobs.Schedule<DeliverDocumentJob>(j => j.ExecuteAsync(deliveryId, organisationId, CancellationToken.None), delay);
+
+    /// <summary>
+    /// Sets the document's status from its counted deliveries (<paramref name="finished"/>, when given, replaces its stored row) and writes the delivered / delivery_failed
+    /// audit row for it. With no finished delivery (the sweep's repair) the row is written only when the document ends up <c>send_failed</c>. Call before save, inside the
+    /// caller's transaction; returns the status the document had before.
+    /// </summary>
+    public static async Task<string> RollUpAsync(ProcuLinkDbContext db, FlowDocument doc, FlowDelivery? finished, DateTime at, CancellationToken ct)
+    {
+        var before = doc.Status;
+        var siblings = await db.Set<FlowDelivery>().Where(d => d.OrgId == doc.OrgId && d.DocumentId == doc.Id && (finished == null || d.Id != finished.Id)).ToListAsync(ct);
+        if (finished is not null) siblings.Add(finished);
+        doc.Status = FlowDeliveryStatus.DocumentStatusFor(siblings.Where(d => FlowDeliveryStatus.CountsTowardDocument(d.OutputId, d.Status)).Select(d => d.Status));
+        doc.UpdatedAt = at;
+        var delivered = finished?.Status == FlowDeliveryStatus.Delivered;
+        if (finished is null ? doc.Status == DocumentStatus.SendFailed : finished.Status is FlowDeliveryStatus.Delivered or FlowDeliveryStatus.DeadLetter)
+            DocumentAudit.Add(db, doc, delivered ? "document.delivered" : "document.delivery_failed",
+                new { output = finished?.OutputName, protocol = finished?.Protocol, responseCode = finished?.ResponseCode, error = finished is null ? SendStoppedError : finished.LastError }, null);
+        return before;
+    }
+
+    /// <summary>Call after commit: enqueues the document's sent / send_failed webhook only when the roll-up moved it to one of those statuses.</summary>
+    public static Task AnnounceAsync(ProcuLinkDbContext db, IBackgroundJobClient jobs, FlowDocument doc, string before, ILogger logger, CancellationToken ct) =>
+        doc.Status is DocumentStatus.Sent or DocumentStatus.SendFailed && doc.Status != before
+            ? FlowWebhook.EnqueueAsync(db, jobs, doc, doc.Status == DocumentStatus.Sent ? FlowWebhookEvent.Sent : FlowWebhookEvent.SendFailed, logger, ct)
+            : Task.CompletedTask;
+
+    public static void LogDeadLetter(ILogger logger, FlowDelivery delivery, string reasonClass) =>
+        logger.LogWarning("Flow delivery {DeliveryId} (org {OrgId}, {Protocol}) dead-lettered: {ReasonClass}.", delivery.Id, delivery.OrgId, delivery.Protocol, reasonClass);
 }

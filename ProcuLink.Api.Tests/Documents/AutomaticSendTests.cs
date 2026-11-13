@@ -126,6 +126,7 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
         {
             db.Organisations.Add(new Organisation { Id = org, Name = "Test Org A", Slug = "acme-" + org.ToString("N") });
             db.Flows.Add(flow);
+            db.FlowIntakes.Add(new FlowIntake { Id = Guid.NewGuid(), OrgId = org, FlowId = flow.Id, Kind = IntakeKind.Api, ConfigJson = """{"webhookUrl":"https://hooks.example.test/in"}""", CreatedAt = now, UpdatedAt = now });
             db.FlowDocuments.AddRange(doc, stuckDoc);
             db.Set<FlowDelivery>().AddRange(queuedOld, queuedFresh, deliveringOld, deliveredOld);
             await db.SaveChangesAsync();
@@ -134,15 +135,20 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
         var jobs = new Mock<IBackgroundJobClient>();
         jobs.Setup(j => j.Create(It.IsAny<Job>(), It.IsAny<IState>())).Returns("job-1");
         await using (var db = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>().UseNpgsql(cs).Options))
-            await new DocumentDeliverySweepJob(db, jobs.Object).ExecuteAsync(CancellationToken.None);
+            await new DocumentDeliverySweepJob(db, jobs.Object, NullLogger<DocumentDeliverySweepJob>.Instance).ExecuteAsync(CancellationToken.None);
 
-        var enqueued = jobs.Invocations.Where(i => i.Method.Name == nameof(IBackgroundJobClient.Create))
-            .Select(i => ((Job)i.Arguments[0]).Args).Select(a => ((Guid)a[0], (Guid)a[1])).ToList();
+        var enqueued = jobs.Invocations.Where(i => i.Method.Name == nameof(IBackgroundJobClient.Create)).Select(i => (Job)i.Arguments[0])
+            .Where(j => j.Type == typeof(DeliverDocumentJob)).Select(j => j.Args).Select(a => ((Guid)a[0], (Guid)a[1])).ToList();
         enqueued.Should().BeEquivalentTo(new[] { (queuedOld.Id, org), (deliveringOld.Id, org) });
 
         // A document stuck in "sending" with nothing in flight is repaired; one with a delivery still in flight is left alone.
         await using var check = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>().UseNpgsql(cs).Options);
         (await check.FlowDocuments.AsNoTracking().SingleAsync(d => d.Id == stuckDoc.Id)).Status.Should().Be(DocumentStatus.SendFailed);
         (await check.FlowDocuments.AsNoTracking().SingleAsync(d => d.Id == doc.Id)).Status.Should().Be(DocumentStatus.Sending);
+        (await check.AuditEvents.CountAsync(a => a.EntityId == stuckDoc.Id && a.Action == "document.delivery_failed")).Should().Be(1);
+        (await check.AuditEvents.CountAsync(a => a.EntityId == doc.Id)).Should().Be(0);
+        jobs.Invocations.Where(i => i.Method.Name == nameof(IBackgroundJobClient.Create)).Select(i => (Job)i.Arguments[0])
+            .Where(j => j.Type == typeof(FlowWebhookJob)).Select(j => ((Guid)j.Args[1], (string)j.Args[2]))
+            .Should().Equal((stuckDoc.Id, FlowWebhookEvent.SendFailed));
     }
 }
