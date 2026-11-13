@@ -30,10 +30,8 @@ public static class DeliveryConfigRules
     /// Refuses a delivery endpoint that would send the purchase order — and the credentials that
     /// authenticate it — over plain http, or that carries a username/password in the URL itself.
     ///
-    /// <para>Scoped deliberately to the transport <c>url</c> inside <c>config_json</c>. It must NOT
-    /// touch <c>CxmlCredentials.DtdSystemId</c>, which travels on the same request: that is a cXML
-    /// DOCTYPE SYSTEM identifier emitted into the output document and never fetched, and its
-    /// canonical published value is <c>http://xml.cxml.org/...</c>.</para>
+    /// <para>Scoped deliberately to the url-keyed values inside <c>config_json</c>. Its caller is
+    /// <c>FlowDestinationService.SaveAsync</c>.</para>
     ///
     /// <para>The key lookup is case-insensitive because the dispatchers deserialize with
     /// <c>PropertyNameCaseInsensitive = true</c> — <c>{"URL":...}</c> is delivered, so it must also
@@ -53,9 +51,7 @@ public static class DeliveryConfigRules
     /// Refuses an OAuth token URL — inside the ENCRYPTED credentials blob — that the transport
     /// policy would refuse as a delivery endpoint. The client-credentials exchange POSTs
     /// <c>client_id</c> and <c>client_secret</c> to that URL at send time, so a cleartext
-    /// <c>tokenUrl</c> leaks the secret itself. The catalog save path already inspects its own
-    /// token URL (<c>SuppliersController</c>); this closes the same gap on the delivery side,
-    /// through the same shared walker so the two write paths cannot drift.
+    /// <c>tokenUrl</c> leaks the secret itself. Its caller is <c>FlowDestinationService.SaveAsync</c>.
     /// </summary>
     public static void ValidateCredentialTokenUrl(string? credentialsJson)
     {
@@ -67,8 +63,9 @@ public static class DeliveryConfigRules
     /// <summary>
     /// Refuses a credential written into the delivery config's extra-headers map. Every entry of
     /// that map is applied to the outbound request by <c>HttpDeliveryDispatcher</c>, so
-    /// <c>Authorization: Bearer …</c> typed there is a real credential stored in a cleartext column,
-    /// returned by GET, and copied into every connection-revision snapshot.
+    /// <c>Authorization: Bearer …</c> typed there is a real credential stored in a cleartext column.
+    /// Its caller is <c>FlowDestinationService.SaveAsync</c>, which passes the stored config so an
+    /// unchanged header is not a new write.
     ///
     /// <para>Any other write path MUST reach this same primitive
     /// (<see cref="DeliveryConfigTransport.FindCredentialHeaders"/>) rather than hand-rolling its own

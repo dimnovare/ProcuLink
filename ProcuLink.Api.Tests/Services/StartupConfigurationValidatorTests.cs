@@ -129,7 +129,8 @@ public class StartupConfigurationValidatorTests
 
         foreach (var host in hosts)
             files.Where(f => ProjectOf(f.Relative) == host)
-                .Any(f => File.ReadAllText(f.FullPath).Contains("StartupConfigurationValidator.Validate("))
+                .Any(f => ProcuLink.Api.Tests.Architecture.OrphanDetector.StripComments(File.ReadAllText(f.FullPath))
+                    .Contains("StartupConfigurationValidator.Validate("))
                 .Should().BeTrue($"{host} must call StartupConfigurationValidator.Validate at startup");
     }
 

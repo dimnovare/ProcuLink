@@ -66,7 +66,7 @@ public sealed class OpenAiMappingService : IAiMappingService
     private readonly ILogger<OpenAiMappingService> _logger;
     private readonly string _model;
     // The tracker is a scoped EF service; OpenAiMappingService itself is a singleton
-    // in the API/Worker DI containers, so we resolve a tracker per-call from the
+    // in the API DI container, so we resolve a tracker per-call from the
     // provided scope factory. When no scope factory is wired (tests, no-op path),
     // we fall back to the inner factory instead.
     private readonly IServiceScopeFactory? _scopeFactory;
@@ -135,8 +135,8 @@ public sealed class OpenAiMappingService : IAiMappingService
     /// True when the org opted into no-egress (<c>Organisation.SelfHostedOcr</c>) and
     /// must therefore never have its mapping data (line codes/descriptions or source
     /// column headers) sent to OpenAI. This is the single chokepoint that keeps the
-    /// no-egress guarantee whole for EVERY <see cref="IAiMappingService"/> caller —
-    /// including the "magic auto-map" field suggester. Fails SAFE: if the flag cannot
+    /// no-egress guarantee whole for EVERY <see cref="IAiMappingService"/> caller.
+    /// Fails SAFE: if the flag cannot
     /// be read we treat the org as no-egress (skip OpenAI), mirroring the cap-check's
     /// fail-closed behaviour. Returns false for the no-tenant (<see cref="Guid.Empty"/>)
     /// case so the existing no-key / cap tests are unaffected. The flag is read from the
@@ -180,7 +180,7 @@ public sealed class OpenAiMappingService : IAiMappingService
         if (_client is null)
             return empty;
 
-        // Only send lines that carry usable signal — matches the single-line guard.
+        // Only send lines that carry usable signal: a code or a description.
         var payloadLines = lines
             .Where(l => !string.IsNullOrWhiteSpace(l.BuyerItemCode)
                         || !string.IsNullOrWhiteSpace(l.Description))
@@ -189,7 +189,7 @@ public sealed class OpenAiMappingService : IAiMappingService
         if (payloadLines.Count == 0)
             return empty;
 
-        // ── Per-org monthly token cap (same pattern as the single-line suggester) ──
+        // ── Per-org monthly token cap ──
         await using var trackerScope = _scopeFactory?.CreateAsyncScope();
         var tracker = trackerScope is not null
             ? trackerScope.Value.ServiceProvider.GetService<IAiUsageTracker>()
@@ -355,7 +355,7 @@ public sealed class OpenAiMappingService : IAiMappingService
         {
             if (!requestedLineNumbers.Contains(s.LineNumber)) continue;
 
-            // Allow-list guard + concrete provenance (shared with the single-line path):
+            // Allow-list guard + concrete provenance (see ResolveSuggestion):
             // null when the code is empty OR (with a catalog) not a real catalog code.
             var suggestion = ResolveSuggestion(
                 catalog, s.SupplierItemCode, s.Confidence, s.Reason, s.Provenance);
@@ -529,8 +529,8 @@ public sealed class OpenAiMappingService : IAiMappingService
 
     /// <summary>
     /// Turns one model-returned suggestion into a validated <see cref="AiMappingSuggestion"/>,
-    /// or null when it must be dropped. The single decision point shared by the single-line and
-    /// batch paths: (1) empty code → null; (2) when a catalog is present and the code is not a
+    /// or null when it must be dropped. The single decision point for the batch suggester:
+    /// (1) empty code → null; (2) when a catalog is present and the code is not a
     /// real catalog code → null (allow-list guard, blocks hallucinations); otherwise build the
     /// suggestion with clamped confidence and concrete catalog provenance. Pure + side-effect
     /// free so it is directly unit-testable without a network call.

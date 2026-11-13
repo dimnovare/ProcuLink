@@ -168,8 +168,8 @@ else
 
 builder.Services.AddScoped<IOrderExceptionService, OrderExceptionService>();
 // Analytics (PostHog) — required by StripeBillingService (resolved via IBillingService
-// in ParseOrderJob). No-op when Analytics:PostHog:ApiKey is absent.
-// Mirrors API/Program.cs lines 189-190.
+// in FlowPickupJob and DocumentIntakeService). No-op when Analytics:PostHog:ApiKey is absent.
+// Mirrors the API registration.
 builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Analytics:PostHog"));
 builder.Services.Configure<ProcuLink.Api.Services.Documents.DocumentEngineOptions>(builder.Configuration.GetSection("DocumentEngine"));
 builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.DocumentEngineGate>();
@@ -280,9 +280,8 @@ if (builder.Configuration.GetValue<bool>("Delivery:EnableSmtp"))
 builder.Services.AddScoped<IDeliveryDispatcher, ErplyDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, DirectoDeliveryDispatcher>();
 
-// SourceMap engine tokenizer: the Worker's parse job (ParseOrderJob → OrderService →
-// OrderIngestionService.ParseStoredFileAsync) needs this to capture the FULL source-token set
-// for structured formats into source_captures. Singleton — stateless, mirrors the Api registration.
+// Source tokenizer: ReadDocumentJob reads structured formats through it (DocumentText.ReadAsync).
+// Singleton — stateless, mirrors the Api registration.
 builder.Services.AddSingleton<ProcuLink.Transform.Tokenizing.ISourceTokenizer, ProcuLink.Transform.Tokenizing.SourceTokenizer>();
 // Registered FROM OutputTransformRegistry.All — the same list that derives the buildable-format
 // allow-list every output-format write path checks against. See the Api registration for why the
@@ -295,11 +294,12 @@ builder.Services.AddSingleton<IAmazonS3ClientFactory, AmazonS3ClientFactory>();
 // FTP/FTPS fetch seam for the flow pickups (FtpPickupSource).
 builder.Services.AddSingleton<IFtpFetchClientFactory, FluentFtpFetchClientFactory>();
 
-// PDF rasterizer for the vision fallback (scanned/no-text PDFs). The Worker runs
-// ParseOrderJob, so it needs the same registration as the API.
+// PDF rasterizer for scanned/no-text PDFs: ReadDocumentJob renders their pages for OCR, and
+// RapidOcrDocumentOcrService takes it too. Same registration as the API.
 builder.Services.AddSingleton<IPdfRasterizer, SkiaPdfRasterizer>();
 builder.Services.AddSingleton<IDocumentReader, OpenAiDocumentReader>();
-// OCR seam. The Worker runs ParseOrderJob, so this is where self-hosted OCR executes.
+// OCR seam. The Worker runs ReadDocumentJob (and OcrWarmupHostedService), so this is where
+// self-hosted OCR executes.
 // Opt-in (RapidOcrNet) only when enabled — otherwise a no-op (no models loaded).
 if (builder.Configuration.GetValue<bool>("NoEgressOcr:Enabled"))
     builder.Services.AddSingleton<IDocumentOcrService, RapidOcrDocumentOcrService>();

@@ -499,13 +499,10 @@ public class TrackedSourceOperationalDataGuardTests
         // The floor that actually protects class 7: count what the brand detector EXTRACTED. A
         // regex edited into matching nothing drives this to zero and fails loudly, instead of
         // reading every fixture, examining no brand, and turning green.
-        // 21 today (9 in C#, 12 in fixtures). The floor sits below that rather than at it: this
-        // counts literals in ASSIGNMENT position only, so ordinary test churn moves it by ones and
-        // twos, and a floor pinned to the exact number would fail on a clean refactor and be
-        // raised without thought. Breaking the regex drives it to zero, which is what it is for.
-        // 15 -> 8 on 2026-11-13 (plan 13b, Task 7b pass 2): the five catalog fixtures, which held
-        // 10 of the fixture literals, went with the catalog pipeline, leaving 8 (6 in C#, 2 in
-        // fixtures). 8 is today's count.
+        // 8 today (6 in C#, 2 in fixtures), and plan 13b (2026-11-13) pinned the floor at that
+        // count when the five catalog fixtures went with the catalog pipeline. It counts literals
+        // in ASSIGNMENT position only, so a clean refactor can move it by one or two; lower it on
+        // purpose when that happens. Breaking the regex drives it to zero, which is what it is for.
         (b.ScannedBrandLiterals + c.ScannedBrandLiterals).Should().BeGreaterThanOrEqualTo(
             8,
             $"only {b.ScannedBrandLiterals} brand literals in C# and {c.ScannedBrandLiterals} in "

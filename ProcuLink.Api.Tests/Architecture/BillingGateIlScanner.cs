@@ -31,7 +31,7 @@ namespace ProcuLink.Api.Tests.Architecture;
 /// before reading any IL.</para>
 ///
 /// <para><b>The IL decoding itself lives in <see cref="IlReader"/>,</b> shared with the other IL
-/// guards (<see cref="OrgAdminGateIlScanner"/>, <c>OutputFormatWritePathsValidateTests</c>). What is specific to this scanner — and stays
+/// guards (<see cref="OrgAdminGateIlScanner"/>). What is specific to this scanner — and stays
 /// here — is the <see cref="BillingFeature"/> constant tracking. Duplicating the decoder was the
 /// alternative, and the log records where that leads: two copies drift and the one nobody fixed is
 /// the one still shipping the bug.</para>
