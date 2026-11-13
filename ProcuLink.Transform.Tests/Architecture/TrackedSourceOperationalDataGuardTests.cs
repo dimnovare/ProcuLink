@@ -101,6 +101,8 @@ public class TrackedSourceOperationalDataGuardTests
         "sftp", "ftp", "ftps", "http", "https", "smtp", "imap", "s3", "as2",
         // Delivery channels and dispatcher kinds that occupy the same field on sibling entities.
         "email", "webhook", "api", "none", "silent",
+        // Storage APIs used as destinations (plan 9b, 2026-11-13): a platform's API, like "s3", not a customer.
+        "google_drive", "google_sheets",
         // Auth mechanisms that earn a dedicated vendor fetcher.
         "aes2fa",
         // TLS/transport version tokens, which share the word in an unrelated sense.
