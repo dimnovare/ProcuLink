@@ -14,7 +14,7 @@ public sealed class LinkedAccountTokens(
     : ILinkedAccountTokens
 {
     public const string ReconnectMessage = "Google access was removed. Reconnect the Google account.";
-    public const string UnavailableMessage = "Google could not be reached. ProcuLink will try again.";
+    public const string UnavailableMessage = "Google could not be reached.";
 
     private static CredentialScope Scope(LinkedAccount a) => new(a.OrgId, CredentialPurpose.LinkedAccountTokens, a.Id);
 
@@ -41,6 +41,7 @@ public sealed class LinkedAccountTokens(
             logger.LogWarning("Google token refresh failed for linked account {AccountId} (HTTP {Status}).", accountId, (int?)ex.StatusCode);
             return Failed(UnavailableMessage, DeliveryOutcome.Dispatched, (int?)ex.StatusCode);
         }
+        catch (CredentialUnbindableException) { refresh = new GoogleRefresh(null, Revoked: true); } // only a reconnect re-seals it
         if (refresh.AccessToken is { } token) return new LinkedAccessToken(token, null);
 
         // Delivery dispatches with no pending changes on this scoped context, so this saves only the status.
