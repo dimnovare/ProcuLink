@@ -4,7 +4,7 @@ using ProcuLink.Core.Entities;
 
 namespace ProcuLink.Api.Contracts;
 
-public record FlowDto(Guid Id, string Name, bool FieldsConfirmed, FlowFieldList Fields, int DocumentCount, DateTime CreatedAt, string Automation = "review", bool ScansOn = false, bool FormatsOn = false, bool DocsOutputsOn = false,
+public record FlowDto(Guid Id, string Name, bool FieldsConfirmed, FlowFieldList Fields, int DocumentCount, DateTime CreatedAt, string Automation = "review", bool ScansOn = false, bool FormatsOn = false, bool DocsOutputsOn = false, bool PeppolOn = false,
     int? PublishedVersion = null, bool HasChanges = false, int? NoCorrectionStreak = null);
 
 public record FlowVersionDto(int VersionNo, DateTime PublishedAt, string? PublishedBy, bool Live);

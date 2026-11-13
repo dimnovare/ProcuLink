@@ -56,7 +56,7 @@ public sealed class DocumentSenderClaimPostgresTests(PostgresContainerFixture po
         var storage = new Mock<IFileStorageService>();
 
         await using var db = NewDb();
-        var sender = new DocumentSender(db, billing.Object, storage.Object, Mock.Of<IBackgroundJobClient>(), Microsoft.Extensions.Logging.Abstractions.NullLogger<DocumentSender>.Instance);
+        var sender = new DocumentSender(db, billing.Object, storage.Object, Mock.Of<IBackgroundJobClient>(), Microsoft.Extensions.Logging.Abstractions.NullLogger<DocumentSender>.Instance, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())));
         var loaded = await db.FlowDocuments.SingleAsync(d => d.Id == current.Id);
         var staleCopy = await db.FlowDocuments.SingleAsync(d => d.Id == stale.Id);
         await using (var other = NewDb())

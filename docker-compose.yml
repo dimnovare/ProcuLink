@@ -25,6 +25,18 @@ services:
       timeout: 3s
       retries: 10
 
+  # Peppol/EN16931 rule checker. Local dev only; production runs it as a private
+  # service. Token comes from VALIDATOR_TOKEN (unset = phorm-dev-token, matching appsettings.Development.json).
+  validator:
+    build: ./validator
+    container_name: proculink-validator
+    restart: unless-stopped
+    environment:
+      PHORM_API_REQUIREDTOKEN: ${VALIDATOR_TOKEN:-phorm-dev-token}
+      PHORM_API_RESPONSE_ONFAILURE_HTTP400: "false"
+    ports:
+      - "127.0.0.1:8085:8080"
+
 volumes:
   proculink-postgres-data:
     name: proculink-postgres-data

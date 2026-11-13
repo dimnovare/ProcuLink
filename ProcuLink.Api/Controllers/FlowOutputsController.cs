@@ -212,6 +212,31 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         return Ok(new OutputDraftDto(draft.Name, draft.Format, draft.TableKey, draft.Template, draft.Leaves, notes, formatCite, destination, docs.Truncated));
     }
 
+    /// <summary>Renders the document through a Peppol output and checks it against the official rules. Nothing is sent or saved.</summary>
+    [HttpPost("api/flows/{flowId:guid}/outputs/{outputId:guid}/check")]
+    public async Task<IActionResult> Check(Guid flowId, Guid outputId, [FromQuery] Guid documentId, [FromServices] IStandardValidator validator,
+        CancellationToken ct)
+    {
+        if (Refuse() is { } refused) return refused;
+        var orgId = tenant.OrganisationId;
+        var doc = await db.FlowDocuments.AsNoTracking().FirstOrDefaultAsync(d => d.OrgId == orgId && d.Id == documentId && d.FlowId == flowId, ct);
+        if (doc is null) return NotFound(new { error = "document_not_found" });
+        var flow = await db.Flows.AsNoTracking().FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == flowId, ct);
+        if (flow is null) return FlowNotFound();
+        var config = await FlowConfigLoader.LiveAsync(db, flow, ct);
+        var output = config.Outputs.FirstOrDefault(o => o.Id == outputId);
+        if (output is null) return OutputNotFound();
+        if (StandardOutputs.Find(output.Standard) is not { Vesid: { } vesid } standard) return NotFound(new { error = "not_a_rule_checked_output" });
+        if (!gate.PeppolOn(orgId)) return StatusCode(403, new { error = "peppol_off" });
+
+        var render = await StandardOutputs.RenderAsync(standard.Id, DocumentJson.Deserialize<ReadResult>(doc.ReadJson), config.Fields, output.TableKey, orgId, ct);
+        if (!render.Ok) return UnprocessableEntity(new { error = render.Error, detail = render.Detail });
+        using var buffer = new MemoryStream();
+        await render.Result!.Content.CopyToAsync(buffer, ct);
+        var outcome = await validator.ValidateAsync(vesid, buffer.ToArray(), ct);
+        return Ok(new { status = outcome.Status.ToString().ToLowerInvariant(), issues = outcome.Issues.Select(i => new { ruleId = i.RuleId, severity = i.Severity, message = i.Message }) });
+    }
+
     /// <summary>Renders the document through the output (or the draft template in the body, if given) and returns the text. Nothing is sent or saved.</summary>
     [HttpPost("api/documents/{documentId:guid}/outputs/{outputId:guid}/preview")]
     public async Task<IActionResult> Preview(Guid documentId, Guid outputId,
@@ -286,6 +311,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         // A standard is filled by meaning from the live fields: the request's format, template and layout are ignored.
         if (request.Standard is { } standard)
         {
+            if (StandardOutputs.Find(standard) is { Flagged: true } && !gate.PeppolOn(orgId)) return StatusCode(403, new { error = "peppol_off" });
             var flow = await db.Flows.AsNoTracking().FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == doc.FlowId, ct);
             if (flow is null) return FlowNotFound();
             render = await StandardOutputs.RenderAsync(standard, read, (await FlowConfigLoader.LiveAsync(db, flow, ct)).Fields, request.TableKey, orgId, ct);
@@ -321,6 +347,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         if (name.Length is < 1 or > 120) return BadRequest(new { error = "invalid_name" });
         // A standard decides its own format and has no template or layout: the request's are ignored.
         var standard = StandardOutputs.Find(output.Standard);
+        if (standard is { Flagged: true } && !gate.PeppolOn(orgId)) return StatusCode(403, new { error = "peppol_off" });
         var format = output.Standard is null ? request.Format : standard?.Format;
         if (format is null || !FlowOutputFormats.All.Contains(format)) return UnprocessableEntity(new { error = "unsupported_format" });
         if (!flow.FieldsConfirmed) return Conflict(new { error = "fields_unconfirmed" });
