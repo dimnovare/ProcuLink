@@ -57,7 +57,9 @@ public sealed class ProcessGlobalStateIsSerializedTests
     // 200 -> 187 on 2026-11-13 (plan 13b, Task 7b): the acceptance, rule-definition, connection
     // backfill, catalog, schema-fingerprint, supplier-suggestion and artifact-selection test files
     // were deleted with their subjects, leaving 187. A broken repo root lands near zero, not here.
-    private const int MinimumFilesParsed = 187;
+    // 187 -> 182 on 2026-11-13 (Task 7b pass 2): the revision-authority (3), output-format write-path
+    // and item-code comparer guard files went with their subjects.
+    private const int MinimumFilesParsed = 182;
     private const int MinimumFilesTouchingProcessGlobalState = 5;
     private const int MinimumTestClassesChecked = 5;
 
@@ -107,11 +109,12 @@ public sealed class ProcessGlobalStateIsSerializedTests
         string[] expected =
         [
             "HealthEndpointTests",                    // names MigrationReadiness AND boots a host
-            "RevisionAuthorityReadinessSurfaceTests",  // names MigrationReadiness AND boots a host
             "ProgramHardeningTests",                   // boots a host only
             "TenancyIsolationTests",                   // boots a host only
             // (2026-11-13, plan 13b: "EndToEndPipelineTests" left this list — the class was deleted
             // with the order pipeline it drove, not missed by the detector.)
+            // (2026-11-13, plan 13b: "RevisionAuthorityReadinessSurfaceTests" left too — deleted
+            // with the revision-authority flag it read.)
             // Declares no factory of its own — it takes HardeningTestFactory, declared in
             // ProgramHardeningTests.cs, as an IClassFixture, and so boots its own host. A
             // file-local check missed it; this entry pins the cross-file path specifically.

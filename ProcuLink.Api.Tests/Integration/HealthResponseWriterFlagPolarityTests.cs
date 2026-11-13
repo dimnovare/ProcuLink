@@ -17,8 +17,7 @@ namespace ProcuLink.Api.Tests.Integration;
 /// registration, threw during construction, or fell out of the "ready" tag filter — every one of
 /// which is a state where nobody knows whether the Worker is consuming. <c>uptime.yml</c> fails the
 /// run on <c>workerHealthy != true</c>, so the open polarity turned "the Worker monitor
-/// disappeared" into a green probe. Its neighbour eight lines below, <c>revisionAuthority</c>, was
-/// deliberately built absent→false with the rationale written down.</para>
+/// disappeared" into a green probe.</para>
 ///
 /// <para><b>Why not an endpoint test.</b> <c>HealthEndpointTests</c> covers present+Healthy and
 /// present+Degraded, which is both directions of the STATUS but neither direction of the presence
@@ -85,7 +84,7 @@ public class HealthResponseWriterFlagPolarityTests
     }
 
     /// <summary>
-    /// The rule, stated once for all three flags: an absent entry is never evidence of health.
+    /// The rule, stated once for both flags: an absent entry is never evidence of health.
     /// A future flag added with the old polarity fails here.
     /// </summary>
     [Fact]
@@ -93,7 +92,7 @@ public class HealthResponseWriterFlagPolarityTests
     {
         var body = await WriteAsync(Report());
 
-        foreach (var flag in new[] { "workerHealthy", "recurringJobsHealthy", "revisionAuthority" })
+        foreach (var flag in new[] { "workerHealthy", "recurringJobsHealthy" })
         {
             Assert.True(body.TryGetProperty(flag, out var value), $"`{flag}` must always be present");
             Assert.Equal(JsonValueKind.False, value.ValueKind);

@@ -317,8 +317,11 @@ public class FixtureDeIdentificationGuardTests
             $"only {scan.ScannedBytes} bytes of fixture content were read — the files were "
             + "listed but not opened, so the guard above proves nothing");
 
+        // 20 -> 7 on 2026-11-13 (plan 13b, Task 7b pass 2): most hosts sat in the five catalog
+        // fixtures, deleted when their last reader went with the catalog pipeline. 7 is today's
+        // count; a broken host detector still reads 0.
         scan.ScannedHosts.Should().BeGreaterThanOrEqualTo(
-            20,
+            7,
             $"only {scan.ScannedHosts} hostnames were extracted and checked across the corpus — "
             + "the host detector matched (almost) nothing, so the host half of the guard above "
             + "proves nothing. This is the floor that catches a sweep which reads every byte and "

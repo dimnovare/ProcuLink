@@ -239,7 +239,6 @@ public class FixtureNamingGuardTests
     [InlineData("ProcuLink.Transform.Tests/FormatMatrix/RealWorldFixtures/rw_idoc_es_numeric_curcy704.xml")]
     [InlineData("ProcuLink.Transform.Tests/Fixtures/real-cxml-1.2-ariba-punchout-mpn-differs.xml")]
     [InlineData("ProcuLink.Transform.Tests/Fixtures/Idoc/idoc-orders05-710.xml")]
-    [InlineData("ProcuLink.Transform.Tests/Catalog/Fixtures/cif-3.0.cif")]
     [InlineData("ProcuLink.Api/Fixtures/po-templates/generic-csv.json")]
     public void Detector_PermitsAFormatShapedName(string path)
         => PathViolations(path).Should().BeEmpty();

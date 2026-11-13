@@ -694,7 +694,9 @@ public sealed class OrphanGuardTests
         // connection/detection sweep removed 17 scoped registrations, leaving 43. The floor only
         // keeps the equality below from comparing two near-empty counts; it sits one under today's
         // count so the next removal has to revisit it on purpose.
-        Assert.True(expected > 42, $"expected the API composition root to register plenty; found {expected}");
+        // 42 -> 40 on 2026-11-13 (plan 13b, Task 7b pass 2): IDeliveryConfigService and
+        // IEffectiveConnectionConfigResolver went, leaving 41. Again one under today's count.
+        Assert.True(expected > 40, $"expected the API composition root to register plenty; found {expected}");
         Assert.Equal(expected, Registrations(scanned.Text));
     }
 

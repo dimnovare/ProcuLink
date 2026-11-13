@@ -503,8 +503,11 @@ public class TrackedSourceOperationalDataGuardTests
         // counts literals in ASSIGNMENT position only, so ordinary test churn moves it by ones and
         // twos, and a floor pinned to the exact number would fail on a clean refactor and be
         // raised without thought. Breaking the regex drives it to zero, which is what it is for.
+        // 15 -> 8 on 2026-11-13 (plan 13b, Task 7b pass 2): the five catalog fixtures, which held
+        // 10 of the fixture literals, went with the catalog pipeline, leaving 8 (6 in C#, 2 in
+        // fixtures). 8 is today's count.
         (b.ScannedBrandLiterals + c.ScannedBrandLiterals).Should().BeGreaterThanOrEqualTo(
-            15,
+            8,
             $"only {b.ScannedBrandLiterals} brand literals in C# and {c.ScannedBrandLiterals} in "
             + "fixtures were extracted and checked — the brand arm matched almost nothing, so "
             + "class 7 proves nothing");

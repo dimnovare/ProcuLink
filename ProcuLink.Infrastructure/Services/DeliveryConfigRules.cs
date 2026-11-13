@@ -5,8 +5,9 @@ using ProcuLink.Core.Services;
 namespace ProcuLink.Infrastructure.Services;
 
 /// <summary>
-/// The write-time rules for a delivery config. Shared by <see cref="DeliveryConfigService"/> (a
-/// supplier's delivery config) and the document-flow destinations, so the two cannot drift.
+/// The write-time rules for a delivery config, run by the document-flow destination save path
+/// (<c>FlowDestinationService.SaveAsync</c>). The parameter names below keep the wording of the
+/// retired supplier delivery-config request, so a refusal's message is unchanged.
 /// </summary>
 public static class DeliveryConfigRules
 {
@@ -45,7 +46,7 @@ public static class DeliveryConfigRules
         // failing it here would be a separate behaviour change from the one this guard is for.
         var verdict = DeliveryConfigTransport.InspectEndpoint(protocol, configJson);
         if (!verdict.Allowed)
-            throw new OutboundUrlPolicyException(verdict, nameof(UpsertDeliveryConfigRequest.ConfigJson));
+            throw new OutboundUrlPolicyException(verdict, "ConfigJson");
     }
 
     /// <summary>
@@ -60,7 +61,7 @@ public static class DeliveryConfigRules
     {
         var verdict = DeliveryConfigTransport.InspectCredentialTokenUrl(credentialsJson);
         if (!verdict.Allowed)
-            throw new OutboundUrlPolicyException(verdict, nameof(UpsertDeliveryConfigRequest.CredentialsJson));
+            throw new OutboundUrlPolicyException(verdict, "CredentialsJson");
     }
 
     /// <summary>
@@ -69,11 +70,10 @@ public static class DeliveryConfigRules
     /// <c>Authorization: Bearer …</c> typed there is a real credential stored in a cleartext column,
     /// returned by GET, and copied into every connection-revision snapshot.
     ///
-    /// <para>The revision write path MUST reach this same primitive
+    /// <para>Any other write path MUST reach this same primitive
     /// (<see cref="DeliveryConfigTransport.FindCredentialHeaders"/>) rather than hand-rolling its own
-    /// header check — see <c>SupplierConnectionService.ValidateCredentialHeaders</c>. Two copies of a
-    /// security rule is how the transport gap existed in the first place, and #157 exists to stop it
-    /// happening twice.</para>
+    /// header check. Two copies of a security rule is how the transport gap existed in the first
+    /// place, and #157 exists to stop it happening twice.</para>
     /// </summary>
     public static void ValidateCredentialHeaders(string configJson, string? storedConfigJson)
     {

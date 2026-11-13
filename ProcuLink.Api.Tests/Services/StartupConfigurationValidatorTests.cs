@@ -64,13 +64,11 @@ public class StartupConfigurationValidatorTests
         act.Should().NotThrow(
             "a complete, valid Production configuration must let the host come up");
 
-        // Cheap observable that the validator actually RAN rather than no-opping: WP-21 requires
-        // the effective revision-authority value to be announced on every host in every
-        // environment, and the announcement must agree with the one reader of the flag.
-        var announcement = $"revision authority enabled={EffectiveConnectionConfigResolver.IsEnabled(cfg)}";
+        // Cheap observable that the validator actually RAN rather than no-opping: this config
+        // leaves Sentry:Dsn unset, and an unset optional key is always warned about.
         logger.Entries.Should().Contain(
-            e => e.Level == LogLevel.Information && e.Message.Contains(announcement),
-            "the startup log is the only surface on which a host's revision-authority value can be read");
+            e => e.Level == LogLevel.Warning && e.Message.Contains("'Sentry:Dsn'"),
+            "Validate must have looked at the optional keys");
 
         // A green Production validation must be silent at Error level — the SSRF kill-switch
         // warning is the one thing that logs there, and this config has the flag off.
@@ -100,6 +98,39 @@ public class StartupConfigurationValidatorTests
     {
         var cfg = AllValid(("Delivery:AllowPrivateNetworkTargets", "true"));
         Assert.Throws<StartupConfigurationException>(() => ValidateProd(cfg));
+    }
+
+    /// <summary>
+    /// Every host calls <see cref="StartupConfigurationValidator.Validate"/>. That call is the only
+    /// thing that makes a host fail fast on a missing Production key, and the outbound-email check
+    /// rides it so a new host inherits that check by existing.
+    ///
+    /// <para>Re-anchored 2026-11-13 (plan 13b) from the deleted RevisionAuthorityHostCoverageTests,
+    /// whose host roster went with the revision-authority flag. The hosts are now derived: every
+    /// non-test project that has a <c>Program.cs</c>. So a new host is checked without anyone
+    /// adding it to a list.</para>
+    /// </summary>
+    [Fact]
+    public void EveryHost_CallsTheStartupValidator()
+    {
+        var files = ProcuLink.Api.Tests.Architecture.RepoSourceCorpus.CsFiles(
+            ProcuLink.Api.Tests.Architecture.RepoSourceCorpus.FindRepoRoot());
+        static string ProjectOf(string relative) => relative.Split('/')[0];
+
+        var hosts = files
+            .Where(f => f.Relative.EndsWith("/Program.cs", StringComparison.Ordinal)
+                && !ProjectOf(f.Relative).EndsWith("Tests", StringComparison.Ordinal))
+            .Select(f => ProjectOf(f.Relative))
+            .Distinct()
+            .ToList();
+
+        // Floor by name: an empty or broken scan must not pass by checking no host at all.
+        hosts.Should().Contain(new[] { "ProcuLink.Api", "ProcuLink.Worker" });
+
+        foreach (var host in hosts)
+            files.Where(f => ProjectOf(f.Relative) == host)
+                .Any(f => File.ReadAllText(f.FullPath).Contains("StartupConfigurationValidator.Validate("))
+                .Should().BeTrue($"{host} must call StartupConfigurationValidator.Validate at startup");
     }
 
     /// <summary>Minimal <see cref="ILogger"/> that records level + rendered message, so a

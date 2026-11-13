@@ -68,9 +68,7 @@ public static class HealthResponseWriter
         // on `workerHealthy != true`, so the open polarity turned "the Worker monitor disappeared"
         // into a green probe. Absent and false are conflated on purpose, in the safe direction:
         // both mean "a live Worker was NOT confirmed". The two are told apart by looking for a
-        // "worker" entry in checks[], the same way the revisionAuthority flag below does it — that
-        // flag was deliberately built absent→false, with the rationale written down, while its
-        // neighbour eight lines up did the opposite.
+        // "worker" entry in checks[].
         var workerHealthy = report.Entries.TryGetValue("worker", out var worker)
             && worker.Status == HealthStatus.Healthy;
 
@@ -85,23 +83,6 @@ public static class HealthResponseWriter
             report.Entries.TryGetValue("recurringJobs", out var recurringJobs)
             && recurringJobs.Status == HealthStatus.Healthy;
 
-        // WP-21: flatten the revision-authority check's EFFECTIVE value the same way, so the one
-        // configuration fact that decides whether ProcuLink's reproducibility claims are true can
-        // be read with `jq -e '.revisionAuthority'` instead of a Railway shell. Consumed by
-        // .github/workflows/uptime.yml, which FAILS the run when it is not true — the flag going
-        // off is otherwise completely silent (orders keep flowing, they just stop honouring pins).
-        //
-        // Renders false when the check is absent, matching the code default — a missing check must
-        // never read as "on". That deliberately conflates "flag off" with "check missing" in this
-        // one boolean; the two are told apart by looking for a `revisionAuthority` entry in
-        // checks[], and docs/ops/revision-authority-production-smoke.md §2 walks an operator
-        // through exactly that. Conflating them is the safe direction: both mean "not confirmed
-        // on", which is what the uptime workflow should fail on.
-        var revisionAuthority =
-            report.Entries.TryGetValue("revisionAuthority", out var revAuth)
-            && revAuth.Data.TryGetValue("enabled", out var enabled)
-            && enabled is true;
-
         var payload = new
         {
             status = report.Status.ToString(),
@@ -109,7 +90,6 @@ public static class HealthResponseWriter
             ready = report.Status != HealthStatus.Unhealthy,
             workerHealthy,
             recurringJobsHealthy,
-            revisionAuthority,
             totalDurationMs = Math.Round(report.TotalDuration.TotalMilliseconds, 1),
             checks = report.Entries
                 .Select(e => new

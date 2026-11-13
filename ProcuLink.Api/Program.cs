@@ -540,18 +540,6 @@ builder.Services.AddScoped<IOrderExceptionService, OrderExceptionService>();
 // (version-1) credential blobs into the bound (version-2) envelope. See
 // ICredentialBindingBackfillService for the columns covered and the delivery-credentials exclusion.
 builder.Services.AddScoped<ICredentialBindingBackfillService, CredentialBindingBackfillService>();
-// Launch batch 7 — revision authority: pinned-revision config bundle resolver, consumed by
-// parse-mapping/item-codes, validation, transform, and delivery. Flag-gated by
-// Connections:RevisionAuthority. The CODE default is OFF (live tables, byte-identical behaviour),
-// but that is NOT the deployed value: production sets Connections__RevisionAuthority = true on the
-// Railway "ProcuLink" service, so revision authority is ON in production. Do not infer the
-// deployed value from an appsettings file — a 2026-07-27 audit did exactly that and filed a P0
-// claiming the versioning subsystem was inert in production. Read the effective value from
-// GET /health/ready (`revisionAuthority`) or this host's startup log instead. See
-// ProcuLink.Infrastructure/Services/RevisionAuthorityHosts.cs and
-// docs/ops/revision-authority-production-smoke.md.
-builder.Services.AddScoped<IEffectiveConnectionConfigResolver,
-                           ProcuLink.Infrastructure.Services.EffectiveConnectionConfigResolver>();
 // The read-only order archive (the three GETs on OrdersController).
 builder.Services.AddScoped<IOrderQueryService, OrderQueryService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
@@ -657,7 +645,6 @@ builder.Services.AddSingleton(sp =>
         .Bind(opts);
     return opts;
 });
-builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
 builder.Services.AddScoped<IErpConnector, ErplyConnector>();
 builder.Services.AddScoped<IErpConnector, DirectoConnector>();
 builder.Services.AddScoped<IDeliveryDispatcher, HttpDeliveryDispatcher>();
@@ -745,15 +732,6 @@ builder.Services.AddHealthChecks()
     .AddCheck<ProcuLink.Api.Controllers.RecurringJobDispatcherHealthCheck>(
         name: "recurringJobs",
         failureStatus: HealthStatus.Degraded,
-        tags: new[] { "ready" })
-    // WP-21 — the EFFECTIVE value of Connections:RevisionAuthority. Always Healthy (the flag being
-    // off is a configuration, not an outage); the value rides the data bag and is flattened to a
-    // top-level `revisionAuthority` boolean by HealthResponseWriter. Exists because the deployed
-    // value was previously readable nowhere, which let a 2026-07-27 audit file a P0 asserting the
-    // versioning subsystem was inert in production when it has been ON there all along.
-    .AddCheck<ProcuLink.Api.Controllers.RevisionAuthorityHealthCheck>(
-        name: "revisionAuthority",
-        failureStatus: HealthStatus.Healthy,
         tags: new[] { "ready" });
 
 // IMonitoringApi is registered scoped (factory wrapper) above for OpsHealthService.
@@ -908,29 +886,22 @@ app.MapControllers();
 // Liveness (/health) is served by HealthController (fast, dependency-free 200) so
 // Railway's container probe is never blocked by a slow dependency. Readiness
 // (/health/ready) runs ONLY the "ready"-tagged checks — DB, storage, migration flag,
-// worker heartbeat, and the revision-authority flag's effective value (WP-21) — and
-// reports the aggregate status so monitoring can see degraded state without taking
-// the process down.
+// worker heartbeat and recurring-job dispatch — and reports the aggregate status so
+// monitoring can see degraded state without taking the process down.
 //
 // HTTP status: Healthy/Degraded → 200, Unhealthy → 503 (the default
 // MapHealthChecks status-code map). A stale Worker is Degraded → 200, but the JSON
 // body carries workerHealthy:false so the external uptime workflow alerts on it.
-// The revisionAuthority check is ALWAYS Healthy — the flag's value is information,
-// never a reason to evict the process — so it reaches monitoring purely through the
-// body.
 //
 // BODY: a structured JSON payload (instead of the default plain "Healthy" string)
-// with per-check status/description/duration + THREE flattened booleans the uptime
-// workflow + dashboards read: workerHealthy, recurringJobsHealthy and
-// revisionAuthority. workerHealthy and revisionAuthority are asserted directly by
-// .github/workflows/uptime.yml, which fails the run on either being false;
-// recurringJobsHealthy reaches the same workflow through the Degraded roll-up gate,
-// which fails the run and names the degraded checks. All three render FALSE when
+// with per-check status/description/duration + TWO flattened booleans the uptime
+// workflow + dashboards read: workerHealthy and recurringJobsHealthy. workerHealthy is
+// asserted directly by .github/workflows/uptime.yml, which fails the run on it being
+// false; recurringJobsHealthy reaches the same workflow through the Degraded roll-up
+// gate, which fails the run and names the degraded checks. Both render FALSE when
 // their check entry is absent — a monitor that vanished is not evidence of health.
 // ResponseWriter is the only customisation — it NEVER includes secrets (each check's
-// Data bag is counts/ages/booleans/config KEY names only, never a config VALUE; the
-// revisionAuthority bag's key set is pinned by RevisionAuthorityReadinessSurfaceTests
-// so a future field cannot quietly widen it on this anonymous endpoint).
+// Data bag is counts/ages/booleans/config KEY names only, never a config VALUE).
 app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
 {
     Predicate = check => check.Tags.Contains("ready"),

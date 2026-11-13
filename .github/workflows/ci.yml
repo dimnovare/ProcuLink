@@ -113,8 +113,8 @@ jobs:
     # actions/checkout can only write inside the workspace, so the frontend ends up inside the
     # BACKEND repo — and two architecture guards here walk `*.cs` from the repo root:
     # RetiredSubsystemsStayRetiredTests.SourceFiles and
-    # RevisionAuthorityHostCoverageTests.ProductionSourceFiles. The frontend carries one tracked
-    # C# file, src/test/fixtures/backendCopy/SampleService.cs, deliberately stuffed with the
+    # StartupConfigurationValidatorTests.EveryHost_CallsTheStartupValidator. The frontend carries
+    # one tracked C# file, src/test/fixtures/backendCopy/SampleService.cs, deliberately stuffed with the
     # phrases those scanners hunt for; at a top-level path it would be read as a production
     # project of this repo. `.claude/` is the one prefix EVERY source scan in this repository
     # already excludes — they all do it because parallel sessions keep full repo COPIES under

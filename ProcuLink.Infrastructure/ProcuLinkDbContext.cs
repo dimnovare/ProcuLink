@@ -135,7 +135,6 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<Supplier> Suppliers => Set<Supplier>();
     public DbSet<PurchaseOrderEntity> PurchaseOrders => Set<PurchaseOrderEntity>();
     public DbSet<PurchaseOrderLineEntity> PurchaseOrderLines => Set<PurchaseOrderLineEntity>();
-    public DbSet<ItemMapping> ItemMappings => Set<ItemMapping>();
     public DbSet<SupplierCatalogSource> SupplierCatalogSources => Set<SupplierCatalogSource>();
     public DbSet<AiSuggestionDecision> AiSuggestionDecisions => Set<AiSuggestionDecision>();
     public DbSet<OutboundArtifact> OutboundArtifacts => Set<OutboundArtifact>();
@@ -158,6 +157,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     // SupplierPoMapping, SchemaFingerprint, SupplierAcceptanceProfile, SupplierAcceptanceRule,
     // RuleDefinition and SupplierConnection lost their last reader with the supplier/catalog/mapping
     // services. Their DbSets went; the entities stay mapped below with explicit table names (R2).
+    // Pass 2 of Task 7b did the same for ItemMapping and ConnectionRevisionItemMapping: their last
+    // reader was the deleted revision-authority resolver.
     public DbSet<TenantApiKey>            TenantApiKeys            => Set<TenantApiKey>();
     public DbSet<IntegrationSubscription> IntegrationSubscriptions => Set<IntegrationSubscription>();
     public DbSet<OrderConfirmationEntity>     OrderConfirmations     => Set<OrderConfirmationEntity>();
@@ -168,7 +169,6 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<OrderValidationResult>       OrderValidationResults       { get; set; } = null!;
     // ── Group V1: versioned Supplier Connection ─────────────────────────────
     public DbSet<SupplierConnectionRevision>     SupplierConnectionRevisions   { get; set; } = null!;
-    public DbSet<ConnectionRevisionItemMapping>  ConnectionRevisionItemMappings { get; set; } = null!;
     public DbSet<ConnectionRevisionTestCase>     ConnectionRevisionTestCases   { get; set; } = null!;
     // ── Phase 2: extensible canonical — user-defined spine fields (Tier-2) ───
     public DbSet<CanonicalFieldDef>              CanonicalFieldDefs            { get; set; } = null!;
