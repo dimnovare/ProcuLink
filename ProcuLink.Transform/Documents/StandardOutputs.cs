@@ -17,10 +17,10 @@ public static class StandardOutputs
         FieldMeanings.LineQuantity, FieldMeanings.LineUnitPrice, FieldMeanings.LineItemCode,
     ];
 
-    // UBL also needs both parties: its writer otherwise names them with placeholders.
+    // cXML also needs a unit: its writer writes a blank one, which networks refuse. UBL also needs both parties: its writer otherwise names them with placeholders.
     public static readonly IReadOnlyList<StandardOutput> All =
     [
-        new("cxml-1-2", OutputFormat.CXml, FlowOutputFormats.Xml, OrderNeeds),
+        new("cxml-1-2", OutputFormat.CXml, FlowOutputFormats.Xml, [.. OrderNeeds, FieldMeanings.LineUnit]),
         new("ubl-2-1-order", OutputFormat.Ubl, FlowOutputFormats.Xml, [.. OrderNeeds, FieldMeanings.SenderName, FieldMeanings.ReceiverName]),
         new("x12-850", OutputFormat.X12, FlowOutputFormats.Text, OrderNeeds),
     ];

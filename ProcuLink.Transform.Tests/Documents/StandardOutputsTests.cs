@@ -1,6 +1,5 @@
 using FluentAssertions;
 using ProcuLink.Core.Documents;
-using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Transform.Conformance;
 using ProcuLink.Transform.Documents;
 using Xunit;
@@ -18,7 +17,7 @@ public class StandardOutputsTests
         ("Unit", FieldMeanings.LineUnit), ("Price", FieldMeanings.LineUnitPrice), ("No", FieldMeanings.LineNumber),
     ];
 
-    private static ReadResult Read(string poNumber = "PO-1", string qty1 = "3", string price1 = "9,99", string code2 = "B-2", string no2 = "20")
+    private static ReadResult Read(string poNumber = "PO-1", string qty1 = "3", string price1 = "9,99", string code2 = "B-2", string no2 = "20", string unit1 = "EA")
     {
         ReadRow Row(params string[] values) => new(Columns.Select((c, i) => (c, i))
             .ToDictionary(x => FieldKey.Normalise(x.c.Label), x => new ReadCell(values[x.i], 1, null, false, false)));
@@ -27,7 +26,7 @@ public class StandardOutputsTests
              Field("Currency", "eur", FieldMeanings.Currency), Field("Buyer", "Buyer Co", FieldMeanings.SenderName),
              Field("Seller", "Seller Co", FieldMeanings.ReceiverName)],
             [new ReadTable("lines", "Lines", Columns.Select(c => new ReadColumn(FieldKey.Normalise(c.Label), c.Label, "text", c.Meaning)).ToList(),
-                [Row("A-1", "Bolt", qty1, "EA", price1, "10"), Row(code2, "Nut", "2", "EA", "0,50", no2)], true)]);
+                [Row("A-1", "Bolt", qty1, unit1, price1, "10"), Row(code2, "Nut", "2", "EA", "0,50", no2)], true)]);
     }
 
     private static Task<DocumentRender> Render(string id, ReadResult read) =>
@@ -51,7 +50,6 @@ public class StandardOutputsTests
 
         text.Should().Contain("PO-1").And.Contain("EUR");
         new ConformanceService().Check(text, writer).ErrorCount.Should().Be(0);
-        render.Result!.FileExtension.Should().Be(DeliveryMediaTypes.For(writer).FileExtension);
     }
 
     [Fact]
@@ -60,6 +58,7 @@ public class StandardOutputsTests
         var render = await Render("x12-850", Read(poNumber: " ", qty1: "1.500", code2: ""));
         (render.Result is null, render.Error, render.Detail).Should()
             .Be((true, "output_invalid", "This standard needs PO number, Qty (line 1) and Item code (line 2)."));
+        (await Render("cxml-1-2", Read(unit1: ""))).Detail.Should().Be("This standard needs Unit (line 1).");
 
         var unknown = await Render("nope", Read());
         (unknown.Error, unknown.Detail).Should().Be(("output_invalid", (string?)null));

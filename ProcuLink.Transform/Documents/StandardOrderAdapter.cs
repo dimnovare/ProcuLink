@@ -20,7 +20,8 @@ public static class StandardOrderAdapter
         string? Text(string meaning) => Blank(Field(meaning)?.Value);
         var table = tableKey is null ? null : read.Tables.FirstOrDefault(t => t.Key == tableKey);
         var rows = table?.Rows ?? [];
-        ReadColumn? Column(string meaning) => table?.Columns.FirstOrDefault(c => FieldMeanings.Of(table, c, fields) == meaning);
+        var columns = (table?.Columns ?? []).ToLookup(c => FieldMeanings.Of(table!, c, fields));
+        ReadColumn? Column(string meaning) => columns[meaning].FirstOrDefault();
         string? Cell(ReadRow row, string meaning) =>
             Column(meaning) is { } c && row.Cells.TryGetValue(c.Key, out var cell) ? Blank(cell.Value) : null;
 
