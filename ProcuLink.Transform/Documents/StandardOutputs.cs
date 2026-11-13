@@ -45,7 +45,7 @@ public static class StandardOutputs
         FieldMeanings.SenderContactName, FieldMeanings.SenderContactPhone, FieldMeanings.SenderContactEmail, FieldMeanings.Iban,
     ];
 
-    private const string XRechnungId = "urn:cen.eu:en16931:2017#compliant#urn:xeinkauf.de:kosit:xrechnung_3.0";
+    private const string XRechnungCustomization = "urn:cen.eu:en16931:2017#compliant#urn:xeinkauf.de:kosit:xrechnung_3.0";
 
     public static readonly IReadOnlyList<StandardOutput> All =
     [
@@ -57,10 +57,10 @@ public static class StandardOutputs
         new("edifact-orders", OutputFormat.EdifactOrders, FlowOutputFormats.Text, OrderNeeds),
         new("en16931-cii", OutputFormat.Ubl, FlowOutputFormats.Xml, CiiNeeds, "eu.cen.en16931:cii:1.3.17", true, Syntax: InvoiceSyntax.Cii, RuleSet: "EN 16931"),
         new("en16931-cii-credit-note", OutputFormat.Ubl, FlowOutputFormats.Xml, CiiNeeds, "eu.cen.en16931:cii:1.3.17", true, true, Syntax: InvoiceSyntax.Cii, RuleSet: "EN 16931"),
-        new("xrechnung-ubl", OutputFormat.Ubl, FlowOutputFormats.Xml, XRechnungNeeds, "de.xrechnung:ubl-invoice:3.0.2", true, RuleSet: "XRechnung", Customization: XRechnungId),
-        new("xrechnung-ubl-credit-note", OutputFormat.Ubl, FlowOutputFormats.Xml, XRechnungNeeds, "de.xrechnung:ubl-creditnote:3.0.2", true, true, RuleSet: "XRechnung", Customization: XRechnungId),
-        new("xrechnung-cii", OutputFormat.Ubl, FlowOutputFormats.Xml, XRechnungNeeds, "de.xrechnung:cii:3.0.2", true, Syntax: InvoiceSyntax.Cii, RuleSet: "XRechnung", Customization: XRechnungId),
-        new("xrechnung-cii-credit-note", OutputFormat.Ubl, FlowOutputFormats.Xml, XRechnungNeeds, "de.xrechnung:cii:3.0.2", true, true, Syntax: InvoiceSyntax.Cii, RuleSet: "XRechnung", Customization: XRechnungId),
+        new("xrechnung-ubl", OutputFormat.Ubl, FlowOutputFormats.Xml, XRechnungNeeds, "de.xrechnung:ubl-invoice:3.0.2", true, RuleSet: "XRechnung", Customization: XRechnungCustomization),
+        new("xrechnung-ubl-credit-note", OutputFormat.Ubl, FlowOutputFormats.Xml, XRechnungNeeds, "de.xrechnung:ubl-creditnote:3.0.2", true, true, RuleSet: "XRechnung", Customization: XRechnungCustomization),
+        new("xrechnung-cii", OutputFormat.Ubl, FlowOutputFormats.Xml, XRechnungNeeds, "de.xrechnung:cii:3.0.2", true, Syntax: InvoiceSyntax.Cii, RuleSet: "XRechnung", Customization: XRechnungCustomization),
+        new("xrechnung-cii-credit-note", OutputFormat.Ubl, FlowOutputFormats.Xml, XRechnungNeeds, "de.xrechnung:cii:3.0.2", true, true, Syntax: InvoiceSyntax.Cii, RuleSet: "XRechnung", Customization: XRechnungCustomization),
     ];
 
     public static StandardOutput? Find(string? id) => All.FirstOrDefault(s => s.Id == id);

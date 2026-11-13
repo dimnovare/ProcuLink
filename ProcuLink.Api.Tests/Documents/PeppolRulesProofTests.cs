@@ -90,7 +90,7 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
         return new ReadResult(read.KindLabel,
             [.. read.Fields,
              Field("Seller street", "Main Street 1", FieldMeanings.SenderStreet), Field("Seller city", "Riga", FieldMeanings.SenderCity), Field("Seller postcode", "LV-1000", FieldMeanings.SenderPostcode),
-             Field("Buyer street", "Side Street 2", FieldMeanings.ReceiverStreet), Field("Buyer city", "Berlin", FieldMeanings.ReceiverCity), Field("Buyer postcode", "10115", FieldMeanings.ReceiverPostcode),
+             Field("Buyer street", "Side Street 2", FieldMeanings.ReceiverStreet), Field("Buyer city", "Riga", FieldMeanings.ReceiverCity), Field("Buyer postcode", "LV-1050", FieldMeanings.ReceiverPostcode),
              Field("Contact name", "Alex Example", FieldMeanings.SenderContactName), Field("Contact phone", "+49 30 0000000", FieldMeanings.SenderContactPhone),
              Field("Contact email", "billing@example.com", FieldMeanings.SenderContactEmail),
              Field("IBAN", "DE02120300000000202051", FieldMeanings.Iban), Field("Payment reference", "INV-1", FieldMeanings.PaymentReference)],
@@ -110,7 +110,7 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
         {
             // The CII reads with and without electronic addresses; the Peppol ids need them.
             var reads = id.StartsWith("en16931", StringComparison.Ordinal) ? new[] { Read(), ReadWithoutEndpoints() }
-                : id.StartsWith("xrechnung", StringComparison.Ordinal) ? new[] { RichRead() } : new[] { Read() };
+                : id.StartsWith("xrechnung", StringComparison.Ordinal) ? new[] { RichRead() } : id == "peppol-bis-billing-3" ? new[] { Read(), RichRead() } : new[] { Read() };
             foreach (var read in reads)
             {
                 var render = await StandardOutputs.RenderAsync(id, read, FlowFieldList.Empty, "lines", Guid.Empty, default);
@@ -121,21 +121,14 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
                 var outcome = await validator.ValidateAsync(StandardOutputs.Find(id)!.Vesid!, bytes.ToArray(), default);
                 Assert.True(outcome.Status == ValidationStatus.Passed,
                     $"{id}: {outcome.Status} {string.Join("; ", outcome.Issues.Where(i => i.Severity == "error").Select(i => $"{i.RuleId} {i.Message}"))}");
+                // phorm only warns on a wrong XRechnung CustomizationID (BR-DE-21), so a clean run must have no warnings either.
+                Assert.True(!outcome.Issues.Any(i => i.Severity == "warning"),
+                    $"{id}: {string.Join("; ", outcome.Issues.Where(i => i.Severity == "warning").Select(i => $"{i.RuleId} {i.Message}"))}");
                 checkedRenders++;
             }
         }
 
-        // Peppol invoice with addresses: it must still pass the Peppol rules.
-        var rich = await StandardOutputs.RenderAsync("peppol-bis-billing-3", RichRead(), FlowFieldList.Empty, "lines", Guid.Empty, default);
-        Assert.True(rich.Ok, rich.Detail);
-        using var richBytes = new MemoryStream();
-        await rich.Result!.Content.CopyToAsync(richBytes);
-        var richOutcome = await validator.ValidateAsync(StandardOutputs.Find("peppol-bis-billing-3")!.Vesid!, richBytes.ToArray(), default);
-        Assert.True(richOutcome.Status == ValidationStatus.Passed,
-            $"rich peppol: {richOutcome.Status} {string.Join("; ", richOutcome.Issues.Where(i => i.Severity == "error").Select(i => $"{i.RuleId} {i.Message}"))}");
-        checkedRenders++;
-
-        // Two Peppol renders + two CII ids read with and without electronic addresses + four XRechnung ids + the rich Peppol invoice.
+        // Two Peppol renders + two CII ids read with and without electronic addresses + four XRechnung ids + the Peppol invoice read with addresses too.
         Assert.Equal(11, checkedRenders);
     }
 }
