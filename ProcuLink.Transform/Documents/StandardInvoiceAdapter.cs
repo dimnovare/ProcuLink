@@ -13,7 +13,7 @@ public static class StandardInvoiceAdapter
 {
     /// <summary>The invoice, its lines and parties, or what the read lacks for <paramref name="needs"/> (never both).</summary>
     public static (InvoiceEntity? Invoice, IReadOnlyList<InvoiceLineEntity> Lines, PeppolPartyOptions? Parties, IReadOnlyList<string> Missing) ToInvoice(
-        ReadResult read, FlowFieldList fields, string? tableKey, IReadOnlyList<string> needs, Guid orgId)
+        ReadResult read, FlowFieldList fields, string? tableKey, IReadOnlyList<string> needs, Guid orgId, bool creditNote)
     {
         var (built, missing) = StandardOrderAdapter.Build(read, fields, tableKey, needs, a =>
         {
@@ -61,7 +61,7 @@ public static class StandardInvoiceAdapter
                 PayeeIban = a.Text(FieldMeanings.Iban), PaymentReference = a.Text(FieldMeanings.PaymentReference),
             };
             return new Built(invoice, lines, parties);
-        });
+        }, creditNote);
         return built is null ? (null, [], null, missing) : (built.Invoice, built.Lines, built.Parties, []);
     }
 
