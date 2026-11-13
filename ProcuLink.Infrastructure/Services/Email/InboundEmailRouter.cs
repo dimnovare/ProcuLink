@@ -677,13 +677,19 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         var usable = 0;
         var accepted = _flows.AcceptedFormats(orgId);
         var messageKey = $"postmark:{payload.ProviderMessageId ?? Guid.NewGuid().ToString("N")}";
-        var files = payload.Attachments.Where(a =>
+        var wanted = payload.Attachments.Where(a =>
                 accepted.Contains(Path.GetExtension(a.FileName).TrimStart('.'), StringComparer.OrdinalIgnoreCase))
+            .ToLookup(a => a.Decode == InboundAttachmentDecode.Undecodable);
+        // Bad wire encoding: no bytes to submit, and a re-delivery replays the same payload, so record the loss.
+        foreach (var att in wanted[true])
+            await WriteAuditAsync(orgId, "inbound_email.attachment_skipped_undecodable",
+                payload with { Attachments = new[] { Strip(att) } }, ct);
+        var files = wanted[false]
             .Select(a => (a.FileName, a.ContentType, a.Content,
                 Key: $"{messageKey}#{Convert.ToHexString(SHA256.HashData(a.Content)).ToLowerInvariant()}"))
             .ToList();
-        // Nothing was submitted, so the body is the document, when the org reads text files.
-        if (files.Count == 0 && accepted.Contains("txt") && !string.IsNullOrWhiteSpace(payload.Body))
+        // No accepted-type file attached (a corrupt one counts): the body is the document, when the org reads text files.
+        if (files.Count == 0 && !wanted[true].Any() && accepted.Contains("txt") && !string.IsNullOrWhiteSpace(payload.Body))
             files.Add(("email.txt", "text/plain", Encoding.UTF8.GetBytes(payload.Body), $"{messageKey}#body"));
         foreach (var att in files)
         {
@@ -727,9 +733,11 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
 
         intake.LastRunAt = DateTime.UtcNow;
         intake.LastStatus = "ok";
-        intake.LastMessage = usable == 0
-            ? $"An email from {payload.FromEmail} had no file we can read attached."
-            : null;
+        intake.LastMessage = wanted[true].Any()
+            ? $"An email from {payload.FromEmail} had an attachment we could not decode, so it was not taken in."
+            : usable == 0
+                ? $"An email from {payload.FromEmail} had no file we can read attached."
+                : null;
         await _db.SaveChangesAsync(ct);
         return new InboundEmailResult(true, orgId, Array.Empty<Guid>(), null);
     }
