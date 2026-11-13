@@ -113,6 +113,33 @@ public class StandardOutputsTests
         doc.Descendants().Count(e => e.Name.LocalName == "Country" && e.Elements().Any(x => x.Name.LocalName == "IdentificationCode")).Should().Be(2);
     }
 
+    // The read printed negative: each listed meaning's value carries a minus sign.
+    private static ReadResult Negated(ReadResult read, params string[] meanings)
+    {
+        string? Neg(string? meaning, string? value) => meanings.Contains(meaning) ? "-" + value : value;
+        var t = read.Tables[0];
+        var columns = t.Columns.ToDictionary(c => c.Key, c => c.Meaning);
+        return new ReadResult(read.KindLabel, [.. read.Fields.Select(f => f with { Value = Neg(f.Meaning, f.Value) })],
+            [t with { Rows = [.. t.Rows.Select(r => new ReadRow(r.Cells.ToDictionary(c => c.Key, c => c.Value with { Value = Neg(columns[c.Key], c.Value.Value) })))] }]);
+    }
+
+    // An invoice id is never flipped. Its quantities and prices stay positive, because an invoice needs them positive to be written.
+    [Theory]
+    [InlineData("peppol-bis-billing-3-credit-note", true, "121.00")]
+    [InlineData("en16931-cii-credit-note", true, "121.00")]
+    [InlineData("peppol-bis-billing-3", false, "-121.00")]
+    public async Task Credit_note_printed_negative_is_written_positive(string id, bool negativeLines, string payable)
+    {
+        string[] amounts = [FieldMeanings.TotalNet, FieldMeanings.TotalTax, FieldMeanings.TotalGross, FieldMeanings.LineAmount];
+        var read = Negated(InvoiceRead(), negativeLines ? [.. amounts, FieldMeanings.LineQuantity, FieldMeanings.LineUnitPrice] : amounts);
+        var doc = XDocument.Parse(Text(await Render(id, read)));
+        string[] Values(params string[] names) => [.. doc.Descendants().Where(e => names.Contains(e.Name.LocalName)).Select(e => e.Value)];
+
+        Values("PayableAmount", "DuePayableAmount").Should().Equal(payable);
+        Values("CreditedQuantity", "InvoicedQuantity", "BilledQuantity")[0].Should().Be("3.0000");
+        Values("PriceAmount", "ChargeAmount").Should().Equal("20.00", "20.00");
+    }
+
     [Fact]
     public async Task A_missing_IBAN_is_named_in_capitals()
     {

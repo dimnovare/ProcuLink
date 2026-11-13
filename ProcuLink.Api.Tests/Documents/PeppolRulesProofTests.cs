@@ -106,6 +106,17 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
             read.Tables);
     }
 
+    // A credit note printed negative: every amount and quantity carries a minus sign.
+    private static ReadResult Negated(ReadResult read)
+    {
+        string[] signed = [FieldMeanings.TotalNet, FieldMeanings.TotalTax, FieldMeanings.TotalGross, FieldMeanings.LineQuantity, FieldMeanings.LineUnitPrice, FieldMeanings.LineAmount];
+        string? Neg(string? meaning, string? value) => signed.Contains(meaning) ? "-" + value : value;
+        var t = read.Tables[0];
+        var columns = t.Columns.ToDictionary(c => c.Key, c => c.Meaning);
+        return new ReadResult(read.KindLabel, [.. read.Fields.Select(f => f with { Value = Neg(f.Meaning, f.Value) })],
+            [t with { Rows = [.. t.Rows.Select(r => new ReadRow(r.Cells.ToDictionary(c => c.Key, c => c.Value with { Value = Neg(columns[c.Key], c.Value.Value) })))] }]);
+    }
+
     [DockerRequiredFact]
     public async Task Both_documents_pass_the_official_rules()
     {
@@ -121,6 +132,8 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
             var reads = id.StartsWith("en16931", StringComparison.Ordinal) ? new[] { Read(), ReadWithoutEndpoints() }
                 : id is "xrechnung-ubl" or "xrechnung-cii" ? new[] { RichRead(), RichReadWithEmailSeller() }
                 : id.StartsWith("xrechnung", StringComparison.Ordinal) ? new[] { RichRead() } : id == "peppol-bis-billing-3" ? new[] { Read(), RichRead() } : new[] { Read() };
+            // Every credit note is also read printed negative; XRechnung needs the rich fields.
+            if (StandardOutputs.Find(id)!.CreditNote) reads = [.. reads, Negated(id.StartsWith("xrechnung", StringComparison.Ordinal) ? RichRead() : Read())];
             foreach (var read in reads)
             {
                 var render = await StandardOutputs.RenderAsync(id, read, FlowFieldList.Empty, "lines", Guid.Empty, default);
@@ -138,7 +151,8 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
             }
         }
 
-        // Two Peppol renders + two CII ids read with and without electronic addresses + four XRechnung ids (the UBL and CII invoices also read with an email seller address) + the Peppol invoice read with addresses too.
-        Assert.Equal(13, checkedRenders);
+        // Two Peppol renders + two CII ids read with and without electronic addresses + four XRechnung ids (the UBL and CII invoices also read with an email seller address) + the Peppol invoice read with addresses too
+        // + the four credit notes read printed negative.
+        Assert.Equal(17, checkedRenders);
     }
 }
