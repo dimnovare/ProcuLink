@@ -182,6 +182,12 @@ builder.Services.AddScoped<IIntegrationTriggerService, IntegrationTriggerService
 builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Analytics:PostHog"));
 builder.Services.Configure<ProcuLink.Api.Services.Documents.DocumentEngineOptions>(builder.Configuration.GetSection("DocumentEngine"));
 builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.DocumentEngineGate>();
+// Google Drive / Sheets destinations (plan 9b). Blank Google config = feature invisible. Both hosts
+// register it: the Worker refreshes tokens during delivery.
+builder.Services.Configure<ProcuLink.Infrastructure.Services.Google.GoogleOptions>(builder.Configuration.GetSection(ProcuLink.Infrastructure.Services.Google.GoogleOptions.Section));
+builder.Services.AddHttpClient(ProcuLink.Infrastructure.Services.Google.GoogleOAuthClient.HttpClientName); // fixed Google hosts: no OutboundRequestGuard
+builder.Services.AddScoped<ProcuLink.Core.Services.Google.IGoogleOAuthClient, ProcuLink.Infrastructure.Services.Google.GoogleOAuthClient>();
+builder.Services.AddScoped<ProcuLink.Core.Services.Google.ILinkedAccountTokens, ProcuLink.Infrastructure.Services.Google.LinkedAccountTokens>();
 builder.Services.Configure<ProcuLink.Api.Services.Documents.ValidatorOptions>(builder.Configuration.GetSection("Validator"));
 builder.Services.AddHttpClient(ProcuLink.Api.Services.Documents.PhormValidator.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddScoped<ProcuLink.Core.Documents.IStandardValidator, ProcuLink.Api.Services.Documents.PhormValidator>();
