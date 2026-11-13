@@ -51,7 +51,7 @@ public class GoogleSheetsDeliveryDispatcherTests
     {
         var sheets = new FakeSheets("""{"values":[["Number","Total"]]}""");
 
-        var result = await Send(sheets, "Number,Total\r\nA-1,=1+1\r\n", "text/csv");
+        var result = await Send(sheets, "Number,Total,\r\nA-1,=1+1\r\n", "text/csv");
 
         result.Success.Should().BeTrue();
         var append = sheets.Requests.Single(r => r.Url.Contains(":append"));

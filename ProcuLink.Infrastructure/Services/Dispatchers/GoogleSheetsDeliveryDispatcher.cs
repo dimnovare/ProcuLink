@@ -77,7 +77,7 @@ public sealed class GoogleSheetsDeliveryDispatcher(
             if (!head.IsSuccessStatusCode) return await Refused(head, tab, deadline.Token);
             var existing = JsonNode.Parse(await head.Content.ReadAsStringAsync(deadline.Token))?["values"]?.AsArray().FirstOrDefault()?.AsArray()
                 .Select(v => v?.ToString().Trim() ?? "").ToArray() ?? [];
-            if (rows.Count > 0 && existing.Length > 0 && rows[0].Select(v => v.Trim()).SequenceEqual(existing)) rows.RemoveAt(0);
+            if (rows.Count > 0 && existing.Length > 0 && TrimTrailingEmpty(rows[0]).SequenceEqual(TrimTrailingEmpty(existing))) rows.RemoveAt(0);
             if (rows.Count == 0) return new DeliveryResult(true, null, 200);
 
             var range = Uri.EscapeDataString(tab is null ? "A1" : $"{Quote(tab)}!A1");
@@ -100,6 +100,10 @@ public sealed class GoogleSheetsDeliveryDispatcher(
             return new DeliveryResult(false, "Google Sheets could not be reached.");
         }
     }
+
+    // Sheets omits trailing empty cells from a row, so compare without them.
+    private static string[] TrimTrailingEmpty(IEnumerable<string> cells) =>
+        cells.Select(v => v.Trim()).Reverse().SkipWhile(v => v.Length == 0).Reverse().ToArray();
 
     private static List<string[]> ReadCsv(byte[] content)
     {
