@@ -53,6 +53,7 @@ public static class StandardInvoiceAdapter
                 BuyerName = a.Text(FieldMeanings.ReceiverName), BuyerEndpointScheme = buyerScheme, BuyerEndpointId = buyerId,
                 BuyerVatId = a.Text(FieldMeanings.ReceiverVatId), BuyerCountry = a.Text(FieldMeanings.ReceiverCountry)?.ToUpperInvariant(),
                 OrderReference = a.Text(FieldMeanings.OrderReference),
+                DeliveryDate = a.OptionalDate(FieldMeanings.DeliveryDate),
             };
             return new Built(invoice, lines, parties);
         });
@@ -61,7 +62,8 @@ public static class StandardInvoiceAdapter
 
     private sealed record Built(InvoiceEntity Invoice, IReadOnlyList<InvoiceLineEntity> Lines, PeppolPartyOptions Parties);
 
-    // Only a value that already has the scheme:id shape reaches here (a need), so the split cannot fail; an optional absent one is (null, null).
+    // For CII the endpoint ids are optional, not needs, so the ^\d{4}:\S+$ presence check does not run: a value without a colon is omitted,
+    // and any other scheme:id is emitted as read (the rule check reports a bad scheme).
     private static (string? Scheme, string? Id) Endpoint(string? value) =>
         value?.IndexOf(':') is { } at and > 0 ? (value[..at], value[(at + 1)..]) : (null, null);
 }

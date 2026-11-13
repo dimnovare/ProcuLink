@@ -212,7 +212,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         return Ok(new OutputDraftDto(draft.Name, draft.Format, draft.TableKey, draft.Template, draft.Leaves, notes, formatCite, destination, docs.Truncated));
     }
 
-    /// <summary>Renders the document through a Peppol output and checks it against the official rules. Nothing is sent or saved.</summary>
+    /// <summary>Renders the document through a flagged standard output and checks it against the official rules. Nothing is sent or saved.</summary>
     [HttpPost("api/flows/{flowId:guid}/outputs/{outputId:guid}/check")]
     public async Task<IActionResult> Check(Guid flowId, Guid outputId, [FromQuery] Guid documentId, [FromServices] IStandardValidator validator,
         CancellationToken ct)

@@ -51,15 +51,15 @@ public sealed class X12TransformService : ITransformService
     private const char DefaultSegmentSep   = '~';
 
     private const string DefaultSenderQualifier   = "ZZ";       // ISA05
-    private const string DefaultSenderId          = "PROCULINK"; // ISA06
+    internal const string DefaultSenderId          = "PROCULINK"; // ISA06
     private const string DefaultReceiverQualifier = "ZZ";       // ISA07
-    private const string DefaultReceiverId        = "SUPPLIER";  // ISA08
+    internal const string DefaultReceiverId        = "SUPPLIER";  // ISA08
     private const string DefaultIsaVersion        = "00401";    // ISA12
     private const string DefaultGsVersion         = "004010";   // GS08
     private const string DefaultUsageIndicator    = "P";        // ISA15 (P = production)
 
     // Control numbers — single interchange / group / transaction set per document.
-    private const string InterchangeControl = "000000001"; // ISA13 / IEA02 (9 digits)
+    internal const string InterchangeControl = "000000001"; // ISA13 / IEA02 (9 digits)
     private const string GroupControl       = "1";          // GS06 / GE02
     private const string StControl          = "0001";       // ST02 / SE02
 

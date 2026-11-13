@@ -4,7 +4,7 @@ using ProcuLink.Transform.Documents;
 namespace ProcuLink.Api.Services.Documents;
 
 /// <summary>
-/// Official-rule checks for a flow's Peppol outputs. A broken rule is a visible check, never a block: an unreachable checker,
+/// Official-rule checks for a flow's flagged standard outputs. A broken rule is a visible check, never a block: an unreachable checker,
 /// a render failure (the send reports it as output_invalid) and a pass all add nothing.
 /// </summary>
 public static class OutputRuleChecks
@@ -54,7 +54,7 @@ public static class OutputRuleChecks
             if (outcome.Status != ValidationStatus.Failed) continue;
             var errors = outcome.Issues.Where(i => i.Severity == "error").ToList();
             if (errors.Count == 0) continue;
-            var message = $"{o.Name} doesn't meet {errors.Count} Peppol rule(s): " + string.Join("; ", errors.Take(Listed).Select(i => $"{i.RuleId} {i.Message}"))
+            var message = $"{o.Name} doesn't meet {errors.Count} {standard.RuleSet} rule(s): " + string.Join("; ", errors.Take(Listed).Select(i => $"{i.RuleId} {i.Message}"))
                 + (errors.Count > Listed ? $" and {errors.Count - Listed} more" : "");
             failed.Add(new DocumentCheck(DocumentChecks.OutputRules, false, null, message));
         }

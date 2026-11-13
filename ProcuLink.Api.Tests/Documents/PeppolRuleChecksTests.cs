@@ -172,4 +172,16 @@ public class PeppolRuleChecksTests(DocumentEngineTestFactory factory) : IClassFi
         (await test.Content.ReadAsStringAsync()).Should().Contain("peppol_off");
         checks.Should().NotContain(c => c.Code == DocumentChecks.OutputRules);
     }
+
+    [Fact]
+    public async Task Flag_off_refuses_an_en16931_output_too()
+    {
+        var org = DocumentEngineTestFactory.OrgB;
+        var (flowId, _) = await SeedDocument(org);
+
+        var create = await factory.ClientFor(org).PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "CII", format = "", standard = "en16931-cii" });
+
+        create.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await create.Content.ReadAsStringAsync()).Should().Contain("peppol_off");
+    }
 }
