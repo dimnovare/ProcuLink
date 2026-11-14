@@ -54,6 +54,7 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
         public required Guid Org { get; init; }
         public required Guid DocumentId { get; init; }
         public required Guid DeliveryId { get; init; }
+        public required Guid FlowId { get; init; }
         public FakeDispatcher Dispatcher { get; } = new();
         public Mock<IBackgroundJobClient> Jobs { get; } = new();
         public Mock<ILogger<DeliverDocumentJob>> Log { get; } = new();
@@ -74,6 +75,26 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
 
         public async Task<FlowDelivery> DeliveryAsync() { await using var db = NewDb(); return await db.Set<FlowDelivery>().AsNoTracking().SingleAsync(d => d.Id == DeliveryId); }
         public async Task<string> DocStatusAsync() { await using var db = NewDb(); return await db.FlowDocuments.Where(d => d.Id == DocumentId).Select(d => d.Status).SingleAsync(); }
+
+        public async Task AddWebhookAsync()
+        {
+            await using var db = NewDb();
+            db.FlowIntakes.Add(new FlowIntake { Id = Guid.NewGuid(), OrgId = Org, FlowId = FlowId, Kind = IntakeKind.Api, ConfigJson = """{"webhookUrl":"https://hooks.example.test/in"}""" });
+            await db.SaveChangesAsync();
+        }
+
+        public async Task<DeliveryBounceResult?> BounceAsync(string key)
+        {
+            await using var db = NewDb();
+            return await new FlowDeliveryBounceHandler(db, Jobs.Object, NullLogger<FlowDeliveryBounceHandler>.Instance)
+                .TryHandleAsync(new DeliveryBounceNotification(key, DeliveryBounceKind.Hard, "supplier@example.test", null, null), CancellationToken.None);
+        }
+
+        public async Task<int> AuditCountAsync(string action) { await using var db = NewDb(); return await db.AuditEvents.CountAsync(a => a.EntityId == DocumentId && a.Action == action); }
+
+        public IEnumerable<string> WebhookEvents() => Jobs.Invocations
+            .Where(i => i.Method.Name == nameof(IBackgroundJobClient.Create) && i.Arguments[0] is Job j && j.Type == typeof(FlowWebhookJob))
+            .Select(i => (string)((Job)i.Arguments[0]).Args[2]);
 
         /// <summary>Makes a failed delivery's backoff elapse.</summary>
         public async Task DueAsync() { await using var db = NewDb(); await db.Set<FlowDelivery>().Where(d => d.Id == DeliveryId).ExecuteUpdateAsync(s => s.SetProperty(d => d.NextAttemptAt, DateTime.UtcNow.AddSeconds(-1))); }
@@ -103,6 +124,41 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
             It.IsAny<Func<It.IsAnyType, Exception?, string>>()), Times.Never);
     }
 
+    [DockerRequiredFact]
+    public async Task A_hard_bounce_dead_letters_a_delivered_delivery_once_and_announces_it()
+    {
+        var h = await SeedAsync();
+        await h.AddWebhookAsync();
+        await h.RunAsync();
+        var key = (await h.DeliveryAsync()).DispatchKey.ToString("N");
+
+        (await h.BounceAsync(key))!.Outcome.Should().Be(DeliveryBounceOutcome.FlowDeliveryMarkedFailed);
+        (await h.BounceAsync(key))!.Outcome.Should().Be(DeliveryBounceOutcome.AlreadyResolved);
+
+        var delivery = await h.DeliveryAsync();
+        delivery.Status.Should().Be(FlowDeliveryStatus.DeadLetter);
+        delivery.LastError.Should().Be(FlowDeliveryBounceHandler.HardBounceError);
+        (await h.DocStatusAsync()).Should().Be(DocumentStatus.SendFailed);
+        (await h.AuditCountAsync("document.delivery_failed")).Should().Be(1);
+        h.WebhookEvents().Should().Equal(FlowWebhookEvent.Sent, FlowWebhookEvent.SendFailed);
+    }
+
+    [DockerRequiredFact]
+    public async Task A_bounce_leaves_an_undelivered_row_alone_and_ignores_keys_that_are_not_flow_keys()
+    {
+        var h = await SeedAsync();
+        var key = (await h.DeliveryAsync()).DispatchKey.ToString("N");
+        await h.SetAsync(FlowDeliveryStatus.Failed, null, 1); // being retried under the same key
+
+        (await h.BounceAsync(key))!.Outcome.Should().Be(DeliveryBounceOutcome.AlreadyResolved);
+        (await h.BounceAsync(Guid.NewGuid().ToString("N"))).Should().BeNull();
+        (await h.BounceAsync("po-" + Guid.NewGuid() + "-" + Guid.NewGuid())).Should().BeNull();
+
+        (await h.DeliveryAsync()).Status.Should().Be(FlowDeliveryStatus.Failed);
+        (await h.DocStatusAsync()).Should().Be(DocumentStatus.Sending);
+        (await h.AuditCountAsync("document.delivery_failed")).Should().Be(0);
+    }
+
     private async Task<Harness> SeedAsync()
     {
         var cs = await postgres.CreateDatabaseAsync("proculink_deliverdocument");
@@ -129,7 +185,7 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
         db.Set<FlowDestination>().Add(destination);
         db.Set<FlowDelivery>().Add(delivery);
         await db.SaveChangesAsync();
-        return new Harness { ConnectionString = cs, Org = org, DocumentId = doc.Id, DeliveryId = delivery.Id };
+        return new Harness { ConnectionString = cs, Org = org, DocumentId = doc.Id, DeliveryId = delivery.Id, FlowId = flow.Id };
     }
 
     [DockerRequiredFact]

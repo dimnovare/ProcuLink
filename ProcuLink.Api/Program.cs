@@ -687,6 +687,7 @@ builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentSender>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.LookupSuggester>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentIntakeService>();
 builder.Services.AddScoped<ProcuLink.Core.Documents.IFlowDocumentSubmitter>(sp => sp.GetRequiredService<ProcuLink.Api.Services.Documents.DocumentIntakeService>());
+builder.Services.AddScoped<ProcuLink.Core.Services.Delivery.IFlowDeliveryBounceHandler, ProcuLink.Api.Services.Documents.FlowDeliveryBounceHandler>();
 
 // -- Flow intake pickups: SFTP / FTP / FTPS (more kinds register here) --
 builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSource, ProcuLink.Api.Services.Documents.Intake.SftpPickupSource>();

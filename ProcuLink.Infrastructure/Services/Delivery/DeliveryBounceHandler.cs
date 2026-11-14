@@ -33,6 +33,7 @@ public sealed class DeliveryBounceHandler : IDeliveryBounceHandler
 {
     private readonly ProcuLinkDbContext _db;
     private readonly IOrderExceptionService _exceptions;
+    private readonly IFlowDeliveryBounceHandler _flows;
     private readonly ILogger<DeliveryBounceHandler> _logger;
 
     /// <summary>
@@ -49,10 +50,12 @@ public sealed class DeliveryBounceHandler : IDeliveryBounceHandler
     public DeliveryBounceHandler(
         ProcuLinkDbContext db,
         IOrderExceptionService exceptions,
+        IFlowDeliveryBounceHandler flows,
         ILogger<DeliveryBounceHandler> logger)
     {
         _db = db;
         _exceptions = exceptions;
+        _flows = flows;
         _logger = logger;
     }
 
@@ -75,7 +78,8 @@ public sealed class DeliveryBounceHandler : IDeliveryBounceHandler
             .FirstOrDefaultAsync(ct);
 
         if (attempt?.Order is null)
-            return Uncorrelated(notification, "no delivery attempt matches the key");
+            return await _flows.TryHandleAsync(notification, ct)
+                ?? Uncorrelated(notification, "no delivery attempt or flow delivery matches the key");
 
         var order = attempt.Order;
         var now = DateTime.UtcNow;
@@ -152,7 +156,7 @@ public sealed class DeliveryBounceHandler : IDeliveryBounceHandler
         // a check that cannot fail. The recipient is logged because the operator's next move is to
         // search their own supplier addresses for it.
         _logger.LogWarning(
-            "Delivery bounce could not be attributed to an order ({Why}): kind={Kind} recipient={Recipient} " +
+            "Delivery bounce could not be attributed to an order or flow delivery ({Why}): kind={Kind} recipient={Recipient} " +
             "providerMessageId={ProviderMessageId}. No order state was changed.",
             why, notification.Kind, notification.Recipient, notification.ProviderMessageId);
 
