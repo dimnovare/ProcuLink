@@ -177,11 +177,17 @@ public class ActivityApiTests(DocumentEngineTestFactory factory) : IClassFixture
     public async Task A_platform_admins_identity_never_reaches_the_workspace()
     {
         var at = new DateTime(2026, 3, 4, 9, 0, 0, DateTimeKind.Utc);
-        foreach (var (action, when) in new[] { ("admin.org.limits_changed", at), ("Admin.Org.Limits_Changed", at.AddMinutes(1)) })
+        var admin = new { sub = "user_platform_admin", email = "admin@example.test" };
+        var detail = new { orderLimit = 40 };
+        foreach (var (action, when, payload) in new (string, DateTime, object)[]
+        {
+            ("admin.org.limits_changed", at, new { actor = admin, by = "user_platform_admin", detail }),   // a by never credits a member
+            ("Admin.Org.Limits_Changed", at.AddMinutes(1), new { Actor = admin, detail }),                 // the key in any letter case
+        })
             await Save(new AuditEvent
             {
                 Id = Guid.NewGuid(), OrgId = Org, EntityType = "Organisation", EntityId = Org, Action = action, CreatedAt = when,
-                Payload = JsonSerializer.SerializeToDocument(new { actor = new { sub = "user_platform_admin", email = "admin@example.test" }, detail = new { orderLimit = 40 } }),
+                Payload = JsonSerializer.SerializeToDocument(payload),
             });
 
         var raw = await factory.ClientFor(Org).GetStringAsync("/api/audit?from=2026-03-04T00:00:00Z&to=2026-03-05T00:00:00Z");
@@ -193,5 +199,6 @@ public class ActivityApiTests(DocumentEngineTestFactory factory) : IClassFixture
         Assert.Equal(40, payloads[0].GetProperty("detail").GetProperty("orderLimit").GetInt32());
         Assert.All(events, e => Assert.Equal(JsonValueKind.Null, e.GetProperty("actorId").ValueKind));   // never credited to a member
         Assert.DoesNotContain("admin@example.test", raw);
+        Assert.DoesNotContain("user_platform_admin", raw);
     }
 }

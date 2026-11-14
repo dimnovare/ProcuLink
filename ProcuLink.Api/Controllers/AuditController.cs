@@ -158,14 +158,14 @@ public class AuditController : ControllerBase
             var isDocument = e.EntityType == "FlowDocument";
             var docFound = isDocument & docMeta.TryGetValue(e.EntityId, out var doc);
             // The send behind a delivery: who started it and when
-            var send = docFound && action is "document.delivered" or "document.delivery_failed" ? SendBefore(e.EntityId, e.CreatedAt) : null;
+            var send = docFound && action is ("document.delivered" or "document.delivery_failed") ? SendBefore(e.EntityId, e.CreatedAt) : null;
             if (isDocument)
             {
                 // The screen names the person from actorId
                 if (docFound) actorId = ActorOf(e.EntityId, action, e.Payload, send);
                 (actorType, actorName, actorInitials) = actorId is null ? ("system", "System", "SY") : ("user", "A workspace member", "WM");
             }
-            else if (DocumentAudit.By(e.Payload) is { } by)
+            else if (!IsAdminAction(action) && DocumentAudit.By(e.Payload) is { } by)
             {
                 actorId = by;
                 (actorType, actorName, actorInitials) = ("user", "A workspace member", "WM");
@@ -271,11 +271,16 @@ public class AuditController : ControllerBase
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /// <summary>The payload as a workspace member may see it: a platform admin's identity (<c>actor</c> on <c>admin.*</c> rows) is the platform's record, not the workspace's.</summary>
+    /// <summary>A platform admin's action, written into the workspace's rows; matched in any letter case.</summary>
+    private static bool IsAdminAction(string action) => action.StartsWith("admin.", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The payload as a workspace member may see it: on <c>admin.*</c> rows the top-level <c>actor</c> and <c>by</c> keys (in any letter case) name the platform admin, which is the platform's record, not the workspace's, so both are removed.</summary>
     private static JsonNode? Shown(string action, JsonDocument? payload)
     {
         var node = payload is null ? null : JsonNode.Parse(payload.RootElement.GetRawText());
-        if (action.StartsWith("admin.", StringComparison.OrdinalIgnoreCase) && node is JsonObject o) o.Remove("actor");
+        if (IsAdminAction(action) && node is JsonObject o)
+            foreach (var key in o.Select(p => p.Key).Where(k => k.Equals("actor", StringComparison.OrdinalIgnoreCase) || k.Equals("by", StringComparison.OrdinalIgnoreCase)).ToList())
+                o.Remove(key);
         return node;
     }
 

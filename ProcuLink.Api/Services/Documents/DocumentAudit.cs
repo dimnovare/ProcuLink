@@ -19,7 +19,7 @@ public static class DocumentAudit
         }).Entity;
     }
 
-    /// <summary>The person a document event names (its payload's <c>by</c>), or null.</summary>
+    /// <summary>The workspace member an event names (its payload's <c>by</c>), or null.</summary>
     public static string? By(JsonDocument? payload) =>
         payload?.RootElement is { ValueKind: JsonValueKind.Object } p && p.TryGetProperty("by", out var b) && b.ValueKind == JsonValueKind.String
             ? b.GetString() : null;
