@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Auth;
 using ProcuLink.Api.Services;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
@@ -17,12 +18,12 @@ namespace ProcuLink.Api.Middleware;
 /// CurrentTenantService can serve it synchronously throughout the rest of the pipeline.
 ///
 /// If the org_id is present but no matching DB record exists, the organisation is
-/// auto-provisioned on the spot (pilot trial, 14-day window). This covers the first
+/// auto-provisioned on the spot (pilot trial window). This covers the first
 /// login flow where Clerk creates an org before the back-end has ever seen it.
 ///
 /// Auto-provisioning is throttled per client IP / email-domain by a lightweight
 /// in-memory sliding window so a script that mints fresh Clerk identities cannot
-/// create unlimited 14-day trials (trial-farming) or hammer the request-hot-path
+/// create unlimited trials (trial-farming) or hammer the request-hot-path
 /// write. A normal first login makes a single provisioning call and is never
 /// affected. When the throttle trips the request may still RESOLVE an organisation that
 /// already exists — a first page load is a burst, and a sibling request may have created
@@ -461,7 +462,7 @@ public sealed class TenantResolutionMiddleware
             AccountStatus  = "trialing",
             CreatedAt      = now,
             TrialStartedAt = now,
-            TrialEndsAt    = now.AddDays(14),
+            TrialEndsAt    = now.Add(PlanConstants.PilotDuration),
         };
 
         db.Organisations.Add(newOrg);

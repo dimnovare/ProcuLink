@@ -19,14 +19,15 @@ public class Organisation
     public DateTime  TrialStartedAt               { get; set; }
     /// <summary>Set at org creation for Pilot. Historical value remains after upgrade/cancel.</summary>
     public DateTime? TrialEndsAt                  { get; set; }
-    /// <summary>Admin-set override. When set, extends the 14-day deadline.</summary>
+    /// <summary>Unused: nothing reads it. The extension in use is <see cref="TrialEndsAtOverride"/>.</summary>
     public DateTime? PilotExtendedUntil           { get; set; }
     /// <summary>Set when user clicks "Request Pilot extension". Sales signal.</summary>
     public DateTime? PilotExtensionRequestedAt    { get; set; }
 
     // ── Per-org admin limit/trial overrides ─────────────────────────────────
-    // All nullable + additive. The EFFECTIVE limit/trial-end is the override
-    // when set, otherwise the plan/computed default. Set only by the platform
+    // All nullable + additive. The EFFECTIVE limit is the override when set, otherwise
+    // the plan default; the effective trial end is PlanConstants.GetEffectiveTrialEnd
+    // (the latest of start + PilotDuration, the stored end and the override). Set only by the platform
     // admin surface (POST /api/admin/organisations/{id}/limits) so the founder
     // can grant a prospect extra headroom or a beefier Pilot without changing
     // the plan. Null = no override → plan/computed default applies.
@@ -34,7 +35,7 @@ public class Organisation
     public int?      OrderLimitOverride           { get; set; }
     /// <summary>Admin override for the supplier limit. Null ⇒ plan default. Non-negative.</summary>
     public int?      SupplierLimitOverride        { get; set; }
-    /// <summary>Admin override for the Pilot trial end. Null ⇒ computed default (trial_started_at + 14d).</summary>
+    /// <summary>Admin override for the Pilot trial end. The trial never ends before trial_started_at + PlanConstants.PilotDuration; see PlanConstants.GetEffectiveTrialEnd.</summary>
     public DateTime? TrialEndsAtOverride          { get; set; }
 
     // ── Stripe ────────────────────────────────────────────────────────────

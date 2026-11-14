@@ -314,7 +314,7 @@ unchecked historical checklist items unless `STATUS.md` explicitly reopens them.
   - CTA → Clerk sign-up
   - `generateMetadata()` with proper OG tags
 - [ ] **B2.** Build/update `app/(marketing)/pricing/page.tsx` — final billing ladder:
-  Pilot (free 14 days), Growth (€149/mo), Operations (€399/mo), Integration (€999/mo), Enterprise (custom)
+  Pilot (free 30 days), Growth (€149/mo), Operations (€399/mo), Integration (€999/mo), Enterprise (custom)
 - [ ] **B3.** Build `app/(marketing)/how-it-works/page.tsx` — step-by-step + FAQ
 - [ ] **B4.** Update `robots.txt` — allow `(marketing)` routes, disallow `(app)` routes
 
@@ -327,7 +327,7 @@ Final plan ladder:
 
 | Plan | Price | Orders | Suppliers |
 |---|---:|---:|---:|
-| Pilot | €0 / 14 days | 20 total during trial | 1 |
+| Pilot | €0 / 30 days | 20 total during trial | 1 |
 | Growth | €149/mo | 150/month | 5 |
 | Operations | €399/mo | 500/month | 10 |
 | Integration | €999/mo | 1,000/month | 20 |

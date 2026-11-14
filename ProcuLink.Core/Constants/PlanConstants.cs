@@ -36,7 +36,7 @@ public static class PlanConstants
     ];
 
     // ── Pilot trial config ─────────────────────────────────────────────────
-    public static readonly TimeSpan PilotDuration     = TimeSpan.FromDays(14);
+    public static readonly TimeSpan PilotDuration     = TimeSpan.FromDays(30);
     public const int                PilotOrderLimit   = 20;
     public const int                PilotSupplierLimit = 1;
 
@@ -191,6 +191,18 @@ public static class PlanConstants
     /// </summary>
     public static int GetEffectiveOrderLimit(string plan, int? orderLimitOverride) =>
         orderLimitOverride is { } o && o >= 0 ? o : GetOrderLimit(plan);
+
+    /// <summary>
+    /// When a trial ends: the latest of start + <see cref="PilotDuration"/>, the stored end and the
+    /// admin override (nulls ignored), so a trial begun under an older, shorter rule gets the full window.
+    /// </summary>
+    public static DateTime GetEffectiveTrialEnd(DateTime trialStartedAt, DateTime? trialEndsAt, DateTime? trialEndsAtOverride)
+    {
+        var end = trialStartedAt.Add(PilotDuration);
+        if (trialEndsAt is { } stored && stored > end) end = stored;
+        if (trialEndsAtOverride is { } hand && hand > end) end = hand;
+        return end;
+    }
 
     /// <summary>
     /// Effective supplier limit for an org: the admin per-org override when set

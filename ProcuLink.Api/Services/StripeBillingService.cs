@@ -1057,8 +1057,8 @@ public sealed class StripeBillingService : IBillingService
     }
 
     private static DateTime GetTrialEndsAt(Core.Entities.Organisation org) =>
-        // Admin override wins, then the persisted trial end, then the computed default.
-        org.TrialEndsAtOverride ?? org.TrialEndsAt ?? org.TrialStartedAt.Add(PlanConstants.PilotDuration);
+        // The latest of start + trial length, the persisted end and the admin override.
+        PlanConstants.GetEffectiveTrialEnd(org.TrialStartedAt, org.TrialEndsAt, org.TrialEndsAtOverride);
 
     private static string NormalizePlan(string plan) =>
         PlanConstants.IsKnownPlan(plan) ? plan : PlanConstants.Pilot;

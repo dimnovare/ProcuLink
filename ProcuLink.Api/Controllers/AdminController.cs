@@ -471,9 +471,7 @@ public sealed class AdminController : ControllerBase
         var plan = PlanConstants.IsKnownPlan(org.Plan) ? org.Plan : PlanConstants.Pilot;
         var effectiveOrderLimit = PlanConstants.GetEffectiveOrderLimit(plan, org.OrderLimitOverride);
         var effectiveSupplierLimit = PlanConstants.GetEffectiveSupplierLimit(plan, org.SupplierLimitOverride);
-        var effectiveTrialEnd = org.TrialEndsAtOverride
-            ?? org.TrialEndsAt
-            ?? org.TrialStartedAt.Add(PlanConstants.PilotDuration);
+        var effectiveTrialEnd = PlanConstants.GetEffectiveTrialEnd(org.TrialStartedAt, org.TrialEndsAt, org.TrialEndsAtOverride);
 
         _logger.LogInformation(
             "Admin set limits for org {OrgId}: orderOverride={OrderOverride}, supplierOverride={SupplierOverride}, trialEndOverride={TrialEnd}",
@@ -608,9 +606,7 @@ public sealed class AdminController : ControllerBase
         var refreshed = await _db.Organisations.AsNoTracking().FirstAsync(o => o.Id == org.Id, ct);
         var effective = refreshed.AccountStatus;
         var reverted = !string.Equals(effective, AccountStatusConstants.Trialing, StringComparison.OrdinalIgnoreCase);
-        var effectiveTrialEnd = refreshed.TrialEndsAtOverride
-            ?? refreshed.TrialEndsAt
-            ?? refreshed.TrialStartedAt.Add(PlanConstants.PilotDuration);
+        var effectiveTrialEnd = PlanConstants.GetEffectiveTrialEnd(refreshed.TrialStartedAt, refreshed.TrialEndsAt, refreshed.TrialEndsAtOverride);
 
         var note = reverted
             ? "The organisation was un-frozen, but its Pilot window has already ended (or its order "

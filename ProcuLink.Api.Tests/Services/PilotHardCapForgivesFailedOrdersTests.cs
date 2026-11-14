@@ -73,7 +73,7 @@ public class PilotHardCapForgivesFailedOrdersTests
             Plan           = plan,
             AccountStatus  = status,
             CreatedAt      = DateTime.UtcNow.AddDays(-3),
-            TrialStartedAt = DateTime.UtcNow.AddDays(-3), // well inside the 14-day window
+            TrialStartedAt = DateTime.UtcNow.AddDays(-3), // well inside the trial window
         };
     }
 

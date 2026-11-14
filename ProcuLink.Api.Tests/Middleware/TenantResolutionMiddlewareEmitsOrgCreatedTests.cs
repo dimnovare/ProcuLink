@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Api.Middleware;
+using ProcuLink.Core.Constants;
 using ProcuLink.Infrastructure;
 using ProcuLink.Api.Tests.TestDoubles;
 using Xunit;
@@ -11,8 +12,8 @@ namespace ProcuLink.Api.Tests.Middleware;
 
 public class TenantResolutionMiddlewareEmitsOrgCreatedTests
 {
-    [Fact]
-    public async Task InvokeAsync_AutoProvisionsOrg_EmitsOrgCreatedEvent()
+    // Auto-provisions an org through the middleware; returns the db options and the analytics fake.
+    private static async Task<(DbContextOptions<ProcuLinkDbContext> Options, FakeAnalyticsService Analytics)> ProvisionOrgAsync()
     {
         var dbOptions = new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
@@ -35,6 +36,13 @@ public class TenantResolutionMiddlewareEmitsOrgCreatedTests
         }, authenticationType: "test"));
 
         await middleware.InvokeAsync(ctx, requestDb, analytics, dbOptions);
+        return (dbOptions, analytics);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_AutoProvisionsOrg_EmitsOrgCreatedEvent()
+    {
+        var (_, analytics) = await ProvisionOrgAsync();
 
         Assert.Single(analytics.CapturedEvents);
         var ev = analytics.CapturedEvents[0];
@@ -43,6 +51,16 @@ public class TenantResolutionMiddlewareEmitsOrgCreatedTests
         Assert.Equal("pilot", ev.Properties["plan"]);
         Assert.Equal("signup_flow", ev.Properties["created_via"]);
         Assert.NotEqual(Guid.Empty, ev.OrgId);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_AutoProvisionsOrg_StoresATrialEndOnePilotDurationAfterTheStart()
+    {
+        var (dbOptions, _) = await ProvisionOrgAsync();
+
+        await using var read = new ProcuLinkDbContext(dbOptions);
+        var created = await read.Organisations.AsNoTracking().SingleAsync();
+        Assert.Equal(PlanConstants.PilotDuration, created.TrialEndsAt!.Value - created.TrialStartedAt);
     }
 
     [Fact]

@@ -478,7 +478,7 @@ public class AdminControllerTests
     public async Task SetOrganisationAccountStatus_ReadOnlyToTrialing_UnfreezesTheOrg()
     {
         var db = MakeDb();
-        var org = FrozenPilotOrg();                 // TrialStartedAt = now-10d ⇒ 4 days left
+        var org = FrozenPilotOrg();                 // TrialStartedAt = now-10d ⇒ 20 days left
         db.Organisations.Add(org);
         await db.SaveChangesAsync();
 
@@ -491,7 +491,7 @@ public class AdminControllerTests
         dto.PreviousAccountStatus.Should().Be(AccountStatusConstants.ReadOnly);
         dto.RequestedAccountStatus.Should().Be(AccountStatusConstants.Trialing);
         dto.AccountStatus.Should().Be(AccountStatusConstants.Trialing);
-        dto.RevertedByTrialWindow.Should().BeFalse("the org still has 4 days of Pilot window left");
+        dto.RevertedByTrialWindow.Should().BeFalse("the org still has 20 days of Pilot window left");
 
         var saved = await db.Organisations.FindAsync(org.Id);
         saved!.AccountStatus.Should().Be(AccountStatusConstants.Trialing);
