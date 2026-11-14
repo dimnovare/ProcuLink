@@ -38,7 +38,11 @@ public sealed record AdminOrganisationDto(
     DateTime CreatedAt,
     DateTime? LastOrderActivity,
     int OrderVolume30d,
-    int SupplierCount);
+    int SupplierCount,
+    int DocumentUnitsThisMonth,
+    int AiCallsThisMonth,
+    long AiTokensInThisMonth,
+    long AiTokensOutThisMonth);
 
 /// <summary>
 /// Response for GET /api/admin/orders/find — the support-triage lookup from a

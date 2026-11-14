@@ -2304,6 +2304,24 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasOne<FlowDestination>().WithMany().HasForeignKey(d => d.DestinationId).OnDelete(DeleteBehavior.SetNull);
         });
 
+        modelBuilder.Entity<FlowReadCall>(b =>
+        {
+            b.ToTable("flow_read_calls");
+            b.HasKey(c => c.Id);
+            b.Property(c => c.Id).HasColumnName("id");
+            b.Property(c => c.OrgId).HasColumnName("org_id");
+            b.Property(c => c.DocumentId).HasColumnName("document_id");
+            b.Property(c => c.Part).HasColumnName("part");
+            b.Property(c => c.Model).HasColumnName("model");
+            b.Property(c => c.TokensIn).HasColumnName("tokens_in");
+            b.Property(c => c.TokensOut).HasColumnName("tokens_out");
+            b.Property(c => c.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.HasIndex(c => new { c.OrgId, c.CreatedAt });
+            b.HasIndex(c => c.DocumentId);
+            b.HasOne<Organisation>().WithMany().HasForeignKey(c => c.OrgId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne<FlowDocument>().WithMany().HasForeignKey(c => c.DocumentId).OnDelete(DeleteBehavior.Cascade);
+        });
+
         modelBuilder.Entity<FlowIntake>(b =>
         {
             b.ToTable("flow_intakes");

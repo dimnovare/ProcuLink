@@ -229,6 +229,28 @@ public sealed class AdminController : ControllerBase
             .ToListAsync(ct);
         var suppliersByOrg = supplierAgg.ToDictionary(x => x.OrgId, x => x.Count);
 
+        // This UTC month's document units read, and what the AI calls cost.
+        var now = DateTime.UtcNow;
+        var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+        var unitsByOrg = await _db.FlowDocuments
+            .AsNoTracking()
+            .Where(d => !d.IsSample && d.ReadAt >= monthStart)
+            .GroupBy(d => d.OrgId)
+            .Select(g => new { OrgId = g.Key, Units = g.Sum(d => d.BillingUnits) })
+            .ToDictionaryAsync(x => x.OrgId, x => x.Units, ct);
+        var callsByOrg = await _db.Set<FlowReadCall>()
+            .AsNoTracking()
+            .Where(c => c.CreatedAt >= monthStart)
+            .GroupBy(c => c.OrgId)
+            .Select(g => new
+            {
+                OrgId     = g.Key,
+                Calls     = g.Count(),
+                TokensIn  = g.Sum(c => (long)c.TokensIn),
+                TokensOut = g.Sum(c => (long)c.TokensOut),
+            })
+            .ToDictionaryAsync(x => x.OrgId, ct);
+
         var orgs = await _db.Organisations
             .AsNoTracking()
             .OrderByDescending(o => o.CreatedAt)
@@ -248,6 +270,8 @@ public sealed class AdminController : ControllerBase
 
             orderByOrg.TryGetValue(o.Id, out var oa);
             suppliersByOrg.TryGetValue(o.Id, out var supCount);
+            unitsByOrg.TryGetValue(o.Id, out var units);
+            callsByOrg.TryGetValue(o.Id, out var calls);
 
             return new AdminOrganisationDto(
                 Id:                   o.Id,
@@ -261,7 +285,11 @@ public sealed class AdminController : ControllerBase
                 CreatedAt:            o.CreatedAt,
                 LastOrderActivity:    oa?.LastActivity,
                 OrderVolume30d:       oa?.Volume30d ?? 0,
-                SupplierCount:        supCount);
+                SupplierCount:        supCount,
+                DocumentUnitsThisMonth: units,
+                AiCallsThisMonth:       calls?.Calls ?? 0,
+                AiTokensInThisMonth:    calls?.TokensIn ?? 0,
+                AiTokensOutThisMonth:   calls?.TokensOut ?? 0);
         }).ToList();
 
         return Ok(result);

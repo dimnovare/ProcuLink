@@ -268,6 +268,41 @@ public class AdminControllerTests
         beta.LastOrderActivity.Should().BeNull();
     }
 
+    [Fact]
+    public async Task GetOrganisations_ReportsThisMonthsReadsAndWhatTheyCost()
+    {
+        var db = MakeDb();
+        var org = Org("Acme", PlanConstants.Starter, AccountStatusConstants.Active);
+        db.Organisations.AddRange(org, Org("Beta", PlanConstants.Pilot, AccountStatusConstants.Trialing));
+        var now = DateTime.UtcNow;
+        var lastMonth = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc).AddDays(-1);
+        FlowDocument Doc(int units, DateTime? readAt, bool sample = false) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = org.Id, FlowId = Guid.NewGuid(), FileName = "f.pdf", ContentType = "application/pdf",
+            SourceFileKey = "k", BillingUnits = units, ReadAt = readAt, IsSample = sample, CreatedAt = now, UpdatedAt = now,
+        };
+        var read = Doc(3, now);
+        db.FlowDocuments.AddRange(read, Doc(2, now), Doc(9, lastMonth), Doc(4, now, sample: true), Doc(6, null));
+        FlowReadCall Call(DateTime at, int tokensIn, int tokensOut) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = org.Id, DocumentId = read.Id, Part = 1, Model = "test-model",
+            TokensIn = tokensIn, TokensOut = tokensOut, CreatedAt = at,
+        };
+        db.Set<FlowReadCall>().AddRange(Call(now, 1200, 300), Call(now, 800, 200), Call(lastMonth, 5000, 5000));
+        await db.SaveChangesAsync();
+
+        var list = (await Build(db).GetOrganisations(CancellationToken.None)).Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeAssignableTo<IEnumerable<AdminOrganisationDto>>().Subject.ToList();
+
+        var acme = list.Single(o => o.Name == "Acme");
+        acme.DocumentUnitsThisMonth.Should().Be(5, "last month's, the sample and the unread document do not count");
+        acme.AiCallsThisMonth.Should().Be(2);
+        acme.AiTokensInThisMonth.Should().Be(2000);
+        acme.AiTokensOutThisMonth.Should().Be(500);
+        var beta = list.Single(o => o.Name == "Beta");
+        (beta.DocumentUnitsThisMonth, beta.AiCallsThisMonth, beta.AiTokensInThisMonth, beta.AiTokensOutThisMonth).Should().Be((0, 0, 0L, 0L));
+    }
+
     // ── invoices guard ────────────────────────────────────────────────────
 
     [Fact]
