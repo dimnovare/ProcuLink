@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
@@ -220,5 +221,50 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
             new { name = "Webhook (renamed)", protocol = "http", config = JsonDocument.Parse(HeaderConfig).RootElement });
 
         put.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+    [Fact]
+    public async Task The_list_says_what_uses_a_destination_and_what_was_sent_there_last()
+    {
+        var t = new DateTime(2026, 6, 1, 9, 0, 0, DateTimeKind.Utc);
+        FlowDestination Destination(Guid org, string name) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = org, Name = name, Protocol = "http", ConfigJson = """{"url":"https://example.test/in"}""", CreatedAt = t, UpdatedAt = t,
+        };
+        var (tested, failed, idle, theirs) = (Destination(OrgA, "Tested only"), Destination(OrgA, "Failed after a test"),
+            Destination(OrgA, "Never used"), Destination(OrgB, "Theirs"));
+        var flow = new Flow { Id = Guid.NewGuid(), OrgId = OrgA, Name = "Supplier invoices", CreatedAt = t, UpdatedAt = t };
+        var output = new FlowOutput { Id = Guid.NewGuid(), OrgId = OrgA, FlowId = flow.Id, Name = "Invoice CSV", Format = "csv", DestinationId = failed.Id, CreatedAt = t, UpdatedAt = t };
+        var document = new FlowDocument { Id = Guid.NewGuid(), OrgId = OrgA, FlowId = flow.Id, FileName = "invoice.pdf", ContentType = "application/pdf", CreatedAt = t, UpdatedAt = t };
+        AuditEvent Test(FlowDestination d, bool success, DateTime at) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = d.OrgId, EntityType = "FlowDestination", EntityId = d.Id, Action = "destination.tested", CreatedAt = at,
+            Payload = JsonSerializer.SerializeToDocument(new { success }),
+        };
+        FlowDelivery Delivery(string status, DateTime at) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = OrgA, DocumentId = document.Id, OutputId = output.Id, OutputName = output.Name, DestinationId = failed.Id,
+            Protocol = "http", Status = status, DispatchKey = Guid.NewGuid(), CreatedAt = at, UpdatedAt = at,
+        };
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.AddRange(tested, failed, idle, theirs, flow, output, document);
+            db.AddRange(Test(tested, false, t.AddMinutes(1)), Test(tested, true, t.AddMinutes(2)), Test(failed, true, t.AddMinutes(1)), Test(theirs, true, t.AddMinutes(5)));
+            db.AddRange(Delivery(FlowDeliveryStatus.Delivered, t.AddMinutes(3)), Delivery(FlowDeliveryStatus.DeadLetter, t.AddMinutes(4)), Delivery(FlowDeliveryStatus.Failed, t.AddMinutes(9)));
+            await db.SaveChangesAsync();
+        }
+
+        var rows = (await factory.ClientFor(DocumentEngineTestFactory.OrgA).GetFromJsonAsync<JsonElement>("/api/destinations")).EnumerateArray().ToList();
+        JsonElement Row(FlowDestination d) => rows.Single(r => r.GetProperty("id").GetGuid() == d.Id);
+        (string, bool, DateTime) Last(FlowDestination d) => (Row(d).GetProperty("lastSend").GetProperty("kind").GetString()!,
+            Row(d).GetProperty("lastSend").GetProperty("ok").GetBoolean(), Row(d).GetProperty("lastSend").GetProperty("at").GetDateTime());
+
+        rows.Should().NotContain(r => r.GetProperty("id").GetGuid() == theirs.Id);
+        Last(tested).Should().Be(("test", true, t.AddMinutes(2)));                       // the newer test
+        Last(failed).Should().Be(("document", false, t.AddMinutes(4)));                  // the newest finished send; the retrying one is not finished
+        Row(idle).GetProperty("lastSend").ValueKind.Should().Be(JsonValueKind.Null);
+        Row(idle).GetProperty("usedBy").GetArrayLength().Should().Be(0);
+        var use = Row(failed).GetProperty("usedBy").EnumerateArray().Single();
+        (use.GetProperty("flowName").GetString(), use.GetProperty("outputName").GetString()).Should().Be(("Supplier invoices", "Invoice CSV"));
     }
 }

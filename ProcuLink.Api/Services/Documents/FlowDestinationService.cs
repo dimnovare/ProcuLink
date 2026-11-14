@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
 using ProcuLink.Core.Services.Delivery;
@@ -16,6 +17,10 @@ using ProcuLink.Infrastructure.Services.Security;
 namespace ProcuLink.Api.Services.Documents;
 
 public sealed record DestinationRequest(string Name, string Protocol, JsonElement Config, JsonElement? Credentials);
+
+public sealed record DestinationUse(Guid FlowId, string FlowName, Guid OutputId, string OutputName);
+/// <param name="Kind"><c>test</c> or <c>document</c>.</param>
+public sealed record DestinationLastSend(string Kind, DateTime At, bool Ok);
 
 /// <summary><c>Code</c> is <c>unsupported_destination</c> or <c>invalid_destination</c> (whose message is the rule's).</summary>
 public sealed class DestinationException(string code, string? detail = null) : Exception(detail ?? code)
@@ -111,11 +116,55 @@ public sealed class FlowDestinationService(
     {
         var d = await db.Set<FlowDestination>().FirstOrDefaultAsync(x => x.OrgId == orgId && x.Id == id, ct);
         if (d is null) return null;
-        if (await db.Set<FlowOutput>().AnyAsync(o => o.OrgId == orgId && o.DestinationId == id, ct)
-            || (await FlowVersions.LiveVersionOutputsAsync(db, orgId, ct)).Any(o => o.DestinationId == id)) return false;
+        if ((await UsesAsync(orgId, ct)).Contains(id)) return false;
         db.Set<FlowDestination>().Remove(d);
         await db.SaveChangesAsync(ct);
         return true;
+    }
+
+    /// <summary>Every output that sends to one of this organisation's destinations: the editable outputs and the ones each flow's live version sends. One row per output.</summary>
+    public async Task<ILookup<Guid, DestinationUse>> UsesAsync(Guid orgId, CancellationToken ct)
+    {
+        var editable = await db.Set<FlowOutput>().AsNoTracking()
+            .Where(o => o.OrgId == orgId && o.DestinationId != null)
+            .Select(o => new { o.FlowId, o.Id, o.Name, Destination = o.DestinationId!.Value }).ToListAsync(ct);
+        var live = (await FlowVersions.LiveVersionOutputsByFlowAsync(db, orgId, ct))
+            .Where(x => x.Output.DestinationId is not null)
+            .Select(x => new { x.FlowId, x.Output.Id, x.Output.Name, Destination = x.Output.DestinationId!.Value });
+        // Editable first, so an output that is both keeps its current name.
+        var uses = editable.Concat(live).DistinctBy(u => (u.Destination, u.Id)).ToList();
+        var flowIds = uses.Select(u => u.FlowId).Distinct().ToList();
+        var names = flowIds.Count == 0
+            ? new Dictionary<Guid, string>()
+            : await db.Flows.AsNoTracking().Where(f => f.OrgId == orgId && flowIds.Contains(f.Id))
+                .Select(f => new { f.Id, f.Name }).ToDictionaryAsync(f => f.Id, f => f.Name, ct);
+        return uses.ToLookup(u => u.Destination, u => new DestinationUse(u.FlowId, names.GetValueOrDefault(u.FlowId, ""), u.Id, u.Name));
+    }
+
+    /// <summary>For each destination: the newer of its newest finished delivery (delivered, or stopped for good) and its newest test.</summary>
+    public async Task<IReadOnlyDictionary<Guid, DestinationLastSend>> LastSendsAsync(Guid orgId, CancellationToken ct)
+    {
+        var rows = await db.Set<FlowDestination>().AsNoTracking().Where(d => d.OrgId == orgId).Select(d => new
+        {
+            d.Id,
+            Sent = db.Set<FlowDelivery>()
+                .Where(x => x.OrgId == orgId && x.DestinationId == d.Id && (x.Status == FlowDeliveryStatus.Delivered || x.Status == FlowDeliveryStatus.DeadLetter))
+                .OrderByDescending(x => x.UpdatedAt).Select(x => new { At = x.UpdatedAt, Ok = x.Status == FlowDeliveryStatus.Delivered }).FirstOrDefault(),
+            Tested = db.AuditEvents
+                .Where(e => e.OrgId == orgId && e.EntityType == "FlowDestination" && e.EntityId == d.Id && e.Action == "destination.tested")
+                .OrderByDescending(e => e.CreatedAt).Select(e => new { At = e.CreatedAt, e.Payload }).FirstOrDefault(),
+        }).ToListAsync(ct);
+
+        var last = new Dictionary<Guid, DestinationLastSend>();
+        foreach (var r in rows)
+        {
+            var sent = r.Sent is { } s ? new DestinationLastSend("document", s.At, s.Ok) : null;
+            var tested = r.Tested is { } t
+                ? new DestinationLastSend("test", t.At, t.Payload?.RootElement.TryGetProperty("success", out var ok) == true && ok.ValueKind == JsonValueKind.True)
+                : null;
+            if ((tested is null || sent?.At >= tested.At ? sent : tested) is { } newer) last[r.Id] = newer;
+        }
+        return last;
     }
 
     public static SupplierDeliveryConfig ToDeliveryConfig(FlowDestination d, string flowName, bool test)
