@@ -46,5 +46,7 @@ public class ReadModelJsonTests
         const string stored = """{"kindLabel":null,"fields":[{"key":"iban","label":"IBAN","value":null,"type":"text","meaning":null,"confidence":1,"location":null,"notOnPage":false,"listed":true,"edited":false}],"tables":[],"truncated":false}""";
         DocumentJson.Deserialize<ReadResult>(stored).Fields[0].Confidence.Should().Be(0);            // a row stored before this change
         System.Text.Json.JsonDocument.Parse(DocumentJson.Serialize(blank)).RootElement.GetProperty("confidence").GetDouble().Should().Be(0);   // and what every API sends
+        var empty = new ReadCell(null, 1.0, null, false, false);
+        DocumentJson.Deserialize<ReadCell>(DocumentJson.Serialize(empty)).Should().Be(empty);        // equal to itself read back from storage
     }
 }

@@ -146,6 +146,19 @@ public class DocumentsApiTests(DocumentEngineTestFactory factory) : IClassFixtur
     }
 
     [Fact]
+    public async Task Clearing_an_empty_value_again_writes_no_second_history_row()
+    {
+        var http = factory.ClientFor(Org);
+        var id = await SeedDocument(DocumentStatus.NeedsReview);
+
+        for (var i = 0; i < 2; i++)
+            await http.PatchAsJsonAsync($"/api/documents/{id}/values", new EditValuesRequest([new FieldEdit("total_gross", "")], null, null, null));
+
+        var history = (await http.GetFromJsonAsync<List<HistoryEntryDto>>($"/api/documents/{id}/history", DocumentJson.Options))!;
+        Assert.Single(history, h => h.Action == "document.value_edited");
+    }
+
+    [Fact]
     public async Task Edit_value_reruns_checks_and_writes_history()
     {
         var http = factory.ClientFor(Org);
