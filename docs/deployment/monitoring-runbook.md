@@ -184,7 +184,7 @@ condition can never swallow the first notification of another.
 |---|---|---|---|
 | `worker_heartbeat_lost` | no Hangfire server has beaten within 60 s (same rule as `/health/ready`) | Railway Worker service — is the process up? | — |
 | `delivery_failure_rate` | ≥ **10** concluded delivery attempts in the last **60 min** and ≥ **50 %** of them failed | Supplier endpoints — rejecting or unreachable | `DeliveryFailureMinAttempts`, `DeliveryFailureWindowMinutes`, `DeliveryFailurePercent` |
-| `ai_token_cap_latched` | ≥ 1 org **in good standing** is at/over its monthly OpenAI token budget | Raise the limit or wait for the month to roll over | — |
+| `ai_token_cap_latched` | ≥ 1 org **in good standing** is at/over its monthly OpenAI token budget | Find why it spent its allowance without reading documents; tell the founder. No per-workspace lever — it stays stopped until the month ends | — |
 | `alert_sweep_degraded` | the sweep could not read one of its own inputs, so the conditions that input feeds were **not evaluated** | See below — treat as MORE urgent than a health alert | — |
 
 Plan 13b (2026-11-13) removed three conditions with the order pipeline: `dead_letter_backlog`,
@@ -513,15 +513,36 @@ supplier — look for a shared cause first.
 
 ### `ai_token_cap_latched` — an org's AI budget is exhausted
 
-Not an outage. PDF extraction for that org silently falls back to the regex path, which is
-worse but not broken, and the counter clears when the calendar month rolls over.
+That workspace's documents have stopped being read: each read fails with `usage_cap`, which is
+final for that document, and the person has to press "Try again" on each one later. There is no
+fallback. The counter clears when the calendar month rolls over.
 
-1. Decide whether the spend is legitimate. The per-org counter is `ai_usage_monthly`; the
-   allowance is `PlanConstants.GetAiMonthlyTokenAllowance` (40,000 tokens per billing unit read
-   this month or being read, floor 1,000,000), and `flow_read_calls` shows what each read cost.
-2. The only global lever is `Ai:OpenAI:EmergencyMonthlyTokenBrake` (default 250,000,000 tokens per
-   workspace a month). Lower it to stop runaway spend; never use it to ration a paying customer.
-3. `Ai:OpenAI:MonthlyTokenLimitPerOrg` is no longer read and can be deleted from both services.
+1. Find out why the spend happened. The allowance is `PlanConstants.GetAiMonthlyTokenAllowance`
+   (40,000 tokens per billing unit read this month or being read, floor 1,000,000; a trial's units
+   are capped at its document limit, so a trial sits at the floor). It grows only by reading, and
+   reading is what is refused, so a workspace stopped at the floor stays stopped until the month
+   ends. Look at why it spent a million tokens without reading documents (failed or repeated
+   reads, AI helpers) and tell the founder. Evidence: the monthly counter `ai_usage_monthly` and
+   `GET /api/billing/ai-usage`. (`flow_read_calls` will show what each read cost once reads write
+   to it; nothing does yet.)
+2. There is no setting that raises one workspace's allowance. The only global lever is the
+   emergency brake `Ai:OpenAI:EmergencyMonthlyTokenBrake` (default 250,000,000 tokens per
+   workspace a month). It lowers, never raises: it only bites for a workspace above 6,250 units a
+   month. Lower it to stop runaway spend; never use it to ration a paying customer.
+   - The variable is `Ai__OpenAI__EmergencyMonthlyTokenBrake`. Set it on BOTH services (the API
+     and the Worker); the Worker is the one that reads documents.
+   - Plain digits only. Blank, `0`, a negative number, or anything with separators, a decimal
+     point or an exponent is ignored and the default (250,000,000) applies; both services log a
+     startup warning when it is set but unusable.
+   - To stop all AI reading at once, set it to `1`.
+   - Confirm what the API sees with `GET /api/billing/ai-usage` (`tokensLimit`). Nothing shows the
+     Worker's value: set both and redeploy both.
+3. `Ai:OpenAI:MonthlyTokenLimitPerOrg` is no longer read. Rollback caveat: images built before
+   this change still carry an old per-workspace limit of 100,000 in the API's settings files and
+   read the old variable. If `Ai__OpenAI__MonthlyTokenLimitPerOrg` has been deleted and the API is
+   rolled back to such an image, every workspace is capped at 100,000 on the API. Keep the old
+   variable until a rollback past this change is no longer possible; then delete it from both
+   services.
 
 ### Support: "PO 4500012580 isn't arriving" — find the org from the PO number
 

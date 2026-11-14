@@ -29,7 +29,7 @@ public interface IAiUsageTracker
     /// <summary>
     /// Returns current usage snapshot for the org for the current calendar month
     /// in UTC. <see cref="AiUsageSnapshot.TokensLimit"/> is the org's RESOLVED
-    /// limit (config override when set, otherwise the org's plan default).
+    /// limit (the document-based allowance for its account status, capped by the emergency brake).
     /// Useful for the billing/ai-usage endpoint and for tests.
     /// </summary>
     Task<AiUsageSnapshot> GetCurrentAsync(Guid organisationId, CancellationToken ct = default);
