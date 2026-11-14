@@ -117,7 +117,7 @@ public class DeliverDocumentJob(
             }
         }
 
-        var before = await RollUpAsync(db, doc, delivery, finishedAt, save);
+        var before = await RollUpAsync(db, doc, delivery, finishedAt, save, destination?.Name);
         await db.SaveChangesAsync(save);
         await tx.CommitAsync(save);
 
@@ -144,9 +144,9 @@ public class DeliverDocumentJob(
     /// <summary>
     /// Sets the document's status from its counted deliveries (<paramref name="finished"/>, when given, replaces its stored row) and writes the delivered / delivery_failed
     /// audit row for it. With no finished delivery (the sweep's repair) the row is written only when the document ends up <c>send_failed</c>. Call before save (inside the
-    /// caller's transaction when it holds the document lock); returns the status the document had before.
+    /// caller's transaction when it holds the document lock); <paramref name="destinationName"/> is kept in the event so it survives a rename or delete; returns the status the document had before.
     /// </summary>
-    public static async Task<string> RollUpAsync(ProcuLinkDbContext db, FlowDocument doc, FlowDelivery? finished, DateTime at, CancellationToken ct)
+    public static async Task<string> RollUpAsync(ProcuLinkDbContext db, FlowDocument doc, FlowDelivery? finished, DateTime at, CancellationToken ct, string? destinationName = null)
     {
         var before = doc.Status;
         var siblings = await db.Set<FlowDelivery>().Where(d => d.OrgId == doc.OrgId && d.DocumentId == doc.Id && (finished == null || d.Id != finished.Id)).ToListAsync(ct);
@@ -157,7 +157,7 @@ public class DeliverDocumentJob(
         if (finished is null ? doc.Status == DocumentStatus.SendFailed : finished.Status is FlowDeliveryStatus.Delivered or FlowDeliveryStatus.DeadLetter)
             DocumentAudit.Add(db, doc, delivered ? "document.delivered" : "document.delivery_failed",
                 new { output = finished?.OutputName, protocol = finished?.Protocol, responseCode = finished?.ResponseCode, error = finished is null ? SendStoppedError : finished.LastError,
-                    attempts = finished?.Attempts, destinationId = finished?.DestinationId, file = finished?.FileName }, null);
+                    attempts = finished?.Attempts, destinationId = finished?.DestinationId, file = finished?.FileName, destination = destinationName, version = doc.FlowVersion }, null);
         return before;
     }
 

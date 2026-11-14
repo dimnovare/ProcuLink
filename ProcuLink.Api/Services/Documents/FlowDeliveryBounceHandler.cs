@@ -38,7 +38,10 @@ public sealed class FlowDeliveryBounceHandler(ProcuLinkDbContext db, IBackground
         delivery.Status = FlowDeliveryStatus.DeadLetter;
         delivery.LastError = notification.Kind == DeliveryBounceKind.SpamComplaint ? SpamComplaintError : HardBounceError;
         delivery.UpdatedAt = now;
-        var before = await DeliverDocumentJob.RollUpAsync(db, doc, delivery, now, ct);
+        var destinationName = delivery.DestinationId is { } destinationId
+            ? await db.Set<FlowDestination>().Where(d => d.Id == destinationId && d.OrgId == found.OrgId).Select(d => d.Name).FirstOrDefaultAsync(ct)
+            : null;
+        var before = await DeliverDocumentJob.RollUpAsync(db, doc, delivery, now, ct, destinationName);
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
 
