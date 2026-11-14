@@ -29,6 +29,12 @@ public static class OperationalAlertKeys
     /// <summary>One or more good-standing orgs have latched their monthly AI token cap.</summary>
     public const string AiTokenCapLatched = "ai_token_cap_latched";
 
+    /// <summary>Flow deliveries dead-lettered inside the trailing window crossed the dead-letter threshold.</summary>
+    public const string FlowDeliveryDeadLetter = "flow_delivery_dead_letter";
+
+    /// <summary>One or more flow deliveries have sat queued, sending or awaiting a retry past the stuck age.</summary>
+    public const string FlowDeliveryStuck = "flow_delivery_stuck";
+
     /// <summary>
     /// The alert sweep itself could not evaluate one or more of its own inputs — the worker-health
     /// snapshot query or the operational probe threw. This is a META condition: it does not say the
@@ -59,6 +65,8 @@ public static class OperationalAlertKeys
         DeliveryFailureRate,
         PullChannelStalled,
         AiTokenCapLatched,
+        FlowDeliveryDeadLetter,
+        FlowDeliveryStuck,
     };
 
     /// <summary>Every key, for tests and for documentation of the full alert surface.</summary>

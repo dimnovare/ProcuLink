@@ -29,6 +29,15 @@ public interface IDeliveryBounceHandler
 }
 
 /// <summary>
+/// Offers a bounce notification to flow deliveries, matching <c>FlowDelivery.DispatchKey</c>.
+/// Returns <c>null</c> when no flow delivery carries the key.
+/// </summary>
+public interface IFlowDeliveryBounceHandler
+{
+    Task<DeliveryBounceResult?> TryHandleAsync(DeliveryBounceNotification notification, CancellationToken ct);
+}
+
+/// <summary>
 /// Provider-neutral bounce/complaint notification. Field names deliberately avoid Postmark's
 /// vocabulary so a second provider maps onto the same handler.
 /// </summary>
@@ -73,8 +82,8 @@ public enum DeliveryBounceOutcome
     OrderMarkedFailed,
 
     /// <summary>
-    /// The attempt was found, but the order is no longer in a state a bounce can contradict — it has
-    /// already been re-sent, or already failed. Recorded, not re-applied.
+    /// The attempt or flow delivery was found, but it is no longer in a state a bounce can contradict —
+    /// it has already been re-sent, or already failed. Recorded, not re-applied.
     /// </summary>
     AlreadyResolved,
 
@@ -83,6 +92,9 @@ public enum DeliveryBounceOutcome
     /// logged at Warning, never treated as handled.
     /// </summary>
     Uncorrelated,
+
+    /// <summary>A flow delivery moved off <c>delivered</c> to <c>dead_letter</c>, and its document was rolled up.</summary>
+    FlowDeliveryMarkedFailed,
 }
 
 /// <summary>
