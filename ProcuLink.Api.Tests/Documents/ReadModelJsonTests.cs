@@ -35,4 +35,16 @@ public class ReadModelJsonTests
         DocumentJson.Deserialize<ReadResult>("{}").Should().BeEquivalentTo(ReadResult.Empty);
         DocumentJson.Deserialize<FlowFieldList>("{}").Should().BeEquivalentTo(FlowFieldList.Empty);
     }
+
+    [Fact]
+    public void An_empty_value_carries_no_confidence_however_it_was_built()
+    {
+        var blank = new ReadField("iban", "IBAN", "  ", FieldTypes.Text, null, 0.9, null, false, true, false);
+        blank.Confidence.Should().Be(0);                                                            // as a reader builds it
+        (new ReadCell("7", 0.8, null, false, false) with { Value = null }).Confidence.Should().Be(0);   // cleared afterwards
+        new ReadCell("7", 0.8, null, false, false).Confidence.Should().Be(0.8);                      // a value keeps its own
+        const string stored = """{"kindLabel":null,"fields":[{"key":"iban","label":"IBAN","value":null,"type":"text","meaning":null,"confidence":1,"location":null,"notOnPage":false,"listed":true,"edited":false}],"tables":[],"truncated":false}""";
+        DocumentJson.Deserialize<ReadResult>(stored).Fields[0].Confidence.Should().Be(0);            // a row stored before this change
+        System.Text.Json.JsonDocument.Parse(DocumentJson.Serialize(blank)).RootElement.GetProperty("confidence").GetDouble().Should().Be(0);   // and what every API sends
+    }
 }

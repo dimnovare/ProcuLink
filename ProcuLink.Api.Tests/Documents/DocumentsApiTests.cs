@@ -130,6 +130,20 @@ public class DocumentsApiTests(DocumentEngineTestFactory factory) : IClassFixtur
         Assert.Equal(HttpStatusCode.BadRequest, unknown.StatusCode);
         Assert.Contains("unknown_target", await unknown.Content.ReadAsStringAsync());
     }
+    [Fact]
+    public async Task Clearing_a_value_leaves_it_edited_with_no_confidence()
+    {
+        var http = factory.ClientFor(Org);
+        var id = await SeedDocument(DocumentStatus.NeedsReview);
+
+        var res = await http.PatchAsJsonAsync($"/api/documents/{id}/values",
+            new EditValuesRequest([new FieldEdit("total_gross", "")], null, null, null));
+
+        var dto = (await res.Content.ReadFromJsonAsync<DocumentDto>(DocumentJson.Options))!;
+        var field = Assert.Single(dto.Read.Fields, f => f.Key == "total_gross");
+        Assert.Equal((true, 0d), (field.Edited, field.Confidence));
+        Assert.Equal(DocumentStatus.NeedsReview, dto.Summary.Status);                                // still required, still missing
+    }
 
     [Fact]
     public async Task Edit_value_reruns_checks_and_writes_history()

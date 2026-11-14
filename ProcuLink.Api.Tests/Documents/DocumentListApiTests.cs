@@ -126,7 +126,7 @@ public class DocumentListApiTests(DocumentEngineTestFactory factory) : IClassFix
         var flow = await Flow(Org);
         var theirFlow = await Flow(OrgB);
         var monday = new DateTime(2026, 5, 4, 0, 0, 0, DateTimeKind.Utc);
-        async Task Sent(Guid org, Guid flowId, string name, DateTime landed, DateTime? touched = null, string status = DocumentStatus.Sent)
+        async Task Sent(Guid org, Guid flowId, string name, DateTime landed, DateTime? touched = null, string status = DocumentStatus.Sent, DateTime? more = null)
         {
             var d = new FlowDocument
             {
@@ -139,6 +139,12 @@ public class DocumentListApiTests(DocumentEngineTestFactory factory) : IClassFix
                 Id = Guid.NewGuid(), OrgId = org, DocumentId = d.Id, OutputId = Guid.NewGuid(), Status = FlowDeliveryStatus.Delivered,
                 DeliveredAt = landed, DispatchKey = Guid.NewGuid(), CreatedAt = landed, UpdatedAt = landed,
             });
+            if (more is { } later)
+                await Save(new FlowDelivery
+                {
+                    Id = Guid.NewGuid(), OrgId = org, DocumentId = d.Id, OutputId = Guid.NewGuid(), Status = FlowDeliveryStatus.Delivered,
+                    DeliveredAt = later, DispatchKey = Guid.NewGuid(), CreatedAt = later, UpdatedAt = later,
+                });
         }
         await Sent(Org, flow, "first-instant.pdf", monday);
         await Sent(Org, flow, "midweek.pdf", monday.AddDays(2));
@@ -146,11 +152,12 @@ public class DocumentListApiTests(DocumentEngineTestFactory factory) : IClassFix
         await Sent(Org, flow, "last-week-touched-now.pdf", monday.AddDays(-3), touched: monday.AddDays(1)); // the row changed this week; the send did not
         await Sent(Org, flow, "still-sending.pdf", monday.AddDays(1), status: DocumentStatus.Sending);     // one output landed, another has not
         await Sent(OrgB, theirFlow, "theirs.pdf", monday.AddDays(2));
+        await Sent(Org, flow, "two-deliveries.pdf", monday.AddDays(2), more: monday.AddDays(9));             // the first output landed in the week, the last one after it: judged by the last
 
         var week = $"sentFrom={monday:o}&sentTo={monday.AddDays(7):o}";
         Assert.Equal(["first-instant.pdf", "midweek.pdf"], (await Names(Org, $"flowId={flow}&{week}")).Order().ToList());
         Assert.Equal(2, (await Page(Org, $"flowId={flow}&{week}&page=1&pageSize=1")).TotalCount);           // "n were sent this week" is this total
-        Assert.Equal(3, (await Names(Org, $"flowId={flow}&sentFrom={monday:o}")).Count);                   // no end: the last instant is in
+        Assert.Equal(4, (await Names(Org, $"flowId={flow}&sentFrom={monday:o}")).Count);                   // no end: the last instant is in
         Assert.Empty(await Names(Org, $"flowId={theirFlow}&{week}"));                                      // another workspace's flow
     }
 
