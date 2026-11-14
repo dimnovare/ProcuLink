@@ -39,8 +39,8 @@ public class AuditController : ControllerBase
         [FromQuery] string? q = null,
         CancellationToken ct     = default)
     {
-        page     = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 200);
+        page     = Math.Clamp(page, 1, int.MaxValue / pageSize); // an absurd page is an empty page, not an overflowed Skip
 
         var orgId = _tenant.OrganisationId;
 

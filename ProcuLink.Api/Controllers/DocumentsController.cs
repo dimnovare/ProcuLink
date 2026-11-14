@@ -71,7 +71,7 @@ public sealed class DocumentsController(
         if (flowId is { } f) docs = docs.Where(d => d.FlowId == f);
         if (status is not null)
         {
-            var statuses = status.Split(',');
+            var statuses = status.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
             docs = docs.Where(d => statuses.Contains(d.Status));
         }
         if (DocumentSearch.Matches(q) is { } match) docs = docs.Where(match);
@@ -85,7 +85,8 @@ public sealed class DocumentsController(
             (await rows.Select(d => new { Doc = d, FlowName = d.Flow!.Name }).ToListAsync(ct)).Select(r => ToSummary(r.Doc, r.FlowName)).ToList();
 
         if (page is null) return Ok(await Summaries(docs.Take(Math.Clamp(take ?? 50, 1, 200))));
-        var (p, size) = (Math.Max(1, page.Value), Math.Clamp(pageSize ?? 50, 1, 200));
+        var size = Math.Clamp(pageSize ?? 50, 1, 200);
+        var p = Math.Clamp(page.Value, 1, int.MaxValue / size); // an absurd page is an empty page, not an overflowed Skip
         var total = await docs.CountAsync(ct);
         return Ok(new PaginatedResult<DocumentSummaryDto>(await Summaries(docs.Skip((p - 1) * size).Take(size)), total, p, size));
     }

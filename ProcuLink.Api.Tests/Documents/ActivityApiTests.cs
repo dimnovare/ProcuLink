@@ -95,8 +95,10 @@ public class ActivityApiTests(DocumentEngineTestFactory factory) : IClassFixture
         Assert.Equal(1, await Total(Org, $"flowId={f1}&actions=document.read"));
         Assert.Equal(2, await Total(Org, $"flowId={f1}&actions=document.read&actions=document.delivered"));
         Assert.Equal(1, await Total(Org, $"flowId={f1}&from=2026-03-01T09:01:00Z&to=2026-03-01T09:02:00Z"));   // from included, to not
-        Assert.Equal(3, await Total(Org, $"q=2291&{day}"));                                                  // by number
+        Assert.Equal(3, await Total(Org, $"q=inv%202291&{day}"));                                             // by number
         Assert.Equal(1, await Total(Org, $"q=po-1&{day}"));
+        var absurd = await Get(Org, $"flowId={f1}&page=2000000000");                                        // no overflowed Skip
+        Assert.Equal((0, 3), (absurd.GetProperty("events").GetArrayLength(), absurd.GetProperty("total").GetInt32()));
     }
 
     [Fact]
@@ -106,12 +108,17 @@ public class ActivityApiTests(DocumentEngineTestFactory factory) : IClassFixture
         var t = new DateTime(2026, 3, 2, 9, 0, 0, DateTimeKind.Utc);
         await Event(OrgB, theirs.Id, "document.read", t);
         await Event(Org, Guid.NewGuid(), "document.read", t);                 // its document no longer exists
+        await Event(Org, theirs.Id, "document.read", t);                      // this workspace's event naming their document
         const string day = "from=2026-03-02T00:00:00Z&to=2026-03-03T00:00:00Z";
 
         Assert.Equal(0, await Total(Org, $"flowId={theirs.FlowId}&{day}"));
         Assert.Equal(0, await Total(Org, $"q=theirs-only&{day}"));
-        var listed = Assert.Single(await Events(Org, day));                   // no document filter: still listed
-        Assert.Equal(JsonValueKind.Null, listed.GetProperty("documentId").ValueKind);
+        var listed = await Events(Org, day);                                  // no document filter: both still listed
+        Assert.Equal(2, listed.Count);
+        Assert.All(listed, e => Assert.Equal(JsonValueKind.Null, e.GetProperty("documentId").ValueKind));
+        var raw = string.Join("", listed.Select(e => e.GetRawText()));
+        Assert.DoesNotContain("theirs-only", raw);                            // their file name and flow are never named
+        Assert.DoesNotContain(theirs.FlowId.ToString(), raw);
     }
 
     [Fact]

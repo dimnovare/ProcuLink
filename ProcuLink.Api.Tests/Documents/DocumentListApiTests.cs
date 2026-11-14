@@ -89,8 +89,10 @@ public class DocumentListApiTests(DocumentEngineTestFactory factory) : IClassFix
             seen.AddRange(result.Items.Select(d => d.Id));
         }
         Assert.Equal((5, 5), (seen.Count, seen.Distinct().Count()));                        // page 4 is empty; nothing repeats
+        var absurd = await Page(Org, $"flowId={flow}&page=2000000000&pageSize=2");          // no overflowed Skip
+        Assert.Equal((0, 5), (absurd.Items.Count, absurd.TotalCount));
 
-        Assert.Equal(2, (await Page(Org, $"flowId={flow}&status=needs_review,read_failed&page=1")).TotalCount);
+        Assert.Equal(2, (await Page(Org, $"flowId={flow}&status=read_failed,%20needs_review&page=1")).TotalCount);   // values are trimmed
         var bare = await factory.ClientFor(Org).GetFromJsonAsync<JsonElement>($"/api/documents?flowId={flow}&take=3");
         Assert.Equal((JsonValueKind.Array, 3), (bare.ValueKind, bare.GetArrayLength()));     // without page: the list as before
     }
@@ -104,10 +106,14 @@ public class DocumentListApiTests(DocumentEngineTestFactory factory) : IClassFix
         var other    = await Doc(Org, flow, "other.pdf",    status: DocumentStatus.SendFailed);
         var retrying = await Doc(Org, flow, "retrying.pdf", status: DocumentStatus.Sending);
         var detached = await Doc(Org, flow, "detached.pdf", status: DocumentStatus.SendFailed);
+        var notDead  = await Doc(Org, flow, "not-dead.pdf", status: DocumentStatus.SendFailed);
+        var moving   = await Doc(Org, flow, "moving.pdf",   status: DocumentStatus.Sending);
         var foreign  = await Doc(OrgB, await Flow(OrgB), "foreign.pdf", status: DocumentStatus.SendFailed);
         await Delivery(stopped,  here,      FlowDeliveryStatus.DeadLetter, outputId: Guid.NewGuid());
         await Delivery(other,    elsewhere, FlowDeliveryStatus.DeadLetter, outputId: Guid.NewGuid());
         await Delivery(retrying, here,      FlowDeliveryStatus.Failed,     outputId: Guid.NewGuid());
+        await Delivery(notDead,  here,      FlowDeliveryStatus.Failed,     outputId: Guid.NewGuid());   // only the delivery status fails
+        await Delivery(moving,   here,      FlowDeliveryStatus.DeadLetter, outputId: Guid.NewGuid());   // only the document status fails
         await Delivery(detached, here,      FlowDeliveryStatus.DeadLetter, outputId: null);   // its output was deleted
         await Delivery(foreign,  here,      FlowDeliveryStatus.DeadLetter, outputId: Guid.NewGuid());
 
