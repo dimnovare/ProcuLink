@@ -149,10 +149,10 @@ public sealed class FlowDestinationService(
             d.Id,
             Sent = db.Set<FlowDelivery>()
                 .Where(x => x.OrgId == orgId && x.DestinationId == d.Id && (x.Status == FlowDeliveryStatus.Delivered || x.Status == FlowDeliveryStatus.DeadLetter))
-                .OrderByDescending(x => x.UpdatedAt).Select(x => new { At = x.UpdatedAt, Ok = x.Status == FlowDeliveryStatus.Delivered }).FirstOrDefault(),
+                .OrderByDescending(x => x.UpdatedAt).ThenByDescending(x => x.Id).Select(x => new { At = x.UpdatedAt, Ok = x.Status == FlowDeliveryStatus.Delivered }).FirstOrDefault(),
             Tested = db.AuditEvents
                 .Where(e => e.OrgId == orgId && e.EntityType == "FlowDestination" && e.EntityId == d.Id && e.Action == "destination.tested")
-                .OrderByDescending(e => e.CreatedAt).Select(e => new { At = e.CreatedAt, e.Payload }).FirstOrDefault(),
+                .OrderByDescending(e => e.CreatedAt).ThenByDescending(e => e.Id).Select(e => new { At = e.CreatedAt, e.Payload }).FirstOrDefault(),
         }).ToListAsync(ct);
 
         var last = new Dictionary<Guid, DestinationLastSend>();

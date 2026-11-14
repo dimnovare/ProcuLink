@@ -108,6 +108,6 @@ public static class FlowVersions
         var rows = await db.Set<FlowVersion>().AsNoTracking()
             .Where(v => v.OrgId == orgId && db.Flows.Any(f => f.OrgId == orgId && f.Id == v.FlowId && f.PublishedVersionNo == v.VersionNo))
             .Select(v => new { v.FlowId, v.SnapshotJson }).ToListAsync(ct);
-        return rows.SelectMany(r => DocumentJson.Deserialize<FlowSnapshot>(r.SnapshotJson).Outputs.Select(o => (r.FlowId, o))).ToList();
+        return rows.SelectMany(r => (DocumentJson.Deserialize<FlowSnapshot>(r.SnapshotJson)?.Outputs ?? []).Select(o => (r.FlowId, o))).ToList();
     }
 }

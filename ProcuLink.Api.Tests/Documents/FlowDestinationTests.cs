@@ -232,6 +232,7 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
         };
         var (tested, failed, idle, theirs) = (Destination(OrgA, "Tested only"), Destination(OrgA, "Failed after a test"),
             Destination(OrgA, "Never used"), Destination(OrgB, "Theirs"));
+        var retested = Destination(OrgA, "Test failed after a send");
         var flow = new Flow { Id = Guid.NewGuid(), OrgId = OrgA, Name = "Supplier invoices", CreatedAt = t, UpdatedAt = t };
         var output = new FlowOutput { Id = Guid.NewGuid(), OrgId = OrgA, FlowId = flow.Id, Name = "Invoice CSV", Format = "csv", DestinationId = failed.Id, CreatedAt = t, UpdatedAt = t };
         var document = new FlowDocument { Id = Guid.NewGuid(), OrgId = OrgA, FlowId = flow.Id, FileName = "invoice.pdf", ContentType = "application/pdf", CreatedAt = t, UpdatedAt = t };
@@ -240,21 +241,23 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
             Id = Guid.NewGuid(), OrgId = d.OrgId, EntityType = "FlowDestination", EntityId = d.Id, Action = "destination.tested", CreatedAt = at,
             Payload = JsonSerializer.SerializeToDocument(new { success }),
         };
-        FlowDelivery Delivery(string status, DateTime at) => new()
+        FlowDelivery Delivery(string status, DateTime at, FlowDestination? to = null) => new()
         {
-            Id = Guid.NewGuid(), OrgId = OrgA, DocumentId = document.Id, OutputId = output.Id, OutputName = output.Name, DestinationId = failed.Id,
+            Id = Guid.NewGuid(), OrgId = OrgA, DocumentId = document.Id, OutputId = output.Id, OutputName = output.Name, DestinationId = (to ?? failed).Id,
             Protocol = "http", Status = status, DispatchKey = Guid.NewGuid(), CreatedAt = at, UpdatedAt = at,
         };
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
-            db.AddRange(tested, failed, idle, theirs, flow, output, document);
+            db.AddRange(tested, failed, idle, theirs, retested, flow, output, document);
             db.AddRange(Test(tested, false, t.AddMinutes(1)), Test(tested, true, t.AddMinutes(2)), Test(failed, true, t.AddMinutes(1)), Test(theirs, true, t.AddMinutes(5)));
             db.AddRange(Delivery(FlowDeliveryStatus.Delivered, t.AddMinutes(3)), Delivery(FlowDeliveryStatus.DeadLetter, t.AddMinutes(4)), Delivery(FlowDeliveryStatus.Failed, t.AddMinutes(9)));
+            db.AddRange(Delivery(FlowDeliveryStatus.Delivered, t.AddMinutes(3), retested), Test(retested, false, t.AddMinutes(6)));
             await db.SaveChangesAsync();
         }
 
-        var rows = (await factory.ClientFor(DocumentEngineTestFactory.OrgA).GetFromJsonAsync<JsonElement>("/api/destinations")).EnumerateArray().ToList();
+        var http = factory.ClientFor(DocumentEngineTestFactory.OrgA);
+        var rows = (await http.GetFromJsonAsync<JsonElement>("/api/destinations")).EnumerateArray().ToList();
         JsonElement Row(FlowDestination d) => rows.Single(r => r.GetProperty("id").GetGuid() == d.Id);
         (string, bool, DateTime) Last(FlowDestination d) => (Row(d).GetProperty("lastSend").GetProperty("kind").GetString()!,
             Row(d).GetProperty("lastSend").GetProperty("ok").GetBoolean(), Row(d).GetProperty("lastSend").GetProperty("at").GetDateTime());
@@ -262,9 +265,20 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
         rows.Should().NotContain(r => r.GetProperty("id").GetGuid() == theirs.Id);
         Last(tested).Should().Be(("test", true, t.AddMinutes(2)));                       // the newer test
         Last(failed).Should().Be(("document", false, t.AddMinutes(4)));                  // the newest finished send; the retrying one is not finished
+        Last(retested).Should().Be(("test", false, t.AddMinutes(6)));                    // a later failed test beats an older delivery
         Row(idle).GetProperty("lastSend").ValueKind.Should().Be(JsonValueKind.Null);
         Row(idle).GetProperty("usedBy").GetArrayLength().Should().Be(0);
         var use = Row(failed).GetProperty("usedBy").EnumerateArray().Single();
         (use.GetProperty("flowName").GetString(), use.GetProperty("outputName").GetString()).Should().Be(("Supplier invoices", "Invoice CSV"));
+
+        var updated = await (await http.PutAsJsonAsync($"/api/destinations/{failed.Id}",
+            new { name = failed.Name, protocol = "http", config = JsonDocument.Parse(failed.ConfigJson).RootElement })).Content.ReadFromJsonAsync<JsonElement>();
+        updated.GetProperty("usedBy").EnumerateArray().Single().GetProperty("outputId").GetGuid().Should().Be(output.Id);   // an update answers what is true
+
+        var refused = await http.DeleteAsync($"/api/destinations/{failed.Id}");          // refused because the EDITABLE output uses it
+        refused.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await refused.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString().Should().Be("destination_in_use");
+        using var check = factory.Services.CreateScope();
+        check.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowDestination>().Any(d => d.Id == failed.Id).Should().BeTrue();
     }
 }

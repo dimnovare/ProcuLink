@@ -21,7 +21,7 @@ public sealed class DestinationsController(
 
     private static IActionResult NotFoundBody() => new NotFoundObjectResult(new { error = "destination_not_found" });
 
-    /// <summary>Create and update answer with no uses and no last send, so every answer has one shape.</summary>
+    /// <summary>A create answers with no uses and no last send (it has none), so every answer has one shape.</summary>
     private static object ToDto(FlowDestination d, IEnumerable<DestinationUse>? usedBy = null, DestinationLastSend? lastSend = null) =>
         new
         {
@@ -65,7 +65,10 @@ public sealed class DestinationsController(
         if (Refuse() is { } refused) return refused;
         try
         {
-            return Ok(ToDto(await destinations.SaveAsync(tenant.OrganisationId, id, request, ct)));
+            var saved = await destinations.SaveAsync(tenant.OrganisationId, id, request, ct);
+            var uses = await destinations.UsesAsync(tenant.OrganisationId, ct);
+            var last = await destinations.LastSendsAsync(tenant.OrganisationId, ct);
+            return Ok(ToDto(saved, uses[saved.Id], last.GetValueOrDefault(saved.Id)));
         }
         catch (DestinationException ex)
         {
