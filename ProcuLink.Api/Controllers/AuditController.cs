@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
 
@@ -31,6 +32,11 @@ public class AuditController : ControllerBase
     public async Task<IActionResult> GetAuditLog(
         [FromQuery] int page     = 1,
         [FromQuery] int pageSize = 50,
+        [FromQuery] Guid? flowId = null,
+        [FromQuery] string[]? actions = null,
+        [FromQuery] DateTimeOffset? from = null,
+        [FromQuery] DateTimeOffset? to = null,
+        [FromQuery] string? q = null,
         CancellationToken ct     = default)
     {
         page     = Math.Max(1, page);
@@ -38,17 +44,27 @@ public class AuditController : ControllerBase
 
         var orgId = _tenant.OrganisationId;
 
-        // Total count for pagination metadata
-        var total = await _db.AuditEvents
-            .AsNoTracking()
-            .Where(e => e.OrgId == orgId)
-            .CountAsync(ct);
+        // One filtered query for both the count and the page
+        var events = _db.AuditEvents.AsNoTracking().Where(e => e.OrgId == orgId);
+        if (actions is { Length: > 0 }) events = events.Where(e => actions.Contains(e.Action));
+        if (from is { } fromAt) { var since = fromAt.UtcDateTime; events = events.Where(e => e.CreatedAt >= since); }
+        if (to is { } toAt) { var until = toAt.UtcDateTime; events = events.Where(e => e.CreatedAt < until); }
+        // A flow or a text narrows to events of documents that still exist in this workspace.
+        var match = DocumentSearch.Matches(q);
+        if (flowId is not null || match is not null)
+        {
+            var docs = _db.FlowDocuments.Where(d => d.OrgId == orgId);
+            if (flowId is { } f) docs = docs.Where(d => d.FlowId == f);
+            if (match is not null) docs = docs.Where(match);
+            events = events.Where(e => e.EntityType == "FlowDocument" && docs.Any(d => d.Id == e.EntityId));
+        }
+
+        var total = await events.CountAsync(ct);
 
         // Fetch the page of events with optional user join
-        var rawEvents = await _db.AuditEvents
-            .AsNoTracking()
-            .Where(e => e.OrgId == orgId)
+        var rawEvents = await events
             .OrderByDescending(e => e.CreatedAt)
+            .ThenBy(e => e.Id)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .Select(e => new
