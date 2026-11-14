@@ -391,6 +391,23 @@ public class AiUsageTrackerTests
             .Should().Be(0, $"{status} is not a recoverable state and gets no AI budget");
     }
 
+    // ── The allowance rule: pure policy function ────────────────────────────
+
+    [Theory]
+    [InlineData(0, AccountStatusConstants.Active, 1_000_000)]
+    [InlineData(25, AccountStatusConstants.Active, 1_000_000)]
+    [InlineData(26, AccountStatusConstants.Active, 1_040_000)]
+    [InlineData(150, AccountStatusConstants.Trialing, 6_000_000)]
+    [InlineData(5_000, AccountStatusConstants.Active, 200_000_000)]
+    [InlineData(-3, AccountStatusConstants.Active, 1_000_000)]
+    [InlineData(40, null, 1_600_000)]
+    [InlineData(5_000, AccountStatusConstants.PastDue, 200_000)]
+    [InlineData(5_000, AccountStatusConstants.ReadOnly, 0)]
+    [InlineData(5_000, AccountStatusConstants.Cancelled, 0)]
+    [InlineData(5_000, AccountStatusConstants.TrialExpired, 0)]
+    public void The_allowance_follows_the_units_billed_and_the_account_status(long units, string? status, long expected) =>
+        PlanConstants.GetAiMonthlyTokenAllowance(units, status).Should().Be(expected);
+
     // ── AccountStatusConstants.IsReadOnly: shared read-only status set ───────
 
     [Theory]

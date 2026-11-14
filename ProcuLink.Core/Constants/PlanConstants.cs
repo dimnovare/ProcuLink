@@ -160,6 +160,22 @@ public static class PlanConstants
         return 0L;
     }
 
+    public const long AiTokensPerBilledUnit = 40_000;
+    public const long AiMonthlyTokenFloor = 1_000_000;
+    public const long AiPastDueGraceTokens = 200_000;
+    public const long AiEmergencyBrakeTokens = 250_000_000;
+
+    /// <summary>
+    /// Monthly AI token allowance: follows the billing units read this month, never below
+    /// the floor. past_due keeps a small grace budget; every other read-only status gets 0.
+    /// </summary>
+    public static long GetAiMonthlyTokenAllowance(long billedUnits, string? accountStatus) =>
+        AccountStatusConstants.IsReadOnly(accountStatus)
+            ? string.Equals(accountStatus, AccountStatusConstants.PastDue, StringComparison.OrdinalIgnoreCase)
+                ? AiPastDueGraceTokens
+                : 0L
+            : Math.Max(AiMonthlyTokenFloor, AiTokensPerBilledUnit * Math.Max(0L, billedUnits));
+
     /// <summary>
     /// Per-order overage fee (EUR) charged on every order an active paid
     /// self-serve plan processes ABOVE its monthly order limit. Billed via a
