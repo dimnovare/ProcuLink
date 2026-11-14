@@ -46,8 +46,8 @@ public sealed record DeliveryFailureRateSignal(int WindowMinutes, int Attempts, 
 }
 
 /// <summary>
-/// Orgs whose monthly AI token budget is exhausted. A latched cap silently degrades PDF extraction
-/// to the regex fallback for that org, which is a known incident pattern that surfaces nowhere else.
+/// Orgs whose monthly AI token budget is exhausted. A latched cap stops every document read for
+/// that org (each fails with <c>usage_cap</c>) until the month ends, and surfaces nowhere else.
 /// </summary>
 /// <param name="LatchedOrgs">
 /// Count of GOOD-STANDING orgs at or over their resolved monthly limit. Delinquent (read-only /

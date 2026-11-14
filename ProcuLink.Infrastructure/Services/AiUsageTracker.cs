@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Ai;
 
@@ -10,24 +11,20 @@ namespace ProcuLink.Infrastructure.Services;
 /// EF-backed implementation of <see cref="IAiUsageTracker"/>.
 /// Persists token usage in <c>ai_usage_monthly</c> keyed by (OrgId, Year, Month).
 ///
-/// <para>The monthly limit is PLAN-AWARE and resolved per org at check time:
-/// the global config override <c>Ai:OpenAI:MonthlyTokenLimitPerOrg</c> (when
-/// set and &gt; 0) beats EVERY plan — preserved as the production emergency
-/// lever. Otherwise the org's plan maps to its default via
-/// <see cref="PlanConstants.GetAiMonthlyTokenLimit"/>; a missing org row or an
-/// unrecognised plan falls back to the Pilot value (fail-safe).</para>
+/// <para>The monthly limit follows the documents the org reads: the billing units
+/// read this month or being read now, through
+/// <see cref="PlanConstants.GetAiMonthlyTokenAllowance"/>, capped only by the
+/// emergency brake <c>Ai:OpenAI:EmergencyMonthlyTokenBrake</c>. A trial's units are
+/// capped at its document limit, so a trial stays at the floor.</para>
 /// </summary>
 public sealed class AiUsageTracker : IAiUsageTracker
 {
     private readonly ProcuLinkDbContext _db;
     private readonly Func<DateTimeOffset> _clock;
 
-    /// <summary>
-    /// Global config override (<c>Ai:OpenAI:MonthlyTokenLimitPerOrg</c>).
-    /// Null when the key is missing, unparseable, or non-positive — in which
-    /// case the per-plan defaults apply.
-    /// </summary>
-    private readonly long? _configOverrideLimit;
+    /// <summary><c>Ai:OpenAI:EmergencyMonthlyTokenBrake</c> when positive, else
+    /// <see cref="PlanConstants.AiEmergencyBrakeTokens"/>.</summary>
+    private readonly long _brake;
 
     public AiUsageTracker(ProcuLinkDbContext db, IConfiguration configuration)
         : this(db, configuration, () => DateTimeOffset.UtcNow)
@@ -43,10 +40,9 @@ public sealed class AiUsageTracker : IAiUsageTracker
         _db = db;
         _clock = clock;
 
-        var raw = configuration["Ai:OpenAI:MonthlyTokenLimitPerOrg"];
-        _configOverrideLimit = long.TryParse(raw, out var parsed) && parsed > 0
+        _brake = long.TryParse(configuration["Ai:OpenAI:EmergencyMonthlyTokenBrake"], out var parsed) && parsed > 0
             ? parsed
-            : null;
+            : PlanConstants.AiEmergencyBrakeTokens;
     }
 
     public async Task<bool> IsAtOrOverLimitAsync(Guid organisationId, CancellationToken ct = default)
@@ -58,10 +54,10 @@ public sealed class AiUsageTracker : IAiUsageTracker
                 u => u.OrgId == organisationId && u.Year == year && u.Month == month,
                 ct);
 
-        // Zero usage can never be at/over a positive limit — skip the plan lookup.
+        // Zero usage can never be at/over a positive limit — skip the allowance lookup.
         if (row is null) return false;
 
-        var limit = await ResolveLimitAsync(organisationId, ct);
+        var limit = await ResolveLimitAsync(organisationId, year, month, ct);
         return row.TokensUsed >= limit;
     }
 
@@ -160,40 +156,33 @@ public sealed class AiUsageTracker : IAiUsageTracker
                 u => u.OrgId == organisationId && u.Year == year && u.Month == month,
                 ct);
 
-        var limit = await ResolveLimitAsync(organisationId, ct);
+        var limit = await ResolveLimitAsync(organisationId, year, month, ct);
         return new AiUsageSnapshot(organisationId, year, month, row?.TokensUsed ?? 0, limit);
     }
 
     /// <summary>
-    /// Resolves the org's monthly token limit. PRECEDENCE:
-    /// <list type="number">
-    ///   <item>the explicit config override (set and &gt; 0) beats EVERYTHING — the
-    ///   production emergency lever; it short-circuits BEFORE any org query.</item>
-    ///   <item>a READ-ONLY / delinquent account status clamps the budget below the
-    ///   paid ceiling so a correct downgrade actually stops the OpenAI spend
-    ///   (past_due → Pilot grace; read_only/cancelled/trial_expired → 0). See
-    ///   <see cref="PlanConstants.GetDelinquentAiMonthlyTokenLimit"/> (audit 2026-07-10 P2).</item>
-    ///   <item>otherwise the org's plan default.</item>
-    /// </list>
-    /// A missing org row or unknown plan resolves to the Pilot value (fail-safe).
+    /// The org's monthly token limit: the allowance for the billing units it read this
+    /// month or is reading now (samples excluded) and its account status, capped by the brake.
     /// </summary>
-    private async Task<long> ResolveLimitAsync(Guid organisationId, CancellationToken ct)
+    private async Task<long> ResolveLimitAsync(Guid organisationId, int year, int month, CancellationToken ct)
     {
-        // The global emergency override wins over the status clamp too — and some
-        // callers run without an Organisations set, so it MUST short-circuit here.
-        if (_configOverrideLimit is { } configured) return configured;
-
         var org = await _db.Organisations
             .AsNoTracking()
             .Where(o => o.Id == organisationId)
-            .Select(o => new { o.Plan, o.AccountStatus })
+            .Select(o => new { o.AccountStatus, o.Plan, o.OrderLimitOverride })
             .FirstOrDefaultAsync(ct);
 
-        // Read-only / delinquent orgs get the clamped budget (never their old paid
-        // ceiling); everyone else gets the plan default. Missing org → Pilot fail-safe.
-        return org is not null && AccountStatusConstants.IsReadOnly(org.AccountStatus)
-            ? PlanConstants.GetDelinquentAiMonthlyTokenLimit(org.Plan, org.AccountStatus)
-            : PlanConstants.GetAiMonthlyTokenLimit(org?.Plan);
+        var monthStart = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Utc);
+        var units = await _db.FlowDocuments
+            .Where(d => d.OrgId == organisationId && !d.IsSample
+                && ((d.ReadAt != null && d.ReadAt >= monthStart) || d.Status == DocumentStatus.Reading))
+            .SumAsync(d => (long)d.BillingUnits, ct);
+
+        // A trial is free, so its units never lift the allowance past its own document cap.
+        if (org?.Plan == PlanConstants.Pilot)
+            units = Math.Min(units, PlanConstants.GetEffectiveOrderLimit(org.Plan, org.OrderLimitOverride));
+
+        return Math.Min(PlanConstants.GetAiMonthlyTokenAllowance(units, org?.AccountStatus), _brake);
     }
 
     private (int year, int month) CurrentYearMonth()

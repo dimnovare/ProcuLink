@@ -79,8 +79,8 @@ public sealed class OperationalAlertProbe : IOperationalAlertProbe
     // ── AI token-cap latch ───────────────────────────────────────────────────────
 
     /// <summary>
-    /// Counts orgs whose shared monthly OpenAI budget is exhausted, which silently degrades every
-    /// PDF upload for that org to the regex fallback.
+    /// Counts orgs whose shared monthly OpenAI budget is exhausted, which stops every document
+    /// read for that org (each fails with <c>usage_cap</c>) until the month ends.
     /// <para>
     /// Two deliberate narrowings keep this from becoming a permanent false page:
     /// only orgs that actually SPENT tokens this month are candidates (an idle org and a
@@ -89,8 +89,8 @@ public sealed class OperationalAlertProbe : IOperationalAlertProbe
     /// would be a page nobody can action.
     /// </para>
     /// The verdict itself comes from <see cref="IAiUsageTracker.IsAtOrOverLimitAsync"/>, i.e. the
-    /// exact predicate production uses, so the config override and the delinquency clamp are
-    /// honoured without re-deriving them here.
+    /// exact predicate production uses, so the document-based allowance, the delinquency clamp and
+    /// the emergency brake are honoured without re-deriving them here.
     /// </summary>
     private async Task<AiTokenLatchSignal> ReadAiTokenLatchAsync(DateTime now, CancellationToken ct)
     {

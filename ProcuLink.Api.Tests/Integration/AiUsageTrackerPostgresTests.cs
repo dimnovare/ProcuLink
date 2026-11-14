@@ -101,6 +101,10 @@ public sealed class AiUsageTrackerPostgresTests(PostgresContainerFixture postgre
             var tracker = new AiUsageTracker(db, EmptyConfig());
             await tracker.IncrementAsync(orgId, 250); // insert path
             await tracker.IncrementAsync(orgId, 750); // atomic-update path
+
+            // Runs the allowance sum over flow_documents on real Postgres: no documents → the floor.
+            Assert.Equal(1_000_000, (await tracker.GetCurrentAsync(orgId)).TokensLimit);
+            Assert.False(await tracker.IsAtOrOverLimitAsync(orgId));
         }
 
         await using var verify = new ProcuLinkDbContext(_options!);

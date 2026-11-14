@@ -298,8 +298,8 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
     private static (string, bool, string) EvaluateAiTokenLatch(AiTokenLatchSignal signal) =>
         (OperationalAlertKeys.AiTokenCapLatched, signal.LatchedOrgs > 0,
             $"ProcuLink AI token cap latched for {signal.LatchedOrgs} organisation(s) in good standing. "
-          + "PDF extraction for them has silently degraded to the regex fallback until the month rolls "
-          + "over or the limit is raised.");
+          + "Their documents are not being read (each read fails with usage_cap) until the month ends; "
+          + "no setting raises one workspace's allowance. Find out why, and tell the founder.");
 
     /// <summary>
     /// The meta-condition: the sweep could not read one or more of its own inputs, so the conditions

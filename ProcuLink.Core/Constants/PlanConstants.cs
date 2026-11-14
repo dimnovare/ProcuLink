@@ -97,68 +97,25 @@ public static class PlanConstants
     public static decimal GetOverageRateEur(string? plan) =>
         plan is not null && OverageRatesEur.TryGetValue(plan, out var rate) ? rate : 0m;
 
-    // ── Per-plan monthly AI token limits ───────────────────────────────────
-    // ONE shared monthly OpenAI token budget per org across ALL AI features
-    // (PDF text/vision extraction, line-SKU mapping suggestions, email-body
-    // NLP, schema inference). Sized so PDF-heavy orgs do not silently latch
-    // the cap mid-month (~4k tokens/PDF → Pilot ≈ 50 PDFs, Growth ≈ 250,
-    // Operations ≈ 625, Integration/Distributor ≈ 1,250, Enterprise ≈ 2,500).
-    // PRECEDENCE: the global config key Ai:OpenAI:MonthlyTokenLimitPerOrg
-    // (when set and > 0) overrides EVERY plan value — it is the production
-    // emergency lever (see AiUsageTracker).
-    public static readonly IReadOnlyDictionary<string, long> AiMonthlyTokenLimits =
-        new Dictionary<string, long>
-        {
-            [Pilot]       = 200_000,
-            [Growth]      = 1_000_000,
-            [Operations]  = 2_500_000,
-            [Integration] = 5_000_000,
-            [Distributor] = 5_000_000,
-            [Enterprise]  = 10_000_000,
-            [Starter]     = 1_000_000,
-            [Pro]         = 2_500_000,
-            [Business]    = 5_000_000,
-            [Scale]       = 10_000_000,
-        };
+    // ── Monthly AI token allowance ───────────────────────────────────────
+    // One allowance per org across every AI feature: 40,000 tokens per billing unit
+    // read this month (or being read), floor 1M, capped by the emergency brake.
+    // A trial's units are capped at its document limit (AiUsageTracker), so it stays at the floor.
+    public const long AiTokensPerBilledUnit = 40_000;
+    public const long AiMonthlyTokenFloor = 1_000_000;
+    public const long AiPastDueGraceTokens = 200_000;
+    public const long AiEmergencyBrakeTokens = 250_000_000;
 
     /// <summary>
-    /// Monthly AI token limit for a plan. Unknown or null plans fall back to
-    /// the Pilot value (fail-safe: an unrecognised plan never gets a bigger
-    /// AI budget than the trial tier).
+    /// Monthly AI token allowance: follows the billing units read this month, never below
+    /// the floor. past_due keeps a small grace budget; every other read-only status gets 0.
     /// </summary>
-    public static long GetAiMonthlyTokenLimit(string? plan) =>
-        plan is not null && AiMonthlyTokenLimits.TryGetValue(plan, out var limit)
-            ? limit
-            : AiMonthlyTokenLimits[Pilot];
-
-    /// <summary>
-    /// AI monthly token budget for a READ-ONLY / delinquent org, overriding the
-    /// paid-plan ceiling so a correct downgrade actually STOPS the OpenAI spend
-    /// (audit 2026-07-10 P2). Founder decision 2026-07-10:
-    /// <list type="bullet">
-    ///   <item><c>past_due</c> keeps the Pilot GRACE budget (a transient Stripe
-    ///   dunning state the customer usually recovers from) — but never MORE than
-    ///   its own plan budget, so a past_due Pilot stays at Pilot.</item>
-    ///   <item><c>read_only</c>, <c>cancelled</c>, <c>trial_expired</c> get ZERO —
-    ///   these are non-recoverable / terminated states, and the org already cannot
-    ///   process orders or use gated features, so any AI spend is pure cost leak.</item>
-    /// </list>
-    /// Intended for statuses where <see cref="AccountStatusConstants.IsReadOnly"/> is
-    /// true; a good-standing status defensively returns the full plan budget (no clamp).
-    /// </summary>
-    public static long GetDelinquentAiMonthlyTokenLimit(string? plan, string accountStatus)
-    {
-        if (!AccountStatusConstants.IsReadOnly(accountStatus))
-            return GetAiMonthlyTokenLimit(plan); // not delinquent — no clamp
-
-        // past_due: Pilot grace, capped at the plan's own budget (Math.Min so a
-        // sub-Pilot tier, should one ever exist, is never raised to Pilot).
-        if (string.Equals(accountStatus, AccountStatusConstants.PastDue, StringComparison.OrdinalIgnoreCase))
-            return Math.Min(GetAiMonthlyTokenLimit(plan), AiMonthlyTokenLimits[Pilot]);
-
-        // read_only / cancelled / trial_expired: no AI budget at all.
-        return 0L;
-    }
+    public static long GetAiMonthlyTokenAllowance(long billedUnits, string? accountStatus) =>
+        AccountStatusConstants.IsReadOnly(accountStatus)
+            ? string.Equals(accountStatus, AccountStatusConstants.PastDue, StringComparison.OrdinalIgnoreCase)
+                ? AiPastDueGraceTokens
+                : 0L
+            : Math.Max(AiMonthlyTokenFloor, AiTokensPerBilledUnit * Math.Max(0L, billedUnits));
 
     /// <summary>
     /// Per-order overage fee (EUR) charged on every order an active paid

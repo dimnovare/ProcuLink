@@ -1244,6 +1244,51 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.ToTable("flow_outputs", (string)null);
                 });
 
+            modelBuilder.Entity("ProcuLink.Core.Entities.FlowReadCall", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("DocumentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("document_id");
+
+                    b.Property<string>("Model")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("model");
+
+                    b.Property<Guid>("OrgId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("org_id");
+
+                    b.Property<int>("Part")
+                        .HasColumnType("integer")
+                        .HasColumnName("part");
+
+                    b.Property<int>("TokensIn")
+                        .HasColumnType("integer")
+                        .HasColumnName("tokens_in");
+
+                    b.Property<int>("TokensOut")
+                        .HasColumnType("integer")
+                        .HasColumnName("tokens_out");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DocumentId");
+
+                    b.HasIndex("OrgId", "CreatedAt");
+
+                    b.ToTable("flow_read_calls", (string)null);
+                });
+
             modelBuilder.Entity("ProcuLink.Core.Entities.FlowVersion", b =>
                 {
                     b.Property<Guid>("Id")
@@ -4613,6 +4658,21 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.HasOne("ProcuLink.Core.Entities.Flow", null)
                         .WithMany()
                         .HasForeignKey("FlowId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("ProcuLink.Core.Entities.Organisation", null)
+                        .WithMany()
+                        .HasForeignKey("OrgId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ProcuLink.Core.Entities.FlowReadCall", b =>
+                {
+                    b.HasOne("ProcuLink.Core.Entities.FlowDocument", null)
+                        .WithMany()
+                        .HasForeignKey("DocumentId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 

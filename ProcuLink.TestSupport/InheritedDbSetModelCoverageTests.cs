@@ -109,7 +109,8 @@ public class InheritedDbSetModelCoverageTests
         // Api.Tests went 10 -> 6 -> 4 on 2026-11-13 (plan 13b deleted the order endpoints and then
         // OrderTransformService, with the tests that held those subclasses). Infrastructure.Tests
         // went 17 -> 16 (5de7c286, Task 6b) -> 10 (5db07ca1, Task 7a) -> 8 (58b7dd23, Task 7b) -> 7
-        // (ad26d483, Task 7b pass 2) as test files whose subjects were deleted took their context
+        // (ad26d483, Task 7b pass 2) -> 6 (plan 14.B Task 2 removed the AI usage tracker test's own
+        // context) as test files whose subjects were deleted took their context
         // subclasses with them; the shared floor could not see it. Floor = today's count minus one.
         var assembly = ThisTestAssembly.GetName().Name!;
         KnownContextCount.Should().ContainKey(assembly,
@@ -123,7 +124,7 @@ public class InheritedDbSetModelCoverageTests
     private static readonly IReadOnlyDictionary<string, int> KnownContextCount = new Dictionary<string, int>
     {
         ["ProcuLink.Api.Tests"] = 4,
-        ["ProcuLink.Infrastructure.Tests"] = 7,
+        ["ProcuLink.Infrastructure.Tests"] = 6,
     };
 
     /// <summary>
