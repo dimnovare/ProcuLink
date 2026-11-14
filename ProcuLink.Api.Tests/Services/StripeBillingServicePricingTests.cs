@@ -287,6 +287,27 @@ public class StripeBillingServicePricingTests
         status.CanProcessOrders.Should().BeTrue();
     }
 
+    [Fact]
+    public async Task PilotOnDayTwenty_WhoseStoredFourteenDayEndHasPassed_IsOnTrialAgain()
+    {
+        var db = MakeDb();
+        var org = Org(PlanConstants.Pilot, AccountStatusConstants.TrialExpired);
+        org.TrialStartedAt = DateTime.UtcNow.AddDays(-20);
+        org.TrialEndsAt = org.TrialStartedAt.AddDays(14); // what a row from the 14-day rule holds
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var status = await MakeService(db).GetStatusAsync(org.Id);
+
+        status.IsTrialExpired.Should().BeFalse();
+        status.CanProcessOrders.Should().BeTrue();
+        status.AccountStatus.Should().Be(AccountStatusConstants.Trialing);
+        status.TrialEndsAt.Should().BeCloseTo(org.TrialStartedAt.Add(PlanConstants.PilotDuration), TimeSpan.FromSeconds(1));
+        var stored = await db.Organisations.AsNoTracking().FirstAsync(o => o.Id == org.Id);
+        stored.TrialEndsAt.Should().BeCloseTo(org.TrialStartedAt.AddDays(14), TimeSpan.FromSeconds(1),
+            "the stored end is never rewritten; the rule is computed");
+    }
+
     // ── overage billing: idempotent (no double-bill) ──────────────────────
 
     [Fact]

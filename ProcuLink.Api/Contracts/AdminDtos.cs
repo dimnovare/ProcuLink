@@ -97,7 +97,7 @@ public sealed record SetOrgLimitsRequest(
 
 /// <summary>
 /// Response for POST /api/admin/organisations/{id}/limits — the updated org row
-/// plus the now-effective limits/trial-end (override ?? plan/computed default).
+/// plus the now-effective limits/trial-end (the trial end is <c>PlanConstants.GetEffectiveTrialEnd</c>).
 /// </summary>
 public sealed record OrgLimitsResponse(
     Guid Id,
