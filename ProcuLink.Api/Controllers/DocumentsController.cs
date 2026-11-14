@@ -40,7 +40,7 @@ public sealed class DocumentsController(
     {
         await using var stream = file.OpenReadStream();
         var orgId = tenant.OrganisationId;
-        var result = await submitter.SubmitAsync(orgId, flowId, stream, file.FileName, file.ContentType, "upload", null, ct);
+        var result = await submitter.SubmitAsync(orgId, flowId, stream, file.FileName, file.ContentType, "upload", null, tenant.ClerkUserId, ct);
         var flowName = result.Document is null ? ""
             : await db.Flows.Where(f => f.OrgId == orgId && f.Id == flowId).Select(f => f.Name).FirstAsync(ct);
         return IntakeResults.From(this, result, flowName, submitter.AcceptedFormats(orgId));
@@ -135,9 +135,7 @@ public sealed class DocumentsController(
         return Ok(rows.Select(a =>
         {
             var payload = a.Payload?.RootElement.Clone() ?? JsonDocument.Parse("{}").RootElement;
-            var by = payload.ValueKind == JsonValueKind.Object && payload.TryGetProperty("by", out var b) && b.ValueKind == JsonValueKind.String
-                ? b.GetString() : null;
-            return new HistoryEntryDto(a.Action, a.CreatedAt, by, payload);
+            return new HistoryEntryDto(a.Action, a.CreatedAt, DocumentAudit.By(a.Payload), payload);
         }));
     }
 

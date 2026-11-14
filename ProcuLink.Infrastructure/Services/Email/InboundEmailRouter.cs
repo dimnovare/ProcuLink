@@ -197,7 +197,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
             {
                 result = await _flows.SubmitAsync(
                     orgId, flowId, new MemoryStream(att.Content), att.FileName, att.ContentType, IntakeKind.Email,
-                    payload.FromEmail, ct);
+                    payload.FromEmail, null, ct);
             }
             catch
             {

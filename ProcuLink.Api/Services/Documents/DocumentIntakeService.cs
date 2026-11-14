@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using System.Text.Json;
 using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Helpers;
@@ -30,7 +29,7 @@ public sealed class DocumentIntakeService(
     /// <summary>The one way a file enters a flow: engine gate, flow, plan limit, then <see cref="AcceptAsync"/>.</summary>
     public async Task<FlowSubmitResult> SubmitAsync(
         Guid orgId, Guid flowId, Stream content, string fileName, string contentType,
-        string source, string? sourceRef, CancellationToken ct)
+        string source, string? sourceRef, string? userId, CancellationToken ct)
     {
         if (!gate.IsEnabled(orgId)) return new(null, "document_engine_not_enabled", null);
         if (!await db.Flows.AnyAsync(f => f.OrgId == orgId && f.Id == flowId, ct)) return new(null, "flow_not_found", null);
@@ -40,7 +39,7 @@ public sealed class DocumentIntakeService(
 
         try
         {
-            return new(await AcceptAsync(orgId, flowId, content, fileName, contentType, source, sourceRef, ct), null, null);
+            return new(await AcceptAsync(orgId, flowId, content, fileName, contentType, source, sourceRef, userId, ct), null, null);
         }
         catch (DocumentRejectedException e)
         {
@@ -50,7 +49,7 @@ public sealed class DocumentIntakeService(
 
     public async Task<FlowDocument> AcceptAsync(
         Guid orgId, Guid flowId, Stream content, string fileName, string contentType,
-        string source, string? sourceRef, CancellationToken ct)
+        string source, string? sourceRef, string? userId, CancellationToken ct)
     {
         var safeName = FileNameSanitiser.Sanitise(fileName);
         var ext = FileNameSanitiser.GetExtension(fileName).TrimStart('.');
@@ -90,14 +89,8 @@ public sealed class DocumentIntakeService(
             });
         }
 
-        var audit = new AuditEvent
-        {
-            Id = Guid.NewGuid(), OrgId = orgId, EntityType = "FlowDocument", EntityId = id,
-            Action = "document.received", CreatedAt = now,
-            Payload = JsonSerializer.SerializeToDocument(new { fileName = safeName, flowId, source, sourceRef }),
-        };
         db.FlowDocuments.Add(doc);
-        db.AuditEvents.Add(audit);
+        var audit = DocumentAudit.Add(db, doc, "document.received", new { fileName = safeName, flowId, source, sourceRef }, userId);
         // Never cancelled half-way, and nothing after it throws: a caller that sees a throw knows nothing committed.
         try
         {

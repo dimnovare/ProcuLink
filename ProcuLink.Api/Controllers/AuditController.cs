@@ -120,11 +120,28 @@ public class AuditController : ControllerBase
         // Load document names in one query (FileName is what DocumentSummaryDto shows)
         var docIds = rawEvents.Where(e => e.EntityType == "FlowDocument").Select(e => e.EntityId).Distinct().ToList();
         var docMeta = docIds.Count == 0
-            ? new Dictionary<Guid, (Guid FlowId, string FileName)>()
+            ? new Dictionary<Guid, (Guid FlowId, string FileName, string? FlowName, string Source)>()
             : (await _db.FlowDocuments.AsNoTracking()
                 .Where(d => d.OrgId == orgId && docIds.Contains(d.Id))
-                .Select(d => new { d.Id, d.FlowId, d.FileName })
-                .ToListAsync(ct)).ToDictionary(d => d.Id, d => (d.FlowId, d.FileName));
+                .Select(d => new { d.Id, d.FlowId, d.FileName, FlowName = d.Flow != null ? d.Flow.Name : null, d.Source })
+                .ToListAsync(ct)).ToDictionary(d => d.Id, d => (d.FlowId, d.FileName, d.FlowName, d.Source));
+
+        // Who received (uploaded) and who sent each of the page's documents, in one query
+        var foundIds = docMeta.Keys.ToList();
+        var handoffs = await _db.AuditEvents.AsNoTracking()
+            .Where(a => a.OrgId == orgId && a.EntityType == "FlowDocument" && foundIds.Contains(a.EntityId)
+                && (a.Action == "document.received" || a.Action == "document.sent"))
+            .Select(a => new { a.EntityId, a.Action, a.CreatedAt, a.Payload })
+            .ToListAsync(ct);
+        string? ActorOf(Guid docId, string action, DateTime at, JsonDocument? payload) => DocumentAudit.By(payload) ?? action switch
+        {
+            "document.delivered" or "document.delivery_failed" => DocumentAudit.By(handoffs
+                .Where(h => h.EntityId == docId && h.Action == "document.sent" && h.CreatedAt <= at)
+                .MaxBy(h => h.CreatedAt)?.Payload),
+            "document.read" or "document.read_failed" => DocumentAudit.By(handoffs
+                .FirstOrDefault(h => h.EntityId == docId && h.Action == "document.received")?.Payload),
+            _ => null,
+        };
 
         // Map to DTO
         var dtos = rawEvents.Select(e =>
@@ -133,9 +150,18 @@ public class AuditController : ControllerBase
             string actorType;
             string actorName;
             string actorInitials;
+            string? actorId = null;
 
             var action = e.Action ?? string.Empty;
-            if (action.Contains("ai", StringComparison.OrdinalIgnoreCase)
+            var isDocument = e.EntityType == "FlowDocument";
+            var docFound = isDocument & docMeta.TryGetValue(e.EntityId, out var doc);
+            if (isDocument)
+            {
+                // The screen names the person from actorId
+                if (docFound) actorId = ActorOf(e.EntityId, action, e.CreatedAt, e.Payload);
+                (actorType, actorName, actorInitials) = actorId is null ? ("system", "System", "SY") : ("user", "A workspace member", "WM");
+            }
+            else if (action.Contains("ai", StringComparison.OrdinalIgnoreCase)
                 || action.Contains("nlp", StringComparison.OrdinalIgnoreCase)
                 || action.Contains("extract", StringComparison.OrdinalIgnoreCase))
             {
@@ -184,11 +210,15 @@ public class AuditController : ControllerBase
             Guid? documentId = null;
             Guid? flowId = null;
             string? documentName = null;
-            if (e.EntityType == "FlowDocument" && docMeta.TryGetValue(e.EntityId, out var doc))
+            string? flowName = null;
+            string? source = null;
+            if (docFound)
             {
                 documentId   = e.EntityId;
                 flowId       = doc.FlowId;
                 documentName = doc.FileName;
+                flowName     = doc.FlowName;
+                source       = doc.Source;
             }
 
             // ── Human-readable message ──────────────────────────────────────
@@ -208,7 +238,10 @@ public class AuditController : ControllerBase
                 documentId,
                 flowId,
                 documentName,
+                flowName,
+                source,
                 action        = action,
+                actorId,
                 actorType,
                 actorName,
                 actorInitials,

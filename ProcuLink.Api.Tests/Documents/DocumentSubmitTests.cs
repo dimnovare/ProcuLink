@@ -38,7 +38,7 @@ public class DocumentSubmitTests : IClassFixture<DocumentEngineTestFactory>
     private static Task<FlowSubmitResult> Submit(IServiceScope scope, Guid flowId, string source, string? sourceRef) =>
         scope.ServiceProvider.GetRequiredService<IFlowDocumentSubmitter>().SubmitAsync(
             DocumentEngineTestFactory.OrgA, flowId, new MemoryStream(Encoding.UTF8.GetBytes("a,b\n1,2\n")),
-            "rows.csv", "text/csv", source, sourceRef, CancellationToken.None);
+            "rows.csv", "text/csv", source, sourceRef, null, CancellationToken.None);
 
     [Fact]
     public async Task Submit_over_the_plan_limit_refuses_and_stores_nothing()

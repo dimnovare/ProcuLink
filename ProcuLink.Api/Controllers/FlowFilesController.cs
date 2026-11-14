@@ -60,7 +60,7 @@ public sealed class FlowFilesController(
         try
         {
             await using var stream = file.OpenReadStream();
-            result = await submitter.SubmitAsync(orgId, flowId, stream, file.FileName, file.ContentType, "api", null, ct);
+            result = await submitter.SubmitAsync(orgId, flowId, stream, file.FileName, file.ContentType, "api", null, null, ct);
         }
         finally
         {

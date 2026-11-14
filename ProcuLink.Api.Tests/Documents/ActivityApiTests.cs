@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure;
 using Xunit;
@@ -43,9 +44,10 @@ public class ActivityApiTests(DocumentEngineTestFactory factory) : IClassFixture
         return doc;
     }
 
-    private Task Event(Guid org, Guid entityId, string action, DateTime at, JsonDocument? payload = null) => Save(new AuditEvent
+    private Task Event(Guid org, Guid entityId, string action, DateTime at, object? payload = null) => Save(new AuditEvent
     {
-        Id = Guid.NewGuid(), OrgId = org, EntityType = "FlowDocument", EntityId = entityId, Action = action, Payload = payload, CreatedAt = at,
+        Id = Guid.NewGuid(), OrgId = org, EntityType = "FlowDocument", EntityId = entityId, Action = action, CreatedAt = at,
+        Payload = payload is null ? null : JsonSerializer.SerializeToDocument(payload),
     });
 
     private Task<JsonElement> Get(Guid org, string query) =>
@@ -110,5 +112,36 @@ public class ActivityApiTests(DocumentEngineTestFactory factory) : IClassFixture
         Assert.Equal(0, await Total(Org, $"q=theirs-only&{day}"));
         var listed = Assert.Single(await Events(Org, day));                   // no document filter: still listed
         Assert.Equal(JsonValueKind.Null, listed.GetProperty("documentId").ValueKind);
+    }
+
+    [Fact]
+    public async Task Document_events_say_who_which_flow_and_how_it_arrived()
+    {
+        var flow = await Flow(Org, "Supplier invoices");
+        var uploaded = await Doc(Org, flow, "uploaded.pdf", source: "upload");
+        var emailed = await Doc(Org, flow, "emailed.pdf", source: IntakeKind.Email);
+        var t = new DateTime(2026, 3, 3, 9, 0, 0, DateTimeKind.Utc);
+        await Event(Org, uploaded.Id, "document.received", t, new { by = "user_uploader" });
+        await Event(Org, uploaded.Id, "document.read", t.AddMinutes(1));
+        await Event(Org, uploaded.Id, "document.sent", t.AddMinutes(2), new { mode = "person", by = "user_sender" });
+        await Event(Org, uploaded.Id, "document.delivered", t.AddMinutes(3));
+        await Event(Org, emailed.Id, "document.received", t);
+        await Event(Org, emailed.Id, "document.sent", t.AddMinutes(2), new { mode = "auto" });
+        await Event(Org, emailed.Id, "document.delivery_failed", t.AddMinutes(3), new { error = "Login refused" });
+
+        var rows = await Events(Org, $"flowId={flow}&pageSize=200");
+        JsonElement Row(Guid doc, string action) => rows.Single(e =>
+            e.GetProperty("documentId").GetString() == doc.ToString() && e.GetProperty("action").GetString() == action);
+
+        var read = Row(uploaded.Id, "document.read");
+        Assert.Equal(("user_uploader", "user", "upload", "Supplier invoices"),
+            (read.GetProperty("actorId").GetString(), read.GetProperty("actorType").GetString(),
+             read.GetProperty("source").GetString(), read.GetProperty("flowName").GetString()));
+        Assert.Equal("user_sender", Row(uploaded.Id, "document.delivered").GetProperty("actorId").GetString());
+
+        var failed = Row(emailed.Id, "document.delivery_failed");
+        Assert.Equal(JsonValueKind.Null, failed.GetProperty("actorId").ValueKind);        // an automatic send
+        Assert.Equal("system", failed.GetProperty("actorType").GetString());              // never "ai"
+        Assert.Equal("email", failed.GetProperty("source").GetString());
     }
 }

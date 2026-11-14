@@ -156,7 +156,8 @@ public class DeliverDocumentJob(
         var delivered = finished?.Status == FlowDeliveryStatus.Delivered;
         if (finished is null ? doc.Status == DocumentStatus.SendFailed : finished.Status is FlowDeliveryStatus.Delivered or FlowDeliveryStatus.DeadLetter)
             DocumentAudit.Add(db, doc, delivered ? "document.delivered" : "document.delivery_failed",
-                new { output = finished?.OutputName, protocol = finished?.Protocol, responseCode = finished?.ResponseCode, error = finished is null ? SendStoppedError : finished.LastError }, null);
+                new { output = finished?.OutputName, protocol = finished?.Protocol, responseCode = finished?.ResponseCode, error = finished is null ? SendStoppedError : finished.LastError,
+                    attempts = finished?.Attempts, destinationId = finished?.DestinationId, file = finished?.FileName }, null);
         return before;
     }
 
