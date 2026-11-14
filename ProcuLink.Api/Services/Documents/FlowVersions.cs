@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
@@ -40,6 +42,13 @@ public static class FlowVersions
             SnapshotJson = FlowSnapshot.Of(flow, live.Outputs).Canonical(), PublishedAt = DateTime.UtcNow, PublishedBy = userId,
         };
         db.Set<FlowVersion>().Add(version);
+        var payload = new JsonObject { ["version"] = version.VersionNo, ["flow"] = flow.Name };
+        if (userId is not null) payload["by"] = userId;
+        var published = db.AuditEvents.Add(new AuditEvent
+        {
+            Id = Guid.NewGuid(), OrgId = flow.OrgId, EntityType = "Flow", EntityId = flow.Id, Action = "flow.published",
+            CreatedAt = version.PublishedAt, Payload = JsonSerializer.SerializeToDocument(payload),
+        }).Entity;
         flow.PublishedVersionNo = version.VersionNo;
         try
         {
@@ -48,6 +57,7 @@ public static class FlowVersions
         catch (DbUpdateException ex) when (IngressDedupe.IsUniqueViolation(ex))
         {
             db.Entry(version).State = EntityState.Detached;
+            db.Entry(published).State = EntityState.Detached;
             flow.PublishedVersionNo = previous;
             db.Entry(flow).Property(x => x.PublishedVersionNo).IsModified = false;
             return (null, "publish_conflict");

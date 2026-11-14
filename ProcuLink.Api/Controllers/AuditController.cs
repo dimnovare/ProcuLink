@@ -134,11 +134,12 @@ public class AuditController : ControllerBase
             .Where(a => a.OrgId == orgId && a.EntityType == "FlowDocument" && foundIds.Contains(a.EntityId)
                 && (a.Action == "document.received" || a.Action == "document.sent"))
             .ToListAsync(ct);
-        string? ActorOf(Guid docId, string action, DateTime at, JsonDocument? payload) => DocumentAudit.By(payload) ?? action switch
+        AuditEvent? SendBefore(Guid docId, DateTime at) => handoffs
+            .Where(h => h.EntityId == docId && h.Action == "document.sent" && h.CreatedAt <= at)
+            .MaxBy(h => h.CreatedAt);
+        string? ActorOf(Guid docId, string action, JsonDocument? payload, AuditEvent? send) => DocumentAudit.By(payload) ?? action switch
         {
-            "document.delivered" or "document.delivery_failed" => DocumentAudit.By(handoffs
-                .Where(h => h.EntityId == docId && h.Action == "document.sent" && h.CreatedAt <= at)
-                .MaxBy(h => h.CreatedAt)?.Payload),
+            "document.delivered" or "document.delivery_failed" => DocumentAudit.By(send?.Payload),
             "document.read" or "document.read_failed" => DocumentAudit.By(handoffs
                 .FirstOrDefault(h => h.EntityId == docId && h.Action == "document.received")?.Payload),
             _ => null,
@@ -156,11 +157,18 @@ public class AuditController : ControllerBase
             var action = e.Action ?? string.Empty;
             var isDocument = e.EntityType == "FlowDocument";
             var docFound = isDocument & docMeta.TryGetValue(e.EntityId, out var doc);
+            // The send behind a delivery: who started it and when
+            var send = docFound && action is "document.delivered" or "document.delivery_failed" ? SendBefore(e.EntityId, e.CreatedAt) : null;
             if (isDocument)
             {
                 // The screen names the person from actorId
-                if (docFound) actorId = ActorOf(e.EntityId, action, e.CreatedAt, e.Payload);
+                if (docFound) actorId = ActorOf(e.EntityId, action, e.Payload, send);
                 (actorType, actorName, actorInitials) = actorId is null ? ("system", "System", "SY") : ("user", "A workspace member", "WM");
+            }
+            else if (DocumentAudit.By(e.Payload) is { } by)
+            {
+                actorId = by;
+                (actorType, actorName, actorInitials) = ("user", "A workspace member", "WM");
             }
             else if (action.Contains("ai", StringComparison.OrdinalIgnoreCase)
                 || action.Contains("nlp", StringComparison.OrdinalIgnoreCase)
@@ -221,6 +229,12 @@ public class AuditController : ControllerBase
                 flowName     = doc.FlowName;
                 source       = doc.Source;
             }
+            else if (e.EntityType == "Flow")
+            {
+                docFlowId = e.EntityId;
+                flowName  = e.Payload?.RootElement is { ValueKind: JsonValueKind.Object } p && p.TryGetProperty("flow", out var f) && f.ValueKind == JsonValueKind.String
+                    ? f.GetString() : null;
+            }
 
             // ── Human-readable message ──────────────────────────────────────
             var message = documentName is not null && DocumentMessages.TryGetValue(action, out var label)
@@ -246,6 +260,7 @@ public class AuditController : ControllerBase
                 actorType,
                 actorName,
                 actorInitials,
+                startedAt     = send?.CreatedAt,
                 message,
                 payload       = Shown(action, e.Payload),
             };
@@ -260,7 +275,7 @@ public class AuditController : ControllerBase
     private static JsonNode? Shown(string action, JsonDocument? payload)
     {
         var node = payload is null ? null : JsonNode.Parse(payload.RootElement.GetRawText());
-        if (action.StartsWith("admin.", StringComparison.Ordinal) && node is JsonObject o) o.Remove("actor");
+        if (action.StartsWith("admin.", StringComparison.OrdinalIgnoreCase) && node is JsonObject o) o.Remove("actor");
         return node;
     }
 

@@ -152,23 +152,46 @@ public class ActivityApiTests(DocumentEngineTestFactory factory) : IClassFixture
         Assert.Equal(JsonValueKind.Null, failed.GetProperty("actorId").ValueKind);        // an automatic send
         Assert.Equal("system", failed.GetProperty("actorType").GetString());              // never "ai"
         Assert.Equal("email", failed.GetProperty("source").GetString());
+        Assert.Equal(t.AddMinutes(2), Row(uploaded.Id, "document.delivered").GetProperty("startedAt").GetDateTime());   // the send before it, not the later one
+        Assert.Equal(t.AddMinutes(2), failed.GetProperty("startedAt").GetDateTime());                                   // an automatic send has a start too
+        Assert.Equal(JsonValueKind.Null, read.GetProperty("startedAt").ValueKind);
+    }
+
+    [Fact]
+    public async Task Publishing_a_version_is_an_event_that_names_the_flow_the_version_and_who()
+    {
+        var flow = await Flow(Org, "Supplier invoices");
+        var http = factory.ClientFor(Org);
+
+        Assert.Equal(HttpStatusCode.OK, (await http.PostAsync($"/api/flows/{flow}/publish", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await http.PostAsync($"/api/flows/{flow}/publish", null)).StatusCode);   // nothing changed: no event
+
+        var e = Assert.Single(await Events(Org, "actions=flow.published"));
+        Assert.Equal((flow.ToString(), "Supplier invoices", 1, "user_DOC_TEST", "user"),
+            (e.GetProperty("flowId").GetString(), e.GetProperty("flowName").GetString(), e.GetProperty("payload").GetProperty("version").GetInt32(),
+             e.GetProperty("actorId").GetString(), e.GetProperty("actorType").GetString()));
+        Assert.Empty(await Events(OrgB, "actions=flow.published"));
     }
 
     [Fact]
     public async Task A_platform_admins_identity_never_reaches_the_workspace()
     {
-        await Save(new AuditEvent
-        {
-            Id = Guid.NewGuid(), OrgId = Org, EntityType = "Organisation", EntityId = Org, Action = "admin.org.limits_changed",
-            CreatedAt = new DateTime(2026, 3, 4, 9, 0, 0, DateTimeKind.Utc),
-            Payload = JsonSerializer.SerializeToDocument(new { actor = new { sub = "user_platform_admin", email = "admin@example.test" }, detail = new { orderLimit = 40 } }),
-        });
+        var at = new DateTime(2026, 3, 4, 9, 0, 0, DateTimeKind.Utc);
+        foreach (var (action, when) in new[] { ("admin.org.limits_changed", at), ("Admin.Org.Limits_Changed", at.AddMinutes(1)) })
+            await Save(new AuditEvent
+            {
+                Id = Guid.NewGuid(), OrgId = Org, EntityType = "Organisation", EntityId = Org, Action = action, CreatedAt = when,
+                Payload = JsonSerializer.SerializeToDocument(new { actor = new { sub = "user_platform_admin", email = "admin@example.test" }, detail = new { orderLimit = 40 } }),
+            });
 
         var raw = await factory.ClientFor(Org).GetStringAsync("/api/audit?from=2026-03-04T00:00:00Z&to=2026-03-05T00:00:00Z");
 
-        var payload = JsonDocument.Parse(raw).RootElement.GetProperty("events").EnumerateArray().Single().GetProperty("payload");
-        Assert.False(payload.TryGetProperty("actor", out _));
-        Assert.Equal(40, payload.GetProperty("detail").GetProperty("orderLimit").GetInt32());
+        var events = JsonDocument.Parse(raw).RootElement.GetProperty("events").EnumerateArray().ToList();
+        var payloads = events.Select(e => e.GetProperty("payload")).ToList();
+        Assert.Equal(2, payloads.Count);
+        Assert.All(payloads, p => Assert.False(p.TryGetProperty("actor", out _)));
+        Assert.Equal(40, payloads[0].GetProperty("detail").GetProperty("orderLimit").GetInt32());
+        Assert.All(events, e => Assert.Equal(JsonValueKind.Null, e.GetProperty("actorId").ValueKind));   // never credited to a member
         Assert.DoesNotContain("admin@example.test", raw);
     }
 }

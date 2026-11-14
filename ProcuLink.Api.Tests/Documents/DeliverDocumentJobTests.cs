@@ -150,6 +150,20 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
         (await h.AuditCountAsync("document.delivery_failed")).Should().Be(1);
         h.WebhookEvents().Should().Equal(FlowWebhookEvent.Sent, FlowWebhookEvent.SendFailed);
         (await h.FailurePayloadsAsync()).Single().GetProperty("destination").GetString().Should().Be("Accounting webhook");
+
+        // A destination id naming another workspace's destination never lends that workspace's name.
+        await using (var db = h.NewDb())
+        {
+            var other = Guid.NewGuid();
+            var foreign = new FlowDestination { Id = Guid.NewGuid(), OrgId = other, Name = "Foreign webhook", Protocol = "http", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+            db.Organisations.Add(new Organisation { Id = other, ClerkOrgId = "org_" + other.ToString("N"), Name = "Test Org B", Slug = "other-" + other.ToString("N") });
+            db.Set<FlowDestination>().Add(foreign);
+            await db.SaveChangesAsync();
+            await db.Set<FlowDelivery>().Where(d => d.Id == h.DeliveryId)
+                .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, FlowDeliveryStatus.Delivered).SetProperty(d => d.DestinationId, foreign.Id));
+        }
+        (await h.BounceAsync(key))!.Outcome.Should().Be(DeliveryBounceOutcome.FlowDeliveryMarkedFailed);
+        (await h.FailurePayloadsAsync())[1].GetProperty("destination").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
     [DockerRequiredFact]
