@@ -191,6 +191,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<FlowDocument>                   FlowDocuments                 { get; set; } = null!;
     public DbSet<FlowIntake>                     FlowIntakes                   { get; set; } = null!;
     public DbSet<FlowIntakeItem>                 FlowIntakeItems               { get; set; } = null!;
+    public DbSet<LinkedAccount>                  LinkedAccounts                { get; set; } = null!;
 
     // ── Org plan-history chokepoint ──────────────────────────────────────────
     // Overage metering must resolve the plan + order-limit override AS OF each
@@ -2213,6 +2214,24 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(d => d.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             b.HasIndex(d => d.OrgId);
             b.HasOne<Organisation>().WithMany().HasForeignKey(d => d.OrgId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<LinkedAccount>(b =>
+        {
+            b.ToTable("linked_accounts");
+            b.HasKey(a => a.Id);
+            b.Property(a => a.Id).HasColumnName("id");
+            b.Property(a => a.OrgId).HasColumnName("org_id");
+            b.Property(a => a.Provider).HasColumnName("provider");
+            b.Property(a => a.Subject).HasColumnName("subject");
+            b.Property(a => a.Email).HasColumnName("email");
+            b.Property(a => a.EncryptedTokens).HasColumnName("encrypted_tokens");
+            b.Property(a => a.Status).HasColumnName("status");
+            b.Property(a => a.CreatedByUserId).HasColumnName("created_by_user_id");
+            b.Property(a => a.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(a => a.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            b.HasIndex(a => new { a.OrgId, a.Provider, a.Subject }).IsUnique();
+            b.HasOne<Organisation>().WithMany().HasForeignKey(a => a.OrgId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<FlowOutput>(b =>

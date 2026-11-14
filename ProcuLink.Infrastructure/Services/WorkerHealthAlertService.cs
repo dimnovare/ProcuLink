@@ -15,6 +15,7 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
     private readonly WorkerHealthAlertOptions _options;
     private readonly ILogger<WorkerHealthAlertService> _logger;
     private readonly Func<DateTime> _utcNow;
+    private readonly IFlowDeliveryHealthProbe? _flows;
 
     public WorkerHealthAlertService(
         IOpsHealthService health,
@@ -23,7 +24,8 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
         WorkerHealthAlertState state,
         WorkerHealthAlertOptions options,
         ILogger<WorkerHealthAlertService> logger,
-        Func<DateTime>? utcNow = null)
+        Func<DateTime>? utcNow = null,
+        IFlowDeliveryHealthProbe? flows = null)
     {
         _health = health;
         _probe = probe;
@@ -32,6 +34,7 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
         _options = options;
         _logger = logger;
         _utcNow = utcNow ?? (() => DateTime.UtcNow);
+        _flows = flows;
     }
 
     /// <summary>
@@ -95,6 +98,19 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
         {
             blindSources.Add(
                 "the operational probe (delivery failure rate, AI token cap)");
+        }
+
+        if (_flows is not null)
+        {
+            if (await ReadFlowSignalAsync(ct) is { } flow)
+            {
+                conditions.Add(EvaluateFlowDeadLetter(flow));
+                conditions.Add(EvaluateFlowStuck(flow));
+            }
+            else
+            {
+                blindSources.Add("the flow delivery probe (flow dead-letters, stuck flow deliveries)");
+            }
         }
 
         conditions.Add(EvaluateSweepDegraded(blindSources));
@@ -304,4 +320,36 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
             $"ProcuLink alert sweep is partially blind: {string.Join(" and ", blindSources)} could not "
           + "be read this run, so the conditions they feed were NOT evaluated — unknown, not healthy. "
           + "Monitoring is degraded until this clears; check Worker logs and database connectivity.");
+
+    /// <summary>Reads the flow delivery signal, returning <c>null</c> when the probe cannot be read (unknown, not healthy).</summary>
+    private async Task<FlowDeliveryHealthSignal?> ReadFlowSignalAsync(CancellationToken ct)
+    {
+        try
+        {
+            return await _flows!.GetSignalAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "WorkerHealthAlert: flow delivery probe failed — flow dead-letters and stuck flow deliveries are NOT evaluated this run.");
+            return null;
+        }
+    }
+
+    private (string, bool, string) EvaluateFlowDeadLetter(FlowDeliveryHealthSignal s)
+    {
+        var threshold = _options.EffectiveDeadLetterThreshold;
+        return (OperationalAlertKeys.FlowDeliveryDeadLetter, s.DeadLettered >= threshold,
+            $"ProcuLink flow deliveries dead-lettered in the last {s.WindowMinutes} min = {s.DeadLettered} (threshold {threshold}). "
+          + "Each is a document output that did not reach its destination; the last error is on the document.");
+    }
+
+    private static (string, bool, string) EvaluateFlowStuck(FlowDeliveryHealthSignal s) =>
+        (OperationalAlertKeys.FlowDeliveryStuck, s.Stuck > 0,
+            $"ProcuLink flow deliveries stuck = {s.Stuck}: queued, sending or awaiting a retry for over {s.StuckAfterMinutes} min. "
+          + "Check that the Worker runs the document-delivery-sweep job and serves the critical queue.");
 }

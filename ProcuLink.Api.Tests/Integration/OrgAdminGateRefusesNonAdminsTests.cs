@@ -163,7 +163,7 @@ public sealed class OrgAdminGateRefusesNonAdminsTests : IClassFixture<RbacTestFa
 {
     /// <summary>Must match <c>OrgAdminGateIsRealTests.ExpectedGatedEndpointCount</c>.</summary>
     // 24 -> 22 on 2026-11-13 (plan 13b Task 6b): send-anyway and the acceptance-gate override deleted.
-    private const int ExpectedGatedEndpointCount = 22;
+    private const int ExpectedGatedEndpointCount = 26; // 22 + 4 Google connect/complete/picker/disconnect (plan 9b)
 
     /// <summary>An organisation with a REAL Clerk organisation id — the modern shape.</summary>
     private const string ClerkOrg = "org_TEST_RBAC";

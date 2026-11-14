@@ -83,6 +83,7 @@ public static class WorkerAlertingRegistration
             sp.GetRequiredService<ILogger<CompositeWorkerAlertSink>>()));
 
         services.AddScoped<IWorkerHealthAlertService, WorkerHealthAlertService>();
+        services.AddScoped<IFlowDeliveryHealthProbe, FlowDeliveryHealthProbe>();
         services.AddScoped<WorkerHealthAlertJob>();
 
         return services;

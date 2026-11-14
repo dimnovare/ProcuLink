@@ -150,7 +150,11 @@ public class WorkerHealthAlertServiceTests
             new DeliveryFailureRateSignal(60, 40, 39),
             new AiTokenLatchSignal(1)));
 
-        await CreateService(health, sink, probe).RunAsync(default);
+        var flows = new Mock<IFlowDeliveryHealthProbe>();
+        flows.Setup(f => f.GetSignalAsync(It.IsAny<CancellationToken>()))
+             .ReturnsAsync(new FlowDeliveryHealthSignal(DeadLettered: 2, WindowMinutes: 1440, Stuck: 1, StuckAfterMinutes: 30));
+
+        await CreateService(health, sink, probe, flows: flows).RunAsync(default);
 
         sink.Calls.Select(c => c.Key).Should().BeEquivalentTo(OperationalAlertKeys.HealthConditions);
     }
@@ -533,6 +537,21 @@ public class WorkerHealthAlertServiceTests
     }
 
     [Fact]
+    public async Task RunAsync_FlowProbeThrows_RaisesTheDegradedAlert()
+    {
+        var sink = new RecordingSink();
+        var flows = new Mock<IFlowDeliveryHealthProbe>();
+        flows.Setup(f => f.GetSignalAsync(It.IsAny<CancellationToken>())).ThrowsAsync(new TimeoutException("flow probe timed out"));
+
+        var alerted = await CreateService(HealthOk(), sink, flows: flows).RunAsync(default);
+
+        alerted.Should().BeTrue();
+        sink.Calls.Should().ContainSingle();
+        sink.Calls[0].Key.Should().Be(OperationalAlertKeys.AlertSweepDegraded);
+        sink.Calls[0].Message.Should().Contain("flow delivery probe");
+    }
+
+    [Fact]
     public async Task RunAsync_ProbeThrowsWhileAConditionIsStandingBad_DoesNotSilentlyRecoverIt()
     {
         var sink = new RecordingSink();
@@ -683,10 +702,11 @@ public class WorkerHealthAlertServiceTests
         Mock<IOpsHealthService> health,
         IWorkerAlertSink sink,
         Mock<IOperationalAlertProbe>? probe = null,
-        ILogger<WorkerHealthAlertService>? logger = null) =>
+        ILogger<WorkerHealthAlertService>? logger = null,
+        Mock<IFlowDeliveryHealthProbe>? flows = null) =>
         new(health.Object, (probe ?? ProbeReturning(Healthy())).Object, sink,
             new WorkerHealthAlertState(), new WorkerHealthAlertOptions(),
-            logger ?? NullLogger<WorkerHealthAlertService>.Instance);
+            logger ?? NullLogger<WorkerHealthAlertService>.Instance, flows: flows?.Object);
 
     /// <summary>
     /// Records rendered log messages. The "healthy —" line and the "reached no configured

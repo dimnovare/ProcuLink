@@ -123,6 +123,26 @@ public sealed class InboundEmailFlowPostgresTests(PostgresContainerFixture postg
             (await db.FlowIntakes.AsNoTracking().SingleAsync(i => i.OrgId == orgId)).LastMessage);
     }
 
+    [DockerRequiredFact]
+    public async Task An_undecodable_attachment_makes_no_document_and_says_so()
+    {
+        var (orgId, _, to) = await SeedAsync(enabled: true);
+        var mail = Payload(to, "msg-1") with
+        {
+            Attachments = [new InboundAttachment("a.pdf", "application/pdf", [], InboundAttachmentDecode.Undecodable)],
+            Body = "see attached",
+        };
+        var result = await RouteAsync(mail, formatsOn: true);
+
+        Assert.True(result.Success);
+        await using var db = new ProcuLinkDbContext(_options!);
+        Assert.Empty(db.FlowDocuments);
+        Assert.True(await db.AuditEvents.AnyAsync(e =>
+            e.OrgId == orgId && e.Action == "inbound_email.attachment_skipped_undecodable"));
+        Assert.Equal("An email from buyer@example.test had an attachment we could not decode, so it was not taken in.",
+            (await db.FlowIntakes.AsNoTracking().SingleAsync(i => i.OrgId == orgId)).LastMessage);
+    }
+
     private static InboundEmailPayload Payload(string to, string messageId) => new(
         "buyer@example.test", to, "Docs",
         [new InboundAttachment("a.pdf", "application/pdf", Encoding.UTF8.GetBytes("%PDF-1.4 test"))],

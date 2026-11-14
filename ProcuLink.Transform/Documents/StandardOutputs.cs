@@ -1,5 +1,6 @@
 using System.Xml;
 using ProcuLink.Core.Documents;
+using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Transform.Output;
 
@@ -74,7 +75,7 @@ public static class StandardOutputs
         if (Find(id) is not { } standard) return new(null, "output_invalid", null);
         try
         {
-            var invoice = standard.Vesid is null ? default : StandardInvoiceAdapter.ToInvoice(read, fields, tableKey, standard.Needs, orgId);
+            var invoice = standard.Vesid is null ? default : StandardInvoiceAdapter.ToInvoice(read, fields, tableKey, standard.Needs, orgId, standard.CreditNote);
             var (order, orderMissing) = standard.Vesid is null ? StandardOrderAdapter.ToOrder(read, fields, tableKey, standard.Needs, orgId) : (null, invoice.Missing);
             if (order is null && invoice.Invoice is null)
             {
@@ -83,6 +84,7 @@ public static class StandardOutputs
             }
             if (invoice.Invoice is { } inv)
             {
+                if (standard.CreditNote && inv.GrandTotal < 0) WritePositive(inv, invoice.Lines);
                 var doc = standard.Syntax == InvoiceSyntax.Cii
                     ? CiiInvoiceWriter.Build(inv, invoice.Lines, invoice.Parties!, standard.CreditNote, standard.Customization)
                     : new PeppolBisInvoiceTransformService().BuildDocument(inv, invoice.Lines, invoice.Parties!, standard.CreditNote, standard.Customization);
@@ -99,6 +101,22 @@ public static class StandardOutputs
         catch (Exception ex) when (ex is TransformValidationException or ArgumentException or InvalidOperationException or XmlException or OverflowException)
         {
             return new(null, "output_invalid", null);
+        }
+    }
+
+    /// <summary>
+    /// A credit note printed negative, written positive as EN 16931 credit notes carry it: each total and line amount changes sign
+    /// (so a re-charge line inside the credit stays negative), a quantity is negative only when its line amount is (a free item is credited,
+    /// so it stays positive), and a unit price is never negative. The tax rate is left alone. The adapter's invoice is fresh and never attached to a DbContext, so it is corrected in place.
+    /// </summary>
+    internal static void WritePositive(InvoiceEntity invoice, IReadOnlyList<InvoiceLineEntity> lines)
+    {
+        (invoice.SubTotal, invoice.TaxTotal, invoice.GrandTotal) = (-invoice.SubTotal, -invoice.TaxTotal, -invoice.GrandTotal);
+        foreach (var l in lines)
+        {
+            l.LineTotal = -l.LineTotal;
+            l.Quantity = l.LineTotal < 0 ? -Math.Abs(l.Quantity) : Math.Abs(l.Quantity);
+            l.UnitPrice = Math.Abs(l.UnitPrice);
         }
     }
 }

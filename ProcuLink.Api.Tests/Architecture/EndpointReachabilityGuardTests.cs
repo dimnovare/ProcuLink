@@ -304,7 +304,7 @@ public sealed class EndpointReachabilityGuardTests
     private const int MinimumEndpoints = 70;           // 81 today; 125 before plan 13b, 131 before the order-ops cut
     private const int MinimumControllers = 16;         // 18 today; 27 before plan 13b deleted nine
     private const int MinimumCallerFiles = 300;        // 377 today
-    private const long MinimumCallerBytes = 1_700_000; // 2.02 MB today
+    private const long MinimumCallerBytes = 1_500_000; // 1.66 MB with 13b's frontend deletions (2026-11-14); 2.02 MB before
     // 90 -> 74 on 2026-11-13 (plan 13b task 8b): the frontend orphan sweep deleted the delivery-config,
     // catalog-source and supplier client calls and the live-matrix harnesses. 74 is today's count.
     private const int MinimumCallsExtracted = 74;      // 74 today

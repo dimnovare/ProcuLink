@@ -1668,6 +1668,63 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.ToTable("item_mappings", (string)null);
                 });
 
+            modelBuilder.Entity("ProcuLink.Core.Entities.LinkedAccount", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CreatedByUserId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("created_by_user_id");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("email");
+
+                    b.Property<string>("EncryptedTokens")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("encrypted_tokens");
+
+                    b.Property<Guid>("OrgId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("org_id");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("provider");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("subject");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrgId", "Provider", "Subject")
+                        .IsUnique();
+
+                    b.ToTable("linked_accounts", (string)null);
+                });
+
             modelBuilder.Entity("ProcuLink.Core.Entities.Lookup", b =>
                 {
                     b.Property<Guid>("Id")
@@ -4664,6 +4721,15 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.Navigation("Organisation");
 
                     b.Navigation("Supplier");
+                });
+
+            modelBuilder.Entity("ProcuLink.Core.Entities.LinkedAccount", b =>
+                {
+                    b.HasOne("ProcuLink.Core.Entities.Organisation", null)
+                        .WithMany()
+                        .HasForeignKey("OrgId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("ProcuLink.Core.Entities.Lookup", b =>

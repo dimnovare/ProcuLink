@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Delivery;
@@ -33,8 +34,25 @@ public class DeliveryBounceHandlerTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 
-    private static DeliveryBounceHandler MakeHandler(ProcuLinkDbContext db) =>
-        new(db, new OrderExceptionService(db), NullLogger<DeliveryBounceHandler>.Instance);
+    private static DeliveryBounceHandler MakeHandler(ProcuLinkDbContext db, IFlowDeliveryBounceHandler? flows = null) =>
+        new(db, new OrderExceptionService(db), flows ?? Mock.Of<IFlowDeliveryBounceHandler>(), NullLogger<DeliveryBounceHandler>.Instance);
+
+    [Fact]
+    public async Task A_key_no_order_attempt_carries_is_offered_to_flow_deliveries()
+    {
+        await using var db = NewDb();
+        SeedDeliveredOrder(db);
+        var flowKey = Guid.NewGuid().ToString("N");
+        var flows = new Mock<IFlowDeliveryBounceHandler>();
+        flows.Setup(f => f.TryHandleAsync(It.Is<DeliveryBounceNotification>(n => n.IdempotencyKey == flowKey), It.IsAny<CancellationToken>()))
+             .ReturnsAsync(new DeliveryBounceResult(DeliveryBounceOutcome.FlowDeliveryMarkedFailed));
+
+        (await MakeHandler(db, flows.Object).HandleAsync(HardBounce(flowKey), CancellationToken.None))
+            .Outcome.Should().Be(DeliveryBounceOutcome.FlowDeliveryMarkedFailed);
+        (await MakeHandler(db, flows.Object).HandleAsync(HardBounce(), CancellationToken.None))
+            .Outcome.Should().Be(DeliveryBounceOutcome.OrderMarkedFailed);
+        flows.Verify(f => f.TryHandleAsync(It.Is<DeliveryBounceNotification>(n => n.IdempotencyKey == Key), It.IsAny<CancellationToken>()), Times.Never);
+    }
 
     /// <summary>
     /// Seeds an order that the email channel already called delivered, plus the successful attempt

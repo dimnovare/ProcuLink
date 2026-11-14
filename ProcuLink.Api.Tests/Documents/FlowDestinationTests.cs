@@ -2,15 +2,22 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
+using ProcuLink.Infrastructure.Services.Dispatchers;
+using ProcuLink.Infrastructure.Services.Google;
+using ProcuLink.Core.Services.Google;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using static ProcuLink.Api.Services.Documents.FlowDestinationService;
+using static ProcuLink.Api.Tests.Documents.DocumentEngineTestFactory;
 
 namespace ProcuLink.Api.Tests.Documents;
 
@@ -53,6 +60,88 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
         var blank = ToDeliveryConfig(d, "Flow", test: false);
         Subject(blank).Should().Be("Flow — {fileName}");
         Body(blank).Should().Be("Attached: {fileName}. Sent by ProcuLink.");
+    }
+
+    private async Task<Guid> SeedAccountAsync(Guid org)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        var id = Guid.NewGuid();
+        db.LinkedAccounts.Add(new LinkedAccount { Id = id, OrgId = org, Subject = "sub-" + id, Email = "user@example.com", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+        return id;
+    }
+
+    [Fact]
+    public async Task Google_destination_with_the_flag_off_is_unsupported()
+    {
+        await using var db = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        var service = new FlowDestinationService(db, null!, [],
+            new DocumentEngineGate(Options.Create(new DocumentEngineOptions { EnabledOrgIds = [OrgA.ToString()] })),
+            Options.Create(new GoogleOptions { ClientId = "c", ClientSecret = "s" }));
+        using var config = JsonDocument.Parse("""{"accountId":"x","folderId":"f"}""");
+
+        var act = () => service.SaveAsync(OrgA, null, new DestinationRequest("d", "google_drive", config.RootElement, null), default);
+
+        (await act.Should().ThrowAsync<DestinationException>()).Which.Code.Should().Be("unsupported_destination");
+    }
+
+    [Fact]
+    public async Task Google_drive_destination_needs_an_own_org_account_and_pins_it()
+    {
+        var http = factory.ClientFor(OrgA);
+        var other = await SeedAccountAsync(OrgB);
+        var own = await SeedAccountAsync(OrgA);
+
+        var foreign = await http.PostAsJsonAsync("/api/destinations", new { name = "Drive", protocol = "google_drive", config = new { accountId = other, folderId = "fold-1" } });
+        foreign.StatusCode.Should().Be((HttpStatusCode)422);
+        (await foreign.Content.ReadAsStringAsync()).Should().Contain("invalid_destination");
+
+        var created = await http.PostAsJsonAsync("/api/destinations", new
+        {
+            name = "Drive", protocol = "google_drive", config = new { accountId = own, folderId = "fold-1", folderName = "Invoices" }, credentials = new { password = "ignored" },
+        });
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        (await created.Content.ReadAsStringAsync()).Should().Contain("\"hasCredentials\":false");
+
+        var inUse = await http.DeleteAsync($"/api/linked-accounts/{own}");
+        inUse.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await inUse.Content.ReadAsStringAsync()).Should().Contain("account_in_use");
+    }
+
+    private sealed class SheetsFake : HttpMessageHandler, IHttpClientFactory, ILinkedAccountTokens
+    {
+        public readonly List<(HttpMethod Method, string Url)> Requests = [];
+        public HttpClient CreateClient(string name) => new(this, disposeHandler: false);
+        public Task<LinkedAccessToken> GetGoogleAccessTokenAsync(Guid orgId, Guid accountId, CancellationToken ct) => Task.FromResult(new LinkedAccessToken("at-1", null));
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Requests.Add((request.Method, request.RequestUri!.ToString()));
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") });
+        }
+    }
+
+    [Fact]
+    public async Task Sheets_test_without_a_payload_sends_a_csv_and_only_reads_the_sheet()
+    {
+        await using var db = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        var fake = new SheetsFake();
+        var d = new FlowDestination
+        {
+            Id = Guid.NewGuid(), OrgId = OrgA, Name = "Sheet", Protocol = DeliveryProtocolConstants.GoogleSheets,
+            ConfigJson = $$"""{"accountId":"{{Guid.NewGuid()}}","spreadsheetId":"sh-1"}""",
+        };
+        db.Set<FlowDestination>().Add(d);
+        await db.SaveChangesAsync();
+        var service = new FlowDestinationService(db, null!,
+            [new GoogleSheetsDeliveryDispatcher(fake, fake, NullLogger<GoogleSheetsDeliveryDispatcher>.Instance)],
+            new DocumentEngineGate(Options.Create(new DocumentEngineOptions { EnabledOrgIds = [OrgA.ToString()] })),
+            Options.Create(new GoogleOptions { ClientId = "c", ClientSecret = "s" }));
+
+        var result = await service.TestAsync(OrgA, d.Id, default);
+
+        result!.Success.Should().BeTrue();
+        fake.Requests.Should().ContainSingle().Which.Method.Should().Be(HttpMethod.Get);
     }
 
     [Fact]

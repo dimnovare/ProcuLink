@@ -52,6 +52,9 @@ public static class CredentialPurpose
     /// <summary>Scope id: FlowIntake.Id. Password, key or secret for a flow pickup.</summary>
     public const string FlowIntakeCredentials = "flow.intake.credentials";
 
+    /// <summary>Scope id: LinkedAccount.Id. A connected account's tokens, payload <c>{"refreshToken":"..."}</c>.</summary>
+    public const string LinkedAccountTokens = "linked.account.tokens";
+
     /// <summary>
     /// The purposes for which a version-1 (unbound, scope-inert) envelope may STILL be read.
     ///

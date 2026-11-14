@@ -144,4 +144,21 @@ public sealed class FlowWebhookTests
         await act.Should().ThrowAsync<InvalidOperationException>();
         handler.Request.Should().BeNull();
     }
+
+    [Fact]
+    public async Task Announce_fires_once_and_only_when_the_roll_up_moved_the_document()
+    {
+        var db = NewDb();
+        var flow = new Flow { Id = Guid.NewGuid(), OrgId = Org, Name = "A", FieldsJson = DocumentJson.Serialize(new FlowFieldList([])) };
+        db.Flows.Add(flow);
+        db.FlowIntakes.Add(new FlowIntake { Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, Kind = IntakeKind.Api, ConfigJson = """{"webhookUrl":"https://hooks.example.test/in"}""" });
+        await db.SaveChangesAsync();
+        var doc = new FlowDocument { Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, Status = DocumentStatus.SendFailed };
+        var jobs = new Mock<IBackgroundJobClient>();
+
+        await DeliverDocumentJob.AnnounceAsync(db, jobs.Object, doc, DocumentStatus.SendFailed, NullLogger.Instance, CancellationToken.None);
+        await DeliverDocumentJob.AnnounceAsync(db, jobs.Object, doc, DocumentStatus.Sending, NullLogger.Instance, CancellationToken.None);
+
+        jobs.Invocations.Select(i => (Job)i.Arguments[0]).Should().ContainSingle().Which.Args[2].Should().Be(FlowWebhookEvent.SendFailed);
+    }
 }

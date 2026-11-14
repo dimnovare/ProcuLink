@@ -18,6 +18,21 @@ public sealed class WorkerHealthAlertOptions
     public const string SectionName = "WorkerHealthAlert";
 
     /// <summary>
+    /// Count of recently dead-lettered flow deliveries at/above which an alert fires. Default 1: a
+    /// delivery only dead-letters after its retries are exhausted, so one is already unambiguously
+    /// wrong. A non-positive configured value falls back to the default.
+    /// </summary>
+    public int DeadLetterThreshold { get; set; } = 1;
+
+    /// <summary>
+    /// Trailing window (minutes, on <c>UpdatedAt</c>) over which dead-lettered flow deliveries are
+    /// counted. Default 1440 (24 h). Without it a dead letter nobody retries would keep the condition
+    /// bad, and re-alerting, for the life of the workspace. A non-positive configured value falls
+    /// back to the default.
+    /// </summary>
+    public int PipelineFailureWindowMinutes { get; set; } = 1440;
+
+    /// <summary>
     /// While a given condition stays bad, re-alert no more often than this many minutes (avoids
     /// alert spam). Applied PER CONDITION, so one persistent incident never gags another.
     /// Default 30. A non-positive configured value falls back to the default.
@@ -43,6 +58,16 @@ public sealed class WorkerHealthAlertOptions
     /// product tried to send failed. A value outside 1–100 falls back to the default.
     /// </summary>
     public int DeliveryFailurePercent { get; set; } = 50;
+
+    /// <summary>Effective dead-letter threshold (never non-positive).</summary>
+    public int EffectiveDeadLetterThreshold => DeadLetterThreshold > 0 ? DeadLetterThreshold : 1;
+
+    /// <summary>Effective dead-letter window in minutes (never non-positive).</summary>
+    public int EffectivePipelineFailureWindowMinutes =>
+        PipelineFailureWindowMinutes > 0 ? PipelineFailureWindowMinutes : 1440;
+
+    /// <summary>Effective dead-letter window as a <see cref="TimeSpan"/>.</summary>
+    public TimeSpan PipelineFailureWindow => TimeSpan.FromMinutes(EffectivePipelineFailureWindowMinutes);
 
     /// <summary>Effective rate-limit interval (never non-positive).</summary>
     public TimeSpan MinAlertInterval =>

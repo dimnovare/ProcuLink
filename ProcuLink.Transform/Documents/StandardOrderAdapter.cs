@@ -56,7 +56,7 @@ public static partial class StandardOrderAdapter
 
     /// <summary>The built value, or what the read lacks for <paramref name="needs"/> (never both). Shared by every standard's adapter.</summary>
     internal static (T? Value, IReadOnlyList<string> Missing) Build<T>(
-        ReadResult read, FlowFieldList fields, string? tableKey, IReadOnlyList<string> needs, Func<Access, T> build) where T : class
+        ReadResult read, FlowFieldList fields, string? tableKey, IReadOnlyList<string> needs, Func<Access, T> build, bool creditNote = false) where T : class
     {
         ReadField? Field(string meaning) => read.Fields.FirstOrDefault(f => FieldMeanings.Of(f, fields) == meaning);
         string? Text(string meaning) => Blank(Field(meaning)?.Value);
@@ -72,7 +72,7 @@ public static partial class StandardOrderAdapter
         {
             if (!need.StartsWith("line_", StringComparison.Ordinal))
             {
-                if (!Present(need, Text(need))) missing.Add(Field(need)?.Label ?? Humanise(need));
+                if (!Present(need, Text(need), creditNote)) missing.Add(Field(need)?.Label ?? Humanise(need));
             }
             else if (rows.Count == 0)
             {
@@ -80,7 +80,7 @@ public static partial class StandardOrderAdapter
             }
             else
             {
-                var line = Enumerable.Range(1, rows.Count).FirstOrDefault(n => !Present(need, Cell(rows[n - 1], need)));
+                var line = Enumerable.Range(1, rows.Count).FirstOrDefault(n => !Present(need, Cell(rows[n - 1], need), creditNote));
                 if (line > 0) missing.Add($"{Column(need)?.Label ?? Humanise(need)} (line {line})");
             }
         }
@@ -91,12 +91,13 @@ public static partial class StandardOrderAdapter
     }
 
     // Numbers count only with a single reading (an ambiguous "1.500" is missing, never guessed), within the writers' own guards.
-    private static bool Present(string meaning, string? value) => value is not null && meaning switch
+    // A credit note may be printed negative (StandardOutputs writes it positive): its quantity need only be non-zero, its price any number.
+    private static bool Present(string meaning, string? value, bool creditNote) => value is not null && meaning switch
     {
         FieldMeanings.IssueDate => FieldValueParser.TryDate(value, out _),
         FieldMeanings.Currency => FieldValueParser.IsCurrency(value.ToUpperInvariant()),
-        FieldMeanings.LineQuantity => FieldValueParser.Number(value) > 0,
-        FieldMeanings.LineUnitPrice => FieldValueParser.Number(value) >= 0,
+        FieldMeanings.LineQuantity => FieldValueParser.Number(value) is { } q && (creditNote ? q != 0 : q > 0),
+        FieldMeanings.LineUnitPrice => FieldValueParser.Number(value) is { } p && (creditNote || p >= 0),
         FieldMeanings.TotalNet or FieldMeanings.TotalTax or FieldMeanings.TotalGross or FieldMeanings.LineAmount
             => FieldValueParser.Number(value) is not null,
         FieldMeanings.SenderEndpointId or FieldMeanings.ReceiverEndpointId => ElectronicAddress().IsMatch(value),

@@ -17,6 +17,8 @@ public sealed class DocumentEngineOptions
     public bool DocsOutputsForAll { get; set; }
     public string[] PeppolOrgIds { get; set; } = [];
     public bool PeppolForAll { get; set; }
+    public string[] NativeConnectorOrgIds { get; set; } = [];
+    public bool NativeConnectorsForAll { get; set; }
 }
 
 /// <summary>Per-org switch for the document engine; off unless listed or enabled for all.</summary>
@@ -46,6 +48,10 @@ public sealed class DocumentEngineGate(IOptions<DocumentEngineOptions> options)
     /// <summary>Peppol BIS Billing outputs and their rule checks: the engine must be on, then the org is listed or all are on.</summary>
     public bool PeppolOn(Guid orgId) =>
         IsEnabled(orgId) && (options.Value.PeppolForAll || Listed(options.Value.PeppolOrgIds, orgId));
+
+    /// <summary>Google Drive and Google Sheets destinations: the engine must be on, then the org is listed or all are on.</summary>
+    public bool NativeConnectorsOn(Guid orgId) =>
+        IsEnabled(orgId) && (options.Value.NativeConnectorsForAll || Listed(options.Value.NativeConnectorOrgIds, orgId));
 
     public string[] AcceptedFormats(Guid orgId) => DocumentFormats.For(ScansOn(orgId), FormatsOn(orgId));
 }

@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
@@ -60,6 +61,41 @@ public sealed class WorkerHealthAlertJobWiringTests
         mail.Sent[0].To.Should().Equal("founder@example.com");
         mail.Sent[0].Subject.Should().Contain(OperationalAlertKeys.WorkerHeartbeatLost);
         mail.Sent[0].TextBody.Should().Contain("no healthy worker");
+    }
+
+    [Fact]
+    public async Task Job_deliversFlowDeliveryAlertsFromRealRows()
+    {
+        var mail = new RecordingEmailApiClient();
+        await using var provider = BuildAlertingGraph(mail, new StubOpsHealth(Healthy()));
+        var now = DateTime.UtcNow;
+        using (var seed = provider.CreateScope())
+        {
+            var db = seed.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            FlowDelivery Row(string status, DateTime updated) => new()
+            {
+                Id = Guid.NewGuid(), OrgId = Guid.NewGuid(), DocumentId = Guid.NewGuid(), Protocol = "email",
+                Status = status, CreatedAt = updated, UpdatedAt = updated,
+            };
+            var delivering = Row(FlowDeliveryStatus.Delivering, now);
+            delivering.ClaimedAt = now.AddMinutes(-31);                  // stuck (claim clock)
+            var retrying = Row(FlowDeliveryStatus.Failed, now);
+            retrying.NextAttemptAt = now.AddMinutes(-31);                // stuck (retry clock)
+            db.Set<FlowDelivery>().AddRange(
+                Row(FlowDeliveryStatus.DeadLetter, now.AddMinutes(-1)),  // counted
+                Row(FlowDeliveryStatus.DeadLetter, now.AddHours(-25)),   // outside the 24 h window
+                Row(FlowDeliveryStatus.Queued, now.AddMinutes(-31)),     // stuck
+                Row(FlowDeliveryStatus.Queued, now.AddMinutes(-5)),      // still the sweep's to move
+                delivering, retrying);
+            await db.SaveChangesAsync();
+        }
+
+        using var scope = provider.CreateScope();
+        await scope.ServiceProvider.GetRequiredService<WorkerHealthAlertJob>().ExecuteAsync(default);
+
+        mail.Sent.Should().HaveCount(2);
+        mail.Sent.Should().ContainSingle(m => m.Subject.Contains(OperationalAlertKeys.FlowDeliveryDeadLetter) && m.TextBody.Contains("= 1"));
+        mail.Sent.Should().ContainSingle(m => m.Subject.Contains(OperationalAlertKeys.FlowDeliveryStuck) && m.TextBody.Contains("= 3"));
     }
 
     [Fact]

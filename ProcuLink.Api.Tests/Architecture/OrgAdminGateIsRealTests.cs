@@ -42,7 +42,7 @@ public sealed class OrgAdminGateIsRealTests
     /// </summary>
     // 24 -> 22 on 2026-11-13 (plan 13b Task 6b): POST /api/orders/{id}/send-anyway and
     // POST /api/orders/{id}/acceptance-gate/override were deleted with the order write API.
-    private const int ExpectedGatedEndpointCount = 22;
+    private const int ExpectedGatedEndpointCount = 26; // 22 + 4 Google connect/complete/picker/disconnect (plan 9b)
 
     /// <summary>
     /// How many operations are declared destructive. Every gated endpoint reaches a declared primitive.
@@ -50,7 +50,7 @@ public sealed class OrgAdminGateIsRealTests
     // 22 -> 19 on 2026-11-13 (plan 13b Task 6b): IAcceptanceGate.RecordOverrideAsync,
     // OrderIngestionService.ApplyInvoiceProblemsAsync and IOrderService.ResolveAsync left the declared
     // set with the three endpoints above, their only gated callers.
-    private const int ExpectedDestructivePrimitiveCount = 19;
+    private const int ExpectedDestructivePrimitiveCount = 23; // 19 + 4, one per Google endpoint (plan 9b)
 
     /// <summary>
     /// Endpoints that gate only PART of a request, in-method: the organisation settings PUT (where

@@ -145,7 +145,7 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
     /// <summary>
     /// The same document with the parties given per call, as an Invoice or (creditNote) a CreditNote-2 document:
     /// type code 381, CreditNoteLine and CreditedQuantity, and no DueDate (a credit note has none; the rules name
-    /// any that trip). Also writes each party's country, street, city and postcode, the seller contact, IBAN payment means and the order reference when given.
+    /// any that trip). Also writes each party's country, street, city and postcode, the seller contact, IBAN payment means, the order reference and the actual delivery date when given.
     /// Rule-checked against the official Peppol rules by PeppolRulesProofTests; that is not access-point acceptance.
     /// </summary>
     public XDocument BuildDocument(InvoiceEntity invoice, IReadOnlyList<InvoiceLineEntity> lines, PeppolPartyOptions parties, bool creditNote, string? customizationId = null)
@@ -200,6 +200,11 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
                 parties.BuyerEndpointId, parties.BuyerEndpointScheme,
                 parties.BuyerName, parties.BuyerVatId, parties.BuyerCountry,
                 parties.BuyerStreet, parties.BuyerCity, parties.BuyerPostcode),
+
+            // ── Actual delivery date (BT-72), only when given ───────────────
+            parties.DeliveryDate is { } delivered
+                ? new XElement(cac + "Delivery", new XElement(cbc + "ActualDeliveryDate", delivered.ToString("yyyy-MM-dd")))
+                : null,
 
             // ── Payment means (BG-16), only with an IBAN ─────────────────────
             string.IsNullOrWhiteSpace(parties.PayeeIban) ? null : new XElement(cac + "PaymentMeans",
