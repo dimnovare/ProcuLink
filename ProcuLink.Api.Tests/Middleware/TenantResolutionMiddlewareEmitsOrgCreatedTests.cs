@@ -12,8 +12,8 @@ namespace ProcuLink.Api.Tests.Middleware;
 
 public class TenantResolutionMiddlewareEmitsOrgCreatedTests
 {
-    [Fact]
-    public async Task InvokeAsync_AutoProvisionsOrg_EmitsOrgCreatedEvent()
+    // Auto-provisions an org through the middleware; returns the db options and the analytics fake.
+    private static async Task<(DbContextOptions<ProcuLinkDbContext> Options, FakeAnalyticsService Analytics)> ProvisionOrgAsync()
     {
         var dbOptions = new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
@@ -36,6 +36,13 @@ public class TenantResolutionMiddlewareEmitsOrgCreatedTests
         }, authenticationType: "test"));
 
         await middleware.InvokeAsync(ctx, requestDb, analytics, dbOptions);
+        return (dbOptions, analytics);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_AutoProvisionsOrg_EmitsOrgCreatedEvent()
+    {
+        var (_, analytics) = await ProvisionOrgAsync();
 
         Assert.Single(analytics.CapturedEvents);
         var ev = analytics.CapturedEvents[0];
@@ -49,24 +56,7 @@ public class TenantResolutionMiddlewareEmitsOrgCreatedTests
     [Fact]
     public async Task InvokeAsync_AutoProvisionsOrg_StoresATrialEndOnePilotDurationAfterTheStart()
     {
-        var dbOptions = new DbContextOptionsBuilder<ProcuLinkDbContext>()
-            .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
-            .Options;
-        await using var requestDb = new ProcuLinkDbContext(dbOptions);
-
-        var middleware = new TenantResolutionMiddleware(
-            next: _ => Task.CompletedTask,
-            logger: NullLogger<TenantResolutionMiddleware>.Instance);
-
-        var ctx = new DefaultHttpContext();
-        ctx.User = new ClaimsPrincipal(new ClaimsIdentity(new[]
-        {
-            new Claim("org_id", "org_TEST_123"),
-            new Claim("org_slug", "acme-co"),
-            new Claim("sub", "user_TEST_abc"),
-        }, authenticationType: "test"));
-
-        await middleware.InvokeAsync(ctx, requestDb, new FakeAnalyticsService(), dbOptions);
+        var (dbOptions, _) = await ProvisionOrgAsync();
 
         await using var read = new ProcuLinkDbContext(dbOptions);
         var created = await read.Organisations.AsNoTracking().SingleAsync();

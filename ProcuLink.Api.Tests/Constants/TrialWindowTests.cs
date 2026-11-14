@@ -19,7 +19,7 @@ public class TrialWindowTests
     public void EffectiveTrialEnd_IsTheLatestOf_StartPlusThirtyDays_TheStoredEnd_AndTheOverride(
         int? storedEndDays, int? overrideHours, int expectedHours)
     {
-        var start = new DateTime(2026, 10, 29, 11, 57, 0, DateTimeKind.Utc);
+        var start = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
         var end = PlanConstants.GetEffectiveTrialEnd(
             start,

@@ -84,7 +84,8 @@ public sealed record CreateInvoiceResponse(
 /// optional; a present field SETS the override (use a non-negative value to set,
 /// or a negative value / null per <see cref="ClearOrderLimit"/> etc. to clear).
 /// Limits must be non-negative when set. <see cref="ExtendTrialDays"/> is a
-/// convenience that pushes the effective trial end out from now by N days.
+/// convenience that pushes the effective trial end out from now by N days (a date
+/// before the trial's default end changes nothing).
 /// </summary>
 public sealed record SetOrgLimitsRequest(
     int? OrderLimitOverride = null,

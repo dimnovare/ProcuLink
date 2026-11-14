@@ -25,8 +25,9 @@ public class Organisation
     public DateTime? PilotExtensionRequestedAt    { get; set; }
 
     // ── Per-org admin limit/trial overrides ─────────────────────────────────
-    // All nullable + additive. The EFFECTIVE limit/trial-end is the override
-    // when set, otherwise the plan/computed default. Set only by the platform
+    // All nullable + additive. The EFFECTIVE limit is the override when set, otherwise
+    // the plan default; the effective trial end is PlanConstants.GetEffectiveTrialEnd
+    // (the latest of start + PilotDuration, the stored end and the override). Set only by the platform
     // admin surface (POST /api/admin/organisations/{id}/limits) so the founder
     // can grant a prospect extra headroom or a beefier Pilot without changing
     // the plan. Null = no override → plan/computed default applies.
