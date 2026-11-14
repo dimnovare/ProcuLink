@@ -19,7 +19,7 @@ public class Organisation
     public DateTime  TrialStartedAt               { get; set; }
     /// <summary>Set at org creation for Pilot. Historical value remains after upgrade/cancel.</summary>
     public DateTime? TrialEndsAt                  { get; set; }
-    /// <summary>Admin-set override. When set, extends the 14-day deadline.</summary>
+    /// <summary>Unused: nothing reads it. The extension in use is <see cref="TrialEndsAtOverride"/>.</summary>
     public DateTime? PilotExtendedUntil           { get; set; }
     /// <summary>Set when user clicks "Request Pilot extension". Sales signal.</summary>
     public DateTime? PilotExtensionRequestedAt    { get; set; }
@@ -34,7 +34,7 @@ public class Organisation
     public int?      OrderLimitOverride           { get; set; }
     /// <summary>Admin override for the supplier limit. Null ⇒ plan default. Non-negative.</summary>
     public int?      SupplierLimitOverride        { get; set; }
-    /// <summary>Admin override for the Pilot trial end. Null ⇒ computed default (trial_started_at + 14d).</summary>
+    /// <summary>Admin override for the Pilot trial end. The trial never ends before trial_started_at + PlanConstants.PilotDuration; see PlanConstants.GetEffectiveTrialEnd.</summary>
     public DateTime? TrialEndsAtOverride          { get; set; }
 
     // ── Stripe ────────────────────────────────────────────────────────────

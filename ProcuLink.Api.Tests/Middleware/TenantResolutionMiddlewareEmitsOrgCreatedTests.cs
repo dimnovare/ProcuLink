@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using ProcuLink.Api.Middleware;
+using ProcuLink.Core.Constants;
 using ProcuLink.Infrastructure;
 using ProcuLink.Api.Tests.TestDoubles;
 using Xunit;
@@ -43,6 +44,33 @@ public class TenantResolutionMiddlewareEmitsOrgCreatedTests
         Assert.Equal("pilot", ev.Properties["plan"]);
         Assert.Equal("signup_flow", ev.Properties["created_via"]);
         Assert.NotEqual(Guid.Empty, ev.OrgId);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_AutoProvisionsOrg_StoresATrialEndOnePilotDurationAfterTheStart()
+    {
+        var dbOptions = new DbContextOptionsBuilder<ProcuLinkDbContext>()
+            .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
+            .Options;
+        await using var requestDb = new ProcuLinkDbContext(dbOptions);
+
+        var middleware = new TenantResolutionMiddleware(
+            next: _ => Task.CompletedTask,
+            logger: NullLogger<TenantResolutionMiddleware>.Instance);
+
+        var ctx = new DefaultHttpContext();
+        ctx.User = new ClaimsPrincipal(new ClaimsIdentity(new[]
+        {
+            new Claim("org_id", "org_TEST_123"),
+            new Claim("org_slug", "acme-co"),
+            new Claim("sub", "user_TEST_abc"),
+        }, authenticationType: "test"));
+
+        await middleware.InvokeAsync(ctx, requestDb, new FakeAnalyticsService(), dbOptions);
+
+        await using var read = new ProcuLinkDbContext(dbOptions);
+        var created = await read.Organisations.AsNoTracking().SingleAsync();
+        Assert.Equal(PlanConstants.PilotDuration, created.TrialEndsAt!.Value - created.TrialStartedAt);
     }
 
     [Fact]
