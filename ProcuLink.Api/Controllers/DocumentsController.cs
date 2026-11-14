@@ -88,7 +88,7 @@ public sealed class DocumentsController(
         var size = Math.Clamp(pageSize ?? 50, 1, 200);
         var p = Math.Clamp(page.Value, 1, int.MaxValue / size); // an absurd page is an empty page, not an overflowed Skip
         var total = await docs.CountAsync(ct);
-        return Ok(new PaginatedResult<DocumentSummaryDto>(await Summaries(docs.Skip((p - 1) * size).Take(size)), total, p, size));
+        return Ok(new PaginatedResult<DocumentRowDto>(await DocumentListRows.ForAsync(db, orgId, docs.Skip((p - 1) * size).Take(size), ct), total, p, size));
     }
 
     [HttpGet("{id:guid}")]

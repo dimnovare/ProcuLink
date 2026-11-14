@@ -23,6 +23,22 @@ public record DocumentSummaryDto(
             DocumentJson.Deserialize<List<DocumentCheck>>(d.ChecksJson).Count, d.CreatedAt, d.Source, d.SourceRef, d.FlowVersion);
 }
 
+/// <summary>Where sending stopped. Destination is null when it has no name left to give (deleted, or not this workspace's).</summary>
+public sealed record DocumentStopDto(Guid? DestinationId, string? Destination, string? Error);
+
+/// <summary>A row of the app's paged documents list: the summary plus what only the app shows. Never returned by the file API.</summary>
+public sealed record DocumentRowDto : DocumentSummaryDto
+{
+    public DocumentRowDto(DocumentSummaryDto summary) : base(summary) { }
+    public string? Number { get; init; }
+    public string? Sender { get; init; }
+    public IReadOnlyList<string> Checks { get; init; } = [];
+    public DateTime? SentAt { get; init; }
+    public DateTime? FailedAt { get; init; }
+    public DocumentStopDto? Stop { get; init; }
+    public bool IsSample { get; init; }
+}
+
 public record DocumentDto(DocumentSummaryDto Summary, string ContentType, ReadResult Read, IReadOnlyList<DocumentCheck> Checks,
     string? SenderLabel = null);
 
