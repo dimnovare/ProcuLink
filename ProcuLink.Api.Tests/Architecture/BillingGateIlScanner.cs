@@ -20,8 +20,7 @@ namespace ProcuLink.Api.Tests.Architecture;
 /// <para><b>Why IL and not source text.</b> The repo has been bitten before by regex source
 /// scanning (the orphan guard's comment stripper silently hid ~680 lines of <c>Program.cs</c>).
 /// Metadata tokens cannot be fooled by a comment, a string literal, a <c>#if</c>, or a rename that
-/// updates one of two spellings. <c>AcceptanceGateSingleDoorTests</c> made the same call for the
-/// same reason.</para>
+/// updates one of two spellings.</para>
 ///
 /// <para><b>Async is the wrinkle that matters.</b> Every gate site in this codebase is an
 /// <c>async</c> method, whose visible body is a compiler-generated stub that hands off to a state
@@ -30,8 +29,8 @@ namespace ProcuLink.Api.Tests.Architecture;
 /// useless, so <see cref="IlReader.BodyOf"/> follows <see cref="AsyncStateMachineAttribute"/>
 /// before reading any IL.</para>
 ///
-/// <para><b>The IL decoding itself lives in <see cref="IlReader"/>,</b> shared with
-/// <see cref="OutboundArtifactSelectionIlScanner"/>. What is specific to this scanner — and stays
+/// <para><b>The IL decoding itself lives in <see cref="IlReader"/>,</b> shared with the other IL
+/// guards (<see cref="OrgAdminGateIlScanner"/>). What is specific to this scanner — and stays
 /// here — is the <see cref="BillingFeature"/> constant tracking. Duplicating the decoder was the
 /// alternative, and the log records where that leads: two copies drift and the one nobody fixed is
 /// the one still shipping the bug.</para>
@@ -80,18 +79,22 @@ internal static class BillingGateIlScanner
     /// <paramref name="primitive"/>, following calls into our own assemblies up to
     /// <paramref name="maxDepth"/> levels.
     ///
-    /// <para>Depth is needed because the delivery gates do not call the primitive themselves:
-    /// <c>SuppliersController.UpsertDeliveryConfig</c> → <c>DeliveryCapabilityGate.FirstUnmetAsync</c>
-    /// → <c>HasFeatureAsync</c>. A depth-1 scanner would call that site unenforced and demand a
-    /// "fix" that duplicates the gate — the opposite of what WP-11 did.</para>
+    /// <para>Depth lets a gate sit in a helper the named site calls, so a refactor that extracts the
+    /// check into a helper that names the feature itself does not read as a deleted gate. A helper
+    /// that takes <see cref="BillingFeature"/> as a parameter does read as one: it consults the
+    /// ladder, but not about this feature. That is fail-closed, and intended.</para>
+    ///
+    /// <para>Only the feature handed to the primitive AT its call site counts. Until plan 13b
+    /// (2026-11-13) any feature constant on a gating path counted too, a widening that existed for the
+    /// delivery-config gate alone (it passed its features through a list, so the call site carried a
+    /// field load, not a constant). That gate was deleted with the legacy order pipeline, and the
+    /// widening went with it rather than stay behind as a looser guard than the code needs.</para>
     /// </summary>
     public static IReadOnlySet<BillingFeature> FeaturesGatedBy(
         MethodBase root, GatePrimitive primitive, int maxDepth = 4)
     {
         var target = primitive == GatePrimitive.ServerRefusal ? HasFeatureAsync : PlanHasFeature;
         var atCallSite = new HashSet<BillingFeature>();
-        var anywhereOnThePath = new HashSet<BillingFeature>();
-        var reachesPrimitive = false;
 
         var seen = new HashSet<MethodBase>(MethodComparer.Instance);
         var queue = new Queue<(MethodBase Method, int Depth)>();
@@ -102,13 +105,10 @@ internal static class BillingGateIlScanner
             var (method, depth) = queue.Dequeue();
             if (!seen.Add(method)) continue;
 
-            foreach (var f in ConstantFeaturesIn(method)) anywhereOnThePath.Add(f);
-
             foreach (var (callee, feature) in CallsIn(method))
             {
                 if (SameMethod(callee, target))
                 {
-                    reachesPrimitive = true;
                     if (feature is { } f) atCallSite.Add(f);
                     continue;
                 }
@@ -117,54 +117,7 @@ internal static class BillingGateIlScanner
             }
         }
 
-        if (!reachesPrimitive) return new HashSet<BillingFeature>();
-
-        // A gate that names its feature right at the call site (SettingsController.UpdateSftp) is
-        // read exactly. The DELIVERY gate does not have that shape and must not be forced into it:
-        // DeliveryCapabilityGate.RequiredFeatures builds a list of (feature, capability) pairs and
-        // FirstUnmetAsync loops it, so at the HasFeatureAsync call the feature is a field load, not
-        // a constant — deliberately, because the channel and the output format are sold separately
-        // and a single-winner gate was one of the bypasses WP-11 closed. Demanding a constant there
-        // would push the codebase back toward a gate per feature.
-        //
-        // So: once the path is PROVEN to reach the primitive, every BillingFeature constant on that
-        // path counts. The proof of enforcement stays exact (reachesPrimitive is not a heuristic);
-        // only the attribution of which features is widened, and only for paths that do gate.
-        return atCallSite.Count > 0 ? atCallSite : anywhereOnThePath;
-    }
-
-    /// <summary>
-    /// Every <see cref="BillingFeature"/> this method's IL materialises as a constant AND hands to
-    /// something typed to receive one.
-    ///
-    /// <para>The "and hands to" half is not optional. <see cref="BillingFeature"/> has ten members,
-    /// so ordinals 0-8 are exactly the values <c>ldc.i4.0</c>-<c>ldc.i4.8</c> push — the most common
-    /// instructions in any method. Reading bare constants would attribute a loop counter or a
-    /// boolean to <c>BulkMapping</c> and report every method in the codebase as a billing gate.
-    /// Requiring the constant to land on a <see cref="BillingFeature"/>-typed parameter (of
-    /// <c>HasFeatureAsync</c>, of <c>PlanHasFeature</c>, or of the
-    /// <c>ValueTuple&lt;BillingFeature, string&gt;</c> that <c>RequiredFeatures</c> builds) removes
-    /// that entire class of false positive.</para>
-    /// </summary>
-    private static IEnumerable<BillingFeature> ConstantFeaturesIn(MethodBase method)
-    {
-        foreach (var (callee, feature) in CallsIn(method))
-        {
-            if (feature is not { } f) continue;
-            if (TakesAFeature(callee)) yield return f;
-        }
-    }
-
-    private static bool TakesAFeature(MethodBase callee)
-    {
-        try
-        {
-            return callee.GetParameters().Any(p => p.ParameterType == typeof(BillingFeature));
-        }
-        catch
-        {
-            return false;
-        }
+        return atCallSite;
     }
 
     /// <summary>
@@ -230,7 +183,9 @@ internal static class BillingGateIlScanner
     /// the stack at a <c>HasFeatureAsync</c> call is the feature itself — the org id is a
     /// <c>Guid</c> (loaded, not pushed as <c>ldc.i4</c>) and the cancellation token is an argument.
     /// A site that ever pushes another <c>ldc.i4</c> between the feature and the call would be
-    /// mis-read, so the reverse index reports a null feature rather than guessing.
+    /// mis-read. The constant is cleared only at a call, so a feature passed through a local that
+    /// was set from a constant earlier still reads as that constant; a feature with no constant
+    /// before its call (a field, a parameter) reads as null.
     /// </summary>
     private static IEnumerable<(MethodBase Callee, BillingFeature? Feature)> CallsIn(MethodBase method)
     {
@@ -294,8 +249,8 @@ internal static class BillingGateIlScanner
 
     /// <summary>
     /// Reports a compiler-generated state-machine <c>MoveNext</c> under the async method a human
-    /// wrote, so the reverse index names <c>SettingsController.UpdateSftp</c> rather than
-    /// <c>&lt;UpdateSftp&gt;d__12.MoveNext</c>.
+    /// wrote, so the reverse index names <c>AuditController.GetAuditLog</c> rather than
+    /// <c>&lt;GetAuditLog&gt;d__3.MoveNext</c>.
     /// </summary>
     private static MethodBase Unwrap(MethodBase method, Type declaringType)
     {

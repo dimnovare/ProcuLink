@@ -5,21 +5,17 @@ using ProcuLink.Core.Entities;
 namespace ProcuLink.Transform.Output;
 
 /// <summary>
-/// Shared canonical-header reader for the output transforms. Consolidates the four byte-identical
-/// <c>ExtractBuyerName</c> copies that lived in <see cref="CsvTransformService"/>,
-/// <see cref="JsonTransformService"/>, <see cref="MappedTransformService"/>, and
-/// <see cref="ScribanOrderModel"/> into one place.
+/// Shared canonical-header reader for the output transforms: the one <c>ExtractBuyerName</c>.
 ///
 /// <para><b>COLUMN-FIRST CONTRACT.</b> The denormalised typed column
 /// (<see cref="PurchaseOrderEntity.BuyerName"/>) is the source of truth — it is always populated by
-/// the async parse path (<c>ParseStoredFileAsync</c>), which deliberately does NOT write
+/// the async parse path, which deliberately does NOT write
 /// <c>canonical_json</c>. <c>canonical_json</c> is consulted ONLY as a legacy fallback for orders
 /// created via the sync (non-file) ingress path. Reading <c>canonical_json</c> first would deliver an
 /// empty buyer for every async-parsed order (prod incident 14c340a1, 2026-06-13).</para>
 ///
-/// <para>Behaviour is byte-identical to the four copies it replaces, with one addition: malformed
-/// <c>canonical_json</c> is now LOGGED (then ignored, returning empty) rather than swallowed silently,
-/// so a corrupt payload is observable. Logging is a no-op until the composition root wires
+/// <para>Malformed <c>canonical_json</c> is LOGGED (then ignored, returning empty) rather than
+/// swallowed silently, so a corrupt payload is observable. Logging is a no-op until the composition root wires
 /// <see cref="TransformDiagnostics.LoggerFactory"/>.</para>
 /// </summary>
 internal static class OrderHeaderReader

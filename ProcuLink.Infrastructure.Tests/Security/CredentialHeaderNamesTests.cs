@@ -273,7 +273,8 @@ public class CredentialHeaderNamesTests
     {
         DeliveryConfigTransport.FindCredentialHeaders(StoredWithToken).Should().NotBeEmpty();
 
-        var message = DeliveryConfigTransport.DescribeCredentialHeaders(StoredWithToken);
+        var message = new CredentialHeaderInConfigException(
+            DeliveryConfigTransport.FindCredentialHeaders(StoredWithToken)).PolicyMessage;
 
         message.Should().NotBeNullOrWhiteSpace();
         message.Should().Contain("'Authorization'");
@@ -285,17 +286,11 @@ public class CredentialHeaderNamesTests
     [Fact]
     public void TwoOffendingHeaders_ReadAsAPlural()
     {
-        var message = DeliveryConfigTransport.DescribeCredentialHeaders(
-            """{"headers":{"Authorization":"Bearer a","X-Api-Key":"b"}}""");
+        var message = new CredentialHeaderInConfigException(DeliveryConfigTransport.FindCredentialHeaders(
+            """{"headers":{"Authorization":"Bearer a","X-Api-Key":"b"}}""")).PolicyMessage;
 
         message.Should().StartWith("Delivery config headers 'Authorization', 'X-Api-Key' hold credentials.");
     }
-
-    [Fact]
-    public void ACleanConfig_HasNoMessage() =>
-        DeliveryConfigTransport.DescribeCredentialHeaders(
-                """{"url":"https://s.example/o","headers":{"Content-Type":"application/xml"}}""")
-            .Should().BeNull();
 
     // ── The exception ────────────────────────────────────────────────────────
 

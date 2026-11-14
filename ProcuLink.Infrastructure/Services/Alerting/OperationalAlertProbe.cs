@@ -5,12 +5,11 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Alerting;
-using ProcuLink.Core.Services.Email;
 
 namespace ProcuLink.Infrastructure.Services.Alerting;
 
 /// <summary>
-/// Reads the three alert signals no existing health surface computed. EF Core only, no raw SQL.
+/// Reads the alert signals no existing health surface computed. EF Core only, no raw SQL.
 /// <para>
 /// EVERY query here is deliberately CROSS-TENANT — deliberately NOT scoped by <c>org_id</c>. This is
 /// a system health probe for the single operator, exactly like
@@ -23,21 +22,8 @@ namespace ProcuLink.Infrastructure.Services.Alerting;
 /// </summary>
 public sealed class OperationalAlertProbe : IOperationalAlertProbe
 {
-    /// <summary>Operator-facing pull-channel names. Also the ids used in alert text.</summary>
-    public const string EmailChannel = "email";
-    public const string SftpChannel  = "sftp";
-    public const string S3Channel    = "s3";
-
-    /// <summary>
-    /// Recurring-job ids registered in <c>ProcuLink.Worker.Worker.StartAsync</c>. Used as the
-    /// migration-free last-poll evidence for the two channels that persist none of their own.
-    /// </summary>
-    public const string SftpPollingJobId = "sftp-polling";
-    public const string S3PollingJobId   = "s3-polling";
-
     private readonly ProcuLinkDbContext _db;
     private readonly IAiUsageTracker _aiUsage;
-    private readonly IRecurringJobLastExecutionSource _recurringJobs;
     private readonly WorkerHealthAlertOptions _options;
     private readonly ILogger<OperationalAlertProbe> _logger;
     private readonly Func<DateTime> _utcNow;
@@ -45,14 +31,12 @@ public sealed class OperationalAlertProbe : IOperationalAlertProbe
     public OperationalAlertProbe(
         ProcuLinkDbContext db,
         IAiUsageTracker aiUsage,
-        IRecurringJobLastExecutionSource recurringJobs,
         WorkerHealthAlertOptions options,
         ILogger<OperationalAlertProbe> logger,
         Func<DateTime>? utcNow = null)
     {
         _db = db;
         _aiUsage = aiUsage;
-        _recurringJobs = recurringJobs;
         _options = options;
         _logger = logger;
         _utcNow = utcNow ?? (() => DateTime.UtcNow);
@@ -64,7 +48,6 @@ public sealed class OperationalAlertProbe : IOperationalAlertProbe
 
         return new OperationalAlertSignals(
             await ReadDeliveryFailureRateAsync(now, ct),
-            await ReadPullChannelsAsync(now, ct),
             await ReadAiTokenLatchAsync(now, ct));
     }
 
@@ -91,122 +74,6 @@ public sealed class OperationalAlertProbe : IOperationalAlertProbe
         var failures = await concluded.CountAsync(a => a.Status == DeliveryAttempt.StatusFailed, ct);
 
         return new DeliveryFailureRateSignal(window, attempts, failures);
-    }
-
-    // ── Pull channels ────────────────────────────────────────────────────────────
-
-    private async Task<IReadOnlyList<PullChannelSignal>> ReadPullChannelsAsync(
-        DateTime now, CancellationToken ct)
-    {
-        return new[]
-        {
-            await ReadEmailChannelAsync(now, ct),
-            await ReadDispatcherBackedChannelAsync(
-                SftpChannel, SftpPollingJobId,
-                await _db.SftpIngressConfigs.AsNoTracking().CountAsync(c => c.IsEnabled, ct),
-                now),
-            await ReadDispatcherBackedChannelAsync(
-                S3Channel, S3PollingJobId,
-                await _db.S3IngressConfigs.AsNoTracking().CountAsync(c => c.IsEnabled, ct),
-                now),
-        };
-    }
-
-    /// <summary>
-    /// IMAP is the one pull channel with a genuine persisted success stamp:
-    /// <c>EmailPollingConfig.LastPolledAt</c>, written by <c>EmailPollOrgJob</c> only after a
-    /// successful disconnect. The freshest stamp across ENABLED orgs is used — a disabled org's
-    /// fresh timestamp must never mask a live org's stalled channel.
-    /// <para>
-    /// The consequence, stated plainly because it limits what an alert off this can claim: taking
-    /// the NEWEST makes this a CHANNEL-level signal ("is anyone still polling successfully"), so one
-    /// org with broken IMAP credentials among several healthy ones will not raise it. That is the
-    /// deliberate trade — the alternative (oldest) pages the operator over a single customer's
-    /// misconfiguration, which is the false-page shape this whole design avoids.
-    /// </para>
-    /// </summary>
-    private async Task<PullChannelSignal> ReadEmailChannelAsync(DateTime now, CancellationToken ct)
-    {
-        // The stamp lives inside a JSON blob, so the parse happens in memory. Only the enabled orgs'
-        // blobs are fetched, which is the same candidate set EmailPollingJob dispatches over.
-        var configs = await _db.Organisations
-            .AsNoTracking()
-            .Where(o => o.EmailPollingEnabled)
-            .Select(o => o.EmailConfigJson)
-            .ToListAsync(ct);
-
-        DateTime? newest = null;
-        foreach (var json in configs)
-        {
-            var polledAt = SafeLastPolledAt(json);
-            if (polledAt is { } at && (newest is null || at > newest))
-                newest = at;
-        }
-
-        return new PullChannelSignal(EmailChannel, configs.Count, MinutesSince(newest, now));
-    }
-
-    /// <summary>
-    /// SFTP and S3 persist no last-successful-poll timestamp, and adding one is a schema change.
-    /// The recurring dispatcher's own last execution is the migration-free stand-in: it proves the
-    /// channel is still being polled at all, which is the "dead pull channel" case. It does NOT
-    /// prove one org's credentials still work — that per-org symptom is out of this probe's reach
-    /// and is called out in the monitoring runbook.
-    /// </summary>
-    private Task<PullChannelSignal> ReadDispatcherBackedChannelAsync(
-        string channel, string recurringJobId, int enabledOrgs, DateTime now)
-    {
-        DateTime? lastRun;
-        try
-        {
-            lastRun = _recurringJobs.GetLastExecutionUtc(recurringJobId);
-        }
-        catch (Exception ex)
-        {
-            // Treated as "unknown", never as "stalled": an unreadable scheduler must not page.
-            _logger.LogWarning(ex,
-                "OperationalAlertProbe: could not read last execution of recurring job {JobId}.",
-                recurringJobId);
-            lastRun = null;
-        }
-
-        return Task.FromResult(new PullChannelSignal(channel, enabledOrgs, MinutesSince(lastRun, now)));
-    }
-
-    /// <summary>
-    /// Parses <c>EmailPollingConfig</c> out of the org's stored JSON, reusing the same deserialiser
-    /// the settings service writes with. A malformed blob yields null (unknown), never a throw —
-    /// one corrupt org row must not blind the whole sweep.
-    /// </summary>
-    private DateTime? SafeLastPolledAt(string? json)
-    {
-        try
-        {
-            return EmailPollingConfig.FromJson(json).LastPolledAt;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "OperationalAlertProbe: unreadable email polling config; ignoring it.");
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Age in minutes, or null when the timestamp is unknown. A Local-kind value is CONVERTED
-    /// (not relabelled), and an Unspecified one is read as UTC — everything in this repo stamps
-    /// <c>DateTime.UtcNow</c>, and a silent timezone shift here would move an age by hours and so
-    /// either invent a stall or hide one.
-    /// </summary>
-    private static double? MinutesSince(DateTime? at, DateTime now)
-    {
-        if (at is not { } value)
-            return null;
-
-        var utc = value.Kind == DateTimeKind.Local
-            ? value.ToUniversalTime()
-            : DateTime.SpecifyKind(value, DateTimeKind.Utc);
-
-        return (now - utc).TotalMinutes;
     }
 
     // ── AI token-cap latch ───────────────────────────────────────────────────────

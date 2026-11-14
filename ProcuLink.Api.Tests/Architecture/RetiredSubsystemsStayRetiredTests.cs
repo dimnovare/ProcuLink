@@ -29,14 +29,17 @@ namespace ProcuLink.Api.Tests.Architecture;
 /// <para><b>Disambiguation is the whole game here</b> — three near-namesakes survive on purpose and
 /// MUST NOT be matched by these patterns:</para>
 /// <list type="bullet">
-///   <item><c>OutputTemplateEmitter</c> / <c>OrderMappingOverride.OutputTemplate</c> — the live
-///     OutputNode AST emitter and the per-order Scriban escape hatch. Unrelated to the retired
+///   <item><c>OutputTemplateEmitter</c> — the live
+///     OutputNode AST emitter. Unrelated to the retired
 ///     <c>OutputTemplate</c> ENTITY.</item>
 ///   <item><c>RuleDefinition</c> + <c>SupplierAcceptanceRule</c> — the rule engine that actually
 ///     runs. The retired one is <c>ValidationRule</c>.</item>
-///   <item><c>InboundEmailController</c> (Postmark, LIVE) and <c>BillingFeature.WebhookDelivery</c> /
-///     <c>IntegrationSubscription</c> (OUTBOUND webhooks the org fires at THEIR systems, LIVE).
-///     The retired one is INBOUND webhook ingress.</item>
+///   <item><c>InboundEmailController</c> (Postmark, LIVE). The retired one is INBOUND webhook
+///     ingress. (<c>BillingFeature.WebhookDelivery</c> was listed here too until plan 13b deleted it
+///     with the legacy supplier delivery config it gated.) <c>IntegrationSubscription</c>
+///     (order-event webhooks the org pointed at THEIR systems) is
+///     RETIRED too since plan 13b (2026-11-13): its rows are kept but inert, with no sender and no
+///     revocation surface. <see cref="IntegrationSubscriptionSender_StaysRetired"/> keeps it so.</item>
 /// </list>
 /// </summary>
 public class RetiredSubsystemsStayRetiredTests
@@ -91,7 +94,7 @@ public class RetiredSubsystemsStayRetiredTests
     public void InboundWebhookIngress_HasNoConsumerAnywhere()
     {
         AssertNoSourceReference(
-            "WP-09 inbound webhook ingress (NOT inbound email, NOT outbound webhook subscriptions)",
+            "WP-09 inbound webhook ingress (NOT inbound email, NOT the kept integration_subscriptions rows)",
             new[]
             {
                 @"\bWebhookIngressController\b",
@@ -112,7 +115,7 @@ public class RetiredSubsystemsStayRetiredTests
     /// <summary>
     /// The counter-test: the LIVE near-namesakes must still be present. Without it, a future
     /// over-broad "cleanup" could satisfy every assertion above by deleting inbound email or the
-    /// org's outbound webhook subscriptions and this file would applaud.
+    /// kept integration_subscriptions mapping and this file would applaud.
     ///
     /// <para><b>This test used to be decorative and is deliberately no longer a source scan.</b> It
     /// asserted only that an identifier STRING appeared in some <c>.cs</c> file. Every subject is
@@ -148,16 +151,6 @@ public class RetiredSubsystemsStayRetiredTests
         HttpActionCount(inboundEmail).Should().BeGreaterThan(0,
             "a controller with no HTTP action answers 404 for every inbound delivery");
 
-        // ── The org's OUTBOUND webhook subscriptions — LIVE, and the subsystem most at risk of
-        //    being confused with the retired INBOUND ingress.
-        var integrations = LiveType("ProcuLink.Api", "ProcuLink.Api.Controllers.IntegrationController",
-            "the org's OUTBOUND webhook subscriptions (events fired at THEIR systems) are LIVE — only the " +
-            "INBOUND ingress was retired");
-        RouteTemplateOf(integrations).Should().Be("api/integrations",
-            "the outbound-subscription endpoints are what the subscriptions UI calls");
-        HttpActionCount(integrations).Should().BeGreaterThan(2,
-            "list / create / delete are the minimum the subscriptions UI calls");
-
         // ── The entities behind the LIVE subsystems, asserted against the EF MODEL rather than the
         //    source text: an entity class that survives but is no longer mapped is a silent
         //    retirement, which is precisely the failure mode this file exists to catch.
@@ -168,43 +161,71 @@ public class RetiredSubsystemsStayRetiredTests
         foreach (var (fullName, why) in new[]
                  {
                      ("ProcuLink.Core.Entities.IntegrationSubscription",
-                      "outbound webhook subscriptions — LIVE"),
+                      "its sender is retired (plan 13b, 2026-11-13) but the rows are kept, inert, and " +
+                      "CredentialBindingBackfillService still re-encrypts their secrets — no drops"),
+                     // 2026-11-13 (plan 13b, Task 7b): the acceptance evaluator, the rule-definition
+                     // service and their RuleCatalog seed source were deleted as orphans. The two
+                     // entities stay mapped because their tables stay (R2: no drops); their
+                     // RuleCatalog.Entries assertion went with RuleCatalog.
                      ("ProcuLink.Core.Entities.SupplierAcceptanceRule",
-                      "the rule engine that actually evaluates — LIVE (the retired one is ValidationRule)"),
+                      "its evaluator is deleted (plan 13b) but the rows are kept, inert — no drops"),
                      ("ProcuLink.Core.Entities.RuleDefinition",
-                      "bound to SupplierAcceptanceRule — LIVE, and seeded per-org from RuleCatalog"),
+                      "its service and seed are deleted (plan 13b) but the rows are kept, inert — no drops"),
                  })
         {
             mapped.Should().Contain(fullName,
                 $"{fullName} must still be mapped by ProcuLinkDbContext: {why}");
         }
 
-        // ── The rule engine's seed source. "RuleDefinition still compiles" is not the claim; the
-        //    claim is that the catalog an org's rules are materialised FROM still has entries.
-        RuleCatalog.Entries.Should().NotBeEmpty(
-            "RuleCatalog seeds the per-org RuleDefinition rows the supplier acceptance engine binds to");
-
         // ── The OutputNode AST emitter — LIVE, and the near-namesake of the retired OutputTemplate
         //    ENTITY. Assert its rendering entry point, not its name.
         LiveType("ProcuLink.Transform", "ProcuLink.Transform.Output.OutputTemplateEmitter",
-            "the OutputNode AST emitter is the live structured-output path (OrdersController preview + " +
-            "OrderTransformService); it is unrelated to the retired OutputTemplate ENTITY")
-            .GetMethod("Emit").Should().NotBeNull("OutputTemplateEmitter.Emit is that path's entry point");
+            "the OutputNode AST emitter is the live structured-output path (DocumentOutputRenderer, " +
+            "every flow output); it is unrelated to the retired OutputTemplate ENTITY")
+            .GetMethod("EmitRows").Should().NotBeNull("OutputTemplateEmitter.EmitRows is that path's entry point");
+    }
 
-        // ── The outbound-webhook billing gate. An enum member alone proves nothing (an orphan member
-        //    compiles fine) — what makes the feature real is that the plan gate answers for it. Parsed
-        //    by name so deleting the member fails HERE rather than at compile time.
-        Enum.TryParse<BillingFeature>("WebhookDelivery", out var webhookDelivery)
-            // Precise on purpose: WebhookDelivery gates the http DELIVERY CHANNEL a purchase order
-            // is sent over (SuppliersController.UpsertDeliveryConfig, via DeliveryCapabilityGate).
-            // It does NOT gate IntegrationSubscription — the order.created/delivered/failed events
-            // fired at the customer's own systems, which are deliberately ungated. The old wording
-            // here conflated the two and read as a claim that POST /api/integrations is plan-gated.
-            .Should().BeTrue("BillingFeature.WebhookDelivery gates the http delivery channel, which is live");
-        PlanConstants.PlanHasFeature(PlanConstants.Growth, webhookDelivery)
-            .Should().BeTrue("outbound webhook delivery is a Growth+ feature and must stay gated, not removed");
-        PlanConstants.PlanHasFeature(PlanConstants.Pilot, webhookDelivery)
-            .Should().BeFalse("…and must still be withheld below Growth, or the gate was deleted rather than kept");
+    /// <summary>
+    /// Plan 13b (2026-11-13) — the order-event webhook SENDER (<c>FireIntegrationTriggerJob</c>) is
+    /// retired. <c>IntegrationSubscription</c> rows are kept (no drops) but inert: nothing sends to
+    /// them, and no surface is left to list or revoke them. A sender that came back would POST to URLs
+    /// nobody can switch off, so no production file may name the subscription URL except the three
+    /// that declare and map the column. Prose counts on purpose, as in WP-09 above.
+    /// </summary>
+    [Fact]
+    public void IntegrationSubscriptionSender_StaysRetired()
+    {
+        var allowed = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "ProcuLink.Core/Entities/IntegrationSubscription.cs",                    // the declaration
+            "ProcuLink.Infrastructure/ProcuLinkDbContext.cs",                        // the column mapping
+            "ProcuLink.Infrastructure/Migrations/ProcuLinkDbContextModelSnapshot.cs", // the current model
+        };
+        var rx = new Regex(@"\bTargetUrl\b|\btarget_url\b", RegexOptions.Compiled);
+        var root = RepoRoot();
+        var seenAllowed = 0;
+        var hits = new List<string>();
+
+        foreach (var file in SourceFiles())
+        {
+            var rel = Path.GetRelativePath(root, file).Replace('\\', '/');
+            if (rel.Contains(".Tests/", StringComparison.Ordinal) ||
+                rel.StartsWith("ProcuLink.TestSupport/", StringComparison.Ordinal))
+                continue;
+            var lines = File.ReadAllLines(file);
+            for (var i = 0; i < lines.Length; i++)
+            {
+                if (!rx.IsMatch(lines[i])) continue;
+                if (allowed.Contains(rel)) seenAllowed++;
+                else hits.Add($"  {rel}:{i + 1}  {lines[i].Trim()}");
+            }
+        }
+
+        seenAllowed.Should().BeGreaterThan(0,
+            "the scan must at least see the column mapping, or it read nothing and its silence proves nothing");
+        hits.Should().BeEmpty(
+            "the integration-subscription sender is RETIRED (rows inert, no sender, no revocation surface) — " +
+            $"no production file may read the subscription URL.\nFound {hits.Count} reference(s):\n{string.Join("\n", hits)}\n");
     }
 
     /// <summary>Resolve a type by name, failing with WHY it matters rather than with a null-ref.</summary>

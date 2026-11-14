@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using FluentAssertions;
 using ProcuLink.Core.Constants;
 using Xunit;
@@ -27,6 +28,18 @@ namespace ProcuLink.Infrastructure.Tests.Constants;
 public class OrderStatusBucketPartitionTests
 {
     /// <summary>
+    /// Every status the product knows: each <c>public const string</c> on
+    /// <see cref="OrderStatusConstants"/>. (2026-11-13, plan 13b: this read
+    /// <c>OrderStatusMachine.AllStatuses</c>, the transition map's keys; the machine was deleted with
+    /// the order pipeline, and the constants it keyed on are what remain.)
+    /// </summary>
+    private static readonly IReadOnlyCollection<string> AllStatuses = typeof(OrderStatusConstants)
+        .GetFields(BindingFlags.Public | BindingFlags.Static)
+        .Where(f => f.IsLiteral && f.FieldType == typeof(string))
+        .Select(f => (string)f.GetRawConstantValue()!)
+        .ToArray();
+
+    /// <summary>
     /// The five buckets, as (name, members). <see cref="OrderStatusConstants.Delivered"/> and
     /// <see cref="OrderStatusConstants.DeliveryHeld"/> are single-member buckets by nature: one is
     /// the only success, the other is a deliberate, self-releasing billing pause that the founder
@@ -48,7 +61,7 @@ public class OrderStatusBucketPartitionTests
         var unclassified = new List<string>();
         var multiplyClassified = new List<string>();
 
-        foreach (var status in OrderStatusMachine.AllStatuses)
+        foreach (var status in AllStatuses)
         {
             var homes = Buckets.Where(b => b.Members.Contains(status)).Select(b => b.Name).ToList();
             if (homes.Count == 0) unclassified.Add(status);
@@ -75,7 +88,7 @@ public class OrderStatusBucketPartitionTests
             16, "the five buckets held 16 statuses between them when this floor was written");
 
         var unknown = members
-            .Where(m => !OrderStatusMachine.AllStatuses.Contains(m.Status))
+            .Where(m => !AllStatuses.Contains(m.Status))
             .Select(m => $"{m.Name} lists '{m.Status}'")
             .ToList();
 
@@ -90,11 +103,11 @@ public class OrderStatusBucketPartitionTests
     [Fact]
     public void ThePartitionWalk_IsNotEmpty()
     {
-        OrderStatusMachine.AllStatuses.Should().HaveCountGreaterThanOrEqualTo(
+        AllStatuses.Should().HaveCountGreaterThanOrEqualTo(
             16, "the machine knew 16 statuses when this floor was written");
         Buckets.Should().HaveCount(5);
         Buckets.Sum(b => b.Members.Count).Should().Be(
-            OrderStatusMachine.AllStatuses.Count,
+            AllStatuses.Count,
             "a partition covers every status exactly once, so the bucket sizes must add up");
 
         // The two statuses whose absence from the dashboard's exception set caused the defect.

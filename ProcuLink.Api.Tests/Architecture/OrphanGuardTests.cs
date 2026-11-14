@@ -82,32 +82,20 @@ public sealed class OrphanGuardTests
             + "The reader is framework code outside this repo, so no in-repo reader can exist. "
             + "Permanent entry — do not 'fix'."),
         new KnownWriteOnly("CanonicalFieldDef",
-            "2026-07-30 — flagged by this guard but NOT a dead surface. Corrected after checking the "
-            + "other repo: the only in-repo reader is its own CanonicalFieldsController, which is all a "
-            + "backend-only scan can see, but the real consumer is the mapper in project-proculink "
-            + "(origin/main src/components/bridge/mapper/useMapperModel.ts:249 fetches it through "
-            + "src/lib/api/canonical-fields.ts, and mergeCanonicalNodes places a custom field alongside "
-            + "the system spine so it can be wired exactly like a built-in — the resulting wire lands in "
-            + "the mapping tables the engine DOES read). Recorded as a limit of the guard, not as a "
-            + "cleanup target. Do not delete this on the strength of this entry."),
+            "2026-11-12 — plan 13b removed CanonicalFieldsController and the frontend mapper that "
+            + "was this table's only consumer (the entity, table and migrations stay: legacy removal "
+            + "drops no tables). Nothing in either repo reads or writes it now."),
 
         // ── WP-04 findings, 2026-07-30. Recorded, NOT fixed: each belongs to another packet.
         new KnownWriteOnly("Buyer",
-            "WP-04 finding 2026-07-30 — FOUNDER CALL. Both repos checked at origin/main before writing "
-            + "this. The surface is live: project-proculink src/app/(app)/library/buyers/page.tsx, full "
-            + "CRUD at src/lib/api-client.ts L1917-L1946 against /api/buyers. But no row of this table "
-            + "reaches the engine: PurchaseOrderEntity has NO BuyerId foreign key — BuyerService.ListAsync "
-            + "joins buyers to orders on the denormalised buyer_name STRING, for display counts only — and "
-            + "IBuyerService is referenced by nothing but BuyersController and the DI roots. Buyers is "
-            + "therefore a directory the user maintains that no parse / mapping / transform / delivery / "
-            + "billing path reads. Whether the concept should exist at all is a product decision, which is "
-            + "why this one is a founder question and the others are not."),
+            "2026-11-12 — plan 13b removed BuyersController and the /library/buyers screen. "
+            + "2026-11-13 — Task 7b deleted BuyerService; the entity, table and DbSet stay (R2). No "
+            + "route or service in either repo reaches them."),
         new KnownWriteOnly("MappingCorrection",
-            "WP-04 finding 2026-07-30: written by ItemMappingService (~L120) when a user changes a "
-            + "mapping's supplier item code, and read by NOTHING — no reader in any of the five "
-            + "production projects, no endpoint anywhere in ProcuLink.Api, and no route referencing it "
-            + "in project-proculink at origin/main. The correction trail is captured and discarded; "
-            + "fingerprint learning runs off SchemaFingerprint, not this table."),
+            "WP-04 finding 2026-07-30: was written by ItemMappingService when a user changed a "
+            + "mapping's supplier item code, and read by NOTHING. 2026-11-13 — plan 13b Task 7b "
+            + "deleted ItemMappingService, so nothing writes it either; the entity, table and DbSet "
+            + "stay (R2)."),
         new KnownWriteOnly("RetentionAuditLog",
             "WP-04 finding 2026-07-30, judged LEGITIMATELY write-mostly: an append-only evidence trail "
             + "written by BlobRetentionService (~L225) with a DetailsJson payload, so that 'what did the "
@@ -311,31 +299,6 @@ public sealed class OrphanGuardTests
     }
 
     // ── Regressions locked against a previously-refuted implementation of this guard ─────
-
-    /// <summary>
-    /// An earlier build of this guard let <c>CanonicalFieldDefs</c> pass with
-    /// <c>CanonicalFieldsController</c> as its only reader, because its name heuristics did not
-    /// connect "CanonicalFields" to the entity "CanonicalFieldDef". The store is caught here
-    /// structurally instead — the controller both reads and writes it, and nothing references the
-    /// controller — so the catch does not depend on the two names resembling each other.
-    ///
-    /// <para>This asserts the DETECTOR still sees the shape, not that the store is dead: this
-    /// particular one is consumed by the frontend mapper, which is written up on its allowlist
-    /// entry. The shape — a table whose only reader is the controller that maintains it — is what
-    /// has to keep being visible, because the next one will not have a frontend behind it.</para>
-    /// </summary>
-    [Fact]
-    public void Guard_CatchesAStore_WhoseOnlyReaderIsItsOwnController()
-    {
-        var finding = Scan.Value.Orphans.SingleOrDefault(o => o.EntityName == "CanonicalFieldDef");
-
-        Assert.True(finding is not null,
-            "CanonicalFieldDef is no longer detected as an orphan. If it genuinely gained a consumer, "
-            + "delete its KnownWriteOnly entry and this test. If the DETECTOR stopped seeing it, the "
-            + "guard has regressed to the false-green it was built to avoid.");
-
-        Assert.Contains(finding!.Owners, o => o.EndsWith("CanonicalFieldsController.cs", StringComparison.Ordinal));
-    }
 
     /// <summary>
     /// The ingress dedupe ledgers are read through <c>_db.Set&lt;ImportedSftpFile&gt;()</c> and
@@ -727,7 +690,13 @@ public sealed class OrphanGuardTests
 
         var expected = Registrations(raw);
 
-        Assert.True(expected > 50, $"expected the API composition root to register plenty; found {expected}");
+        // 50 -> 42 on 2026-11-13 (plan 13b, Task 7b): the supplier/catalog/mapping/acceptance/
+        // connection/detection sweep removed 17 scoped registrations, leaving 43. The floor only
+        // keeps the equality below from comparing two near-empty counts; it sits one under today's
+        // count so the next removal has to revisit it on purpose.
+        // 42 -> 40 on 2026-11-13 (plan 13b, Task 7b pass 2): IDeliveryConfigService and
+        // IEffectiveConnectionConfigResolver went, leaving 41. Again one under today's count.
+        Assert.True(expected > 40, $"expected the API composition root to register plenty; found {expected}");
         Assert.Equal(expected, Registrations(scanned.Text));
     }
 

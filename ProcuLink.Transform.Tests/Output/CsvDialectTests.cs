@@ -1,5 +1,4 @@
 using System.Text;
-using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Transform.Output;
@@ -28,22 +27,12 @@ namespace ProcuLink.Transform.Tests.Output;
 /// </summary>
 public class CsvDialectTests
 {
-    private static PurchaseOrderEntity Order(string? note = null)
+    /// <summary>The shared header with <paramref name="note"/> as the buyer name, the value the oddly-shaped cells ride in.</summary>
+    private static Dictionary<string, string> HeaderWith(string? note = null)
     {
-        var id = Guid.NewGuid();
-        return new PurchaseOrderEntity
-        {
-            Id = id, OrgId = Guid.NewGuid(), SupplierId = Guid.NewGuid(),
-            PoNumber = "PO-1", Currency = "EUR", OrderDate = new DateOnly(2026, 6, 15),
-            BuyerName = note,
-            Lines =
-            {
-                new PurchaseOrderLineEntity { Id = Guid.NewGuid(), OrderId = id, LineNumber = 1,
-                    SupplierItemCode = "S-1", Quantity = 3m, UnitPrice = 10m, NeedsReview = false },
-                new PurchaseOrderLineEntity { Id = Guid.NewGuid(), OrderId = id, LineNumber = 2,
-                    SupplierItemCode = "S-2", Quantity = 2m, UnitPrice = 5m, NeedsReview = false },
-            },
-        };
+        var header = EmitterRows.Header();
+        header["BuyerName"] = note ?? string.Empty;
+        return header;
     }
 
     private static OutputNodeTemplate Tree(CsvDialect? dialect = null, string headerField = "PoNumber") => new()
@@ -57,14 +46,8 @@ public class CsvDialectTests
                 OutputNode.FieldOf("Qty", new OutputFieldRule { OutputPath = "Qty", CanonicalField = "Quantity" })))),
     };
 
-    private static byte[] EmitBytes(OutputNodeTemplate t, PurchaseOrderEntity? order = null)
-    {
-        var r = new OutputTemplateEmitter().Emit(t, order ?? Order(), new OrderMappingOverride());
-        r.Content.Position = 0;
-        using var ms = new MemoryStream();
-        r.Content.CopyTo(ms);
-        return ms.ToArray();
-    }
+    private static byte[] EmitBytes(OutputNodeTemplate t, Dictionary<string, string>? header = null) =>
+        EmitterRows.Emit(t, header ?? HeaderWith(), EmitterRows.TwoLines()).Bytes();
 
     // ── The oracle ───────────────────────────────────────────────────────────
 
@@ -154,12 +137,12 @@ public class CsvDialectTests
     {
         var withComma = Encoding.UTF8.GetString(EmitBytes(
             Tree(new CsvDialect { Delimiter = ";", LineEnding = "\n" }, headerField: "BuyerName"),
-            Order("Acme, Inc")));
+            HeaderWith("Acme, Inc")));
         Assert.Contains("\"Acme, Inc\";S-1;3", withComma);
 
         var withSemicolon = Encoding.UTF8.GetString(EmitBytes(
             Tree(new CsvDialect { Delimiter = ";", LineEnding = "\n" }, headerField: "BuyerName"),
-            Order("Acme; Inc")));
+            HeaderWith("Acme; Inc")));
         Assert.Contains("\"Acme; Inc\";S-1;3", withSemicolon);
     }
 
@@ -186,7 +169,7 @@ public class CsvDialectTests
     {
         var text = Encoding.UTF8.GetString(EmitBytes(
             Tree(new CsvDialect { QuotePolicy = "always", LineEnding = "\n" }, headerField: "BuyerName"),
-            Order("He said \"hi\"")));
+            HeaderWith("He said \"hi\"")));
 
         Assert.Contains("\"He said \"\"hi\"\"\"", text);
     }
@@ -228,7 +211,7 @@ public class CsvDialectTests
     {
         var bytes = EmitBytes(
             Tree(new CsvDialect { Encoding = "windows-1252", LineEnding = "\n" }, headerField: "BuyerName"),
-            Order("Köln"));
+            HeaderWith("Köln"));
 
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
         Assert.Contains("Köln", Encoding.GetEncoding("windows-1252").GetString(bytes));
@@ -241,7 +224,7 @@ public class CsvDialectTests
     [Fact]
     public void Utf8_IsTheDefault_AndAnUmlautTakesTwoBytes()
     {
-        var bytes = EmitBytes(Tree(new CsvDialect { LineEnding = "\n" }, headerField: "BuyerName"), Order("Köln"));
+        var bytes = EmitBytes(Tree(new CsvDialect { LineEnding = "\n" }, headerField: "BuyerName"), HeaderWith("Köln"));
 
         Assert.Contains("Köln", Encoding.UTF8.GetString(bytes));
         Assert.Contains((byte)0xC3, bytes);

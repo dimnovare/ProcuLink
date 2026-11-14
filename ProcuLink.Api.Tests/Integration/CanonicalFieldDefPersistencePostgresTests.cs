@@ -188,7 +188,7 @@ public sealed class CanonicalFieldDefPersistencePostgresTests(PostgresContainerF
             db.Suppliers.Add(new Supplier { Id = supplierId, OrgId = orgId, Name = "CFD Supplier", CreatedAt = now });
             await db.SaveChangesAsync();
 
-            db.SupplierConnections.Add(new SupplierConnection
+            db.Set<SupplierConnection>().Add(new SupplierConnection
             {
                 Id = connId, OrgId = orgId, SupplierId = supplierId, Name = "Acme",
                 ActiveRevisionId = null, CreatedAt = now, UpdatedAt = now,
@@ -199,7 +199,7 @@ public sealed class CanonicalFieldDefPersistencePostgresTests(PostgresContainerF
 
         await using (var db = new ProcuLinkDbContext(_options!))
         {
-            var c = await db.SupplierConnections.AsNoTracking().SingleAsync(x => x.Id == connId);
+            var c = await db.Set<SupplierConnection>().AsNoTracking().SingleAsync(x => x.Id == connId);
             Assert.True(c.PriceVarianceGuardEnabled);
             Assert.Equal(20m, c.PriceVarianceThresholdPercent);
         }

@@ -15,8 +15,7 @@ namespace ProcuLink.Api.Tests.Architecture;
 ///   <c>SentryRequest</c>; <c>ProcuLink.Worker/Program.cs</c> had <b>no BeforeSend at all</b>,
 ///   while being the host that fires customer webhooks. Two <c>Program.cs</c> files drifting is a
 ///   recurring defect class here, so the wiring is one shared call and this guard is parameterised
-///   over both hosts — the same shape as <c>AcceptanceGateSingleDoorTests.BothHosts_registerTheGate</c>
-///   and <c>PushIngressSeamRegistrationTests</c>.</description></item>
+///   over both hosts — the same shape as <c>StartupConfigurationValidatorTests.EveryHost_CallsTheStartupValidator</c>.</description></item>
 ///   <item><description><b>The callbacks are really attached, and really redact.</b> A source
 ///   guard alone would pass on a call that installs a no-op. These tests pull the delegates back
 ///   off the configured <see cref="SentryOptions"/> and run a realistic Slack webhook URL through
@@ -194,42 +193,8 @@ public class SentryScrubbingHostWiringTests
         Assert.Equal(ordinary, scrubbed.Message.Message);
     }
 
-    // ── 3. The webhook job hands no raw target URL to a logger ───────────────
-    /// <summary>
-    /// Every use of <c>sub.TargetUrl</c> in the webhook job is enumerated here. Three uses are
-    /// legitimate — validating it, sending to it, and reducing it to a scheme+host destination —
-    /// and a fourth is how the original leak was written. Adding one fails this test on purpose:
-    /// it is a review checkpoint, not a style rule. Log
-    /// <c>TelemetryRedactor.SafeDestination(sub.TargetUrl)</c> plus the subscription id instead.
-    /// </summary>
-    [Fact]
-    public void TheWebhookJob_usesTheRawTargetUrlOnlyWhereAudited()
-    {
-        var path = Path.Combine(RepoSourceCorpus.FindRepoRoot(),
-                                "ProcuLink.Infrastructure", "Jobs", "FireIntegrationTriggerJob.cs");
-        Assert.True(File.Exists(path), $"{path} not found — the job moved and this guard is now blind.");
-        var source = File.ReadAllText(path);
-
-        // Anti-vacuity: the redaction really is present in the file this guard is reading.
-        Assert.Contains("TelemetryRedactor.SafeDestination(sub.TargetUrl)", source);
-
-        var uses = source
-            .Split('\n')
-            .Select(l => l.Trim())
-            .Where(l => l.Contains("sub.TargetUrl", StringComparison.Ordinal)
-                        && !l.StartsWith("//", StringComparison.Ordinal))
-            .ToList();
-
-        var expected = new[]
-        {
-            "var guardResult = await _guard.ValidateAsync(sub.TargetUrl, ct);",
-            "using var request = new HttpRequestMessage(HttpMethod.Post, sub.TargetUrl)",
-            "var destination = TelemetryRedactor.SafeDestination(sub.TargetUrl);",
-        };
-
-        Assert.Equal(expected.OrderBy(s => s, StringComparer.Ordinal).ToList(),
-                     uses.OrderBy(s => s, StringComparer.Ordinal).ToList());
-    }
+    // ── 3. (2026-11-13, plan 13b) The webhook-job raw-URL audit went with FireIntegrationTriggerJob,
+    //       deleted with the order pipeline's integration sender: no job sends to sub.TargetUrl now.
 
     // ── helpers ──────────────────────────────────────────────────────────────
     /// <summary>
@@ -250,7 +215,7 @@ public class SentryScrubbingHostWiringTests
         var stripped = OrphanDetector.StripComments(File.ReadAllText(full));
 
         // Anti-vacuity: the stripper must not have swallowed the composition root. It has done
-        // exactly that before on ProcuLink.Api/Program.cs — see the note in AcceptanceGateSingleDoorTests.
+        // exactly that before on ProcuLink.Api/Program.cs.
         Assert.Contains("builder.Build()", stripped);
         return stripped;
     }

@@ -16,7 +16,6 @@ using ProcuLink.Api.Middleware;
 using ProcuLink.Api.Services;
 using ProcuLink.Api.Startup;
 using ProcuLink.Api.Telemetry;
-using ProcuLink.Api.Services.StarterTemplates;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
@@ -35,7 +34,6 @@ using ProcuLink.Infrastructure.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Ocr;
 using ProcuLink.Infrastructure.Services.Security;
 using ProcuLink.Infrastructure;
-using ProcuLink.Infrastructure.Repositories;
 using ProcuLink.Infrastructure.Storage;
 using ProcuLink.Transform.Output;
 using ProcuLink.Transform.Parsing;
@@ -103,10 +101,6 @@ StripeConfiguration.AppInfo = new AppInfo { Name = "ProcuLink", Url = "https://p
 // API gets 30 (it serves HTTP + enqueues Hangfire jobs); the Worker (WorkerCount=10)
 // gets 20. ConnectionIdleLifetime returns idle pooled connections to Neon so the
 // pool doesn't pin its ceiling. Existing settings in the string are preserved.
-// P2 hardening: log-only order state-machine observer. Singleton interceptor attached to
-// every DbContext, so all tracked Status writes flow through one observation point. It
-// only logs warnings on unexpected transitions — it never blocks or mutates a save.
-builder.Services.AddSingleton<ProcuLink.Infrastructure.Services.OrderStatusTransitionObserver>();
 // Time-boxed diagnostic: record database faults against the in-flight request so the
 // middleware below can say whether that request survived them. See DatabaseFaultOutcome.
 builder.Services.AddSingleton<ProcuLink.Api.Middleware.DatabaseFaultOutcome.ConnectionObserver>();
@@ -120,7 +114,6 @@ builder.Services.AddDbContext<ProcuLinkDbContext>((sp, options) =>
     options.UseNpgsql(BuildPooledConnectionString(
             builder.Configuration.GetConnectionString("DefaultConnection"), maxPoolSize: 30))
         .AddInterceptors(
-            sp.GetRequiredService<ProcuLink.Infrastructure.Services.OrderStatusTransitionObserver>(),
             sp.GetRequiredService<ProcuLink.Api.Middleware.DatabaseFaultOutcome.ConnectionObserver>(),
             sp.GetRequiredService<ProcuLink.Api.Middleware.DatabaseFaultOutcome.TransactionObserver>()));
 
@@ -330,22 +323,9 @@ builder.Services.AddRateLimiter(options =>
     // client also paces + retries on a throttle, so larger batches self-throttle.
     options.AddPolicy("upload", ctx => Window(ctx, "upload", permit: 60, seconds: 60));
 
-    // Transform is CPU/IO-heavy (parse + standards serialization + enqueue
-    // delivery). Cap per-user so a tight client loop can't hammer the worker.
-    options.AddPolicy("transform", ctx => Window(ctx, "transform", permit: 30, seconds: 60));
-
     // AI mapping / schema-inference / suggestion endpoints call paid LLM APIs.
     // Tighter cap protects the OpenAI bill and latency budget.
     options.AddPolicy("ai", ctx => Window(ctx, "ai", permit: 15, seconds: 60));
-
-    // Deterministic mapping-preview reads (GET .../mapping-preview, POST
-    // .../mapping-override/preview). These do NO LLM work — they read stored
-    // suggestions / run an in-memory dry-run transform — but the live mapping
-    // editor polls them repeatedly (debounced as the user types/while parsing).
-    // They MUST NOT share the tight "ai" cap, or the editor trips a 429. Generous
-    // per-user ceiling so debounced polling never bites, still bounded so a
-    // runaway client can't hammer the transform path.
-    options.AddPolicy("preview", ctx => Window(ctx, "preview", permit: 120, seconds: 60));
 
     // Signed-URL / artifact-download generation. Each call mints a pre-signed R2
     // URL; cap so the surface can't be used to bulk-mint download links.
@@ -355,18 +335,6 @@ builder.Services.AddRateLimiter(options =>
     // is a spam/amplification + SMTP-cost vector. Nobody legitimately files
     // more than a handful of tickets a minute — keep this tight.
     options.AddPolicy("support", ctx => Window(ctx, "support", permit: 5, seconds: 60));
-
-    // The practice-order endpoint persists a CALLER-SUPPLIED recipient address, and
-    // the user's next send mails a CSV to it from ProcuLink's verified Postmark
-    // sender. That is the support form's amplification shape without its one
-    // mitigation: support posts to a fixed inbox we own, so its bounces land on us
-    // by design, whereas here the recipient is chosen by the caller and every bounce
-    // or complaint is charged to our sender reputation. Same 5/60s cap, own
-    // partition so a burst here cannot consume the support budget or vice versa.
-    // NOT "upload" (60/min) — that is sized for a daily batch of POs, each costing
-    // one parse job against the caller's own org, and would permit 60 emails a
-    // minute to addresses we have never verified.
-    options.AddPolicy("sample-order", ctx => Window(ctx, "sample-order", permit: 5, seconds: 60));
 
     // Global backstop: every request (including ones with no named policy) is
     // bounded per partition. Generous so it never bites normal usage, but it
@@ -416,7 +384,7 @@ builder.Services.AddHangfire(cfg => cfg
     .UsePostgreSqlStorage(c => c.UseNpgsqlConnection(connectionString)));
 // No AddHangfireServer here — the Worker process is the sole Hangfire executor.
 // The API only enqueues jobs; running a server here would cause it to try to
-// deserialize ProcuLink.Worker types (e.g. EmailPollingJob) that it can't load.
+// deserialize ProcuLink.Worker types (e.g. WorkerHeartbeatJob) that it can't load.
 
 // Register the Hangfire monitoring API so OpsHealthService can read server heartbeats.
 // JobStorage is registered as a singleton by AddHangfire; we expose IMonitoringApi
@@ -544,7 +512,7 @@ builder.Services.AddCors(options =>
               // headers still gets the number.
               //
               // Content-Disposition is exposed for the same reason. GET
-              // /api/orders/{id}/source streams the original document and names it in that
+              // /api/documents/{id}/source streams the original document and names it in that
               // header, but the frontend is a different origin and reaches the endpoint by
               // authenticated fetch (a bare <iframe src> cannot carry the bearer token), so
               // without this the one consumer the header exists for cannot read it.
@@ -558,11 +526,6 @@ builder.Services.AddCors(options =>
               .AllowCredentials());
 });
 
-// ── Repositories ──────────────────────────────────────────────────────────
-// Supplier profiles still flow through the repository; orders and item mappings
-// use DbContext directly via their services (legacy order/item-mapping repos removed).
-builder.Services.AddScoped<ISupplierProfileRepository, EfSupplierProfileRepository>();
-
 // ── File storage ───────────────────────────────────────────────────────────
 // Use LocalFileStorageService in dev when R2 credentials are absent.
 // Set Storage:R2AccessKeyId in user-secrets or environment to switch to R2.
@@ -572,74 +535,17 @@ else
     builder.Services.AddSingleton<IFileStorageService, R2StorageService>();
 
 // ── Domain services ────────────────────────────────────────────────────────
-// ItemMappingService is Scoped (DbContext is Scoped).
-// OrderService is Scoped for the same reason.
-builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
-// Supplier product catalog (ground truth for AI code suggestions) — Scoped (DbContext is Scoped).
-builder.Services.AddScoped<ISupplierCatalogService, SupplierCatalogService>();
-// V10 — indexed catalog retrieval at scale (exact + pg_trgm trigram). Scoped; OrderIngestionService
-// self-constructs one from its DbContext, but register it so other consumers can resolve it.
-builder.Services.AddScoped<ICatalogRetrievalService, CatalogRetrievalService>();
-// Durable AI-suggestion accept/reject decision history (confidence calibration) — Scoped.
-builder.Services.AddScoped<IAiSuggestionDecisionService, AiSuggestionDecisionService>();
-// V9 — confidence calibration. Computes a per-org empirical reliability curve from the decision
-// history (display-only; never mutates the stored raw confidence). Needs IMemoryCache for the
-// short-TTL per-org curve cache; AddMemoryCache is idempotent if registered elsewhere.
-builder.Services.AddMemoryCache();
-builder.Services.AddScoped<IConfidenceCalibrationService, ConfidenceCalibrationService>();
-// heart-piece-flex Phase 1: per-order mapping/override stored in canonical_json (no new table).
-builder.Services.AddScoped<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService,
-                           ProcuLink.Infrastructure.Services.OrderMappingOverrideService>();
-// heart-piece-flex promote: persists a per-order SourceMap into the supplier's reusable inbound mapping.
-builder.Services.AddScoped<ProcuLink.Core.Services.Mapping.IPromoteMappingService,
-                           ProcuLink.Infrastructure.Services.PromoteMappingService>();
 builder.Services.AddScoped<IOrderExceptionService, OrderExceptionService>();
-builder.Services.AddScoped<IOpsHealthService, OpsHealthService>();
-builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();
-// WP-17 — the server-side acceptance gate. Registered in BOTH hosts (see Worker/Program.cs): the
-// Worker is where TransformOrderJob actually runs, so a gate registered only here would be
-// enforcement living in the API process and nowhere the transform happens.
-builder.Services.AddScoped<IAcceptanceGate, AcceptanceGate>();
-// WP-33 stage 1 — auto-send in dry run. Registered in BOTH hosts for the same reason as the gate
-// above: ParseOrderJob runs in the Worker, and that is where the decision is made. Registered here
-// too so the API's own in-process job execution is not a blind spot.
-builder.Services.AddScoped<IAutoSendDryRunEvaluator, AutoSendDryRunEvaluator>();
-// Group V4 — unified validation: reusable rule definitions + binding-aware read API + boot backfill.
-builder.Services.AddScoped<IRuleDefinitionService, RuleDefinitionService>();
-builder.Services.AddScoped<IRuleDefinitionBackfillService, RuleDefinitionBackfillService>();
-// Group V1 — versioned Supplier Connection (lifecycle service, ingest-time resolver, backfill).
-builder.Services.AddScoped<ISupplierConnectionService, SupplierConnectionService>();
-builder.Services.AddScoped<IConnectionResolver, ConnectionResolver>();
-builder.Services.AddScoped<IConnectionBackfillService, ConnectionBackfillService>();
 // Task 8 (credential AAD binding) — idempotent boot backfill that re-encrypts pre-binding
 // (version-1) credential blobs into the bound (version-2) envelope. See
 // ICredentialBindingBackfillService for the columns covered and the delivery-credentials exclusion.
 builder.Services.AddScoped<ICredentialBindingBackfillService, CredentialBindingBackfillService>();
-// Launch batch 7 — revision authority: pinned-revision config bundle resolver, consumed by
-// parse-mapping/item-codes, validation, transform, and delivery. Flag-gated by
-// Connections:RevisionAuthority. The CODE default is OFF (live tables, byte-identical behaviour),
-// but that is NOT the deployed value: production sets Connections__RevisionAuthority = true on the
-// Railway "ProcuLink" service, so revision authority is ON in production. Do not infer the
-// deployed value from an appsettings file — a 2026-07-27 audit did exactly that and filed a P0
-// claiming the versioning subsystem was inert in production. Read the effective value from
-// GET /health/ready (`revisionAuthority`) or this host's startup log instead. See
-// ProcuLink.Infrastructure/Services/RevisionAuthorityHosts.cs and
-// docs/ops/revision-authority-production-smoke.md.
-builder.Services.AddScoped<IEffectiveConnectionConfigResolver,
-                           ProcuLink.Infrastructure.Services.EffectiveConnectionConfigResolver>();
-// Group V2 — replay / impact testing (non-mutating; reuses the transform + acceptance engines).
-builder.Services.AddScoped<IReplayService, ReplayService>();
-builder.Services.AddScoped<IOrderService, OrderService>();
-// Same scoped OrderService also serves the pull-ingress stub-creation seam (explicit order id).
-builder.Services.AddScoped<IStubOrderCreator>(sp => (OrderService)sp.GetRequiredService<IOrderService>());
-builder.Services.AddScoped<IClaimedOrderCreator>(sp => (OrderService)sp.GetRequiredService<IOrderService>());
-builder.Services.AddScoped<IPassportService, PassportService>();
-builder.Services.AddScoped<IOrderConfirmationService, OrderConfirmationService>();
+// The read-only order archive (the three GETs on OrdersController).
+builder.Services.AddScoped<IOrderQueryService, OrderQueryService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
 // Parity with the Worker (which runs the daily reconciliation sweep); keeps Development DI
 // validation consistent across both hosts even though only the Worker executes the job.
 builder.Services.AddScoped<IBillingReconciliationService, StripeSubscriptionReconciliationService>();
-builder.Services.AddScoped<ISampleOrderService, SampleOrderService>();
 
 // ── Email API (Postmark over HTTPS) ──────────────────────────────────────
 // Sends mail via a managed HTTP API (port 443), so it works on hosts that block outbound SMTP
@@ -665,7 +571,6 @@ else
 builder.Services.AddScoped<ISupportContactService, SupportContactService>();
 
 // ── Starter PO mapping templates — static, read-only, cached ─────────────
-builder.Services.AddSingleton<IStarterTemplateService, StarterTemplateService>();
 
 // ── Analytics (PostHog) — no-op when key absent ──────────────────────────
 builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Analytics:PostHog"));
@@ -681,7 +586,6 @@ builder.Services.AddScoped<ProcuLink.Api.Services.Google.GoogleConnectService>()
 builder.Services.Configure<ProcuLink.Api.Services.Documents.ValidatorOptions>(builder.Configuration.GetSection("Validator"));
 builder.Services.AddHttpClient(ProcuLink.Api.Services.Documents.PhormValidator.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(4)); // under the web app's 8 s budget; the Worker keeps 10 s
 builder.Services.AddScoped<ProcuLink.Core.Documents.IStandardValidator, ProcuLink.Api.Services.Documents.PhormValidator>();
-builder.Services.AddSingleton<ProcuLink.Core.Services.IOrderIntakeSwitch>(sp => sp.GetRequiredService<ProcuLink.Api.Services.Documents.DocumentEngineGate>());
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentRechecker>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentSender>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.LookupSuggester>();
@@ -706,51 +610,29 @@ builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowPickupDispatchJob>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.FlowDestinationService>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.FlowIntakeService>();
 builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
-builder.Services.AddScoped<IEmailSettingsService, EmailSettingsService>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Organisation.IOrganisationSettingsService, ProcuLink.Infrastructure.Services.OrganisationSettingsService>();
-builder.Services.AddScoped<ProcuLink.Core.Services.Ingress.IPullIngressSettingsService, ProcuLink.Infrastructure.Services.PullIngressSettingsService>();
 builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
 builder.Services.AddSingleton<ProcuLink.Core.Documents.IOutputDesigner, ProcuLink.Infrastructure.Services.Ai.OpenAiOutputDesigner>();
-// T4 — external web/product-code grounding. No-op unless Ai:OpenAI:ProductSearch:Enabled=true
-// (default off → byte-identical deploy). Reuses Ai:OpenAI:ApiKey via the Responses web_search tool.
-builder.Services.AddSingleton<IProductCodeSearch, OpenAiProductCodeSearch>();
 builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
-builder.Services.AddScoped<IIdempotencyService, IdempotencyService>();
-builder.Services.AddScoped<ISchemaInferencer, OpenAiSchemaInferencer>();
-builder.Services.AddScoped<IEmailBodyOrderExtractor, OpenAiEmailBodyOrderExtractor>();
 builder.Services.AddScoped<IInboundAddressService, InboundAddressService>();
 builder.Services.AddScoped<IInboundEmailRouter, InboundEmailRouter>();
 // Outbound direction of the same provider relationship: Postmark's bounce / spam-complaint
 // webhook. Without it a mistyped supplier address leaves the order reading 'delivered' forever.
 builder.Services.AddScoped<IDeliveryBounceHandler, ProcuLink.Infrastructure.Services.Delivery.DeliveryBounceHandler>();
-builder.Services.AddScoped<IParseJobEnqueuer, ProcuLink.Api.Controllers.HangfireParseJobEnqueuer>();
 
 // ── Wave 2: pull-ingress (SFTP / S3-R2) + OCR fallback ────────────────────
 builder.Services.AddSingleton<ISftpClientFactory, RenciSftpClientFactory>();
-builder.Services.AddScoped<ISftpIngressService, SftpIngressService>();
 builder.Services.AddSingleton<IAmazonS3ClientFactory, AmazonS3ClientFactory>();
-builder.Services.AddScoped<IS3IngressService, S3IngressService>();
 
-// ── Catalog import channels: SFTP/FTP(S) pull + settings (plan 2026-06-12) ─
+// ── FTP/FTPS fetch seam for the flow pickups (FtpPickupSource) ─────────────
 // FluentFTP fetch seam is hardened (PASVEX + mandatory FTPS data encryption + 30 s
-// timeouts) inside the factory; CatalogPullService owns guard/deadline/bounded-read.
+// timeouts) inside the factory.
 builder.Services.AddSingleton<ProcuLink.Infrastructure.Services.Ingress.IFtpFetchClientFactory,
                               ProcuLink.Infrastructure.Services.Ingress.FluentFtpFetchClientFactory>();
-builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogPullService,
-                           ProcuLink.Infrastructure.Services.Catalog.CatalogPullService>();
-builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogSourceSettingsService,
-                           ProcuLink.Infrastructure.Services.Catalog.CatalogSourceSettingsService>();
-// Vendor catalog fetchers (plan 2026-07-02 D4) — resolved by protocol inside CatalogPullService.
-builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogVendorFetcher,
-                           ProcuLink.Infrastructure.Services.Catalog.Aes2faSignedCatalogFetcher>();
 
 // PDF rasterizer for the vision fallback (scanned/no-text PDFs). Self-contained
 // PDFium + SkiaSharp natives — no extra system packages on the Debian base.
 builder.Services.AddSingleton<IPdfRasterizer, SkiaPdfRasterizer>();
-// Primary PDF path: text → LLM structured extraction (no-op without an OpenAI key,
-// so the deterministic PdfOrderParser stays the fallback). Singleton + per-call
-// IServiceScopeFactory tracker resolution so the same instance is valid in the Worker.
-builder.Services.AddSingleton<IStructuredOrderExtractor, OpenAiPdfOrderExtractor>();
 builder.Services.AddSingleton<IDocumentReader, OpenAiDocumentReader>();
 // OCR seam. Opt-in self-hosted no-egress engine (RapidOcrNet) only when enabled —
 // otherwise a no-op, so the ~12MB models + ONNX session are never loaded.
@@ -758,20 +640,8 @@ if (builder.Configuration.GetValue<bool>("NoEgressOcr:Enabled"))
     builder.Services.AddSingleton<IDocumentOcrService, RapidOcrDocumentOcrService>();
 else
     builder.Services.AddSingleton<IDocumentOcrService, NoOpOcrService>();
-// IPoMappingService resolves to the INVALIDATING decorator, never the bare PoMappingService. All five
-// supplier-mapping writers go through this interface, so wrapping it here is what makes "a supplier
-// mapping save can never leave a stale artifact shippable" total rather than per-endpoint. The inner
-// implementation is registered as a concrete type so only the decorator can reach it.
-builder.Services.AddScoped<PoMappingService>();
-builder.Services.AddScoped<IPoMappingService>(sp => new ArtifactInvalidatingPoMappingService(
-    sp.GetRequiredService<PoMappingService>(),
-    sp.GetRequiredService<ProcuLinkDbContext>(),
-    sp.GetRequiredService<IEffectiveConnectionConfigResolver>(),
-    sp.GetRequiredService<ILogger<ArtifactInvalidatingPoMappingService>>()));
-builder.Services.AddScoped<IBuyerService, BuyerService>();
-// ── Wave 4: API keys + integration subscriptions ──────────────────────────
+// ── Wave 4: API keys ──────────────────────────
 builder.Services.AddScoped<IApiKeyService, ApiKeyService>();
-builder.Services.AddScoped<IIntegrationTriggerService, IntegrationTriggerService>();
 builder.Services.AddSingleton<DeliveryEncryptionService>();
 builder.Services.AddSingleton<OutboundRequestGuard>();
 // Group O reliability: retry-queue backoff + SLA window tunables (section Delivery:Reliability).
@@ -783,18 +653,6 @@ builder.Services.AddSingleton(sp =>
         .Bind(opts);
     return opts;
 });
-builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
-// cXML network credentials: resolves a supplier's configured From/To/Sender identities + decrypts
-// the Sender SharedSecret for the cXML transform (OrderService → OrderTransformService). Unregistered
-// → legacy GUID identities.
-builder.Services.AddScoped<ICxmlCredentialResolver, CxmlCredentialResolver>();
-builder.Services.AddScoped<IDeliveryService, DeliveryService>();
-// Re-drive seam: the reactivation webhook (BillingController → ReleaseBillingHeldOrdersAsync)
-// re-enqueues delivery for billing-held orders (held parks are restored, not re-enqueued). The
-// Hangfire adapter needs only IBackgroundJobClient, which the Api already provides. Also injected
-// into DeliveryService.
-builder.Services.AddScoped<IRetryDeliveryEnqueuer, ProcuLink.Infrastructure.Jobs.HangfireRetryDeliveryEnqueuer>();
-builder.Services.AddScoped<IDeliverySlaService, DeliverySlaService>();
 builder.Services.AddScoped<IErpConnector, ErplyConnector>();
 builder.Services.AddScoped<IErpConnector, DirectoConnector>();
 builder.Services.AddScoped<IDeliveryDispatcher, HttpDeliveryDispatcher>();
@@ -812,72 +670,11 @@ if (builder.Configuration.GetValue<bool>("Delivery:EnableSmtp"))
 builder.Services.AddScoped<IDeliveryDispatcher, ErplyDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, DirectoDeliveryDispatcher>();
 
-// ── Parsing layer (ProcuLink.Transform) ───────────────────────────────────
-// Each parser registered individually so DI can inject IEnumerable<IPurchaseOrderParser>
-// into OrderParserFactory, which selects by file extension at runtime.
-builder.Services.AddSingleton<IPurchaseOrderParser, CsvOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, XlsxOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, PdfOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, CxmlOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, UblOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, IDocOrders05Parser>(); // SAP IDoc ORDERS05 (.xml, root <ORDERS05>)
-builder.Services.AddSingleton<IPurchaseOrderParser, EdifactOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, X12OrderParser>(); // Group M — ANSI X12 850
-builder.Services.AddSingleton<OrderParserFactory>();
-
-// ── Transform layer (ProcuLink.Transform) ──────────────────────────────────
-// Every implementation registered as ITransformService. OrderService resolves the correct one at
-// runtime via IEnumerable<ITransformService> + CanTransform().
-//
-// Registered FROM OutputTransformRegistry.All rather than listed here, because the same list also
-// derives OutputTransformRegistry.Catalog — the allow-list every write path that stores an output
-// format checks against. Listing them separately is how the two drifted: the revision write path
-// accepted formats (UblOrder / X12_850 / EdifactOrders) that no transform below can build.
-builder.Services.AddOutputTransforms();
-
-// ── Group V8: standards conformance reports ─────────────────────────────────
-// Validates a generated outbound document against its NAMED standard profile
-// (cXML 1.2 / UBL 2.1 / X12 850 / EDIFACT ORDERS D.96A / SAP IDoc ORDERS05).
-// Pure/stateless — used by OrdersController's GET /api/orders/{id}/conformance.
-builder.Services.AddSingleton<ProcuLink.Transform.Conformance.IConformanceService,
-    ProcuLink.Transform.Conformance.ConformanceService>();
-
-// ── Wave 3: Invoice parsers ────────────────────────────────────────────────
-builder.Services.AddSingleton<IInvoiceParser, UblInvoiceParser>();
-builder.Services.AddSingleton<IInvoiceParser, EdifactInvoiceParser>();
-builder.Services.AddSingleton<InvoiceParserFactory>();
-builder.Services.AddSingleton<IDesadvParser, EdifactDesadvParser>();
-builder.Services.AddSingleton<DesadvParserFactory>();
-
-// ── Wave 3: Invoice transform services ────────────────────────────────────
-builder.Services.AddSingleton<IInvoiceTransformService, CsvInvoiceTransformService>();
-builder.Services.AddSingleton<IInvoiceTransformService, XmlInvoiceTransformService>();
-builder.Services.AddSingleton<IInvoiceTransformService, JsonInvoiceTransformService>();
-
-// ── Peppol wedge (Track A): BIS Billing 3.0 UBL invoice generation + validation.
-// Format token "peppol" is routed by InvoiceService.ForwardAsync just like the
-// other invoice transformers. Party details (endpoint IDs / VAT) come from
-// PeppolPartyOptions; the default-constructed singleton produces a structurally
-// valid but party-incomplete document, which PeppolBisValidator flags honestly.
-// AS4 / Access-Point transport is NOT included (that is Track B partner-wrap).
-builder.Services.AddSingleton<IInvoiceTransformService, PeppolBisInvoiceTransformService>();
-builder.Services.AddSingleton<PeppolBisValidator>();
-
-// ── Wave 3: Invoice + ASN services ────────────────────────────────────────
-builder.Services.AddScoped<IInvoiceService, ProcuLink.Infrastructure.Services.InvoiceService>();
-builder.Services.AddScoped<IDesadvService, ProcuLink.Infrastructure.Services.DesadvService>();
-
 // GDPR per-order erasure (admin-triggered): deletes the R2 blobs + every order-tied DB row.
 builder.Services.AddScoped<IDataErasureService, ProcuLink.Infrastructure.Services.DataErasureService>();
 // Whole-organisation erase (admin endpoint + Worker DisposableOrgSweepJob); receipt in platform_audit_events.
 builder.Services.AddScoped<IOrganisationEraser, ProcuLink.Infrastructure.Services.OrganisationEraser>();
 
-// ── Phase 6: smart format auto-detect ─────────────────────────────────────
-builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, ProcuLink.Infrastructure.Services.Detection.FormatDetectorService>();
-builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();
-builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISupplierSuggestionService, ProcuLink.Infrastructure.Services.Detection.SupplierSuggestionService>();
-// Stateless source-column extractor used by the magic-mapping UI (GET /api/suppliers/{id}/mapping/source-columns).
-builder.Services.AddSingleton<ProcuLink.Core.Services.Detection.ISourceColumnExtractor, ProcuLink.Transform.Detection.SourceColumnExtractor>();
 // SourceMap engine tokenizer: extracts every addressable value from a source file (CSV + XML concrete;
 // other formats return an empty list). Singleton — stateless, reused across requests.
 builder.Services.AddSingleton<ProcuLink.Transform.Tokenizing.ISourceTokenizer, ProcuLink.Transform.Tokenizing.SourceTokenizer>();
@@ -928,15 +725,6 @@ builder.Services.AddHealthChecks()
     .AddCheck<ProcuLink.Api.Controllers.RecurringJobDispatcherHealthCheck>(
         name: "recurringJobs",
         failureStatus: HealthStatus.Degraded,
-        tags: new[] { "ready" })
-    // WP-21 — the EFFECTIVE value of Connections:RevisionAuthority. Always Healthy (the flag being
-    // off is a configuration, not an outage); the value rides the data bag and is flattened to a
-    // top-level `revisionAuthority` boolean by HealthResponseWriter. Exists because the deployed
-    // value was previously readable nowhere, which let a 2026-07-27 audit file a P0 asserting the
-    // versioning subsystem was inert in production when it has been ON there all along.
-    .AddCheck<ProcuLink.Api.Controllers.RevisionAuthorityHealthCheck>(
-        name: "revisionAuthority",
-        failureStatus: HealthStatus.Healthy,
         tags: new[] { "ready" });
 
 // IMonitoringApi is registered scoped (factory wrapper) above for OpsHealthService.
@@ -979,9 +767,6 @@ builder.Services.AddSwaggerGen(options =>
         }
     });
 });
-
-// Magic-mapping field suggester: deterministic heuristic, optionally AI-augmented (no-op without an AI key).
-builder.Services.AddScoped<ProcuLink.Core.Services.Mapping.IFieldMappingSuggester, ProcuLink.Transform.Mapping.AiAugmentedFieldMappingSuggester>();
 
 // ──────────────────────────────────────────────────────────────────────────
 var app = builder.Build();
@@ -1094,29 +879,22 @@ app.MapControllers();
 // Liveness (/health) is served by HealthController (fast, dependency-free 200) so
 // Railway's container probe is never blocked by a slow dependency. Readiness
 // (/health/ready) runs ONLY the "ready"-tagged checks — DB, storage, migration flag,
-// worker heartbeat, and the revision-authority flag's effective value (WP-21) — and
-// reports the aggregate status so monitoring can see degraded state without taking
-// the process down.
+// worker heartbeat and recurring-job dispatch — and reports the aggregate status so
+// monitoring can see degraded state without taking the process down.
 //
 // HTTP status: Healthy/Degraded → 200, Unhealthy → 503 (the default
 // MapHealthChecks status-code map). A stale Worker is Degraded → 200, but the JSON
 // body carries workerHealthy:false so the external uptime workflow alerts on it.
-// The revisionAuthority check is ALWAYS Healthy — the flag's value is information,
-// never a reason to evict the process — so it reaches monitoring purely through the
-// body.
 //
 // BODY: a structured JSON payload (instead of the default plain "Healthy" string)
-// with per-check status/description/duration + THREE flattened booleans the uptime
-// workflow + dashboards read: workerHealthy, recurringJobsHealthy and
-// revisionAuthority. workerHealthy and revisionAuthority are asserted directly by
-// .github/workflows/uptime.yml, which fails the run on either being false;
-// recurringJobsHealthy reaches the same workflow through the Degraded roll-up gate,
-// which fails the run and names the degraded checks. All three render FALSE when
+// with per-check status/description/duration + TWO flattened booleans the uptime
+// workflow + dashboards read: workerHealthy and recurringJobsHealthy. workerHealthy is
+// asserted directly by .github/workflows/uptime.yml, which fails the run on it being
+// false; recurringJobsHealthy reaches the same workflow through the Degraded roll-up
+// gate, which fails the run and names the degraded checks. Both render FALSE when
 // their check entry is absent — a monitor that vanished is not evidence of health.
 // ResponseWriter is the only customisation — it NEVER includes secrets (each check's
-// Data bag is counts/ages/booleans/config KEY names only, never a config VALUE; the
-// revisionAuthority bag's key set is pinned by RevisionAuthorityReadinessSurfaceTests
-// so a future field cannot quietly widen it on this anonymous endpoint).
+// Data bag is counts/ages/booleans/config KEY names only, never a config VALUE).
 app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
 {
     Predicate = check => check.Tags.Contains("ready"),

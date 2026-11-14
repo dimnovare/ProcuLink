@@ -76,30 +76,6 @@ internal static class OrgAdminGateIlScanner
     /// </summary>
     public static readonly IReadOnlyList<Primitive> DestructivePrimitives =
     [
-        new("IDeliveryConfigService.UpsertAsync",
-            OnInterface<IDeliveryConfigService>(nameof(IDeliveryConfigService.UpsertAsync)),
-            "Writes the endpoint, protocol and credentials every future order for a supplier is "
-          + "sent to — the definition of silently redirecting where documents go."),
-
-        new("IDeliveryConfigService.DeleteAsync",
-            OnInterface<IDeliveryConfigService>(nameof(IDeliveryConfigService.DeleteAsync)),
-            "Destroys that route and its credentials; every subsequent send for the supplier fails."),
-
-        new("ISupplierConnectionService.PublishAsync",
-            OnInterface<ISupplierConnectionService>(nameof(ISupplierConnectionService.PublishAsync)),
-            "Moves the connection's ACTIVE pointer — from here the revision is what pinned orders "
-          + "deliver through."),
-
-        new("ISupplierConnectionService.RollbackAsync",
-            OnInterface<ISupplierConnectionService>(nameof(ISupplierConnectionService.RollbackAsync)),
-            "Publishes a previously-archived bundle nobody re-approved and moves the active pointer "
-          + "to it: a redirection expressed as an undo."),
-
-        new("ISupplierConnectionService.RepublishLiveDeliveryAsync",
-            OnInterface<ISupplierConnectionService>(nameof(ISupplierConnectionService.RepublishLiveDeliveryAsync)),
-            "Snapshots a delivery edit into a NEW published revision, which is how a live-row edit "
-          + "reaches revision-governed orders."),
-
         new("IApiKeyService.CreateAsync",
             OnInterface<IApiKeyService>(nameof(IApiKeyService.CreateAsync)),
             "Mints a bearer credential with org-wide machine access, shown once, and attributed to "
@@ -114,51 +90,11 @@ internal static class OrgAdminGateIlScanner
             "The Stripe Billing Portal is where the subscription is CANCELLED, and cancelling stops "
           + "every ingest path at once with nothing queued for later."),
 
-        new("IAcceptanceGate.RecordOverrideAsync",
-            OnInterface<IAcceptanceGate>(nameof(IAcceptanceGate.RecordOverrideAsync)),
-            "Overrules the supplier's own stated terms; what follows cannot be recalled."),
-
-        new("IEmailSettingsService.UpdateAsync",
-            OnInterface<IEmailSettingsService>(nameof(IEmailSettingsService.UpdateAsync)),
-            "Stores IMAP host and credentials and names the supplier arriving documents are "
-          + "attributed to — the inbound mirror of redirecting deliveries."),
-
-        new("IPullIngressSettingsService.UpdateSftpAsync",
-            OnInterface<IPullIngressSettingsService>(nameof(IPullIngressSettingsService.UpdateSftpAsync)),
-            "Repoints the SFTP poller at an external host, with credentials."),
-
-        new("IPullIngressSettingsService.UpdateS3Async",
-            OnInterface<IPullIngressSettingsService>(nameof(IPullIngressSettingsService.UpdateS3Async)),
-            "Repoints the S3/R2 poller at an external bucket, with access keys."),
-
-        new("IInboundAddressService.MintPrimaryAsync",
-            OnInterface<IInboundAddressService>(nameof(IInboundAddressService.MintPrimaryAsync)),
-            "Issues a bearer credential that authorises inbound purchase orders into this "
-          + "organisation. It is the inbound twin of minting an API key, and rotating is how an "
-          + "organisation's ingest identity changes."),
-
-        new("IInboundAddressService.RevokeAsync",
-            OnInterface<IInboundAddressService>(nameof(IInboundAddressService.RevokeAsync)),
-            "Switches off an address buyers are actively sending to. Their mail stops being "
-          + "accepted from the next message, and nothing tells them — a silent redirection of "
-          + "where an organisation's documents can arrive."),
-
-        new("OrderIngestionService.ApplyInvoiceProblemsAsync",
-            OnInternalStatic("ProcuLink.Api.Services.OrderIngestionService", "ApplyInvoiceProblemsAsync"),
-            "Releases an invoice held by its checks into the send flow, closing the checks that held it "
-          + "(\"send anyway\"); once it is released a document can reach the vendor's destination."),
-
         new("IOrganisationSettingsService.UpdateAsync",
             OnInterface<IOrganisationSettingsService>(nameof(IOrganisationSettingsService.UpdateAsync)),
             "Names the supplier every invoice is sent to, and its caller moves the parked invoices there: "
           + "a silent redirection of where invoices go. The order direction it also writes is open to "
           + "every member, so its caller gates in-method."),
-
-        new("IOrderService.ResolveAsync",
-            OnInterface<IOrderService>(nameof(IOrderService.ResolveAsync)),
-            "Can rewrite an invoice's IBAN, number and seller: who gets paid, under which number. Every "
-          + "member still resolves lines and edits the other fields, so its caller gates in-method on "
-          + "those four."),
 
         new("FlowDestinationService.SaveAsync",
             OnInterface<ProcuLink.Api.Services.Documents.FlowDestinationService>(nameof(ProcuLink.Api.Services.Documents.FlowDestinationService.SaveAsync)),
@@ -249,12 +185,6 @@ internal static class OrgAdminGateIlScanner
             OnInterface<ProcuLink.Core.Services.Google.ILinkedAccountTokens>(nameof(ProcuLink.Core.Services.Google.ILinkedAccountTokens.GetGoogleAccessTokenAsync)),
             "Hands a live Google access token to the browser: it reads and writes every Drive file ProcuLink "
           + "can see in the organisation's connected account."),
-
-        new("new IntegrationSubscription / DbSet<IntegrationSubscription>.Add",
-            CreatesIntegrationSubscription,
-            "Stands up an outbound subscription that ships the payload of every matching order to "
-          + "an arbitrary URL. There is no service seam here, so the primitive is the entity being "
-          + "minted and persisted."),
     ];
 
     /// <summary>
@@ -289,25 +219,6 @@ internal static class OrgAdminGateIlScanner
         if (type.GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public) is null)
             throw new InvalidOperationException($"{typeName}.{name} does not exist — update OrgAdminGateIlScanner.");
         return member => member is MethodBase method && method.Name == name && method.DeclaringType == type;
-    }
-
-    /// <summary>
-    /// Matches either half of "mint a webhook subscription": constructing the entity, or adding it
-    /// to its <see cref="DbSet{TEntity}"/>. Both are accepted because this is the one primitive with
-    /// no service interface to name, and either IL shape is conclusive on its own.
-    /// </summary>
-    private static bool CreatesIntegrationSubscription(MemberInfo member)
-    {
-        if (member is ConstructorInfo ctor)
-            return ctor.DeclaringType == typeof(IntegrationSubscription);
-
-        if (member is not MethodBase { Name: nameof(DbSet<IntegrationSubscription>.Add) } add)
-            return false;
-
-        var declaring = add.DeclaringType;
-        return declaring is { IsGenericType: true }
-            && declaring.GetGenericTypeDefinition() == typeof(DbSet<>)
-            && declaring.GetGenericArguments()[0] == typeof(IntegrationSubscription);
     }
 
     // ── The two computed sets ─────────────────────────────────────────────────

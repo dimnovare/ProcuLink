@@ -11,11 +11,23 @@
 ProcuLink is a **B2B procurement bridge**: it moves purchase orders between buyers and
 suppliers in each counterparty's required format and delivery channel.
 
-**Import an order source → parse → normalize → validate → review exceptions → transform → deliver → learn.**
+**A document arrives in a flow → is read → is reviewed (teach a field once) → renders its
+outputs → is delivered to destinations.** Flows, intakes, outputs, destinations and lookups
+are the product (`FlowsController`, `FlowIntakesController`, `FlowOutputsController`,
+`DestinationsController`, `LookupsController`, `DocumentsController`; jobs `ReadDocumentJob`,
+`SendDocumentJob`, `DeliverDocumentJob`, `FlowPickupJob`).
 
-The data model is **direction-agnostic** (buyer = document issuer, supplier = recipient);
-each org chooses its direction (outbound "send POs to suppliers" is the default, inbound
-"receive customer POs" is a per-org setting that relabels the UI — display-only).
+The data model is **direction-agnostic** (buyer = document issuer, supplier = recipient).
+
+**Plan 13b (2026-11-13) removed the old order pipeline.** Every workspace runs on the document
+engine, so the purchase-order path was deleted: `OrdersController` is a read-only archive (three
+GETs: list, detail, artifact download) and the old order write path, parse / transform / retry
+jobs and the SFTP / S3 / IMAP order-polling and stuck-order / SLA sweeps are gone, as are the
+order-event integration webhooks, the supplier catalog sync, the acceptance gate, the
+connection-revision / revision-authority machinery and eight `BillingFeature` members (only
+`AdvancedAudit` and `Sso` remain). Every old table, entity and migration stays — no drop
+migration — so old orders remain readable and exportable. `DocumentEngineGate` stays as the
+flow-side gate. Do not write code against the deleted names; `git log` has them.
 
 ## Current direction (2026-07)
 
@@ -29,12 +41,10 @@ each org chooses its direction (outbound "send POs to suppliers" is the default,
 - **Active work:** the production-hardening push in
   `docs/prompts/2026-07-02-fable5-production-push-master-prompt.md` — prove every advertised
   capability live, click-audit the UI, consolidate design drift, make marketing truthful.
-- **Product north star:** the **versioned Supplier Connection** — mappings/rules/templates/
-  delivery/catalog unified in one first-class versioned object (draft → test → publish →
-  archive), every order pinning a `ConnectionRevisionId` for reproducibility, replay, and
-  rollback. Shipped and live; keep new connection concepts first-class (no `CanonicalJson`
-  overloading), keep Scriban as the power-user escape hatch (not the default), and never
-  equate HTTP 200 with supplier business acceptance.
+- **Product shape:** flows → outputs → destinations (see "What this project is"). The versioned
+  Supplier Connection (`SupplierConnection` / `SupplierConnectionRevision`) no longer has a
+  service or endpoint since plan 13b; its entities and tables stay. Keep Scriban as the power-user
+  escape hatch (not the default), and never equate HTTP 200 with supplier business acceptance.
 
 ## Repository layout
 
@@ -46,7 +56,7 @@ each org chooses its direction (outbound "send POs to suppliers" is the default,
 ├── ProcuLink.Core\                  ← Domain models + service interfaces
 ├── ProcuLink.Infrastructure\        ← EF Core, Postgres, R2/Local storage, delivery
 ├── ProcuLink.Transform\             ← Format parsers + output transforms
-├── ProcuLink.Worker\                ← Hangfire jobs host (parse/deliver/polling)
+├── ProcuLink.Worker\                ← Hangfire jobs host (document read/deliver, flow pickups, sweeps)
 ├── ProcuLink.Transform.Tests\
 ├── ProcuLink.Infrastructure.Tests\
 └── ProcuLink.Api.Tests\
@@ -78,10 +88,11 @@ Package manager: bun · Framework: Next.js 15 (App Router)
 - **Input formats:** CSV, XLSX, PDF (text→LLM primary; vision fallback for scanned; regex +
   self-hosted no-egress OCR fallbacks), UBL 2.1 Order (a Peppol BIS Order 3 file IS a UBL 2.1
   Order, so it parses on the same pipeline — `UblOrderParser` has no BIS-specific branch), cXML 1.2,
-  EDIFACT ORDERS (D96A/D01B, hand-rolled), X12 850, SAP IDoc ORDERS05. UBL Invoice parses;
-  EDIFACT INVOIC/DESADV are **stubs**.
-- **Output formats:** XML, CSV, JSON, cXML, UBL 2.1 Order, X12 850 — plus the
-  `OutputNode` AST / output designer and Scriban escape hatch.
+  EDIFACT ORDERS (D96A/D01B, hand-rolled), X12 850, SAP IDoc ORDERS05. Invoice and despatch
+  parsers (UBL Invoice, EDIFACT INVOIC/DESADV) were deleted in plan 13b.
+- **Output formats:** XML, CSV, JSON, cXML, UBL 2.1 Order, X12 850 — listed in
+  `OutputTransformRegistry.All` — plus the `OutputNode` AST emitter (`OutputTemplateEmitter`)
+  and the Scriban escape hatch.
   **Outbound Peppol BIS Order 3 is NOT offered and must not be advertised.** The UBL emitter
   produces a plain OASIS UBL 2.1 Order and deliberately declares no `cbc:CustomizationID` and no
   `cbc:ProfileID` — both are `minOccurs="0"` in the UBL 2.1 Order-2 schema, and a receiving access
@@ -91,12 +102,12 @@ Package manager: bun · Framework: Next.js 15 (App Router)
 - **Delivery channels:** `http` (+OAuth2), `sftp`, `ftps`, `email` (Postmark HTTPS is the
   canonical email path; SMTP retired on Railway), `erp_erply`, `erp_directo` — all with
   AES-GCM credentials, SSRF guard (`OutboundRequestGuard`), test-fire, retry/dead-letter.
-- **Ingress channels:** browser upload, REST ingress (`plk_` API keys), inbound email
-  (`{slug}@orders.proculink.eu` via CF MX → Postmark), IMAP polling, SFTP/S3 polling,
-  catalog import (API push + SFTP/FTP(S) + HTTP pull).
-- AI mapping suggestions (provider-neutral `IAiMappingService`, OpenAI structured outputs,
-  never auto-applied, confidence + provenance shown), schema fingerprinting, acceptance
-  profiles, admin area, billing with soft caps + €0.50/order overage (never hard-blocks paid).
+- **Intake channels (per flow):** browser upload (`POST /api/flows/{flowId}/documents`), the file
+  API (`/api/v1/flows/{flowId}/documents`, `plk_` API keys), inbound email (Postmark webhook
+  → `InboundEmailRouter`), and pickups (`FlowPickupJob`: IMAP, SFTP, FTP(S), S3).
+- AI lookup suggestions (provider-neutral `IAiMappingService`, OpenAI structured outputs,
+  never auto-applied, confidence + provenance shown), admin area, billing with soft caps +
+  €0.50/order overage (never hard-blocks paid).
 
 ## Durable coding conventions
 
@@ -137,10 +148,9 @@ trust — don't hide it.
   a real, tested capability. When in doubt, soften the copy — never over-claim.
   `/library/standards` + `src/lib/standards/catalog.ts` are the conservative source of truth.
 - **No commercial EDI licences** (EdiFabric rejected, ~€1,500/yr). EDIFACT is hand-rolled or
-  MIT open-source only. EDIFACT INVOIC/DESADV remain stubs — present as "coming soon", never
-  as errors.
-- **The 3-column Order Workshop layout is locked.** `/inbox/[orderId]` renders `OrderWorkshop`;
-  polish and fix, do not restructure or replace the layout.
+  MIT open-source only.
+- **The old Order Workshop is gone** (plan 13b). Old orders are read at `/archive`; the field
+  mapping surface is the flow Advanced view (`MapperWorkbench`, `variant="flow"`).
 - **Bridge Layer visual direction is locked** (navy/violet/blue→green). The visual canon stays;
   bridge/dock/crossing VOCABULARY is purged from user-facing copy. Only propose a visual-direction
   change with demonstrated superiority + founder sign-off.

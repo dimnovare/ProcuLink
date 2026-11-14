@@ -7,7 +7,7 @@ namespace ProcuLink.Infrastructure.Services;
 /// Process-wide, thread-safe alert state for <see cref="WorkerHealthAlertService"/>. Registered as
 /// a SINGLETON so the rate-limit window and the healthy→bad transition flag survive across the
 /// recurring (scoped) sweep invocations. Kept separate from the scoped sweep service (which depends
-/// on a scoped DbContext via <c>IOpsHealthService</c>) so a singleton never captures a scoped graph.
+/// on scoped services) so a singleton never captures a scoped graph.
 /// <para>
 /// State is kept PER ALERT KEY. That is the point: with one shared window, a worker outage that
 /// persists for hours would sit inside its own cooldown and silently swallow the FIRST notification

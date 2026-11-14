@@ -6,9 +6,9 @@ namespace ProcuLink.Worker.Jobs;
 /// <summary>
 /// Recurring Hangfire job (every ~5 min): thin wrapper over <see cref="IWorkerHealthAlertService"/>
 /// so the probe + alert-decision logic stays unit-tested in the Infrastructure test suite
-/// (mirrors <see cref="StuckOrderDetectionJob"/> / <see cref="DeliverySlaSweepJob"/>). Raises an
+/// (mirrors <see cref="DataRetentionSweepJob"/>). Raises an
 /// operator alert (Sentry in production, a safe no-op without a DSN) when no worker is beating or
-/// the dead-letter/failed-delivery backlog crosses the configured threshold. Idempotent.
+/// delivery attempts fail above the configured rate. Idempotent.
 /// </summary>
 public sealed class WorkerHealthAlertJob
 {

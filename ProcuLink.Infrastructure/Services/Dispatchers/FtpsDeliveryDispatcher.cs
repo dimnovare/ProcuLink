@@ -51,7 +51,7 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
     // (overwriteExisting off) — neither produces a second copy.
     //
     // It does NOT mean the re-send completes: with overwriteExisting off it refuses, and
-    // DeliveryService parks that combination for a human rather than retrying it into dead-letter
+    // DeliverDocumentJob parks that combination for a human rather than retrying it into dead-letter
     // (CannotRepairItsOwnFile). See SftpDeliveryDispatcher.OverwriteExistingFromConfig.
     public ResendSafety ResendSafety => ResendSafety.Safe;
 

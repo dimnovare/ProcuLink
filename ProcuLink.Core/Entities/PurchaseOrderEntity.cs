@@ -135,15 +135,10 @@ public class PurchaseOrderEntity
 
     /// <summary>
     /// The status this order held immediately before a billing hold moved it to
-    /// <c>delivery_held</c>. Sole writer: <c>DeliveryService.HoldForBillingAsync</c> (which
-    /// overwrites any prior value on every hold); cleared by
-    /// <c>DeliveryService.ReleaseBillingHeldOrdersAsync</c> when the hold is released.
-    /// Meaningful ONLY while <see cref="Status"/> is <c>delivery_held</c> — other exits from the
-    /// hold (a late supplier ACK via the status webhook, an MV-1 mapping edit) leave it stale by
-    /// design, so readers must gate on the status. Exists so the release can tell a held PARK
-    /// (<c>delivery_unconfirmed</c> — restored for a human, never auto re-sent) from a genuinely
-    /// send-ready hold (released to <c>ready_to_deliver</c> and re-driven). Null for orders held
-    /// before this column existed.
+    /// <c>delivery_held</c>. Archive-only since 2026-11-13: plan 13b deleted its writer
+    /// (<c>DeliveryService.HoldForBillingAsync</c>) and the automatic release with the order
+    /// pipeline. A held order stays held: the archive never sends. Meaningful ONLY while
+    /// <see cref="Status"/> is <c>delivery_held</c>. Null for orders held before this column existed.
     /// </summary>
     public string? HeldFromStatus { get; set; }
 

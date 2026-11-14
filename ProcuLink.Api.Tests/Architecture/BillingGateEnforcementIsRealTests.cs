@@ -3,7 +3,6 @@ using FluentAssertions;
 using ProcuLink.Api.Controllers;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Constants;
-using ProcuLink.Worker.Jobs;
 using Xunit;
 using static ProcuLink.Api.Tests.Architecture.BillingGateIlScanner;
 
@@ -50,49 +49,16 @@ public sealed class BillingGateEnforcementIsRealTests
     ///
     /// <para>Where a feature has several sites, the one named is the one a customer hits first;
     /// <see cref="EveryGateCallInProduction_IsAccountedFor"/> covers the rest by walking the code in
-    /// the opposite direction, so a second site cannot be deleted unnoticed either.</para>
+    /// the opposite direction, so a gate call for an undeclared feature cannot appear unnoticed. It
+    /// works at the feature level: it cannot tell that a second site for a declared feature went.</para>
     /// </summary>
     private static readonly IReadOnlyDictionary<BillingFeature, Site> Sites =
         new Dictionary<BillingFeature, Site>
         {
-            [BillingFeature.BulkMapping] = new(
-                typeof(SuppliersController), nameof(SuppliersController.ImportMappings), Kind.ServerRefusal,
-                "The bulk lever is the differentiator; single-mapping edits stay open on every plan."),
-
-            [BillingFeature.Cxml] = new(
-                typeof(SuppliersController), nameof(SuppliersController.UpsertDeliveryConfig), Kind.ServerRefusal,
-                "Reached through DeliveryCapabilityGate, which is why this scanner follows calls "
-              + "rather than looking for HasFeatureAsync in the method body itself."),
-
             [BillingFeature.AdvancedAudit] = new(
                 typeof(AuditController), nameof(AuditController.GetAuditLog), Kind.ServerRefusal,
-                "The org-wide trail. The per-order audit stays open — gating it would take away "
-              + "something Growth already pays for."),
-
-            [BillingFeature.WebhookDelivery] = new(
-                typeof(SuppliersController), nameof(SuppliersController.UpsertDeliveryConfig), Kind.ServerRefusal,
-                "Protocol = http, via DeliveryCapabilityGate."),
-
-            [BillingFeature.EmailIngestion] = new(
-                typeof(SettingsController), nameof(SettingsController.UpdateEmail), Kind.ServerRefusal,
-                "Enabling IMAP. EmailPollOrgJob re-checks every cycle so a downgrade stops the poll."),
-
-            [BillingFeature.SftpIngestion] = new(
-                typeof(SettingsController), nameof(SettingsController.UpdateSftp), Kind.ServerRefusal,
-                "Enabling SFTP pull. SftpPollOrgJob re-checks every cycle."),
-
-            [BillingFeature.S3Ingestion] = new(
-                typeof(SettingsController), nameof(SettingsController.UpdateS3), Kind.ServerRefusal,
-                "Enabling S3/R2 pull. S3PollOrgJob re-checks every cycle."),
-
-            [BillingFeature.ErpConnectors] = new(
-                typeof(SuppliersController), nameof(SuppliersController.UpsertDeliveryConfig), Kind.ServerRefusal,
-                "Protocol = erp_erply | erp_directo, via DeliveryCapabilityGate."),
-
-            [BillingFeature.CustomSupplierRules] = new(
-                typeof(SupplierAcceptanceController), nameof(SupplierAcceptanceController.CreateVersion),
-                Kind.ServerRefusal,
-                "Authoring a rule version. Activate is gated too; reading versions stays open."),
+                "The org-wide trail. A document's own history stays open — gating it would take "
+              + "away something every plan already has."),
 
             [BillingFeature.Sso] = new(
                 typeof(StripeBillingService), nameof(StripeBillingService.GetStatusAsync),
@@ -114,29 +80,12 @@ public sealed class BillingGateEnforcementIsRealTests
     [Fact]
     public void Scanner_Control_FindsAGateThatIsDefinitelyThere()
     {
-        var features = FeaturesGatedBy(Resolve(typeof(SettingsController), nameof(SettingsController.UpdateSftp)),
+        var features = FeaturesGatedBy(Resolve(typeof(AuditController), nameof(AuditController.GetAuditLog)),
             GatePrimitive.ServerRefusal);
 
-        features.Should().Contain(BillingFeature.SftpIngestion,
-            "SettingsController.UpdateSftp calls HasFeatureAsync(SftpIngestion) directly. If this "
+        features.Should().Contain(BillingFeature.AdvancedAudit,
+            "AuditController.GetAuditLog calls HasFeatureAsync(AdvancedAudit) directly. If this "
           + "fails, the scanner is broken and every other assertion in this file is worthless.");
-    }
-
-    /// <summary>
-    /// POSITIVE CONTROL, INDIRECT. The delivery gates reach the primitive two calls away
-    /// (UpsertDeliveryConfig → DeliveryCapabilityGate.FirstUnmetAsync → HasFeatureAsync). A scanner
-    /// that only read the method's own body would report these unenforced and demand a duplicated
-    /// gate — undoing the single-decision design WP-11 landed.
-    /// </summary>
-    [Fact]
-    public void Scanner_Control_FollowsCallsIntoTheSharedDeliveryGate()
-    {
-        var features = FeaturesGatedBy(
-            Resolve(typeof(SuppliersController), nameof(SuppliersController.UpsertDeliveryConfig)),
-            GatePrimitive.ServerRefusal);
-
-        features.Should().Contain(BillingFeature.WebhookDelivery,
-            "the http gate lives in DeliveryCapabilityGate, one call away from the controller");
     }
 
     /// <summary>
@@ -147,10 +96,10 @@ public sealed class BillingGateEnforcementIsRealTests
     public void Scanner_Control_DoesNotInventAGateWhereThereIsNone()
     {
         ReachesGatePrimitive(
-            Resolve(typeof(OrdersController), nameof(OrdersController.GetAudit)),
+            Resolve(typeof(DocumentsController), nameof(DocumentsController.History)),
             GatePrimitive.ServerRefusal)
             .Should().BeFalse(
-                "the per-order audit trail is deliberately open on every paid plan. If the scanner "
+                "a document's history is deliberately open on every plan. If the scanner "
               + "reports a gate here, it is reporting gates everywhere and proves nothing.");
     }
 
@@ -232,10 +181,8 @@ public sealed class BillingGateEnforcementIsRealTests
 
     /// <summary>
     /// The REVERSE direction. Everything above starts from the declared map, so a gate that exists
-    /// in production but is absent from the map is invisible to it — and an enforcement site that
-    /// is quietly deleted from one of the several-site features (the poll jobs, the second delivery
-    /// write path, the catalog source) would go unnoticed. This walks the code instead and demands
-    /// every real gate call belong to a feature we claim to enforce.
+    /// in production but is absent from the map is invisible to it. This walks the code instead and
+    /// demands every real gate call belong to a feature we claim to enforce.
     /// </summary>
     [Fact]
     public void EveryGateCallInProduction_IsAccountedFor()
@@ -246,6 +193,13 @@ public sealed class BillingGateEnforcementIsRealTests
             "production must contain at least one HasFeatureAsync call — an empty result means the "
           + "scanner failed to load the production assemblies, not that the ladder is clean");
 
+        // The reverse walk below reads only the call sites whose feature is a compile-time constant.
+        // A call with no constant before it would otherwise be dropped silently, so every
+        // production gate call must name its feature at the call site.
+        callSites.Should().OnlyContain(c => c.Feature != null,
+            "no constant feature found at the call site; every HasFeatureAsync call in production "
+          + "must name a constant BillingFeature there, or the walk below cannot see it");
+
         var gatedFeatures = callSites.Select(c => c.Feature).OfType<BillingFeature>().Distinct().ToArray();
 
         gatedFeatures.Should().BeSubsetOf(Enum.GetValues<BillingFeature>(),
@@ -254,34 +208,13 @@ public sealed class BillingGateEnforcementIsRealTests
 
         // A gate call naming a feature nobody declares means an enforcement site was added or moved
         // without updating the map — the map going stale in the direction the per-feature tests
-        // cannot see. (The delivery gates are absent from this list by design: they pass the feature
-        // through a list rather than as a constant at the call site, which is why the per-feature
-        // tests follow the call graph instead of reading call sites.)
+        // cannot see.
         gatedFeatures.Should().OnlyContain(f => Sites.ContainsKey(f),
             "every HasFeatureAsync call in production must be for a feature the gate table declares. "
           + "An undeclared one is a capability being refused that no plan card admits to gating.");
 
         var serverRefusals = Sites.Where(kv => kv.Value.Kind == Kind.ServerRefusal).Select(kv => kv.Key).ToArray();
         serverRefusals.Should().NotBeEmpty("the ladder must refuse something, or it is not a ladder");
-    }
-
-    /// <summary>
-    /// The pull jobs are the only gates that re-check AFTER the org was allowed to configure the
-    /// channel, which is what makes a downgrade actually stop the ingest rather than merely stop
-    /// re-enabling it. They are easy to "simplify" away, and nothing else would notice.
-    /// </summary>
-    [Theory]
-    [InlineData(typeof(SftpPollOrgJob), BillingFeature.SftpIngestion)]
-    [InlineData(typeof(S3PollOrgJob), BillingFeature.S3Ingestion)]
-    [InlineData(typeof(EmailPollOrgJob), BillingFeature.EmailIngestion)]
-    public void ThePullJobs_ReCheckTheGateOnEveryCycle(Type jobType, BillingFeature feature)
-    {
-        var execute = Resolve(jobType, "ExecuteAsync");
-
-        FeaturesGatedBy(execute, GatePrimitive.ServerRefusal).Should().Contain(feature,
-            $"{jobType.Name} must re-check {feature} every cycle. Gating only the settings write "
-          + "would let an org that downgrades keep ingesting for as long as its stored config "
-          + "survives — the configuration gate and the runtime gate are different guarantees.");
     }
 
     private static MethodBase Resolve(Type type, string method) =>

@@ -12,7 +12,7 @@ namespace ProcuLink.Api.Tests.Integration;
 /// Verifies: (1) the full migration chain applies cleanly including the new table,
 /// (2) the unique (org_id, supplier_id) index rejects a second source for the same
 /// supplier, and (3) the supplier FK rejects an orphan source. Docker-gated so the suite
-/// skips (not fails) where Docker is absent, mirroring <see cref="EndToEndPipelineTests"/>.
+/// skips (not fails) where Docker is absent, via <see cref="DockerRequiredFactAttribute"/>.
 /// </summary>
 [Collection("postgres-container")]
 public sealed class SupplierCatalogSourcePostgresTests(PostgresContainerFixture postgres) : IAsyncLifetime

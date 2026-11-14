@@ -75,19 +75,6 @@ public class OrderExceptionServiceTests
     }
 
     [Fact]
-    public async Task Resolve_SetsStateResolved()
-    {
-        var db = MakeDb();
-        var (orgId, orderId) = SeedOrder(db, "delivery_failed", false);
-        var svc = new OrderExceptionService(db);
-        await svc.ReconcileAsync(orgId, orderId, CancellationToken.None);
-        var ex = await db.OrderExceptions.SingleAsync();
-        var ok = await svc.ResolveAsync(orgId, ex.Id, CancellationToken.None);
-        Assert.True(ok);
-        Assert.Equal("resolved", (await db.OrderExceptions.SingleAsync()).State);
-    }
-
-    [Fact]
     public async Task Reconcile_TransformFailed_OpensTransformException()
     {
         var db = MakeDb();
@@ -150,7 +137,8 @@ public class OrderExceptionServiceTests
         var svc = new OrderExceptionService(db);
         await svc.ReconcileAsync(orgId, orderId, CancellationToken.None);
         var ex = await db.OrderExceptions.SingleAsync();
-        await svc.IgnoreAsync(orgId, ex.Id, CancellationToken.None);
+        ex.State = "ignored";                     // a row an operator ignored before plan 13b
+        await db.SaveChangesAsync();
 
         // Re-reconcile while problem still present — ignored row stays ignored, no new open row
         await svc.ReconcileAsync(orgId, orderId, CancellationToken.None);
@@ -202,7 +190,9 @@ public class OrderExceptionServiceTests
         var ex = await db.OrderExceptions.SingleAsync();
 
         // Operator manually resolves — but the order is still delivery_failed.
-        await svc.ResolveAsync(orgId, ex.Id, CancellationToken.None);
+        ex.State = "resolved";                    // a row an operator resolved before plan 13b
+        ex.ResolvedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
         Assert.Equal(0, await db.OrderExceptions.CountAsync(e => e.State == "open"));
 
         // Next pipeline touch: condition still holds → recreate an open row.
@@ -225,7 +215,9 @@ public class OrderExceptionServiceTests
         var ex = await db.OrderExceptions.SingleAsync();
 
         // Operator resolves AND the order is genuinely fixed (transform succeeded).
-        await svc.ResolveAsync(orgId, ex.Id, CancellationToken.None);
+        ex.State = "resolved";                    // a row an operator resolved before plan 13b
+        ex.ResolvedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
         var order = await db.PurchaseOrders.SingleAsync();
         order.Status = "delivered";
         await db.SaveChangesAsync();

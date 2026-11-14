@@ -104,10 +104,27 @@ public class InheritedDbSetModelCoverageTests
             "the negative control ignores exactly these to reproduce the defect; an empty list "
             + "would make it ignore nothing and prove nothing");
 
-        scan.Contexts.Count(c => !c.IsControl).Should().BeGreaterThan(9,
-            "this assembly is known to hold well over a dozen ProcuLinkDbContext subclasses; a "
-            + "handful means type discovery is broken, not that the population shrank");
+        // This file is link-compiled into both test assemblies, so the floor is per assembly: one
+        // shared number was right for one of them and let most of the other's population vanish.
+        // Api.Tests went 10 -> 6 -> 4 on 2026-11-13 (plan 13b deleted the order endpoints and then
+        // OrderTransformService, with the tests that held those subclasses). Infrastructure.Tests
+        // went 17 -> 16 (5de7c286, Task 6b) -> 10 (5db07ca1, Task 7a) -> 8 (58b7dd23, Task 7b) -> 7
+        // (ad26d483, Task 7b pass 2) as test files whose subjects were deleted took their context
+        // subclasses with them; the shared floor could not see it. Floor = today's count minus one.
+        var assembly = ThisTestAssembly.GetName().Name!;
+        KnownContextCount.Should().ContainKey(assembly,
+            "every assembly that compiles this guard must state its own population");
+        var known = KnownContextCount[assembly];
+        scan.Contexts.Count(c => !c.IsControl).Should().BeGreaterThan(known - 1,
+            $"{assembly} is known to hold {known} ProcuLinkDbContext subclasses; fewer means type "
+            + "discovery is broken, not that the population shrank");
     }
+
+    private static readonly IReadOnlyDictionary<string, int> KnownContextCount = new Dictionary<string, int>
+    {
+        ["ProcuLink.Api.Tests"] = 4,
+        ["ProcuLink.Infrastructure.Tests"] = 7,
+    };
 
     /// <summary>
     /// The negative control: a context built exactly like the real ones — no

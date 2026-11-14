@@ -72,7 +72,6 @@ public class BillingControllerTests
 
         var billing = new Mock<IBillingService>();
         var aiUsage = new Mock<IAiUsageTracker>();
-        var delivery = new Mock<ProcuLink.Core.Services.Delivery.IDeliveryService>();
 
         var ctrl = new BillingController(
             billing.Object,
@@ -81,7 +80,6 @@ public class BillingControllerTests
             NullLogger<BillingController>.Instance,
             db,
             aiUsage.Object,
-            delivery.Object,
             new DocumentEngineGate(Options.Create(new DocumentEngineOptions { EnabledForAll = engine })));
 
         return (ctrl, billing, aiUsage, orgId, db);

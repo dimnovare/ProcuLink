@@ -14,17 +14,8 @@ public static class OperationalAlertKeys
     /// <summary>No Hangfire worker has a recent heartbeat — background processing has stopped.</summary>
     public const string WorkerHeartbeatLost = "worker_heartbeat_lost";
 
-    /// <summary>All-org dead-letter + failed-delivery backlog crossed its threshold.</summary>
-    public const string DeadLetterBacklog = "dead_letter_backlog";
-
-    /// <summary>All-org failed + transform-failed (pre-delivery pipeline) backlog crossed its threshold.</summary>
-    public const string PipelineFailureBacklog = "pipeline_failure_backlog";
-
     /// <summary>Delivery attempts in the recent window are failing above the configured rate.</summary>
     public const string DeliveryFailureRate = "delivery_failure_rate";
-
-    /// <summary>An enabled inbound pull channel has not recorded a successful poll recently.</summary>
-    public const string PullChannelStalled = "pull_channel_stalled";
 
     /// <summary>One or more good-standing orgs have latched their monthly AI token cap.</summary>
     public const string AiTokenCapLatched = "ai_token_cap_latched";
@@ -60,10 +51,7 @@ public static class OperationalAlertKeys
     public static readonly IReadOnlyList<string> HealthConditions = new[]
     {
         WorkerHeartbeatLost,
-        DeadLetterBacklog,
-        PipelineFailureBacklog,
         DeliveryFailureRate,
-        PullChannelStalled,
         AiTokenCapLatched,
         FlowDeliveryDeadLetter,
         FlowDeliveryStuck,

@@ -8,7 +8,6 @@ using ProcuLink.Core.Services.Catalog;
 using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
-using ProcuLink.Infrastructure.Services.Catalog;
 
 namespace ProcuLink.Infrastructure.Tests.Services.Catalog;
 
@@ -64,82 +63,6 @@ public class CatalogCredentialBindingTests
 
         var act = () => enc.Decrypt(blob, CredentialScope.ForSupplier(
             OrgA, CredentialPurpose.SupplierCatalogAuthConfig, SourceOne));
-
-        act.Should().Throw<CredentialUnbindableException>();
-    }
-
-    // Writes through the REAL production write path, then decrypts with the exact tuple
-    // CatalogPullService.cs:312 constructs. A wrong purpose or a wrong scope id on either side
-    // shows up here as an unreadable credential rather than as a broken catalog sync in production.
-    [Fact]
-    public async Task Upsert_ThenDecryptWithTheReadSideScope_RoundTrips()
-    {
-        await using var db = NewDb();
-        db.Suppliers.Add(new Supplier
-        {
-            Id = SupplierId, OrgId = OrgA, Name = "Catalog supplier", CreatedAt = DateTime.UtcNow,
-        });
-        await db.SaveChangesAsync();
-
-        var enc = Encryption();
-        var service = new CatalogSourceSettingsService(db, enc, new Mock<IBackgroundJobClient>().Object);
-
-        await service.UpsertAsync(OrgA, SupplierId, new UpsertCatalogSourceRequest(
-            Protocol: "sftp",
-            Host: "files.example.com",
-            Port: 22,
-            Username: "catalog",
-            Password: "catalog-password",
-            RemotePath: "/exports/catalog.csv",
-            FileFormat: "auto",
-            SyncIntervalHours: 24,
-            IsEnabled: true), CancellationToken.None);
-
-        var source = await db.SupplierCatalogSources.AsNoTracking()
-            .SingleAsync(s => s.OrgId == OrgA && s.SupplierId == SupplierId);
-
-        enc.Decrypt(source.EncryptedPassword!, CredentialScope.ForSupplier(
-            source.OrgId, CredentialPurpose.SupplierCatalogPassword, source.Id))
-            .Should().Be("catalog-password");
-    }
-
-    // The positive round-trip above cannot, by itself, prove the write side binds anything: a
-    // legacy version-1 envelope (what CatalogSourceSettingsService wrote before this task) carries
-    // no associated data and decrypts successfully under ANY scope, so "does the plaintext come
-    // back" passes whether or not source.Id is actually bound in. This test supplies the missing
-    // negative case — same stored ciphertext, decrypted under a DIFFERENT source id — which is
-    // red before Step 3 (legacy blob, scope-blind, no throw) and green after (bound blob, wrong
-    // AAD, throws).
-    [Fact]
-    public async Task Upsert_ThenDecryptUnderAWrongSourceId_Throws()
-    {
-        await using var db = NewDb();
-        db.Suppliers.Add(new Supplier
-        {
-            Id = SupplierId, OrgId = OrgA, Name = "Catalog supplier", CreatedAt = DateTime.UtcNow,
-        });
-        await db.SaveChangesAsync();
-
-        var enc = Encryption();
-        var service = new CatalogSourceSettingsService(db, enc, new Mock<IBackgroundJobClient>().Object);
-
-        await service.UpsertAsync(OrgA, SupplierId, new UpsertCatalogSourceRequest(
-            Protocol: "sftp",
-            Host: "files.example.com",
-            Port: 22,
-            Username: "catalog",
-            Password: "catalog-password",
-            RemotePath: "/exports/catalog.csv",
-            FileFormat: "auto",
-            SyncIntervalHours: 24,
-            IsEnabled: true), CancellationToken.None);
-
-        var source = await db.SupplierCatalogSources.AsNoTracking()
-            .SingleAsync(s => s.OrgId == OrgA && s.SupplierId == SupplierId);
-
-        var wrongSourceId = Guid.Parse("88888888-8888-8888-8888-888888888888");
-        var act = () => enc.Decrypt(source.EncryptedPassword!, CredentialScope.ForSupplier(
-            source.OrgId, CredentialPurpose.SupplierCatalogPassword, wrongSourceId));
 
         act.Should().Throw<CredentialUnbindableException>();
     }

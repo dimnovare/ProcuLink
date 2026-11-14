@@ -131,12 +131,7 @@ static string? BuildPooledConnectionString(string? raw, int maxPoolSize)
     return b.ConnectionString;
 }
 
-// P2 hardening: same log-only order state-machine observer as the API host — delivery,
-// stuck-detection, and job-driven Status writes happen here too. Warnings only; never blocks.
-builder.Services.AddSingleton<ProcuLink.Infrastructure.Services.OrderStatusTransitionObserver>();
-builder.Services.AddDbContext<ProcuLinkDbContext>((sp, options) =>
-    options.UseNpgsql(connectionString)
-        .AddInterceptors(sp.GetRequiredService<ProcuLink.Infrastructure.Services.OrderStatusTransitionObserver>()));
+builder.Services.AddDbContext<ProcuLinkDbContext>(options => options.UseNpgsql(connectionString));
 
 builder.Services.AddHangfire(cfg => cfg
     .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
@@ -171,14 +166,10 @@ if (string.IsNullOrEmpty(builder.Configuration["Storage:R2AccessKeyId"]))
 else
     builder.Services.AddSingleton<IFileStorageService, R2StorageService>();
 
-builder.Services.AddScoped<IItemMappingService, ItemMappingService>();
 builder.Services.AddScoped<IOrderExceptionService, OrderExceptionService>();
-// Wave 4: IntegrationTriggerService is needed by OrderService and DeliveryService.
-// Register it here so Worker DI validation passes (same as API/Program.cs line 198).
-builder.Services.AddScoped<IIntegrationTriggerService, IntegrationTriggerService>();
 // Analytics (PostHog) — required by StripeBillingService (resolved via IBillingService
-// in EmailPollingJob) and ParseOrderJob. No-op when Analytics:PostHog:ApiKey is absent.
-// Mirrors API/Program.cs lines 189-190.
+// in FlowPickupJob and DocumentIntakeService). No-op when Analytics:PostHog:ApiKey is absent.
+// Mirrors the API registration.
 builder.Services.Configure<PostHogOptions>(builder.Configuration.GetSection("Analytics:PostHog"));
 builder.Services.Configure<ProcuLink.Api.Services.Documents.DocumentEngineOptions>(builder.Configuration.GetSection("DocumentEngine"));
 builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.DocumentEngineGate>();
@@ -191,7 +182,6 @@ builder.Services.AddScoped<ProcuLink.Core.Services.Google.ILinkedAccountTokens, 
 builder.Services.Configure<ProcuLink.Api.Services.Documents.ValidatorOptions>(builder.Configuration.GetSection("Validator"));
 builder.Services.AddHttpClient(ProcuLink.Api.Services.Documents.PhormValidator.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddScoped<ProcuLink.Core.Documents.IStandardValidator, ProcuLink.Api.Services.Documents.PhormValidator>();
-builder.Services.AddSingleton<ProcuLink.Core.Services.IOrderIntakeSwitch>(sp => sp.GetRequiredService<ProcuLink.Api.Services.Documents.DocumentEngineGate>());
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentRechecker>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentSender>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentIntakeService>();
@@ -223,70 +213,22 @@ else
     builder.Services.AddScoped<IEmailSender, ConsoleEmailSender>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.FlowDestinationService>();
 builder.Services.AddSingleton<IAnalyticsService, PostHogAnalyticsService>();
-builder.Services.AddScoped<IOrderService, OrderService>();
-// Same scoped OrderService also serves the pull-ingress stub-creation seam (explicit order id).
-builder.Services.AddScoped<IStubOrderCreator>(sp => (OrderService)sp.GetRequiredService<IOrderService>());
-builder.Services.AddScoped<IClaimedOrderCreator>(sp => (OrderService)sp.GetRequiredService<IOrderService>());
-// Durable AI-suggestion decision history — an optional OrderService dependency; register it
-// so the resolve/accept paths persist history when driven from the Worker too.
-builder.Services.AddScoped<IAiSuggestionDecisionService, AiSuggestionDecisionService>();
 builder.Services.AddScoped<IBillingService, StripeBillingService>();
 // Billing safety net: reconciles plan/account_status against Stripe as source of truth
 // (driven by the daily BillingReconciliationJob). Registered here because the Worker is the
 // sole Hangfire executor and Development DI validation constructs the job's dependency graph.
 builder.Services.AddScoped<IBillingReconciliationService, StripeSubscriptionReconciliationService>();
-builder.Services.AddScoped<IEmailSettingsService, EmailSettingsService>();
-builder.Services.AddSingleton<IAiMappingService, OpenAiMappingService>();
-// T4 — external web/product-code grounding (no-op unless Ai:OpenAI:ProductSearch:Enabled=true).
-builder.Services.AddSingleton<IProductCodeSearch, OpenAiProductCodeSearch>();
 builder.Services.AddScoped<IAiUsageTracker, AiUsageTracker>();
-// Same decorator as the API composition root. No Worker job writes a supplier PO mapping today — all
-// six writers are API-side — so this is behaviour-neutral here. It is registered anyway because the
-// alternative is two composition roots that disagree about what IPoMappingService means, and the
-// first Worker job that ever writes one would silently skip the invalidation.
-builder.Services.AddScoped<PoMappingService>();
-builder.Services.AddScoped<IPoMappingService>(sp => new ArtifactInvalidatingPoMappingService(
-    sp.GetRequiredService<PoMappingService>(),
-    sp.GetRequiredService<ProcuLinkDbContext>(),
-    sp.GetRequiredService<IEffectiveConnectionConfigResolver>(),
-    sp.GetRequiredService<ILogger<ArtifactInvalidatingPoMappingService>>()));
 builder.Services.AddSingleton<DeliveryEncryptionService>();
 builder.Services.AddSingleton<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>();
 // Group O reliability: retry-queue backoff + SLA window tunables (section Delivery:Reliability).
-// Mirrors API/Program.cs. The Worker executes the scheduled RetryDeliveryJob and the SLA sweep.
+// Mirrors API/Program.cs. The Worker executes DeliverDocumentJob, which reads them.
 builder.Services.AddSingleton(sp =>
 {
     var opts = new DeliveryReliabilityOptions();
     builder.Configuration.GetSection(DeliveryReliabilityOptions.SectionName).Bind(opts);
     return opts;
 });
-// Launch batch 7 — revision authority: pinned-revision config bundle resolver, consumed by the
-// Worker's parse (ParseOrderJob → OrderService), transform (TransformOrderJob), and delivery
-// jobs. Flag-gated by Connections:RevisionAuthority. The CODE default is OFF (live tables,
-// byte-identical), but that is NOT the deployed value: production sets
-// Connections__RevisionAuthority = true on the Railway "aware-amazement" service, so revision
-// authority is ON for the host that actually runs parse/transform/deliver. This process serves no
-// HTTP, so its effective value is announced in the startup log (StartupConfigurationValidator)
-// rather than on a health endpoint. See ProcuLink.Infrastructure/Services/RevisionAuthorityHosts.cs
-// and docs/ops/revision-authority-production-smoke.md.
-builder.Services.AddScoped<IEffectiveConnectionConfigResolver, EffectiveConnectionConfigResolver>();
-builder.Services.AddScoped<IDeliveryConfigService, DeliveryConfigService>();
-// cXML network credentials resolver — consumed by the Worker's TransformOrderJob (OrderService →
-// OrderTransformService) so cXML generated on the Worker carries the supplier's real identities.
-builder.Services.AddScoped<ICxmlCredentialResolver, CxmlCredentialResolver>();
-// WP-17 — the server-side acceptance gate, and the acceptance evaluator it reads. THE WORKER is
-// where TransformOrderJob runs, so this is the host that actually enforces the supplier's blocking
-// rules; before this work package neither type was registered here at all. OrderService also
-// constructs a real gate when DI hands it none, so a future omission degrades to "still enforced"
-// rather than "silently open" — but the registration is the intended path and
-// AcceptanceGateHostRegistrationTests pins both hosts.
-builder.Services.AddScoped<ISupplierAcceptanceService, SupplierAcceptanceService>();
-builder.Services.AddScoped<IAcceptanceGate, AcceptanceGate>();
-// WP-33 stage 1 — auto-send in dry run. This host runs ParseOrderJob, so this is where the
-// decision is actually made; AutoSendDryRunCannotSendTests.BothHosts_registerTheEvaluator pins both.
-builder.Services.AddScoped<IAutoSendDryRunEvaluator, AutoSendDryRunEvaluator>();
-builder.Services.AddScoped<IDeliveryService, DeliveryService>();
-builder.Services.AddScoped<IDeliverySlaService, DeliverySlaService>();
 
 // ── Wave 4 reliability/observability: worker-health alert sweep + retention ──
 // The recurring jobs are scheduled in Worker.cs; these are their DI deps.
@@ -328,7 +270,7 @@ builder.Services.AddScoped<DisposableOrgSweepJob>();
 
 builder.Services.AddScoped<IErpConnector, ErplyConnector>();
 builder.Services.AddScoped<IErpConnector, DirectoConnector>();
-// Email API (Postmark over HTTPS) — the Worker runs TransformOrderJob → DeliveryService, so the
+// Email API (Postmark over HTTPS) — the Worker runs DeliverDocumentJob, so the
 // email delivery dispatcher resolves IEmailApiClient HERE too (DI foot-gun precedent 4607d6d).
 builder.Services.AddHttpClient(PostmarkEmailApiClient.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddScoped<IEmailApiClient, PostmarkEmailApiClient>();
@@ -346,133 +288,30 @@ if (builder.Configuration.GetValue<bool>("Delivery:EnableSmtp"))
 builder.Services.AddScoped<IDeliveryDispatcher, ErplyDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, DirectoDeliveryDispatcher>();
 
-builder.Services.AddSingleton<IPurchaseOrderParser, CsvOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, XlsxOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, PdfOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, CxmlOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, UblOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, IDocOrders05Parser>(); // SAP IDoc ORDERS05 (.xml, root <ORDERS05>)
-builder.Services.AddSingleton<IPurchaseOrderParser, EdifactOrderParser>();
-builder.Services.AddSingleton<IPurchaseOrderParser, X12OrderParser>(); // Group M — ANSI X12 850
-builder.Services.AddSingleton<OrderParserFactory>();
-// SourceMap engine tokenizer: the Worker's parse job (ParseOrderJob → OrderService →
-// OrderIngestionService.ParseStoredFileAsync) needs this to capture the FULL source-token set
-// for structured formats into source_captures. Singleton — stateless, mirrors the Api registration.
+// Source tokenizer: ReadDocumentJob reads structured formats through it (DocumentText.ReadAsync).
+// Singleton — stateless, mirrors the Api registration.
 builder.Services.AddSingleton<ProcuLink.Transform.Tokenizing.ISourceTokenizer, ProcuLink.Transform.Tokenizing.SourceTokenizer>();
-// Registered FROM OutputTransformRegistry.All — the same list that derives the buildable-format
-// allow-list every output-format write path checks against. See the Api registration for why the
-// two must not be typed out separately.
-builder.Services.AddOutputTransforms();
 
 // ── Wave 2: pull-ingress (SFTP / S3-R2) + OCR fallback ────────────────────
 builder.Services.AddSingleton<ISftpClientFactory, RenciSftpClientFactory>();
-builder.Services.AddScoped<ISftpIngressService, SftpIngressService>();
 builder.Services.AddSingleton<IAmazonS3ClientFactory, AmazonS3ClientFactory>();
-builder.Services.AddScoped<IS3IngressService, S3IngressService>();
-
-// ── Catalog import channels: SFTP/FTP(S) pull (plan 2026-06-12) ────────────
-// DI foot-gun precedent 4607d6d: ISupplierCatalogService was Api-only — the Worker
-// executes CatalogSyncSourceJob, so the sink + pull pipeline must resolve here too.
-builder.Services.AddScoped<ISupplierCatalogService, SupplierCatalogService>();
+// FTP/FTPS fetch seam for the flow pickups (FtpPickupSource).
 builder.Services.AddSingleton<IFtpFetchClientFactory, FluentFtpFetchClientFactory>();
-builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogPullService,
-                           ProcuLink.Infrastructure.Services.Catalog.CatalogPullService>();
-// Vendor catalog fetchers (plan 2026-07-02 D4) — the Worker runs the sync jobs, so the fetcher
-// must resolve here too (DI foot-gun precedent 4607d6d).
-builder.Services.AddScoped<ProcuLink.Core.Services.Catalog.ICatalogVendorFetcher,
-                           ProcuLink.Infrastructure.Services.Catalog.Aes2faSignedCatalogFetcher>();
-builder.Services.AddScoped<CatalogSyncDispatcherJob>();
-builder.Services.AddScoped<CatalogSyncSourceJob>();
-// IEmailBodyOrderExtractor intentionally NOT registered here: OpenAiEmailBodyOrderExtractor
-// depends on ICurrentTenantService (HttpContext-based) which only exists in the API.
-// Email-body NLP runs in the API's InboundEmailController scope (Postmark webhook),
-// not in Worker jobs. Registering it here triggers DI validation failure at Host.Build().
 
-// PDF rasterizer for the vision fallback (scanned/no-text PDFs). The Worker runs
-// ParseOrderJob, so it needs the same registration as the API.
+// PDF rasterizer for scanned/no-text PDFs: ReadDocumentJob renders their pages for OCR, and
+// RapidOcrDocumentOcrService takes it too. Same registration as the API.
 builder.Services.AddSingleton<IPdfRasterizer, SkiaPdfRasterizer>();
-// Primary PDF path: text → LLM structured extraction. The Worker runs ParseOrderJob,
-// so it must register the same singleton extractor as the API (orgId is a method
-// param + tracker resolved via IServiceScopeFactory — no ICurrentTenantService).
-builder.Services.AddSingleton<IStructuredOrderExtractor, OpenAiPdfOrderExtractor>();
 builder.Services.AddSingleton<IDocumentReader, OpenAiDocumentReader>();
-// OCR seam. The Worker runs ParseOrderJob, so this is where self-hosted OCR executes.
+// OCR seam. The Worker runs ReadDocumentJob (and OcrWarmupHostedService), so this is where
+// self-hosted OCR executes.
 // Opt-in (RapidOcrNet) only when enabled — otherwise a no-op (no models loaded).
 if (builder.Configuration.GetValue<bool>("NoEgressOcr:Enabled"))
     builder.Services.AddSingleton<IDocumentOcrService, RapidOcrDocumentOcrService>();
 else
     builder.Services.AddSingleton<IDocumentOcrService, NoOpOcrService>();
 
-// ── Phase 6: smart format auto-detect ─────────────────────────────────────
-// Mirrors API/Program.cs. Currently used only by API controllers, but registered
-// here too so future background jobs in this dep graph can resolve it without a
-// second DI fix.
-builder.Services.AddScoped<ProcuLink.Core.Services.Detection.IFormatDetector, ProcuLink.Infrastructure.Services.Detection.FormatDetectorService>();
-
-builder.Services.AddScoped<EmailPollingJob>();
-builder.Services.AddScoped<EmailPollOrgJob>();
-builder.Services.AddScoped<SftpPollingJob>();
-builder.Services.AddScoped<SftpPollOrgJob>();
-builder.Services.AddScoped<S3PollingJob>();
-builder.Services.AddScoped<S3PollOrgJob>();
-// P0 reliability: stuck-order detection sweep + operator retry job.
-builder.Services.AddScoped<IStuckOrderDetectionService, StuckOrderDetectionService>();
-builder.Services.AddScoped<StuckOrderDetectionJob>();
-// StuckOrderDetectionService re-enqueues stuck 'parsing' orders through IParseJobEnqueuer.
-// That dependency is optional, so without this registration the Worker would reset stuck
-// orders to 'pending_parse' but never enqueue a fresh parse job — nothing would drive them.
-// The concrete adapter lives in ProcuLink.Api (alongside Hangfire + ParseOrderJob) and needs
-// only IBackgroundJobClient, which this Worker already provides.
-builder.Services.AddScoped<IParseJobEnqueuer, ProcuLink.Api.Controllers.HangfireParseJobEnqueuer>();
-// Group O reliability: automatic delivery retry queue (scheduled here) + SLA breach sweep.
-builder.Services.AddScoped<RetryDeliveryJob>();
-builder.Services.AddScoped<DeliverySlaSweepJob>();
-// Delivery-path hardening: recover orders stranded in 'delivering' (e.g. a Worker restart /
-// download throw / dispatcher hang between the status write and the terminal attempt persist).
-// The sweep re-drives them through RetryDeliveryJob via IRetryDeliveryEnqueuer up to a bounded
-// cap, then dead-letters — guaranteeing a delivering→terminal transition. The Hangfire adapter
-// needs only IBackgroundJobClient, which this Worker already provides.
-builder.Services.AddScoped<IRetryDeliveryEnqueuer, ProcuLink.Infrastructure.Jobs.HangfireRetryDeliveryEnqueuer>();
-builder.Services.AddScoped<IStuckDeliveryDetectionService, StuckDeliveryDetectionService>();
-builder.Services.AddScoped<StuckDeliveryDetectionJob>();
-// B1 lost-order backstop: recover orders stranded in 'ready_to_deliver' whose delivery enqueue was
-// lost between TransformOrderJob's commit and DeliverOrderJob.Enqueue (crash / DB blip). Re-drives
-// AUTO-deliver orders with no delivery attempt through the normal first-delivery job; idempotent
-// (DeliverOrderJob's atomic claim prevents any double-send). The dispatch adapter lives in
-// ProcuLink.Api alongside DeliverOrderJob and needs only IBackgroundJobClient, which this Worker
-// already provides.
-builder.Services.AddScoped<IDeliveryDispatchEnqueuer, ProcuLink.Api.Jobs.HangfireDeliveryDispatchEnqueuer>();
-builder.Services.AddScoped<IStrandedReadyOrderDetectionService, StrandedReadyOrderDetectionService>();
-builder.Services.AddScoped<StrandedReadyDeliveryDetectionJob>();
-// B5 silent-no-more-retries backstop: recover orders stranded in 'delivery_failed' with attempts
-// remaining whose automatic next-retry was lost between the failed-attempt write and the backoff
-// BackgroundJob.Schedule (crash / lost enqueue). Re-drives them through RetryDeliveryJob via the same
-// IRetryDeliveryEnqueuer the stuck-delivery sweep uses; idempotent (RetryDeliveryAsync's atomic claim
-// + attempt-cap prevent any double-send). The aged threshold is set well past the max retry backoff
-// so a legitimately-scheduled retry is never raced.
-builder.Services.AddScoped<IStrandedFailedDeliveryDetectionService, StrandedFailedDeliveryDetectionService>();
-builder.Services.AddScoped<StrandedFailedDeliveryDetectionJob>();
 builder.Services.AddScoped<BillingReconciliationJob>();
-// ParseOrderJob (executed here) records schema fingerprints — register the service it depends on.
-builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISchemaFingerprintService, ProcuLink.Infrastructure.Services.Detection.SchemaFingerprintService>();
-builder.Services.AddScoped<ProcuLink.Core.Services.Detection.ISupplierSuggestionService, ProcuLink.Infrastructure.Services.Detection.SupplierSuggestionService>();
-// ParseOrderJob lives in ProcuLink.Api but is enqueued on "default" — Worker executes it.
-builder.Services.AddScoped<ParseOrderJob>();
 
-// ── Wave 3: Invoice parse pipeline (executed HERE — the Worker is the sole Hangfire executor) ──
-// DI foot-gun precedent 4607d6d: these were Api-only. InvoiceController enqueues ParseInvoiceJob,
-// but the Worker (not the API) runs Hangfire jobs, so without these registrations the activator
-// can't construct ParseInvoiceJob → it never executes and the invoice is stranded in "parsing"
-// forever (no status=failed, no stuck-order sweep covers invoices). Mirrors API/Program.cs.
-builder.Services.AddSingleton<IInvoiceParser, UblInvoiceParser>();
-builder.Services.AddSingleton<IInvoiceParser, EdifactInvoiceParser>();
-builder.Services.AddSingleton<InvoiceParserFactory>();
-builder.Services.AddSingleton<IInvoiceTransformService, CsvInvoiceTransformService>();
-builder.Services.AddSingleton<IInvoiceTransformService, XmlInvoiceTransformService>();
-builder.Services.AddSingleton<IInvoiceTransformService, JsonInvoiceTransformService>();
-builder.Services.AddScoped<IInvoiceService, InvoiceService>();
-// ParseInvoiceJob lives in ProcuLink.Api, enqueued on "critical" — Worker executes it.
-builder.Services.AddScoped<ParseInvoiceJob>();
 builder.Services.AddScoped<ReadDocumentJob>();
 builder.Services.AddScoped<DeliverDocumentJob>();
 builder.Services.AddScoped<SendDocumentJob>();
@@ -486,7 +325,7 @@ builder.Services.AddHostedService<ProcuLink.Worker.OcrWarmupHostedService>();
 var host = builder.Build();
 
 // ── Analytics graceful flush on shutdown ─────────────────────────────────
-// Mirrors API/Program.cs lines 405-409 — drain queued PostHog events on
+// Mirrors API/Program.cs — drain queued PostHog events on
 // SIGTERM before the Hangfire server stops accepting work.
 host.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping.Register(() =>
 {

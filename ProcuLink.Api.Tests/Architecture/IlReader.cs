@@ -7,10 +7,10 @@ namespace ProcuLink.Api.Tests.Architecture;
 /// <summary>
 /// The one IL decoder the architecture guards share.
 ///
-/// <para><b>Why it is shared and not copied.</b> Two guards now read compiled IL to answer a
+/// <para><b>Why it is shared and not copied.</b> Several guards read compiled IL to answer a
 /// question prose cannot be trusted with — <see cref="BillingGateIlScanner"/> ("does this method
-/// provably reach a billing gate?") and <see cref="OutboundArtifactSelectionIlScanner"/> ("does
-/// this method pick an outbound artifact by recency, and does it consult the rule?"). Both need
+/// provably reach a billing gate?") among them. (The outbound-artifact-selection scanner that was
+/// its first sibling went with the order pipeline, plan 13b, 2026-11-13.) They all need
 /// the same three primitives: the opcode table, the operand-size table, and the trick of following
 /// an async method to its state machine's <c>MoveNext</c>. The progress log records what happens
 /// when a scanner-shaped helper gets duplicated instead: two copies drift, and the one nobody

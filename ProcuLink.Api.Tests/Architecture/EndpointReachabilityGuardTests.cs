@@ -103,14 +103,6 @@ public sealed class EndpointReachabilityGuardTests
     private static readonly IReadOnlyList<AccountedEndpoint> MachineFacing =
     [
         // ── Machine-to-machine ingress, sold as an integration surface ────────────────────
-        new("POST /api/ingress/{}/catalog/{}",
-            "2026-08-13 — machine-to-machine catalog push. IngressController carries "
-            + "[Authorize(AuthenticationSchemes = \"ApiKey\")], not Clerk. The URL is RENDERED for "
-            + "the customer to paste into their own system at "
-            + "project-proculink/src/components/bridge/SupplierDockProfile.tsx:1243 — this app never "
-            + "posts to it, and a frontend caller would be the bug. Its sibling POST "
-            + "/api/ingress/{slug}/orders needs no entry: scripts/live-matrix/ingest-harness.mjs:97 "
-            + "really calls it."),
         new("POST /api/v1/flows/{}/documents",
             "2026-11-07 — machine-to-machine file API. ProcuLink.Api/Controllers/FlowFilesController.cs carries "
             + "[Authorize(AuthenticationSchemes = \"ApiKey\")], not Clerk: the customer's own system "
@@ -121,13 +113,6 @@ public sealed class EndpointReachabilityGuardTests
             + "[Authorize(AuthenticationSchemes = \"ApiKey\")], not Clerk: after posting a file the "
             + "customer's own system fetches the result by id with an org API key, and no browser "
             + "screen calls it, so a frontend caller would be the bug. Permanent entry."),
-        new("GET /api/ingress/{}/ping",
-            "2026-08-13 — the reachability probe a customer runs while wiring the ingress API up, "
-            + "documented for them at "
-            + "project-proculink/src/app/(marketing)/help/api-and-integrations/page.mdx:29 as "
-            + "`GET /api/ingress/{your-slug}/ping`. Being callable by someone who is not us IS the "
-            + "feature. Permanent entry."),
-
         // ── Provider webhooks. The caller is Stripe. ──────────────────────────────────────
         new("POST /api/billing/webhook",
             "2026-08-13 — Stripe calls this, not the browser. [AllowAnonymous] with signature "
@@ -147,6 +132,13 @@ public sealed class EndpointReachabilityGuardTests
             "ProcuLink.Infrastructure/Services/Delivery/DeliveryBounceHandler.cs and its sibling " + 
             "POST /api/inbound-email/postmark is the inbound half. " + 
             "Permanent entry."),
+        new("POST /api/inbound-email/postmark",
+            "2026-11-13 — Postmark calls this, not the browser: the inbound webhook, configured in the "
+            + "Postmark dashboard rather than in code, authenticated by the shared token, with the tenant "
+            + "derived from the recipient address (ProcuLink.Api/Controllers/InboundEmailController.cs, "
+            + "[HttpPost(\"postmark\")]). Its only in-repo caller was the live-matrix inbound-email "
+            + "harness, deleted by plan 13b task 8b; the provider was always the real caller. A frontend "
+            + "caller would be a bug. Permanent entry."),
 
         // ── Operator tooling with a documented out-of-band caller ─────────────────────────
         new("DELETE /api/admin/organisations/{}/orders/{}",
@@ -171,18 +163,6 @@ public sealed class EndpointReachabilityGuardTests
             + "download link, so the caller is a browser following a URL this service built. R2 is "
             + "used in every deployed environment, so it has no production caller either."),
 
-        // ── Called through a computed final segment, which the matcher refuses to credit ──
-        new("POST /api/connections/{}/revisions/{}/publish",
-            "2026-08-13 — genuinely called, through a segment the matcher will not credit: "
-            + "project-proculink/src/lib/api-client.ts builds "
-            + "`/api/connections/${connectionId}/revisions/${revisionId}/${action}` where `action` "
-            + "is the union \"publish\" | \"archive\". Crediting a computed segment against a "
-            + "literal route segment would let one template mark a whole controller reachable — see "
-            + "EndpointReachabilityScanner.Matches for why that refusal is deliberate."),
-        new("POST /api/connections/{}/revisions/{}/archive",
-            "2026-08-13 — the other half of the same computed-segment call in "
-            + "project-proculink/src/lib/api-client.ts; see the publish entry directly above for why "
-            + "the matcher refuses to credit it structurally."),
     ];
 
     /// <summary>
@@ -198,110 +178,9 @@ public sealed class EndpointReachabilityGuardTests
     /// </summary>
     private static readonly IReadOnlyList<AccountedEndpoint> UncalledPendingDecision =
     [
-        // ── The two recovery doors the audit named. See Guard_SeesTheTwoRecoveryDoors… ────
-        new("POST /api/orders/{}/acceptance-gate/override",
-            "PENDING A DECISION, 2026-08-13 — named by the v2 audit as a caller-less recovery door. "
-            + "ProcuLink.Api/Controllers/OrderAcceptanceGateController.cs:70-78 documents it as the "
-            + "administrator's authorisation to send an order despite the supplier's blocking rules, "
-            + "with a required reason and a recorded identity — and no screen offers it. The GET "
-            + "beside it IS called, so an operator can see exactly why an order is blocked and has "
-            + "no way to act on it. Build the control or delete the endpoint."),
-        new("DELETE /api/suppliers/{}/po-mapping/output-tree",
-            "PENDING A DECISION, 2026-08-13 — the second recovery door named by the v2 audit. Its "
-            + "own docstring at ProcuLink.Api/Controllers/SuppliersController.cs:583-587 calls it "
-            + "\"the recovery door for a layout that cannot deliver this supplier's format\", and "
-            + "the mapper offers no way to un-promote a layout. A door with no handle, in its own "
-            + "words."),
-
-        // ── Operator diagnostics that exist and cannot be looked at ──────────────────────
-        new("GET /api/auto-send/dry-runs",
-            "PENDING A DECISION, 2026-08-13 — the audit records the per-supplier auto-send flag as "
-            + "shipped with no indicator and no control; this is the evidence trail for it, and "
-            + "nothing reads that either. ProcuLink.Api/Controllers/AutoSendDryRunController.cs:145 "
-            + "exists in full, exercised by "
-            + "ProcuLink.Api.Tests/Integration/AutoSendDryRunPostgresTests.cs, behind no surface."),
-        new("GET /api/auto-send/dry-runs/summary",
-            "PENDING A DECISION, 2026-08-13 — the aggregate of the list above "
-            + "(ProcuLink.Api/Controllers/AutoSendDryRunController.cs:82); it stands or falls with "
-            + "the same decision and is listed separately so neither is lost."),
-
-        // ── Order-level reads with no screen ─────────────────────────────────────────────
-        new("GET /api/orders/{}/status",
-            "PENDING A DECISION, 2026-08-13 — a cheap poll-friendly status read. The review screen "
-            + "polls the full order instead (project-proculink/src/lib/api-client.ts fetches "
-            + "/api/orders/{id}), so this narrower endpoint is engine surface nobody adopted."),
-        new("GET /api/orders/{}/ai-decisions",
-            "PENDING A DECISION, 2026-08-13 — the AI decision trail for one order. "
-            + "ProcuLink.Api/Services/PassportService.cs:168 tells the operator in prose that it is "
-            + "\"available at GET /api/orders/{id}/ai-decisions\" — a sentence that promises a "
-            + "surface no screen provides. Either the review screen shows the trail or both the "
-            + "endpoint and the sentence go."),
-        new("GET /api/orders/{}/delivery-attempts",
-            "PENDING A DECISION, 2026-08-13 — per-order delivery attempts "
-            + "(ProcuLink.Api/Controllers/DeliveriesController.cs:33). The review screen renders "
-            + "delivery state from the order itself and the org-wide trail is GET /api/audit, which "
-            + "project-proculink/src/components/bridge/CrossingsLog.tsx reads, so this per-order "
-            + "view has no reader. Decide whether the order page grows an attempts panel."),
-        new("POST /api/orders/{}/mark-rejected",
-            "PENDING A DECISION, 2026-08-13 — marks an order rejected by the supplier. The review "
-            + "screen RENDERS the resulting rejected_by_supplier status "
-            + "(project-proculink/src/lib/orderStatusManifest.ts) but offers no way to set it, so "
-            + "today the status can only arrive from a delivery response."),
-
-        // ── The supplier order-confirmation flow: built, never surfaced ──────────────────
-        new("POST /api/orders/{}/confirmation",
-            "PENDING A DECISION, 2026-08-13 — records a supplier order confirmation. "
-            + "ProcuLink.Api/Controllers/OrderConfirmationController.cs:45 is reachable only by an "
-            + "operator with a REST client. Decide whether inbound confirmation is a product "
-            + "surface."),
-        new("POST /api/orders/{}/confirmation/upload",
-            "PENDING A DECISION, 2026-08-13 — the file half of the confirmation flow above "
-            + "(OrderConfirmationController.cs:88). Same decision, listed separately so neither is "
-            + "lost."),
-        new("GET /api/order-confirmations/{}",
-            "PENDING A DECISION, 2026-08-13 — the read half of the same confirmation flow "
-            + "(OrderConfirmationController.cs:132). A GET, so the frontend's state-changing sweep "
-            + "never saw it; it makes the confirmation gap a whole feature rather than two writes."),
-
+        // Nine order-API entries left with their endpoints on 2026-11-13 (plan 13b: the order API
+        // is a read-only archive) — removed from the baseline below in the same change.
         // ── Engine surfaces the product never adopted ────────────────────────────────────
-        new("POST /api/schema/infer",
-            "PENDING A DECISION, 2026-08-13 — schema inference over an uploaded sample. No caller in "
-            + "project-proculink/src/lib/api-client.ts; the mapper's suggestion path uses the "
-            + "mapper-enrichment endpoints instead. Either the mapper adopts it or it is dead engine "
-            + "surface."),
-        new("POST /api/schema/propose-mapping",
-            "PENDING A DECISION, 2026-08-13 — the second half of the inference pair above, uncalled "
-            + "for the same reason (SchemaInferenceController.cs:96)."),
-        new("POST /api/suppliers/{}/po-mapping/test",
-            "PENDING A DECISION, 2026-08-13 — dry-runs a mapping against a sample without saving. "
-            + "project-proculink/src/lib/api/mapping.ts calls PUT and DELETE on /po-mapping and "
-            + "never /test, so the mapper's preview does not use it."),
-        new("POST /api/suppliers/{}/profiles",
-            "PENDING A DECISION, 2026-08-13 — upserts a supplier profile. "
-            + "project-proculink/src/lib/api-client.ts:1300 documents the route in a COMMENT beside "
-            + "two GET callers and never posts to it, which is precisely how a comment comes to look "
-            + "like a caller. Decide whether profiles are editable in-product."),
-        new("GET /api/rule-definitions",
-            "PENDING A DECISION, 2026-08-13 — the org-wide validation-rule catalog. "
-            + "project-proculink/src/lib/api-client.ts:3169 says so outright: \"No client for GET "
-            + "/api/rule-definitions: the org-wide catalog page it fed had…\" — the page was deleted "
-            + "(see src/lib/retired-routes.ts) and the endpoint was not. Delete it or give it a "
-            + "page."),
-        new("GET /api/rule-definitions/{}",
-            "PENDING A DECISION, 2026-08-13 — one definition from the catalog above "
-            + "(ProcuLink.Api/Controllers/RuleDefinitionsController.cs:42); same decision. The "
-            + "supplier-scoped bindings endpoint at RuleDefinitionsController.cs:52 is separate and "
-            + "IS called."),
-        new("GET /api/suppliers/{}/acceptance-profile/versions",
-            "PENDING A DECISION, 2026-08-13 — the version history of a supplier's acceptance "
-            + "profile. api-client.ts calls GET and POST on /acceptance-profile and POST on "
-            + "/{versionNo}/activate, so a user can create and activate a version and cannot list "
-            + "what exists. Either the supplier screen grows a history panel or this goes."),
-        new("GET /api/invoices/{}/validate-peppol",
-            "PENDING A DECISION, 2026-08-13 — Peppol conformance for one invoice. The invoices "
-            + "screen (project-proculink/src/app/(app)/inbound/invoices/page.tsx) offers no control "
-            + "for it. This is adjacent to audit finding P0-3 on circular conformance claims: the "
-            + "one endpoint that could answer the question honestly is the one nothing asks."),
         new("GET /api/billing/ai-usage",
             "PENDING A DECISION, 2026-08-13 — per-organisation AI spend "
             + "(ProcuLink.Api/Controllers/BillingController.cs:187). "
@@ -329,9 +208,9 @@ public sealed class EndpointReachabilityGuardTests
         MachineFacing.Concat(UncalledPendingDecision).ToDictionary(e => e.Key, e => e, StringComparer.Ordinal);
 
     /// <summary>
-    /// The union as landed, 2026-08-15 (was 2026-08-13). Moved three times, each deliberately and in the open, and each
+    /// The union as landed, 2026-08-15 (was 2026-08-13). Moved four times, each deliberately and in the open, and each
     /// marked at its entries with the date and the caller: 2026-08-15 (the Postmark bounce webhook), 2026-08-20 (the
-    /// support PO-number lookup) and 2026-11-07 (plan 4's file API, two routes). <b>SHRINK-ONLY.</b> An entry may be deleted — when the
+    /// support PO-number lookup), 2026-11-07 (plan 4's file API, two routes) and 2026-11-13 (the inbound Postmark webhook, whose harness went). <b>SHRINK-ONLY.</b> An entry may be deleted — when the
     /// endpoint gains a caller, or is removed — but nothing may ever be added: a NEW caller-less
     /// endpoint has to be fixed, not excused.
     ///
@@ -343,19 +222,14 @@ public sealed class EndpointReachabilityGuardTests
         new HashSet<string>(StringComparer.Ordinal)
         {
             "DELETE /api/admin/organisations/{}/orders/{}",
-            "DELETE /api/suppliers/{}/po-mapping/output-tree",
-            "GET /api/admin/item-mapping-twins",
             "GET /api/admin/job-failures",
             // Moved into the baseline on 2026-08-20, deliberately and in the open, exactly as the
             // failure text asks: the support PO-number → org lookup's caller is the founder's hand,
             // via the curl written into docs/deployment/monitoring-runbook.md §5 — a runbook curl,
             // the same class of out-of-band caller as the account-status entry above it.
             "GET /api/admin/orders/find",
-            "GET /api/auto-send/dry-runs",
-            "GET /api/auto-send/dry-runs/summary",
             "GET /api/billing/ai-usage",
             "GET /api/dev/files/{**}",
-            "GET /api/ingress/{}/ping",
             // Moved into the baseline on 2026-11-07, deliberately and in the open: the file API is a
             // machine-facing ingress (ProcuLink.Api/Controllers/FlowFilesController.cs) whose only caller is the
             // customer's own system, with an org API key.
@@ -365,31 +239,16 @@ public sealed class EndpointReachabilityGuardTests
             // failure text asks: the Postmark bounce webhook is caller-less BY CONSTRUCTION — the
             // caller is the mail provider. It is the second provider webhook here, beside Stripe's.
             "POST /api/inbound-email/postmark-bounce",
-            "GET /api/invoices/{}/validate-peppol",
-            "GET /api/order-confirmations/{}",
-            "GET /api/orders/{}/ai-decisions",
-            "GET /api/orders/{}/delivery-attempts",
-            "GET /api/orders/{}/status",
-            "GET /api/rule-definitions",
-            "GET /api/rule-definitions/{}",
-            "GET /api/suppliers/{}/acceptance-profile/versions",
+            // Moved into the baseline on 2026-11-13, deliberately and in the open: the inbound Postmark
+            // webhook lost its only in-repo caller when plan 13b task 8b deleted scripts/live-matrix/.
+            // Its real caller is the mail provider, exactly like postmark-bounce above.
+            "POST /api/inbound-email/postmark",
             "GET /health",
             "POST /api/admin/organisations/{}/account-status",
             "POST /api/admin/organisations/{}/orders/bulk-erase",
             "POST /api/admin/organisations/{}/retention",
             "POST /api/billing/pilot/request-extension",
             "POST /api/billing/webhook",
-            "POST /api/connections/{}/revisions/{}/archive",
-            "POST /api/connections/{}/revisions/{}/publish",
-            "POST /api/ingress/{}/catalog/{}",
-            "POST /api/orders/{}/acceptance-gate/override",
-            "POST /api/orders/{}/confirmation",
-            "POST /api/orders/{}/confirmation/upload",
-            "POST /api/orders/{}/mark-rejected",
-            "POST /api/schema/infer",
-            "POST /api/schema/propose-mapping",
-            "POST /api/suppliers/{}/po-mapping/test",
-            "POST /api/suppliers/{}/profiles",
         };
 
     /// <summary>
@@ -440,12 +299,16 @@ public sealed class EndpointReachabilityGuardTests
     // count of something the DETECTOR itself produced — not a count of files on disk. A prior
     // packet in this repo re-pointed a sweep at a project with no matches and its file-count floor
     // passed anyway; a file-count floor proves the directory exists, not that anything was found.
-    private const int MinimumEndpoints = 140;          // 165 today
-    private const int MinimumControllers = 30;         // 37 today
-    private const int MinimumCallerFiles = 300;        // 418 today
-    private const long MinimumCallerBytes = 2_000_000; // 3.30 MB today
-    private const int MinimumCallsExtracted = 100;     // 159 today
-    private const int MinimumDistinctCalledEndpoints = 80;
+    // Lowered on 2026-11-13 when plan 13b cut the order API to a read-only archive: nine controllers
+    // and the order write actions went, and the frontend lost their client calls with them.
+    private const int MinimumEndpoints = 70;           // 81 today; 125 before plan 13b, 131 before the order-ops cut
+    private const int MinimumControllers = 16;         // 18 today; 27 before plan 13b deleted nine
+    private const int MinimumCallerFiles = 300;        // 377 today
+    private const long MinimumCallerBytes = 1_500_000; // 1.66 MB with 13b's frontend deletions (2026-11-14); 2.02 MB before
+    // 90 -> 74 on 2026-11-13 (plan 13b task 8b): the frontend orphan sweep deleted the delivery-config,
+    // catalog-source and supplier client calls and the live-matrix harnesses. 74 is today's count.
+    private const int MinimumCallsExtracted = 74;      // 74 today
+    private const int MinimumDistinctCalledEndpoints = 60; // 71 today
 
     // ── The guard ────────────────────────────────────────────────────────────────────────
 
@@ -462,21 +325,6 @@ public sealed class EndpointReachabilityGuardTests
         {
             Assert.Fail(Render(unexplained, scan.Endpoints.Count, scan.CallerFiles.Count, scan.Calls.Count));
         }
-    }
-
-    /// <summary>
-    /// The audit's own finding, pinned. These are the two endpoints §3 pointed at when it said "two
-    /// documented recovery doors have zero callers", and they are the reason this file exists. If
-    /// either gains a control, delete its declaration AND its line here — the deletion is the win.
-    /// If the DETECTOR stops seeing them, the guard has regressed to the false green it replaced.
-    /// </summary>
-    [Fact]
-    public void Guard_SeesTheTwoRecoveryDoorsTheAuditNamed()
-    {
-        var unreachable = Scan.Value.Unreachable.Select(e => e.Key).ToHashSet(StringComparer.Ordinal);
-
-        Assert.Contains("POST /api/orders/{}/acceptance-gate/override", unreachable);
-        Assert.Contains("DELETE /api/suppliers/{}/po-mapping/output-tree", unreachable);
     }
 
     /// <summary>
@@ -527,10 +375,10 @@ public sealed class EndpointReachabilityGuardTests
         // routed, which this service does not use and this scanner does not model.
         Assert.DoesNotContain(scan.Endpoints, e => e.Path == "/(NO-ATTRIBUTE-ROUTE)");
 
-        // Absolute templates DISCARD the controller prefix. Three actions rely on it, and a
+        // Absolute templates DISCARD the controller prefix. Two actions rely on it, and a
         // hand-rolled combiner is exactly where a source-text scanner gets this wrong: it would
-        // report /api/dashboard/api/orders/summary, which nothing calls, as a finding.
-        Assert.Contains(scan.Endpoints, e => e.Key == "GET /api/orders/summary" && e.Site == "DashboardController.GetSummary");
+        // report /api/documents/api/flows/{}/documents, which nothing calls, as a finding.
+        Assert.Contains(scan.Endpoints, e => e.Key == "POST /api/flows/{}/documents" && e.Site == "DocumentsController.Upload");
         Assert.Contains(scan.Endpoints, e => e.Key == "GET /health" && e.Site == "HealthController.Health");
     }
 
@@ -648,11 +496,11 @@ public sealed class EndpointReachabilityGuardTests
         var files = Scan.Value.CallerFiles.Select(f => f.RelativePath.Replace('\\', '/')).ToList();
 
         Assert.Contains("src/lib/api-client.ts", files);
-        Assert.Contains("src/lib/api/delivery.ts", files);
-        Assert.True(files.Any(f => f.StartsWith("scripts/live-matrix/", StringComparison.Ordinal)),
-            "the live-matrix harnesses are gone from the corpus — they are the only in-repo caller "
-            + "of the ingress API and of the Postmark webhook, so losing them turns two working "
-            + "integrations into findings");
+        // 2026-11-13, plan 13b task 8b: src/lib/api/delivery.ts and scripts/live-matrix/ were deleted
+        // with the frontend orphan sweep. documents.ts is the apiFetch-wrapper module left.
+        Assert.Contains("src/lib/api/documents.ts", files);
+        Assert.True(files.Any(f => f.StartsWith("scripts/", StringComparison.Ordinal)),
+            "the scripts/ root is gone from the corpus");
     }
 
     // ── The declaration lists cannot rot ─────────────────────────────────────────────────

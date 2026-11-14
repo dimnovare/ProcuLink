@@ -111,7 +111,7 @@ public class PeppolBisValidatorTests
     /// checked that the validator complained. That proved only that an <c>if</c> executes when
     /// you hand-corrupt its input — an input the product never produces. In production the sole
     /// caller builds the document with <c>PeppolBisInvoiceTransformService</c> and validates it
-    /// immediately (<c>InvoiceController.ValidatePeppol</c>), so the compared value was always
+    /// immediately (the since-removed invoice validate-peppol endpoint), so the compared value was always
     /// the constant the emitter had just written, and the rule could not fail.
     ///
     /// The rule is gone. The profile is declared and unverified, and the API says so.

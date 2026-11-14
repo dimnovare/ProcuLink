@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Controllers;
+using ProcuLink.Api.Services;
 using ProcuLink.Api.Tests.TestSupport;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -19,7 +20,7 @@ namespace ProcuLink.Api.Tests.Controllers;
 /// <summary>
 /// Regression coverage for <c>GET /api/orders</c> honouring REST-style
 /// <c>limit</c>/<c>offset</c> paging, end-to-end through the controller + a real
-/// <see cref="OrderService"/> over a shared DbContext. Reproduces the live bug where the
+/// <see cref="OrderQueryService"/> over a shared DbContext. Reproduces the live bug where the
 /// endpoint silently ignored <c>limit</c>/<c>offset</c> and always returned the default
 /// first 25 rows, so a user with thousands of orders could only ever see 25 of them.
 /// </summary>
@@ -30,7 +31,7 @@ public class OrdersControllerListPagingTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 
-    private static OrdersController BuildController(IOrderService orders, Guid orgId, ProcuLinkDbContext db)
+    private static OrdersController BuildController(IOrderQueryService orders, Guid orgId, ProcuLinkDbContext db)
     {
         var tenant = new Mock<ICurrentTenantService>();
         tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
@@ -38,18 +39,7 @@ public class OrdersControllerListPagingTests
         return new OrdersController(
             orders,
             tenant.Object,
-            new Mock<IBackgroundJobClient>().Object,
-            db,
-            NullLogger<OrdersController>.Instance,
-            new Mock<IBillingService>().Object,
-            new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object,
-            new Mock<IOrderMappingOverrideService>().Object,
-            new Mock<IPromoteMappingService>().Object,
-            new Mock<IFileStorageService>().Object,
-            new Mock<ISourceTokenizer>().Object,
-            Array.Empty<ITransformService>());
+            db);
     }
 
     /// <summary>Seeds <paramref name="count"/> orders for one org; returns (db, orgId, all seeded ids).</summary>

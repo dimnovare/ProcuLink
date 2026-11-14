@@ -56,7 +56,6 @@ public class OrgPlanHistoryWritePointTests
             NullLogger<BillingController>.Instance,
             db,
             new Mock<IAiUsageTracker>().Object,
-            new Mock<ProcuLink.Core.Services.Delivery.IDeliveryService>().Object,
             new ProcuLink.Api.Services.Documents.DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new ProcuLink.Api.Services.Documents.DocumentEngineOptions())));
 
     private static AdminController MakeAdminController(ProcuLinkDbContext db) =>
@@ -64,8 +63,7 @@ public class OrgPlanHistoryWritePointTests
             new Mock<IBillingService>().Object,
             MakeConfig(),
             NullLogger<AdminController>.Instance,
-            new Mock<IDataErasureService>().Object,
-            new ProcuLink.Infrastructure.Services.ItemMappingService(db));
+            new Mock<IDataErasureService>().Object);
 
     private static async Task<Organisation> AddOrgAsync(
         ProcuLinkDbContext db, string plan, string status, string? stripeCustomerId = null)

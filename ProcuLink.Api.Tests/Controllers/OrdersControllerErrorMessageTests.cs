@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Controllers;
+using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Delivery;
@@ -57,7 +58,7 @@ public class OrdersControllerErrorMessageTests
             OutboundArtifacts = new List<OutboundArtifact>(),
         };
 
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc
             .Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(failedEntity));
@@ -68,18 +69,7 @@ public class OrdersControllerErrorMessageTests
         var controller = new OrdersController(
             ordersSvc.Object,
             tenant.Object,
-            new Mock<IBackgroundJobClient>().Object,
-            db,
-            NullLogger<OrdersController>.Instance,
-            new Mock<IBillingService>().Object,
-            new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
-            new Mock<IFileStorageService>().Object,
-            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
-            Array.Empty<ProcuLink.Core.Services.ITransformService>());
+            db);
 
         var result = await controller.Get(orderId, CancellationToken.None);
 
@@ -126,7 +116,7 @@ public class OrdersControllerErrorMessageTests
             OutboundArtifacts = new List<OutboundArtifact>(),
         };
 
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc
             .Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(failedEntity));
@@ -137,18 +127,7 @@ public class OrdersControllerErrorMessageTests
         var controller = new OrdersController(
             ordersSvc.Object,
             tenant.Object,
-            new Mock<IBackgroundJobClient>().Object,
-            db,
-            NullLogger<OrdersController>.Instance,
-            new Mock<IBillingService>().Object,
-            new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
-            new Mock<IFileStorageService>().Object,
-            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
-            Array.Empty<ProcuLink.Core.Services.ITransformService>());
+            db);
 
         var result = await controller.Get(orderId, CancellationToken.None);
 
@@ -195,7 +174,7 @@ public class OrdersControllerErrorMessageTests
             OutboundArtifacts = new List<OutboundArtifact>(),
         };
 
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc
             .Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(deadEntity));
@@ -206,18 +185,7 @@ public class OrdersControllerErrorMessageTests
         var controller = new OrdersController(
             ordersSvc.Object,
             tenant.Object,
-            new Mock<IBackgroundJobClient>().Object,
-            db,
-            NullLogger<OrdersController>.Instance,
-            new Mock<IBillingService>().Object,
-            new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
-            new Mock<IFileStorageService>().Object,
-            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
-            Array.Empty<ProcuLink.Core.Services.ITransformService>());
+            db);
 
         var result = await controller.Get(orderId, CancellationToken.None);
 
@@ -270,7 +238,7 @@ public class OrdersControllerErrorMessageTests
             OutboundArtifacts = new List<OutboundArtifact>(),
         };
 
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc
             .Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(parkedEntity));
@@ -281,18 +249,7 @@ public class OrdersControllerErrorMessageTests
         var controller = new OrdersController(
             ordersSvc.Object,
             tenant.Object,
-            new Mock<IBackgroundJobClient>().Object,
-            db,
-            NullLogger<OrdersController>.Instance,
-            new Mock<IBillingService>().Object,
-            new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
-            new Mock<IFileStorageService>().Object,
-            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
-            Array.Empty<ProcuLink.Core.Services.ITransformService>());
+            db);
 
         var result = await controller.Get(orderId, CancellationToken.None);
 
@@ -362,7 +319,7 @@ public class OrdersControllerErrorMessageTests
             OutboundArtifacts = new List<OutboundArtifact>(),
         };
 
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc
             .Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(parkedEntity));
@@ -373,18 +330,7 @@ public class OrdersControllerErrorMessageTests
         var controller = new OrdersController(
             ordersSvc.Object,
             tenant.Object,
-            new Mock<IBackgroundJobClient>().Object,
-            db,
-            NullLogger<OrdersController>.Instance,
-            new Mock<IBillingService>().Object,
-            new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
-            new Mock<IFileStorageService>().Object,
-            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
-            Array.Empty<ProcuLink.Core.Services.ITransformService>());
+            db);
 
         var result = await controller.Get(orderId, CancellationToken.None);
 
@@ -448,7 +394,7 @@ public class OrdersControllerErrorMessageTests
             OutboundArtifacts = new List<OutboundArtifact>(),
         };
 
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc
             .Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(heldEntity));
@@ -459,18 +405,7 @@ public class OrdersControllerErrorMessageTests
         var controller = new OrdersController(
             ordersSvc.Object,
             tenant.Object,
-            new Mock<IBackgroundJobClient>().Object,
-            db,
-            NullLogger<OrdersController>.Instance,
-            new Mock<IBillingService>().Object,
-            new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
-            new Mock<IFileStorageService>().Object,
-            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
-            Array.Empty<ProcuLink.Core.Services.ITransformService>());
+            db);
 
         var result = await controller.Get(orderId, CancellationToken.None);
 
@@ -600,7 +535,7 @@ public class OrdersControllerErrorMessageTests
     private static async Task<OrderDto> GetDtoAsync(
         ProcuLinkDbContext db, Guid orgId, Guid orderId, PurchaseOrderEntity entity)
     {
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc
             .Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(entity));
@@ -611,18 +546,7 @@ public class OrdersControllerErrorMessageTests
         var controller = new OrdersController(
             ordersSvc.Object,
             tenant.Object,
-            new Mock<IBackgroundJobClient>().Object,
-            db,
-            NullLogger<OrdersController>.Instance,
-            new Mock<IBillingService>().Object,
-            new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
-            new Mock<IFileStorageService>().Object,
-            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
-            Array.Empty<ProcuLink.Core.Services.ITransformService>());
+            db);
 
         var result = await controller.Get(orderId, CancellationToken.None);
 
@@ -653,7 +577,7 @@ public class OrdersControllerErrorMessageTests
             OutboundArtifacts = new List<OutboundArtifact>(),
         };
 
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc
             .Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(readyEntity));
@@ -664,18 +588,7 @@ public class OrdersControllerErrorMessageTests
         var controller = new OrdersController(
             ordersSvc.Object,
             tenant.Object,
-            new Mock<IBackgroundJobClient>().Object,
-            db,
-            NullLogger<OrdersController>.Instance,
-            new Mock<IBillingService>().Object,
-            new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
-            new Mock<IFileStorageService>().Object,
-            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
-            Array.Empty<ProcuLink.Core.Services.ITransformService>());
+            db);
 
         var result = await controller.Get(orderId, CancellationToken.None);
 

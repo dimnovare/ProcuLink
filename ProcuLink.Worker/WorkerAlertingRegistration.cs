@@ -66,10 +66,6 @@ public static class WorkerAlertingRegistration
             return opts;
         });
 
-        // The recurring-job source is Hangfire's own scheduler record, which is why SFTP/S3 pull
-        // freshness needs no new column. It takes an OPTIONAL JobStorage, so it still resolves in a
-        // container that has none.
-        services.AddSingleton<IRecurringJobLastExecutionSource, HangfireRecurringJobLastExecutionSource>();
         services.AddScoped<IOperationalAlertProbe, OperationalAlertProbe>();
 
         // Sinks are SCOPED because the email sink resolves the scoped IEmailApiClient — a singleton

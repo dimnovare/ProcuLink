@@ -111,10 +111,14 @@ public sealed class OrderExceptionService : IOrderExceptionService
         // ReconcileAsync prefers the sentence the park itself wrote to the attempt row, because that
         // one knows WHY the order parked (a file-drop connection that will refuse a repeat send
         // needs the opposite advice from a channel that cannot de-duplicate one). Null protocol =
-        // the channel-agnostic wording: this method works from order status alone.
+        // the channel-agnostic wording: this method works from order status alone. (2026-11-13: the
+        // sentence was DeliveryService.BuildUnconfirmedMessage(protocol: null); plan 13b deleted
+        // DeliveryService, so the null-protocol wording now lives here verbatim.)
         if (status == OrderStatusConstants.DeliveryUnconfirmed)
             return ("delivery_unconfirmed", "Deliver", "warning",
-                DeliveryService.BuildUnconfirmedMessage(protocol: null));
+                "Delivery unconfirmed. We may have sent this order, but lost the connection before the "
+                + "supplier confirmed it, and this delivery channel cannot tell us whether it arrived. "
+                + "Check with the supplier, then either send it again or mark it delivered.");
         if (status == OrderStatusConstants.RejectedBySupplier)
             return ("supplier_rejected", "Deliver", "error", "The supplier rejected this order.");
         if (status == OrderStatusConstants.DeliveryDeadLetter)
@@ -276,69 +280,5 @@ public sealed class OrderExceptionService : IOrderExceptionService
         }
 
         await _db.SaveChangesAsync(ct);
-    }
-
-    /// <summary>
-    /// One page of the organisation's exception history, newest first.
-    ///
-    /// <para><b>Why this is paged at all.</b> Exception rows are never deleted — resolving or
-    /// ignoring one flips <c>State</c> and leaves the row — so an organisation's history grows
-    /// monotonically from its first order onward. Returning all of it, which is what this method
-    /// used to do, is a response whose size is a function of account age.</para>
-    ///
-    /// <para><b>The ordering carries a tiebreak, and it is load-bearing.</b> Ordering by
-    /// <c>CreatedAt</c> alone is not a total order here: <see cref="ReconcileAsync"/> stamps every
-    /// row it opens in one pass with the same <c>now</c>, so a single order can produce several
-    /// exceptions sharing a timestamp to the tick. Postgres is free to return tied rows in any
-    /// order per query, and a Skip/Take walk over an unstable sort silently repeats some rows
-    /// across pages and drops others entirely. <c>Id</c> is unique, so adding it makes the sort
-    /// total and the walk exhaustive.</para>
-    /// </summary>
-    public async Task<OrderExceptionPage> ListAsync(
-        Guid orgId, string? state, int page, int pageSize, CancellationToken ct)
-    {
-        page     = Math.Max(1, page);
-        pageSize = Math.Clamp(pageSize, OrderExceptionPaging.MinPageSize, OrderExceptionPaging.MaxPageSize);
-
-        var q = _db.OrderExceptions.AsNoTracking().Where(e => e.OrgId == orgId);
-        if (!string.IsNullOrWhiteSpace(state))
-            q = q.Where(e => e.State == state);
-
-        // The total is counted over the SAME filtered query, so a pager can never be built from a
-        // population the rows did not come from.
-        var total = await q.CountAsync(ct);
-
-        var rows = await q
-            .OrderByDescending(e => e.CreatedAt)
-            .ThenByDescending(e => e.Id)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToListAsync(ct);
-
-        return new OrderExceptionPage(rows, total, page, pageSize);
-    }
-
-    public async Task<IReadOnlyList<OrderException>> ListForOrderAsync(Guid orgId, Guid orderId, CancellationToken ct) =>
-        await _db.OrderExceptions.AsNoTracking()
-            .Where(e => e.OrgId == orgId && e.OrderId == orderId)
-            .OrderByDescending(e => e.CreatedAt)
-            .ToListAsync(ct);
-
-    public Task<bool> ResolveAsync(Guid orgId, Guid exceptionId, CancellationToken ct)
-        => SetStateAsync(orgId, exceptionId, "resolved", ct);
-
-    public Task<bool> IgnoreAsync(Guid orgId, Guid exceptionId, CancellationToken ct)
-        => SetStateAsync(orgId, exceptionId, "ignored", ct);
-
-    private async Task<bool> SetStateAsync(Guid orgId, Guid exceptionId, string state, CancellationToken ct)
-    {
-        var ex = await _db.OrderExceptions
-            .Where(e => e.Id == exceptionId && e.OrgId == orgId)
-            .FirstOrDefaultAsync(ct);
-        if (ex is null) return false;
-        ex.State = state;
-        if (state == "resolved") ex.ResolvedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync(ct);
-        return true;
     }
 }

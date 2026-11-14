@@ -350,25 +350,13 @@ public static class PlanConstants
 
     // ── Feature gate: minimum plan required per feature ───────────────────
     // EVERY row here must have a real enforcement site in production code — see
-    // BillingFeatureGateCoverageTests.EnforcedBy, which fails the build otherwise.
+    // BillingGateEnforcementIsRealTests, which reads compiled IL and fails the build otherwise.
     // A row nothing checks is not a gate, it is a false claim about the price list.
+    // Plan 13b (2026-11-13) deleted eight rows with the legacy order surfaces they gated.
     private static readonly IReadOnlyDictionary<BillingFeature, string> MinimumPlan =
         new Dictionary<BillingFeature, string>
         {
-            [BillingFeature.BulkMapping]        = Operations,
-            [BillingFeature.Cxml]               = Operations,
             [BillingFeature.AdvancedAudit]      = Operations,
-            // ── Delivery / ingestion CHANNELS are decoupled from VOLUME ──────
-            // These were gated to Integration, which forced a volume upgrade just
-            // to unlock a channel. They are now available on ALL paid self-serve
-            // plans (Growth+), so picking a channel never forces a volume tier.
-            // Pilot stays restricted (PlanHasFeature returns false below Growth).
-            [BillingFeature.WebhookDelivery]    = Growth,
-            [BillingFeature.EmailIngestion]     = Growth,
-            [BillingFeature.SftpIngestion]      = Growth,
-            [BillingFeature.S3Ingestion]        = Growth,
-            [BillingFeature.ErpConnectors]      = Enterprise,
-            [BillingFeature.CustomSupplierRules]= Enterprise,
             // Enterprise SSO (SAML/OIDC) via Clerk Enterprise Connections.
             [BillingFeature.Sso]                = Enterprise,
         };

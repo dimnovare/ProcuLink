@@ -39,8 +39,7 @@ public class AdminControllerTests
         var billing = new StripeBillingService(
             db, config, NullLogger<StripeBillingService>.Instance, new FakeAnalyticsService());
 
-        return new AdminController(db, billing, config, NullLogger<AdminController>.Instance, new NoopErasureService(),
-            new ProcuLink.Infrastructure.Services.ItemMappingService(db));
+        return new AdminController(db, billing, config, NullLogger<AdminController>.Instance, new NoopErasureService());
     }
 
     /// <summary>Builds an AdminController with an explicit (recording) erasure service.</summary>
@@ -51,8 +50,7 @@ public class AdminControllerTests
             .Build();
         var billing = new StripeBillingService(
             db, config, NullLogger<StripeBillingService>.Instance, new FakeAnalyticsService());
-        return new AdminController(db, billing, config, NullLogger<AdminController>.Instance, erasure,
-            new ProcuLink.Infrastructure.Services.ItemMappingService(db));
+        return new AdminController(db, billing, config, NullLogger<AdminController>.Instance, erasure);
     }
 
     private sealed class NoopErasureService : ProcuLink.Core.Services.IDataErasureService

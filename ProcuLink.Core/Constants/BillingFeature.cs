@@ -26,25 +26,24 @@
 /// Like <c>CustomTemplates</c>, there is no surface left behind the gate once its subsystem is
 /// retired. (Its identifier is deliberately not written here -- naming a retired symbol in a comment
 /// is what <c>RetiredSubsystemsStayRetiredTests</c> exists to catch, and it caught this line.) The
-/// engine that DOES evaluate (<c>SupplierAcceptanceRule</c> / <c>RuleDefinition</c>) is gated by
-/// <c>CustomSupplierRules</c>, which stays.</para>
+/// engine that did evaluate (<c>SupplierAcceptanceRule</c> / <c>RuleDefinition</c>) was gated by
+/// <c>CustomSupplierRules</c>, removed in plan 13b below.</para>
+///
+/// <para><b>Removed in plan 13b</b> (2026-11-13): <c>BulkMapping</c>, <c>Cxml</c>,
+/// <c>WebhookDelivery</c>, <c>EmailIngestion</c>, <c>ErpConnectors</c>, <c>CustomSupplierRules</c>,
+/// <c>SftpIngestion</c> and <c>S3Ingestion</c>. Every one of them gated a surface of the legacy
+/// purchase-order pipeline (supplier delivery config, mapping import, acceptance profiles, the
+/// order intake settings), and those surfaces were deleted with it. The document engine gates
+/// none of them, so nothing was left to refuse.</para>
 ///
 /// <para>Deleting members here is ordinal-safe: <c>BillingFeature</c> is never persisted or
-/// serialized -- verified repo-wide, its only non-gate reference is a doc comment in
-/// <c>CxmlTransformService</c>. Re-verify that before removing any future member, or stored
-/// data silently changes meaning.</para>
+/// serialized -- re-verified repo-wide for plan 13b: no entity, migration, DTO or Stripe metadata
+/// key carries it. Re-verify that before removing any future member, or stored data silently
+/// changes meaning.</para>
 /// </summary>
 public enum BillingFeature
 {
-    BulkMapping,
-    Cxml,
     AdvancedAudit,
-    WebhookDelivery,
-    EmailIngestion,
-    ErpConnectors,
-    CustomSupplierRules,
-    SftpIngestion,
-    S3Ingestion,
     // Enterprise SSO (SAML/OIDC). The auth itself is handled natively by Clerk
     // Enterprise Connections; this flag is pure plan-gating metadata that drives
     // the Settings "Single sign-on" availability/upsell — it does NOT touch JWT

@@ -5,7 +5,7 @@ namespace ProcuLink.Transform.Output;
 
 /// <summary>
 /// Tiny static observability sink for the Transform layer's <b>static, DI-less</b> output builders
-/// (<see cref="MappedTransformService"/>, <see cref="SourceMapReDerive"/>,
+/// (<see cref="MappedTransformService"/>,
 /// <see cref="OutputTemplateEmitter"/>). Those types are constructed with a bare
 /// <c>new()</c> from many call sites, so there is no per-instance <c>ILogger</c> to inject.
 ///

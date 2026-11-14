@@ -479,8 +479,12 @@ public class TrackedSourceOperationalDataGuardTests
             1_000_000,
             $"only {b.ScannedBytes} bytes of C# were read — the files were listed but not opened");
 
+        // 40 -> 34 on 2026-11-13 (plan 13b, Task 7b): the deleted ConnectorManifestCatalog,
+        // CatalogPullService and their tests (catalog pull, connection backfill, cXML credential
+        // resolver) held the six protocol literals that went. 34 is today's count; the floor exists
+        // to catch an extractor that matches nothing, which lands at zero, not at 34.
         b.ScannedProtocolLiterals.Should().BeGreaterThanOrEqualTo(
-            40,
+            34,
             $"only {b.ScannedProtocolLiterals} protocol literals were extracted and checked — the "
             + "protocol arm matched nothing, so class 6 proves nothing");
 
@@ -497,12 +501,14 @@ public class TrackedSourceOperationalDataGuardTests
         // The floor that actually protects class 7: count what the brand detector EXTRACTED. A
         // regex edited into matching nothing drives this to zero and fails loudly, instead of
         // reading every fixture, examining no brand, and turning green.
-        // 21 today (9 in C#, 12 in fixtures). The floor sits below that rather than at it: this
-        // counts literals in ASSIGNMENT position only, so ordinary test churn moves it by ones and
-        // twos, and a floor pinned to the exact number would fail on a clean refactor and be
-        // raised without thought. Breaking the regex drives it to zero, which is what it is for.
+        // 8 today (6 in C#, 2 in fixtures), and plan 13b (2026-11-13) pinned the floor at that
+        // count when the five catalog fixtures went with the catalog pipeline. It counts literals
+        // in ASSIGNMENT position only, so a clean refactor can move it by one or two; lower it on
+        // purpose when that happens. Breaking the regex drives it to zero, which is what it is for.
+        // 8 -> 7 on 2026-11-13 (plan 13b, task 8a): the one literal in the deleted
+        // EffectiveEntityResolverCarriesWidenedFieldsTests went with it. 7 is today's count.
         (b.ScannedBrandLiterals + c.ScannedBrandLiterals).Should().BeGreaterThanOrEqualTo(
-            15,
+            7,
             $"only {b.ScannedBrandLiterals} brand literals in C# and {c.ScannedBrandLiterals} in "
             + "fixtures were extracted and checked — the brand arm matched almost nothing, so "
             + "class 7 proves nothing");

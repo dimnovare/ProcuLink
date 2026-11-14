@@ -89,96 +89,6 @@ public class OperationalAlertProbeTests
             "the operator alert is a system probe, deliberately cross-tenant");
     }
 
-    // ── Pull channels ────────────────────────────────────────────────────────────
-
-    [Fact]
-    public async Task PullChannels_ReportsAllThreeChannelsEveryRun()
-    {
-        await using var db = NewDb();
-
-        var signals = await Probe(db).GetSignalsAsync(default);
-
-        signals.PullChannels.Select(c => c.Channel)
-            .Should().BeEquivalentTo(new[] { "email", "sftp", "s3" });
-    }
-
-    [Fact]
-    public async Task PullChannels_Email_UsesTheNewestSuccessfulPollAcrossEnabledSources()
-    {
-        await using var db = NewDb();
-        await SeedEmailOrgAsync(db, enabled: true, lastPolledAt: Now.AddMinutes(-200));
-        await SeedEmailOrgAsync(db, enabled: true, lastPolledAt: Now.AddMinutes(-9));
-
-        var email = (await Probe(db).GetSignalsAsync(default)).PullChannels.Single(c => c.Channel == "email");
-
-        email.EnabledSources.Should().Be(2);
-        email.MinutesSinceLastSuccess.Should().BeApproximately(9d, 0.01);
-    }
-
-    [Fact]
-    public async Task PullChannels_Email_IgnoresDisabledOrgs()
-    {
-        await using var db = NewDb();
-        await SeedEmailOrgAsync(db, enabled: false, lastPolledAt: Now.AddMinutes(-1));
-        await SeedEmailOrgAsync(db, enabled: true,  lastPolledAt: Now.AddMinutes(-500));
-
-        var email = (await Probe(db).GetSignalsAsync(default)).PullChannels.Single(c => c.Channel == "email");
-
-        email.EnabledSources.Should().Be(1);
-        email.MinutesSinceLastSuccess.Should().BeApproximately(500d, 0.01,
-            "a switched-off org's fresh timestamp must not mask a live org's stalled channel");
-    }
-
-    [Fact]
-    public async Task PullChannels_Email_NeverPolled_ReportsNullRatherThanZeroAge()
-    {
-        await using var db = NewDb();
-        await SeedEmailOrgAsync(db, enabled: true, lastPolledAt: null);
-
-        var email = (await Probe(db).GetSignalsAsync(default)).PullChannels.Single(c => c.Channel == "email");
-
-        email.EnabledSources.Should().Be(1);
-        email.MinutesSinceLastSuccess.Should().BeNull(
-            "a channel configured minutes ago has not polled yet — that is not an incident");
-    }
-
-    [Fact]
-    public async Task PullChannels_SftpAndS3_CountEnabledConfigsAndUseTheDispatcherExecution()
-    {
-        await using var db = NewDb();
-        var org = await SeedOrgAsync(db);
-        db.SftpIngressConfigs.Add(new SftpIngressConfig { Id = Guid.NewGuid(), OrgId = org, IsEnabled = true });
-        db.SftpIngressConfigs.Add(new SftpIngressConfig { Id = Guid.NewGuid(), OrgId = org, IsEnabled = false });
-        db.S3IngressConfigs.Add(new S3IngressConfig { Id = Guid.NewGuid(), OrgId = org, IsEnabled = true });
-        await db.SaveChangesAsync();
-
-        var executions = new FakeRecurringJobExecutions
-        {
-            ["sftp-polling"] = Now.AddMinutes(-4),
-            ["s3-polling"]   = Now.AddMinutes(-120),
-        };
-
-        var channels = (await Probe(db, executions: executions).GetSignalsAsync(default)).PullChannels;
-
-        var sftp = channels.Single(c => c.Channel == "sftp");
-        sftp.EnabledSources.Should().Be(1);
-        sftp.MinutesSinceLastSuccess.Should().BeApproximately(4d, 0.01);
-
-        var s3 = channels.Single(c => c.Channel == "s3");
-        s3.EnabledSources.Should().Be(1);
-        s3.MinutesSinceLastSuccess.Should().BeApproximately(120d, 0.01);
-    }
-
-    [Fact]
-    public async Task PullChannels_NoConfigs_ReportZeroEnabledSources()
-    {
-        await using var db = NewDb();
-
-        var channels = (await Probe(db).GetSignalsAsync(default)).PullChannels;
-
-        channels.Should().OnlyContain(c => c.EnabledSources == 0);
-    }
-
     // ── AI token-cap latch ───────────────────────────────────────────────────────
 
     [Fact]
@@ -259,11 +169,9 @@ public class OperationalAlertProbeTests
     private static OperationalAlertProbe Probe(
         ProcuLinkDbContext db,
         IAiUsageTracker? tracker = null,
-        IRecurringJobLastExecutionSource? executions = null,
         WorkerHealthAlertOptions? options = null) =>
         new(db,
             tracker ?? new FakeAiUsageTracker(),
-            executions ?? new FakeRecurringJobExecutions(),
             options ?? new WorkerHealthAlertOptions(),
             NullLogger<OperationalAlertProbe>.Instance,
             () => Now);
@@ -279,40 +187,6 @@ public class OperationalAlertProbeTests
         await db.SaveChangesAsync();
         return id;
     }
-
-    private static async Task<Guid> SeedEmailOrgAsync(
-        ProcuLinkDbContext db, bool enabled, DateTime? lastPolledAt)
-    {
-        var id = Guid.NewGuid();
-        var cfg = EmailPollingConfigJson(enabled, lastPolledAt);
-        db.Organisations.Add(new Organisation
-        {
-            Id = id, Name = $"Org {id:N}",
-            Plan = PlanConstants.Growth, AccountStatus = AccountStatusConstants.Active,
-            EmailPollingEnabled = enabled, EmailConfigJson = cfg,
-        });
-        await db.SaveChangesAsync();
-        return id;
-    }
-
-    /// <summary>
-    /// Writes the same camelCase shape <c>EmailPollingConfig</c> serialises, so the probe is
-    /// exercised against the real on-disk format rather than a convenient one.
-    /// </summary>
-    private static string EmailPollingConfigJson(bool enabled, DateTime? lastPolledAt) =>
-        JsonSerializer.Serialize(new
-        {
-            enabled,
-            host = "imap.example.com",
-            port = 993,
-            useSsl = true,
-            username = "po@example.com",
-            folder = "INBOX",
-            defaultSupplierId = (Guid?)null,
-            passwordCiphertext = (string?)null,
-            lastPolledAt,
-            updatedAt = (DateTime?)null,
-        });
 
     private static void SeedAttempts(
         ProcuLinkDbContext db, Guid orgId, string status, int count, DateTime attemptedAt)
@@ -351,13 +225,5 @@ public class OperationalAlertProbeTests
 
         public Task<AiUsageSnapshot> GetCurrentAsync(Guid organisationId, CancellationToken ct = default) =>
             Task.FromResult(new AiUsageSnapshot(organisationId, Now.Year, Now.Month, 0, 0));
-    }
-
-    private sealed class FakeRecurringJobExecutions : IRecurringJobLastExecutionSource
-    {
-        private readonly Dictionary<string, DateTime?> _byId = new();
-        public DateTime? this[string id] { set => _byId[id] = value; }
-        public DateTime? GetLastExecutionUtc(string recurringJobId) =>
-            _byId.TryGetValue(recurringJobId, out var at) ? at : null;
     }
 }

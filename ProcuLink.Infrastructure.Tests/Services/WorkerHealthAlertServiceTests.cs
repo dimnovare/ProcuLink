@@ -24,8 +24,7 @@ public class WorkerHealthAlertServiceTests
     {
         var sink = new RecordingSink();
         var health = HealthReturning(new WorkerHealthSnapshot(
-            WorkerHealthy: false, ActiveWorkers: 0, SecondsSinceWorkerHeartbeat: 300,
-            DeadLetterOrders: 0, FailedDeliveryOrders: 0));
+            WorkerHealthy: false, ActiveWorkers: 0, SecondsSinceWorkerHeartbeat: 300));
 
         var alerted = await CreateService(health, sink).RunAsync(default);
 
@@ -35,59 +34,17 @@ public class WorkerHealthAlertServiceTests
         sink.Calls[0].Message.Should().Contain("no healthy worker");
     }
 
-    // ── Condition 2: dead-letter backlog ─────────────────────────────────────────
-
     [Fact]
-    public async Task RunAsync_DeadLetterBacklogAtThreshold_RaisesAlert()
-    {
-        var sink = new RecordingSink();
-        // Healthy worker, but dead-letter + failed crosses the threshold (default 1). This pins
-        // the DEFAULT on purpose: the previous default of 25 was arithmetically unreachable during
-        // a pilot (a Pilot org is capped at 20 orders total), and the only test of this condition
-        // set an explicit threshold — so the unreachable default was never exercised by anything.
-        // ONE dead-lettered order must fire: by the time an order dead-letters it has already
-        // failed three concluded delivery attempts over ~90 minutes of backoff.
-        var health = HealthReturning(new WorkerHealthSnapshot(
-            WorkerHealthy: true, ActiveWorkers: 1, SecondsSinceWorkerHeartbeat: 5,
-            DeadLetterOrders: 1, FailedDeliveryOrders: 0));
-
-        var alerted = await CreateService(health, sink).RunAsync(default);
-
-        alerted.Should().BeTrue();
-        sink.Calls.Should().ContainSingle();
-        sink.Calls[0].Key.Should().Be(OperationalAlertKeys.DeadLetterBacklog);
-        sink.Calls[0].Message.Should().Contain("dead-letter+failed deliveries = 1");
-    }
-
-    [Fact]
-    public async Task RunAsync_BelowThresholdAndWorkerUp_DoesNotAlert()
+    public async Task RunAsync_WorkerUp_DoesNotAlert()
     {
         var sink = new RecordingSink();
         var health = HealthReturning(new WorkerHealthSnapshot(
-            WorkerHealthy: true, ActiveWorkers: 1, SecondsSinceWorkerHeartbeat: 2,
-            DeadLetterOrders: 0, FailedDeliveryOrders: 0)); // 0 < 1 threshold
+            WorkerHealthy: true, ActiveWorkers: 1, SecondsSinceWorkerHeartbeat: 2));
 
         var alerted = await CreateService(health, sink).RunAsync(default);
 
         alerted.Should().BeFalse();
         sink.Calls.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task RunAsync_CustomThreshold_IsRespected()
-    {
-        var sink = new RecordingSink();
-        var health = HealthReturning(new WorkerHealthSnapshot(
-            WorkerHealthy: true, ActiveWorkers: 1, SecondsSinceWorkerHeartbeat: 2,
-            DeadLetterOrders: 5, FailedDeliveryOrders: 0));
-        var options = new WorkerHealthAlertOptions { DeadLetterThreshold = 5 };
-
-        var svc = new WorkerHealthAlertService(
-            health.Object, ProbeReturning(Healthy()).Object, sink, new WorkerHealthAlertState(), options,
-            NullLogger<WorkerHealthAlertService>.Instance);
-
-        (await svc.RunAsync(default)).Should().BeTrue();
-        sink.Calls.Should().ContainSingle();
     }
 
     // ── Condition 3: delivery failure-rate spike ─────────────────────────────────
@@ -142,89 +99,6 @@ public class WorkerHealthAlertServiceTests
         sink.Calls.Should().BeEmpty();
     }
 
-    // ── Condition 4: pull-channel last-success age ───────────────────────────────
-
-    [Fact]
-    public async Task RunAsync_PullChannelStale_RaisesAlertNamingTheChannel()
-    {
-        var sink = new RecordingSink();
-        var probe = ProbeReturning(Healthy() with
-        {
-            PullChannels = new[] { new PullChannelSignal("email", EnabledSources: 2, MinutesSinceLastSuccess: 180) },
-        });
-
-        var alerted = await CreateService(HealthOk(), sink, probe).RunAsync(default);
-
-        alerted.Should().BeTrue();
-        sink.Calls.Should().ContainSingle();
-        sink.Calls[0].Key.Should().Be(OperationalAlertKeys.PullChannelStalled);
-        sink.Calls[0].Message.Should().Contain("email");
-    }
-
-    [Fact]
-    public async Task RunAsync_PullChannelStaleButNobodyUsesIt_DoesNotAlert()
-    {
-        var sink = new RecordingSink();
-        var probe = ProbeReturning(Healthy() with
-        {
-            PullChannels = new[] { new PullChannelSignal("sftp", EnabledSources: 0, MinutesSinceLastSuccess: 9_999) },
-        });
-
-        var alerted = await CreateService(HealthOk(), sink, probe).RunAsync(default);
-
-        alerted.Should().BeFalse("a channel nobody has switched on cannot be a live incident");
-        sink.Calls.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task RunAsync_PullChannelNeverSucceeded_DoesNotAlert()
-    {
-        var sink = new RecordingSink();
-        var probe = ProbeReturning(Healthy() with
-        {
-            PullChannels = new[] { new PullChannelSignal("s3", EnabledSources: 1, MinutesSinceLastSuccess: null) },
-        });
-
-        var alerted = await CreateService(HealthOk(), sink, probe).RunAsync(default);
-
-        alerted.Should().BeFalse("a channel configured minutes ago has not polled yet");
-        sink.Calls.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task RunAsync_PullChannelFresh_DoesNotAlert()
-    {
-        var sink = new RecordingSink();
-        var probe = ProbeReturning(Healthy() with
-        {
-            PullChannels = new[] { new PullChannelSignal("email", EnabledSources: 3, MinutesSinceLastSuccess: 4) },
-        });
-
-        (await CreateService(HealthOk(), sink, probe).RunAsync(default)).Should().BeFalse();
-        sink.Calls.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task RunAsync_SeveralStaleChannels_AreReportedInOneAlert()
-    {
-        var sink = new RecordingSink();
-        var probe = ProbeReturning(Healthy() with
-        {
-            PullChannels = new[]
-            {
-                new PullChannelSignal("email", 1, 300),
-                new PullChannelSignal("sftp",  1, 400),
-                new PullChannelSignal("s3",    1, 2),
-            },
-        });
-
-        await CreateService(HealthOk(), sink, probe).RunAsync(default);
-
-        sink.Calls.Should().ContainSingle("all stalled channels share one condition and one cooldown");
-        sink.Calls[0].Message.Should().Contain("email").And.Contain("sftp");
-        sink.Calls[0].Message.Should().NotContain("s3", "a fresh channel must not be named as stalled");
-    }
-
     // ── Condition 5: AI token-cap latch ──────────────────────────────────────────
 
     [Fact]
@@ -251,116 +125,14 @@ public class WorkerHealthAlertServiceTests
         sink.Calls.Should().BeEmpty();
     }
 
-    // ── Condition 6: pipeline failure backlog (parse/transform failures) ─────────
-
-    [Fact]
-    public async Task RunAsync_PipelineFailureAtThreshold_RaisesAlert()
-    {
-        var sink = new RecordingSink();
-        // Default threshold is 1: at pilot scale a single order stuck in failed/transform_failed
-        // is a broken parser or template, and previously nobody upstream ever heard about it.
-        var health = HealthReturning(new WorkerHealthSnapshot(
-            WorkerHealthy: true, ActiveWorkers: 1, SecondsSinceWorkerHeartbeat: 5,
-            DeadLetterOrders: 0, FailedDeliveryOrders: 0,
-            FailedOrders: 1, TransformFailedOrders: 0));
-
-        var alerted = await CreateService(health, sink).RunAsync(default);
-
-        alerted.Should().BeTrue();
-        sink.Calls.Should().ContainSingle();
-        sink.Calls[0].Key.Should().Be(OperationalAlertKeys.PipelineFailureBacklog);
-        sink.Calls[0].Message.Should().Contain("failed+transform_failed orders = 1");
-    }
-
-    [Fact]
-    public async Task RunAsync_TransformFailuresAloneCrossTheThreshold_RaisesAlert()
-    {
-        var sink = new RecordingSink();
-        var health = HealthReturning(new WorkerHealthSnapshot(
-            WorkerHealthy: true, ActiveWorkers: 1, SecondsSinceWorkerHeartbeat: 5,
-            DeadLetterOrders: 0, FailedDeliveryOrders: 0,
-            FailedOrders: 0, TransformFailedOrders: 2));
-
-        var alerted = await CreateService(health, sink).RunAsync(default);
-
-        alerted.Should().BeTrue();
-        sink.Calls.Should().ContainSingle();
-        sink.Calls[0].Key.Should().Be(OperationalAlertKeys.PipelineFailureBacklog);
-    }
-
-    [Fact]
-    public async Task RunAsync_PipelineFailureBelowCustomThreshold_DoesNotAlert()
-    {
-        var sink = new RecordingSink();
-        var health = HealthReturning(new WorkerHealthSnapshot(
-            WorkerHealthy: true, ActiveWorkers: 1, SecondsSinceWorkerHeartbeat: 5,
-            DeadLetterOrders: 0, FailedDeliveryOrders: 0,
-            FailedOrders: 2, TransformFailedOrders: 2)); // 4 < 5
-        var options = new WorkerHealthAlertOptions { PipelineFailureThreshold = 5 };
-
-        var svc = new WorkerHealthAlertService(
-            health.Object, ProbeReturning(Healthy()).Object, sink, new WorkerHealthAlertState(), options,
-            NullLogger<WorkerHealthAlertService>.Instance);
-
-        (await svc.RunAsync(default)).Should().BeFalse();
-        sink.Calls.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task RunAsync_PipelineFailureStaysBadWithinWindow_AlertsOnceThenSuppresses()
-    {
-        var sink = new RecordingSink();
-        var health = HealthReturning(new WorkerHealthSnapshot(
-            WorkerHealthy: true, ActiveWorkers: 1, SecondsSinceWorkerHeartbeat: 5,
-            DeadLetterOrders: 0, FailedDeliveryOrders: 0,
-            FailedOrders: 3, TransformFailedOrders: 0));
-
-        var now = new DateTime(2026, 8, 20, 9, 0, 0, DateTimeKind.Utc);
-        var svc = new WorkerHealthAlertService(
-            health.Object, ProbeReturning(Healthy()).Object, sink, new WorkerHealthAlertState(),
-            new WorkerHealthAlertOptions { MinAlertIntervalMinutes = 30 },
-            NullLogger<WorkerHealthAlertService>.Instance, () => now);
-
-        // First bad run -> transition alert.
-        (await svc.RunAsync(default)).Should().BeTrue();
-        // 10 min later, still bad, inside the 30-min window -> suppressed.
-        now = now.AddMinutes(10);
-        (await svc.RunAsync(default)).Should().BeFalse();
-        // 35 min after the first alert -> window elapsed -> alerts again.
-        now = now.AddMinutes(25);
-        (await svc.RunAsync(default)).Should().BeTrue();
-
-        sink.Calls.Should().HaveCount(2);
-        sink.Calls.Should().OnlyContain(c => c.Key == OperationalAlertKeys.PipelineFailureBacklog);
-    }
-
-    [Fact]
-    public async Task RunAsync_HealthSnapshotThrows_PipelineFailureIsUnknownNotAllClear()
-    {
-        var sink = new RecordingSink();
-
-        await CreateService(HealthThrowing(), sink).RunAsync(default);
-
-        sink.Calls.Select(c => c.Key).Should().NotContain(OperationalAlertKeys.PipelineFailureBacklog,
-            "an unreadable snapshot means the condition is UNKNOWN, not bad and not clear");
-        sink.Calls.Should().ContainSingle();
-        sink.Calls[0].Key.Should().Be(OperationalAlertKeys.AlertSweepDegraded);
-        sink.Calls[0].Message.Should().Contain("pipeline failure backlog",
-            "the degraded page must name the pipeline condition as one of the blinded inputs");
-    }
-
     // ── All clear ────────────────────────────────────────────────────────────────
 
     [Fact]
     public async Task RunAsync_Healthy_DoesNotAlert()
     {
         var sink = new RecordingSink();
-        // Genuinely all clear: zero dead-lettered, zero failed. This fixture used to carry 1+1
-        // under the old threshold of 25 — under the pilot-scale default of 1, an order sitting in
-        // dead_letter IS the incident, so "healthy" now means none.
         var health = HealthReturning(new WorkerHealthSnapshot(
-            WorkerHealthy: true, ActiveWorkers: 2, SecondsSinceWorkerHeartbeat: 3,
-            DeadLetterOrders: 0, FailedDeliveryOrders: 0));
+            WorkerHealthy: true, ActiveWorkers: 2, SecondsSinceWorkerHeartbeat: 3));
 
         var alerted = await CreateService(health, sink).RunAsync(default);
 
@@ -373,12 +145,9 @@ public class WorkerHealthAlertServiceTests
     {
         var sink = new RecordingSink();
         var health = HealthReturning(new WorkerHealthSnapshot(
-            WorkerHealthy: false, ActiveWorkers: 0, SecondsSinceWorkerHeartbeat: 900,
-            DeadLetterOrders: 30, FailedDeliveryOrders: 5,
-            FailedOrders: 2, TransformFailedOrders: 1));
+            WorkerHealthy: false, ActiveWorkers: 0, SecondsSinceWorkerHeartbeat: 900));
         var probe = ProbeReturning(new OperationalAlertSignals(
             new DeliveryFailureRateSignal(60, 40, 39),
-            new[] { new PullChannelSignal("email", 1, 500) },
             new AiTokenLatchSignal(1)));
 
         var flows = new Mock<IFlowDeliveryHealthProbe>();
@@ -397,8 +166,7 @@ public class WorkerHealthAlertServiceTests
     {
         var sink = new RecordingSink();
         var bad = new WorkerHealthSnapshot(
-            WorkerHealthy: false, ActiveWorkers: 0, SecondsSinceWorkerHeartbeat: 120,
-            DeadLetterOrders: 0, FailedDeliveryOrders: 0);
+            WorkerHealthy: false, ActiveWorkers: 0, SecondsSinceWorkerHeartbeat: 120);
         var health = HealthReturning(bad);
 
         var now = new DateTime(2026, 6, 7, 12, 0, 0, DateTimeKind.Utc);
@@ -429,8 +197,8 @@ public class WorkerHealthAlertServiceTests
         var options = new WorkerHealthAlertOptions { MinAlertIntervalMinutes = 30 };
         var now = new DateTime(2026, 6, 7, 12, 0, 0, DateTimeKind.Utc);
 
-        var bad = new WorkerHealthSnapshot(false, 0, 120, 0, 0);
-        var good = new WorkerHealthSnapshot(true, 1, 2, 0, 0);
+        var bad = new WorkerHealthSnapshot(false, 0, 120);
+        var good = new WorkerHealthSnapshot(true, 1, 2);
 
         var seq = new Queue<WorkerHealthSnapshot>(new[] { bad, good, bad });
         var health = new Mock<IOpsHealthService>();
@@ -462,7 +230,7 @@ public class WorkerHealthAlertServiceTests
         var state = new WorkerHealthAlertState();
         var options = new WorkerHealthAlertOptions { MinAlertIntervalMinutes = 30 };
 
-        var workerDown = new WorkerHealthSnapshot(false, 0, 600, 0, 0);
+        var workerDown = new WorkerHealthSnapshot(false, 0, 600);
         var health = HealthReturning(workerDown);
 
         var signals = Healthy();
@@ -502,7 +270,7 @@ public class WorkerHealthAlertServiceTests
     public async Task RunAsync_CooldownSurvivesAWorkerRestart()
     {
         var sink = new RecordingSink();
-        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 600, 0, 0));
+        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 600));
         var options = new WorkerHealthAlertOptions { MinAlertIntervalMinutes = 30 };
         var now = new DateTime(2026, 8, 20, 13, 45, 0, DateTimeKind.Utc);
 
@@ -537,7 +305,7 @@ public class WorkerHealthAlertServiceTests
     public async Task RunAsync_AfterARestart_StillAlertsOnceTheCooldownGenuinelyElapsed()
     {
         var sink = new RecordingSink();
-        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 600, 0, 0));
+        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 600));
         var options = new WorkerHealthAlertOptions { MinAlertIntervalMinutes = 30 };
         var now = new DateTime(2026, 8, 20, 13, 45, 0, DateTimeKind.Utc);
 
@@ -575,8 +343,8 @@ public class WorkerHealthAlertServiceTests
         var now = new DateTime(2026, 8, 20, 13, 45, 0, DateTimeKind.Utc);
         var store = new InMemoryWorkerHealthAlertStateStore();
 
-        var bad = new WorkerHealthSnapshot(false, 0, 600, 0, 0);
-        var good = new WorkerHealthSnapshot(true, 1, 2, 0, 0);
+        var bad = new WorkerHealthSnapshot(false, 0, 600);
+        var good = new WorkerHealthSnapshot(true, 1, 2);
 
         WorkerHealthAlertService Svc(WorkerHealthSnapshot snap) => new(
             HealthReturning(snap).Object, ProbeReturning(Healthy()).Object, sink,
@@ -625,7 +393,7 @@ public class WorkerHealthAlertServiceTests
     public async Task RunAsync_CooldownStoreUnreadable_StillEvaluatesEveryOtherCondition()
     {
         var sink = new RecordingSink();
-        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 600, 0, 0));
+        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 600));
 
         var svc = new WorkerHealthAlertService(
             health.Object, ProbeReturning(Healthy()).Object, sink,
@@ -649,7 +417,7 @@ public class WorkerHealthAlertServiceTests
     public async Task RunAsync_CooldownStoreUnwritable_ReportsDegradedOnTheNextSweep()
     {
         var sink = new RecordingSink();
-        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 600, 0, 0));
+        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 600));
         var now = new DateTime(2026, 8, 20, 13, 45, 0, DateTimeKind.Utc);
         var state = new WorkerHealthAlertState(new WriteOnlyFailingStateStore());
 
@@ -673,10 +441,10 @@ public class WorkerHealthAlertServiceTests
     // ── Probe resilience ─────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task RunAsync_ProbeThrows_StillEvaluatesTheWorkerAndBacklogConditions()
+    public async Task RunAsync_ProbeThrows_StillEvaluatesTheWorkerCondition()
     {
         var sink = new RecordingSink();
-        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 600, 0, 0));
+        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 600));
         var probe = new Mock<IOperationalAlertProbe>();
         probe.Setup(p => p.GetSignalsAsync(It.IsAny<CancellationToken>()))
              .ThrowsAsync(new InvalidOperationException("probe exploded"));
@@ -692,7 +460,7 @@ public class WorkerHealthAlertServiceTests
     public async Task RunAsync_SinkThrows_DoesNotAbortTheRemainingConditions()
     {
         var throwingSink = new ThrowingOnFirstCallSink();
-        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 600, 0, 0));
+        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 600));
         var probe = ProbeReturning(Healthy() with { AiTokenLatch = new AiTokenLatchSignal(3) });
 
         var svc = new WorkerHealthAlertService(
@@ -870,7 +638,7 @@ public class WorkerHealthAlertServiceTests
     [Fact]
     public async Task RunAsync_NoTransportDeliveredTheAlert_IsNotReportedAsAlerted()
     {
-        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 900, 0, 0));
+        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 900));
 
         var alerted = await CreateService(health, new UndeliverableSink()).RunAsync(default);
 
@@ -883,7 +651,7 @@ public class WorkerHealthAlertServiceTests
     public async Task RunAsync_NoTransportDeliveredTheAlert_SaysSoInTheLog()
     {
         var log = new CapturingLogger();
-        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 900, 0, 0));
+        var health = HealthReturning(new WorkerHealthSnapshot(false, 0, 900));
 
         await CreateService(health, new UndeliverableSink(), logger: log).RunAsync(default);
 
@@ -894,7 +662,6 @@ public class WorkerHealthAlertServiceTests
 
     private static OperationalAlertSignals Healthy() => new(
         new DeliveryFailureRateSignal(60, 0, 0),
-        Array.Empty<PullChannelSignal>(),
         new AiTokenLatchSignal(0));
 
     private static Mock<IOpsHealthService> HealthReturning(WorkerHealthSnapshot snap)
@@ -906,7 +673,7 @@ public class WorkerHealthAlertServiceTests
     }
 
     private static Mock<IOpsHealthService> HealthOk() =>
-        HealthReturning(new WorkerHealthSnapshot(true, 1, 3, 0, 0));
+        HealthReturning(new WorkerHealthSnapshot(true, 1, 3));
 
     private static Mock<IOpsHealthService> HealthThrowing()
     {

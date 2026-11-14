@@ -479,7 +479,8 @@ public class OrderExceptionDuplicatePoNumberTests
 
         var row = await db.OrderExceptions.SingleAsync(
             e => e.OrderId == second && e.Code == OrderExceptionService.DuplicatePoNumberCode);
-        Assert.True(await svc.IgnoreAsync(orgId, row.Id, CancellationToken.None));
+        row.State = "ignored";                    // a row an operator ignored before plan 13b
+        await db.SaveChangesAsync();
 
         await svc.ReconcileAsync(orgId, second, CancellationToken.None);
 

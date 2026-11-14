@@ -1,37 +1,16 @@
 namespace ProcuLink.Core.Services.Email;
 
 /// <summary>
-/// Routes an inbound email payload (e.g. from a Postmark Inbound webhook) into
-/// the existing CreateStub + ParseOrderJob pipeline. The router is responsible
-/// for resolving the tenant from the recipient address, validating the tenant
-/// is allowed to ingest, filtering supported attachments, and creating one
-/// order stub per supported attachment.
+/// Routes an inbound email payload (e.g. from a Postmark Inbound webhook) to the flow whose own
+/// address received it: the router resolves the tenant from the recipient address and hands each
+/// attachment the flow accepts to the flow's document intake.
 /// </summary>
-/// <remarks>
-/// The router mirrors the behaviour of <see cref="IClaimedOrderCreator.CreateClaimedStubAsync"/>
-/// + <c>ParseOrderJob.Enqueue</c> used by both <c>OrdersController.Upload</c>
-/// (browser upload) and <c>EmailPollingJob</c> (IMAP poll). It is the third
-/// ingress channel on the same pipeline — only the ingress is new.
-/// </remarks>
 public interface IInboundEmailRouter
 {
     /// <summary>
-    /// Parses the inbound payload, extracts attachments, finds the tenant by
-    /// recipient address, creates one order stub per CSV/XLSX/PDF/XML/EDI/TXT
-    /// attachment, and enqueues parse jobs.
+    /// Finds the tenant by recipient address and submits the message's attachments to the flow that
+    /// owns that address. An address that is not a flow's is refused, Transient.
     /// </summary>
-    /// <param name="payload">The inbound message envelope (from/to/subject + attachments).</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>
-    /// A result describing whether the tenant could be resolved, which org received
-    /// the message, and the list of created order ids (one per supported attachment).
-    /// An attachment that cannot be ingested is skipped WITHOUT failing the message —
-    /// unsupported type, undecodable wire encoding, empty, oversized — and each skip
-    /// writes an audit row naming its cause, because the sender is never told and no
-    /// order exists to look at. The result is still
-    /// <see cref="InboundEmailResult.Success"/> = <c>true</c> with possibly empty
-    /// <see cref="InboundEmailResult.CreatedOrderIds"/>.
-    /// </returns>
     Task<InboundEmailResult> RouteAsync(InboundEmailPayload payload, CancellationToken ct);
 }
 
@@ -48,9 +27,8 @@ public interface IInboundEmailRouter
 /// <param name="Subject">Free-text subject line. Not used for routing today; kept for audit.</param>
 /// <param name="Attachments">Decoded attachments — the router filters by extension.</param>
 /// <param name="Body">
-/// Plain-text body of the message. When no supported attachment yields an order,
-/// the router falls back to <see cref="Ai.IEmailBodyOrderExtractor"/> on this
-/// field. Webhook adapters should prefer the provider's text body and strip HTML
+/// Plain-text body of the message. When no attachment is submitted and the flow reads text files,
+/// the body is submitted as the document. Webhook adapters should prefer the provider's text body and strip HTML
 /// tags from the HTML body when only that is available.
 /// </param>
 /// <param name="ProviderMessageId">
@@ -192,16 +170,3 @@ public sealed record InboundEmailResult(
     IReadOnlyList<Guid> CreatedOrderIds,
     string? Error,
     InboundEmailRejectionKind RejectionKind = InboundEmailRejectionKind.Unspecified);
-
-/// <summary>
-/// Decouples the router (which lives in <c>ProcuLink.Infrastructure</c>) from
-/// the Hangfire-bound <c>ParseOrderJob</c> (which lives in <c>ProcuLink.Api</c>).
-/// The Api project supplies the concrete adapter that calls
-/// <c>ParseOrderJob.Enqueue(IBackgroundJobClient, orderId, orgId)</c>; tests
-/// supply a recording fake.
-/// </summary>
-public interface IParseJobEnqueuer
-{
-    /// <summary>Enqueues a parse job for the given order stub.</summary>
-    Task EnqueueAsync(Guid orderId, Guid orgId, CancellationToken ct);
-}

@@ -1,6 +1,4 @@
 using FluentAssertions;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Security;
 using ProcuLink.Core.Services.Delivery;
@@ -9,82 +7,52 @@ using ProcuLink.Infrastructure.Services;
 namespace ProcuLink.Infrastructure.Tests.Services;
 
 /// <summary>
-/// Transport security at the supplier delivery-config WRITE path — the one endpoint that chooses
-/// where a purchase order and its credentials are sent.
+/// Transport security at the delivery-config WRITE rule — the check that decides whether a saved
+/// endpoint may receive a document and the credentials that authenticate it.
 ///
-/// <para>Before this, <c>UpsertAsync</c> never looked at the URL at all: <c>ValidateConfigJson</c>
-/// checked only that the blob was non-empty and parseable. An operator could save
-/// <c>http://erp.supplier.com/xmlcore</c> for Directo and every order would leave with
+/// <para>Before this rule existed, the save path never looked at the URL at all: it checked only
+/// that the blob was non-empty and parseable. An operator could save
+/// <c>http://erp.supplier.com/xmlcore</c> for Directo and every send would leave with
 /// <c>user</c>, <c>password</c> and <c>key</c> as a cleartext form body, or save
 /// <c>https://user:pass@supplier.example/orders</c> and have that password stored in
-/// <c>config_json</c> as clear text, returned by GET, copied into every delivery attempt row, and
-/// rendered on the order passport screen.</para>
+/// <c>config_json</c> as clear text.</para>
 ///
 /// <para>Both directions are asserted. A rule that refused every URL would satisfy a
 /// refusal-only suite, so each refusal is paired with the save it must not break.</para>
+///
+/// <para>2026-11-13 (plan 13b): re-anchored from <c>DeliveryConfigService.UpsertAsync</c>, deleted
+/// with the order pipeline, onto <see cref="DeliveryConfigRules"/> — the rule the flow destination
+/// save path runs. The persistence-only fact ("a refused URL does not overwrite a working config")
+/// went with the service.</para>
 /// </summary>
 public class DeliveryConfigTransportSecurityTests
 {
-    private static ProcuLinkDbContext CreateDb()
-    {
-        var options = new DbContextOptionsBuilder<ProcuLinkDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString())
-            .Options;
-        return new DeliveryConfigServiceTests.DeliveryConfigTestDbContext(options);
-    }
-
-    private static DeliveryConfigService CreateService(ProcuLinkDbContext db)
-    {
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Delivery:EncryptionKey"] = Convert.ToBase64String(new byte[32]),
-            })
-            .Build();
-        return new DeliveryConfigService(db, new DeliveryEncryptionService(config));
-    }
-
-    private static Task<DeliveryConfigResponse> SaveAsync(
-        DeliveryConfigService service, Guid orgId, Guid supplierId, string protocol, string configJson) =>
-        service.UpsertAsync(
-            orgId, supplierId,
-            new UpsertDeliveryConfigRequest(protocol, false, configJson, null),
-            default);
+    private static Action Validate(string protocol, string configJson) =>
+        () => DeliveryConfigRules.ValidateTransportSecurity(protocol, configJson);
 
     // ── Refusals ─────────────────────────────────────────────────────────────
 
-    /// <summary>The verbatim U-3 case: Directo over cleartext ships the PO plus user/password/key.</summary>
+    /// <summary>The verbatim U-3 case: Directo over cleartext ships the document plus user/password/key.</summary>
     [Fact]
-    public async Task UpsertAsync_DirectoOverPlainHttp_IsRefusedAndSavesNothing()
+    public void DirectoOverPlainHttp_IsRefused()
     {
-        await using var db = CreateDb();
-        var service = CreateService(db);
+        var thrown = Validate(DeliveryProtocolConstants.ErpDirecto,
+                "{\"url\":\"http://erp.supplier.com/xmlcore\",\"database\":\"live\"}")
+            .Should().Throw<OutboundUrlPolicyException>();
 
-        var act = () => SaveAsync(service, Guid.NewGuid(), Guid.NewGuid(),
-            DeliveryProtocolConstants.ErpDirecto,
-            "{\"url\":\"http://erp.supplier.com/xmlcore\",\"database\":\"live\"}");
-
-        var thrown = await act.Should().ThrowAsync<OutboundUrlPolicyException>();
-        thrown.And.ErrorCode.Should().Be(OutboundUrlPolicy.ErrorInsecureTransport);
-        thrown.And.Message.Should().Contain("https://");
-
-        (await db.SupplierDeliveryConfigs.CountAsync()).Should().Be(0);
+        thrown.Which.ErrorCode.Should().Be(OutboundUrlPolicy.ErrorInsecureTransport);
+        thrown.Which.Message.Should().Contain("https://");
     }
 
     [Theory]
     [InlineData(DeliveryProtocolConstants.Http)]
     [InlineData(DeliveryProtocolConstants.ErpErply)]
     [InlineData(DeliveryProtocolConstants.ErpDirecto)]
-    public async Task UpsertAsync_AnyUrlBearingProtocolOverPlainHttp_IsRefused(string protocol)
+    public void AnyUrlBearingProtocolOverPlainHttp_IsRefused(string protocol)
     {
-        await using var db = CreateDb();
-        var service = CreateService(db);
-
-        var act = () => SaveAsync(service, Guid.NewGuid(), Guid.NewGuid(), protocol,
-            "{\"url\":\"http://supplier.example.com/orders\",\"database\":\"live\"}");
-
-        (await act.Should().ThrowAsync<OutboundUrlPolicyException>())
-            .And.ErrorCode.Should().Be(OutboundUrlPolicy.ErrorInsecureTransport);
+        Validate(protocol, "{\"url\":\"http://supplier.example.com/orders\",\"database\":\"live\"}")
+            .Should().Throw<OutboundUrlPolicyException>()
+            .Which.ErrorCode.Should().Be(OutboundUrlPolicy.ErrorInsecureTransport);
     }
 
     /// <summary>
@@ -96,17 +64,11 @@ public class DeliveryConfigTransportSecurityTests
     [InlineData("URL")]
     [InlineData("Url")]
     [InlineData("uRl")]
-    public async Task UpsertAsync_UrlKeyInAnyCasing_IsStillInspected(string key)
+    public void UrlKeyInAnyCasing_IsStillInspected(string key)
     {
-        await using var db = CreateDb();
-        var service = CreateService(db);
-
-        var act = () => SaveAsync(service, Guid.NewGuid(), Guid.NewGuid(),
-            DeliveryProtocolConstants.Http,
-            $"{{\"{key}\":\"http://supplier.example.com/orders\"}}");
-
-        (await act.Should().ThrowAsync<OutboundUrlPolicyException>())
-            .And.ErrorCode.Should().Be(OutboundUrlPolicy.ErrorInsecureTransport);
+        Validate(DeliveryProtocolConstants.Http, $"{{\"{key}\":\"http://supplier.example.com/orders\"}}")
+            .Should().Throw<OutboundUrlPolicyException>()
+            .Which.ErrorCode.Should().Be(OutboundUrlPolicy.ErrorInsecureTransport);
     }
 
     /// <summary>
@@ -124,18 +86,11 @@ public class DeliveryConfigTransportSecurityTests
     [InlineData("""{"url":"https://ok.example/orders","url":"http://evil.example/orders"}""")]
     [InlineData("""{"url":"http://evil.example/orders","url":"https://ok.example/orders"}""")]
     [InlineData("""{"URL":"https://ok.example/orders","url":"http://evil.example/orders"}""")]
-    public async Task UpsertAsync_ARepeatedUrlKey_CannotSmuggleACleartextEndpointPast(string configJson)
+    public void ARepeatedUrlKey_CannotSmuggleACleartextEndpointPast(string configJson)
     {
-        await using var db = CreateDb();
-        var service = CreateService(db);
-
-        var act = () => SaveAsync(service, Guid.NewGuid(), Guid.NewGuid(),
-            DeliveryProtocolConstants.Http, configJson);
-
-        (await act.Should().ThrowAsync<OutboundUrlPolicyException>())
-            .And.ErrorCode.Should().Be(OutboundUrlPolicy.ErrorInsecureTransport);
-
-        (await db.SupplierDeliveryConfigs.CountAsync()).Should().Be(0);
+        Validate(DeliveryProtocolConstants.Http, configJson)
+            .Should().Throw<OutboundUrlPolicyException>()
+            .Which.ErrorCode.Should().Be(OutboundUrlPolicy.ErrorInsecureTransport);
     }
 
     /// <summary>
@@ -144,58 +99,26 @@ public class DeliveryConfigTransportSecurityTests
     /// while turning a bypass into a different behaviour change.
     /// </summary>
     [Fact]
-    public async Task UpsertAsync_ARepeatedUrlKeyThatIsSecureEveryTime_StillSaves()
+    public void ARepeatedUrlKeyThatIsSecureEveryTime_IsAllowed()
     {
-        await using var db = CreateDb();
-        var service = CreateService(db);
-
-        var saved = await SaveAsync(service, Guid.NewGuid(), Guid.NewGuid(),
-            DeliveryProtocolConstants.Http,
-            """{"url":"https://a.example/orders","url":"https://b.example/orders"}""");
-
-        saved.Should().NotBeNull();
-        (await db.SupplierDeliveryConfigs.CountAsync()).Should().Be(1);
+        Validate(DeliveryProtocolConstants.Http,
+                """{"url":"https://a.example/orders","url":"https://b.example/orders"}""")
+            .Should().NotThrow();
     }
 
     /// <summary>
     /// config_json is cleartext by design (SupplierDeliveryConfig.cs documents the invariant).
-    /// A userinfo URL puts a password straight into it — and into GET, every delivery-attempt
-    /// destination, and the order passport screen that renders it.
+    /// A userinfo URL puts a password straight into it.
     /// </summary>
     [Fact]
-    public async Task UpsertAsync_CredentialsEmbeddedInTheDeliveryUrl_AreRefused()
+    public void CredentialsEmbeddedInTheDeliveryUrl_AreRefused()
     {
-        await using var db = CreateDb();
-        var service = CreateService(db);
+        var thrown = Validate(DeliveryProtocolConstants.Http,
+                "{\"url\":\"https://apiuser:hunter2@supplier.example/orders\"}")
+            .Should().Throw<OutboundUrlPolicyException>();
 
-        var act = () => SaveAsync(service, Guid.NewGuid(), Guid.NewGuid(),
-            DeliveryProtocolConstants.Http,
-            "{\"url\":\"https://apiuser:hunter2@supplier.example/orders\"}");
-
-        var thrown = await act.Should().ThrowAsync<OutboundUrlPolicyException>();
-        thrown.And.ErrorCode.Should().Be(OutboundUrlPolicy.ErrorCredentialsInUrl);
-        thrown.And.Message.Should().NotContain("hunter2");
-
-        (await db.SupplierDeliveryConfigs.CountAsync()).Should().Be(0);
-    }
-
-    [Fact]
-    public async Task UpsertAsync_ARefusedUrl_DoesNotOverwriteAWorkingConfig()
-    {
-        await using var db = CreateDb();
-        var service = CreateService(db);
-        var orgId = Guid.NewGuid();
-        var supplierId = Guid.NewGuid();
-
-        await SaveAsync(service, orgId, supplierId, DeliveryProtocolConstants.Http,
-            "{\"url\":\"https://supplier.example/orders\"}");
-
-        var act = () => SaveAsync(service, orgId, supplierId, DeliveryProtocolConstants.Http,
-            "{\"url\":\"http://supplier.example/orders\"}");
-        await act.Should().ThrowAsync<OutboundUrlPolicyException>();
-
-        var row = await db.SupplierDeliveryConfigs.SingleAsync();
-        row.ConfigJson.Should().Contain("https://supplier.example/orders");
+        thrown.Which.ErrorCode.Should().Be(OutboundUrlPolicy.ErrorCredentialsInUrl);
+        thrown.Which.Message.Should().NotContain("hunter2");
     }
 
     // ── Allowances ───────────────────────────────────────────────────────────
@@ -204,36 +127,24 @@ public class DeliveryConfigTransportSecurityTests
     [InlineData(DeliveryProtocolConstants.Http)]
     [InlineData(DeliveryProtocolConstants.ErpErply)]
     [InlineData(DeliveryProtocolConstants.ErpDirecto)]
-    public async Task UpsertAsync_HttpsEndpoint_IsSaved(string protocol)
+    public void HttpsEndpoint_IsAllowed(string protocol)
     {
-        await using var db = CreateDb();
-        var service = CreateService(db);
-
-        var saved = await SaveAsync(service, Guid.NewGuid(), Guid.NewGuid(), protocol,
-            "{\"url\":\"https://supplier.example/orders\",\"database\":\"live\"}");
-
-        saved.Protocol.Should().Be(protocol);
-        (await db.SupplierDeliveryConfigs.CountAsync()).Should().Be(1);
+        Validate(protocol, "{\"url\":\"https://supplier.example/orders\",\"database\":\"live\"}")
+            .Should().NotThrow();
     }
 
     /// <summary>
-    /// The live failure-state e2e spec stands up a Node listener on an ephemeral loopback port and
-    /// saves <c>http://127.0.0.1:PORT/reject</c> as a delivery target, asserting the save succeeds.
-    /// The exemption therefore has to match on host, not on an authority string with a fixed port.
+    /// The local dev loop and the e2e suites stand up a listener on an ephemeral loopback port and
+    /// save <c>http://127.0.0.1:PORT/...</c> as a target. The exemption therefore has to match on
+    /// host, not on an authority string with a fixed port.
     /// </summary>
     [Theory]
     [InlineData("http://127.0.0.1:53412/reject")]
     [InlineData("http://localhost:5223/api/delivery")]
     [InlineData("http://[::1]:9000/inbound")]
-    public async Task UpsertAsync_PlainHttpOnLoopback_IsSavedSoLocalDevelopmentKeepsWorking(string url)
+    public void PlainHttpOnLoopback_IsAllowedSoLocalDevelopmentKeepsWorking(string url)
     {
-        await using var db = CreateDb();
-        var service = CreateService(db);
-
-        await SaveAsync(service, Guid.NewGuid(), Guid.NewGuid(), DeliveryProtocolConstants.Http,
-            $"{{\"url\":\"{url}\"}}");
-
-        (await db.SupplierDeliveryConfigs.CountAsync()).Should().Be(1);
+        Validate(DeliveryProtocolConstants.Http, $"{{\"url\":\"{url}\"}}").Should().NotThrow();
     }
 
     /// <summary>
@@ -245,128 +156,70 @@ public class DeliveryConfigTransportSecurityTests
     [InlineData(DeliveryProtocolConstants.Ftps)]
     [InlineData(DeliveryProtocolConstants.Ftp)]
     [InlineData(DeliveryProtocolConstants.Email)]
-    public async Task UpsertAsync_HostBasedProtocols_AreUnaffected(string protocol)
+    public void HostBasedProtocols_AreUnaffected(string protocol)
     {
-        await using var db = CreateDb();
-        var service = CreateService(db);
-
-        await SaveAsync(service, Guid.NewGuid(), Guid.NewGuid(), protocol,
-            "{\"host\":\"files.supplier.example\",\"port\":22,\"remotePath\":\"/in\"}");
-
-        (await db.SupplierDeliveryConfigs.CountAsync()).Should().Be(1);
+        Validate(protocol, "{\"host\":\"files.supplier.example\",\"port\":22,\"remotePath\":\"/in\"}")
+            .Should().NotThrow();
     }
 
     /// <summary>
     /// REGRESSION GUARD. <c>dtdSystemId</c> is a cXML DOCTYPE SYSTEM identifier — an XML identity
-    /// string emitted into the output document and never fetched (the loaders pin
-    /// <c>DtdProcessing.Ignore</c> and a null <c>XmlResolver</c>). The canonical value published by
-    /// cXML is <c>http://xml.cxml.org/...</c>, and the editor ships it as a datalist option.
-    /// Forcing https on it would emit invalid cXML while protecting nothing.
+    /// string emitted into the output document and never fetched. The canonical value published by
+    /// cXML is <c>http://xml.cxml.org/...</c>. Only url-keyed values are network targets, so an
+    /// http DTD beside an https endpoint must not be refused: forcing https on it would emit
+    /// invalid cXML while protecting nothing.
     /// </summary>
     [Fact]
-    public async Task UpsertAsync_CxmlDtdSystemId_IsNotTreatedAsANetworkTarget()
+    public void CxmlDtdSystemId_IsNotTreatedAsANetworkTarget()
     {
-        await using var db = CreateDb();
-        var service = CreateService(db);
-        var orgId = Guid.NewGuid();
-        var supplierId = Guid.NewGuid();
-
-        await service.UpsertAsync(orgId, supplierId, new UpsertDeliveryConfigRequest(
-            DeliveryProtocolConstants.Http, false,
-            "{\"url\":\"https://supplier.example/orders\"}", null, "cxml",
-            new CxmlCredentialsInput(
-                "NetworkId", "TESTBUYER_SE", null, null, null, null,
-                SenderSharedSecret: null,
-                DtdSystemId: "http://xml.cxml.org/schemas/cXML/1.2.024/cXML.dtd",
-                DtdPublicId: "-//cXML//DTD cXML 1.2.024//EN")), default);
-
-        var fetched = await service.GetAsync(orgId, supplierId, default);
-        fetched!.CxmlCredentials!.DtdSystemId
-            .Should().Be("http://xml.cxml.org/schemas/cXML/1.2.024/cXML.dtd");
+        Validate(DeliveryProtocolConstants.Http,
+                """{"url":"https://supplier.example/orders","dtdSystemId":"http://xml.cxml.org/schemas/cXML/1.2.024/cXML.dtd"}""")
+            .Should().NotThrow();
     }
 
-    // ── Configs saved BEFORE enforcement existed ─────────────────────────────
+    // ── Configs saved BEFORE enforcement existed (the delivery-time warning) ──
 
     /// <summary>
-    /// Refusing at save protects nothing already stored. An org that saved an http:// endpoint
-    /// before this shipped keeps delivering — silently breaking those orders would trade a
-    /// security weakness for an outage — but the config is flagged on every read so the editor
-    /// can say so, rather than leaving the operator exposed and uninformed.
+    /// Refusing at save protects nothing already stored. A config saved with an http:// endpoint
+    /// before enforcement keeps delivering — silently breaking it would trade a security weakness
+    /// for an outage — but the dispatchers log it on every send. 2026-11-13 (plan 13b, task 8a):
+    /// re-anchored from the deleted read-path composer <c>DescribeConfigWarnings</c> onto its
+    /// transport half, <see cref="DeliveryConfigTransport.DescribeInsecureTransport"/>, which the
+    /// HTTP, Directo and Erply delivery paths call.
     /// </summary>
     [Theory]
     [InlineData("{\"url\":\"http://erp.supplier.com/xmlcore\"}")]
     [InlineData("{\"URL\":\"http://erp.supplier.com/xmlcore\"}")]
-    public async Task GetAsync_AConfigSavedBeforeEnforcement_IsFlaggedInsecure(string configJson)
+    public void AConfigSavedBeforeEnforcement_IsFlaggedInsecure(string configJson)
     {
-        await using var db = CreateDb();
-        var service = CreateService(db);
-        var orgId = Guid.NewGuid();
-        var supplierId = Guid.NewGuid();
+        var warning = DeliveryConfigTransport.DescribeInsecureTransport(DeliveryProtocolConstants.ErpDirecto, configJson);
 
-        // Written straight to the row: this is what an org that configured delivery before
-        // enforcement existed actually has, and UpsertAsync can no longer produce it.
-        db.SupplierDeliveryConfigs.Add(new ProcuLink.Core.Entities.SupplierDeliveryConfig
-        {
-            Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,
-            Protocol = DeliveryProtocolConstants.ErpDirecto, ConfigJson = configJson,
-            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
-        });
-        await db.SaveChangesAsync();
-
-        var fetched = await service.GetAsync(orgId, supplierId, default);
-
-        fetched!.InsecureTransportWarning.Should().NotBeNullOrWhiteSpace();
-        fetched.InsecureTransportWarning.Should().Contain("https://");
+        warning.Should().NotBeNullOrWhiteSpace();
+        warning.Should().Contain("https://");
     }
 
     [Theory]
     [InlineData("{\"url\":\"https://supplier.example/orders\"}")]
     [InlineData("{\"url\":\"http://127.0.0.1:9000/orders\"}")]
     [InlineData("{\"host\":\"files.supplier.example\"}")]
-    public async Task GetAsync_ASecureOrLoopbackConfig_CarriesNoWarning(string configJson)
+    public void ASecureOrLoopbackConfig_CarriesNoWarning(string configJson)
     {
-        await using var db = CreateDb();
-        var service = CreateService(db);
-        var orgId = Guid.NewGuid();
-        var supplierId = Guid.NewGuid();
-
-        db.SupplierDeliveryConfigs.Add(new ProcuLink.Core.Entities.SupplierDeliveryConfig
-        {
-            Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,
-            Protocol = DeliveryProtocolConstants.Http, ConfigJson = configJson,
-            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
-        });
-        await db.SaveChangesAsync();
-
-        (await service.GetAsync(orgId, supplierId, default))!
-            .InsecureTransportWarning.Should().BeNull();
+        DeliveryConfigTransport.DescribeInsecureTransport(DeliveryProtocolConstants.Http, configJson)
+            .Should().BeNull();
     }
 
     /// <summary>
-    /// The warning is rendered in the editor and logged. A stored userinfo URL must be flagged,
-    /// but the flag must not carry the password back out into either place.
+    /// The warning is logged. A stored userinfo URL must be flagged, but the flag must not carry
+    /// the password back out into the log line.
     /// </summary>
     [Fact]
-    public async Task GetAsync_AStoredUserinfoUrl_IsFlaggedWithoutEchoingTheSecret()
+    public void AStoredUserinfoUrl_IsFlaggedWithoutEchoingTheSecret()
     {
-        await using var db = CreateDb();
-        var service = CreateService(db);
-        var orgId = Guid.NewGuid();
-        var supplierId = Guid.NewGuid();
+        var warning = DeliveryConfigTransport.DescribeInsecureTransport(
+            DeliveryProtocolConstants.Http, "{\"url\":\"https://apiuser:hunter2@supplier.example/orders\"}");
 
-        db.SupplierDeliveryConfigs.Add(new ProcuLink.Core.Entities.SupplierDeliveryConfig
-        {
-            Id = Guid.NewGuid(), OrgId = orgId, SupplierId = supplierId,
-            Protocol = DeliveryProtocolConstants.Http,
-            ConfigJson = "{\"url\":\"https://apiuser:hunter2@supplier.example/orders\"}",
-            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
-        });
-        await db.SaveChangesAsync();
-
-        var fetched = await service.GetAsync(orgId, supplierId, default);
-
-        fetched!.InsecureTransportWarning.Should().NotBeNullOrWhiteSpace();
-        fetched.InsecureTransportWarning.Should().NotContain("hunter2");
+        warning.Should().NotBeNullOrWhiteSpace();
+        warning.Should().NotContain("hunter2");
     }
 
     // ── The url-bearing protocol set is declared once ────────────────────────
@@ -377,22 +230,16 @@ public class DeliveryConfigTransportSecurityTests
     /// than silently shipping an unvalidated channel.
     /// </summary>
     [Fact]
-    public async Task EveryDeclaredUrlBearingProtocol_RefusesCleartext_AndTheListIsNotVacuous()
+    public void EveryDeclaredUrlBearingProtocol_RefusesCleartext_AndTheListIsNotVacuous()
     {
         DeliveryProtocolConstants.UrlBased.Should().NotBeEmpty();
         DeliveryProtocolConstants.UrlBased.Should().BeSubsetOf(DeliveryProtocolConstants.All);
 
         foreach (var protocol in DeliveryProtocolConstants.UrlBased)
         {
-            await using var db = CreateDb();
-            var service = CreateService(db);
-
-            var act = () => SaveAsync(service, Guid.NewGuid(), Guid.NewGuid(), protocol,
-                "{\"url\":\"http://supplier.example.com/orders\",\"database\":\"live\"}");
-
-            (await act.Should().ThrowAsync<OutboundUrlPolicyException>(
-                    $"'{protocol}' is declared url-bearing"))
-                .And.ErrorCode.Should().Be(OutboundUrlPolicy.ErrorInsecureTransport);
+            Validate(protocol, "{\"url\":\"http://supplier.example.com/orders\",\"database\":\"live\"}")
+                .Should().Throw<OutboundUrlPolicyException>($"'{protocol}' is declared url-bearing")
+                .Which.ErrorCode.Should().Be(OutboundUrlPolicy.ErrorInsecureTransport);
         }
     }
 }

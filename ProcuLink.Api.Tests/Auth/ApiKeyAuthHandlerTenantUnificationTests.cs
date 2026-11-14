@@ -29,7 +29,7 @@ namespace ProcuLink.Api.Tests.Auth;
 ///    the resolved INTERNAL organisation UUID into <c>HttpContext.Items</c> under the
 ///    SAME key the JWT path uses — not just the org_id claim.
 ///  • <see cref="CurrentTenantService"/> (the single resolver shared with JWT
-///    controllers) reads that value, so <see cref="IngressController"/> resolves the
+///    controllers) reads that value, so ingress resolves the
 ///    correct internal org WITHOUT parsing its own claim.
 ///  • Ingress still works AND stays idempotent when driven through this unified path.
 ///
@@ -154,95 +154,6 @@ public class ApiKeyAuthHandlerTenantUnificationTests
     }
 
     [Fact]
-    public async Task IngressController_ResolvesCorrectInternalOrg_ViaUnifiedPath()
-    {
-        var dbOptions = NewDbOptions();
-        await using var db = new ProcuLinkDbContext(dbOptions);
-        var (orgId, supplierId) = Seed(db);
-
-        // 1) Authenticate exactly as the framework would (handler populates Items).
-        var ctx = NewRequestContext();
-        var auth = await AuthenticateAsync(dbOptions, ctx);
-        Assert.True(auth.Succeeded);
-        ctx.User = auth.Principal!;
-
-        // 2) Drive the controller off the SAME context via the shared resolver.
-        var tenant     = new CurrentTenantService(new HttpContextAccessor { HttpContext = ctx });
-        var idempotency = new IdempotencyService(db);
-        var controller = new IngressController(db, idempotency, tenant, TestDoubles.PermissiveBilling.Service(), NullLogger<IngressController>.Instance)
-        {
-            ControllerContext = new ControllerContext { HttpContext = ctx },
-        };
-
-        // WP-22: the controller claims the Idempotency-Key FIRST and creates under the order id the
-        // claim pre-generated, so the created entity's id is whatever the controller supplies — not
-        // one the test picks.
-        PurchaseOrderEntity Entity(Guid id) => new()
-        {
-            Id                = id,
-            OrgId             = orgId,
-            SupplierId        = supplierId,
-            PoNumber          = "PO-UNIFIED-001",
-            Status            = "pending_review",
-            CreatedAt         = DateTime.UtcNow,
-            UpdatedAt         = DateTime.UtcNow,
-            Lines             = new List<PurchaseOrderLineEntity>(),
-            OutboundArtifacts = new List<OutboundArtifact>(),
-        };
-
-        // The controller MUST create with the resolved INTERNAL org id.
-        Guid? observedOrgId    = null;
-        Guid? claimedOrderId   = null;
-        var claimedOrders = new Mock<IClaimedOrderCreator>();
-        claimedOrders
-            .Setup(s => s.CreateClaimedFromParsedOrderAsync(
-                It.IsAny<Guid>(), supplierId, It.IsAny<Guid>(), It.IsAny<ExtractedOrder>(),
-                "ingress_api", It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .Callback<Guid, Guid?, Guid, ExtractedOrder, string, string?, CancellationToken>(
-                (o, _, id, _, _, _, _) => { observedOrgId = o; claimedOrderId = id; })
-            .ReturnsAsync(() => Result<PurchaseOrderEntity>.Ok(Entity(claimedOrderId!.Value)));
-
-        var orders = new Mock<IOrderService>();
-        orders
-            .Setup(s => s.GetByIdAsync(orgId, It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(() => claimedOrderId is null
-                ? Result<PurchaseOrderEntity>.Fail("Order not found.")
-                : Result<PurchaseOrderEntity>.Ok(Entity(claimedOrderId.Value)));
-
-        var req = new IngressOrderRequest(
-            OrderNumber: "PO-UNIFIED-001",
-            OrderDate:   new DateOnly(2026, 6, 7),
-            Currency:    "EUR",
-            Notes:       null,
-            SupplierId:  supplierId.ToString(),
-            Lines: new List<IngressOrderLine>
-            {
-                new(BuyerItemCode: "BUY-1", Description: "Widget", Quantity: 5m, Unit: "EA", UnitPrice: 1.25m),
-            });
-
-        // Ping resolves the slug off the unified org id.
-        Assert.IsType<OkObjectResult>(await controller.Ping(Slug, CancellationToken.None));
-
-        // First POST creates the order under the correct internal org.
-        Assert.IsType<OkObjectResult>(
-            await controller.ReceiveOrder(Slug, req, orders.Object, claimedOrders.Object, CancellationToken.None));
-        Assert.Equal(orgId, observedOrgId);
-
-        // Idempotency still holds through the unified path: a verbatim retry
-        // short-circuits and creates no second order.
-        var second = await controller.ReceiveOrder(Slug, req, orders.Object, claimedOrders.Object, CancellationToken.None);
-        Assert.IsType<OkObjectResult>(second);
-        claimedOrders.Verify(
-            s => s.CreateClaimedFromParsedOrderAsync(
-                It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<Guid>(), It.IsAny<ExtractedOrder>(),
-                It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()),
-            Times.Once);
-
-        var keyRows = await db.IdempotencyKeys.Where(k => k.OrgId == orgId).ToListAsync();
-        Assert.Single(keyRows);
-    }
-
-    [Fact]
     public async Task ApiKeyAuth_PrincipalCarriesPerKeySubClaim_ForRateLimitPartitioning()
     {
         // M3 regression (plan 2026-06-12): the rate limiter partitions on the `sub` claim
@@ -261,28 +172,4 @@ public class ApiKeyAuthHandlerTenantUnificationTests
         Assert.Equal($"apikey:{keyId}", sub);
     }
 
-    [Fact]
-    public async Task IngressController_RejectsSlugMismatch_ViaUnifiedPath()
-    {
-        var dbOptions = NewDbOptions();
-        await using var db = new ProcuLinkDbContext(dbOptions);
-        var (orgId, _) = Seed(db, slug: "real-slug");
-
-        var ctx = NewRequestContext();
-        var auth = await AuthenticateAsync(dbOptions, ctx);
-        Assert.True(auth.Succeeded);
-        ctx.User = auth.Principal!;
-
-        var tenant      = new CurrentTenantService(new HttpContextAccessor { HttpContext = ctx });
-        var idempotency = new IdempotencyService(db);
-        var controller  = new IngressController(db, idempotency, tenant, TestDoubles.PermissiveBilling.Service(), NullLogger<IngressController>.Instance)
-        {
-            ControllerContext = new ControllerContext { HttpContext = ctx },
-        };
-
-        // A different slug than the caller's org must be forbidden — the slug guard
-        // now compares against the unified internal org id.
-        var ping = await controller.Ping("someone-elses-slug", CancellationToken.None);
-        Assert.IsType<ForbidResult>(ping);
-    }
 }

@@ -93,11 +93,10 @@ public class StartupConfigurationValidatorTests
             + "every deploy that did the right thing");
 
         // The other half of "did not throw": it did not throw because it PASSED, not because it
-        // never looked. Validate always announces the effective revision-authority value, and the
-        // announcement must agree with the single reader of the flag.
-        var announcement = $"revision authority enabled={EffectiveConnectionConfigResolver.IsEnabled(config)}";
+        // never looked. Sentry:Dsn is unset here, and Validate always warns about an unset
+        // optional key.
         Assert.Contains(logger.Entries, e =>
-            e.Level == LogLevel.Information && e.Message.Contains(announcement));
+            e.Level == LogLevel.Warning && e.Message.Contains("'Sentry:Dsn'"));
 
         // A clean Production config logs nothing at Error — that level is reserved for the
         // SSRF kill-switch, which is off here.
@@ -127,11 +126,10 @@ public class StartupConfigurationValidatorTests
             "a local dev host must still start on the placeholder key — hard-failing here would "
             + "force every developer to mint secrets before running the app");
 
-        // Validate ran to completion rather than bailing early: the announcement is emitted on
-        // every host in every environment, and its value matches the one reader of the flag.
-        var announcement = $"revision authority enabled={EffectiveConnectionConfigResolver.IsEnabled(config)}";
+        // Validate ran rather than bailing out: the unset optional Sentry:Dsn is warned about in
+        // every environment.
         Assert.Contains(logger.Entries, e =>
-            e.Level == LogLevel.Information && e.Message.Contains(announcement));
+            e.Level == LogLevel.Warning && e.Message.Contains("'Sentry:Dsn'"));
 
         // Development warns about unset optional keys, but nothing here is Error-worthy.
         Assert.DoesNotContain(logger.Entries, e => e.Level >= LogLevel.Error);

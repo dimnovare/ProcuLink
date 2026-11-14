@@ -6,6 +6,7 @@ using Microsoft.Extensions.Caching.Memory;
 using Moq;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Controllers;
+using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ai;
@@ -155,7 +156,7 @@ public class UnscoredSuggestionReadBoundaryTests
         var tenant = new Mock<ICurrentTenantService>();
         tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
 
-        var orders = new Mock<IOrderService>();
+        var orders = new Mock<IOrderQueryService>();
         orders
             .Setup(s => s.GetByIdAsync(orgId, entity.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(entity));
@@ -163,23 +164,7 @@ public class UnscoredSuggestionReadBoundaryTests
         return new OrdersController(
             orders.Object,
             tenant.Object,
-            new Mock<IBackgroundJobClient>().Object,
-            db,
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<OrdersController>.Instance,
-            new Mock<IBillingService>().Object,
-            new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
-            new Mock<IFileStorageService>().Object,
-            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
-            Array.Empty<ITransformService>(),
-            aiDecisions: null,
-            conformance: null,
-            poMappings: null,
-            effectiveConfig: null,
-            calibration: null);
+            db);
     }
 
     private static ReadBoundaryTestDbContext MakeDb() =>

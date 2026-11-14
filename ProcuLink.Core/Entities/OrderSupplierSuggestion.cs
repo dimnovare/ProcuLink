@@ -43,7 +43,7 @@ public class OrderSupplierSuggestion
     public string? SignalsJson { get; set; }
 
     /// <summary>
-    /// Scoring ruleset identity (<c>SupplierSuggestionScoring.ModelVersion</c>), so a calibration
+    /// Scoring ruleset identity, so a calibration
     /// pass can group decisions by the rules that produced them and never compares across changes.
     /// </summary>
     public string? ModelVersion { get; set; }

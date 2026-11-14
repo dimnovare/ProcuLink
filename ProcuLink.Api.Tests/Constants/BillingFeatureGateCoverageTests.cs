@@ -50,20 +50,14 @@ public class BillingFeatureGateCoverageTests
     /// <c>CustomTemplates</c> (BE #80, the output-template editor WP-06 deleted) and the
     /// second, never-run rule engine's flag (BE #75, WP-07). The temporary
     /// <c>RetiredElsewhere</c> exemption that held the latter is gone with it — its own doc
-    /// asked for that deletion rather than letting it become a parking space.</para>
+    /// asked for that deletion rather than letting it become a parking space. Plan 13b (2026-11-13)
+    /// removed eight more with the legacy order surfaces they gated; see
+    /// <see cref="DeletedFeatures_StayDeleted"/>.</para>
     /// </summary>
     public static readonly IReadOnlyDictionary<BillingFeature, string> EnforcedBy =
         new Dictionary<BillingFeature, string>
         {
-            [BillingFeature.BulkMapping]         = "SuppliersController.ImportMappings",
-            [BillingFeature.Cxml]                = "SuppliersController.UpsertDeliveryConfig (OutputFormat = cxml)",
-            [BillingFeature.AdvancedAudit]       = "AuditController.GetAuditLog (org-wide trail; per-order audit stays open)",
-            [BillingFeature.WebhookDelivery]     = "SuppliersController.UpsertDeliveryConfig (Protocol = http)",
-            [BillingFeature.EmailIngestion]      = "SettingsController.UpdateEmail + EmailPollOrgJob + InboundEmailRouter.RouteAsync",
-            [BillingFeature.SftpIngestion]       = "SettingsController.UpdateSftp + SuppliersController.UpsertCatalogSource + SftpPollOrgJob",
-            [BillingFeature.S3Ingestion]         = "SettingsController.UpdateS3 + S3PollOrgJob",
-            [BillingFeature.ErpConnectors]       = "SuppliersController.UpsertDeliveryConfig (Protocol = erp_*)",
-            [BillingFeature.CustomSupplierRules] = "SupplierAcceptanceController.CreateVersion",
+            [BillingFeature.AdvancedAudit]       = "AuditController.GetAuditLog (org-wide trail; a document's own history stays open)",
             [BillingFeature.Sso]                 = "StripeBillingService.GetStatusAsync -> BillingStatus.SsoAvailable",
         };
 
@@ -172,7 +166,7 @@ public class BillingFeatureGateCoverageTests
         EnforcedBy.Keys.Should().OnlyContain(f => live.Contains(f));
     }
 
-    // ── The five WP-11 deletions must not come back ──────────────────────────
+    // ── Deleted features must not come back ──────────────────────────────────
 
     [Theory]
     [InlineData("Xml")]
@@ -180,10 +174,19 @@ public class BillingFeatureGateCoverageTests
     [InlineData("MappingLibrary")]
     [InlineData("DeliveryHistory")]
     [InlineData("SlaOnboarding")]
+    // Plan 13b (2026-11-13): their gate sites were deleted with the legacy order pipeline.
+    [InlineData("BulkMapping")]
+    [InlineData("Cxml")]
+    [InlineData("WebhookDelivery")]
+    [InlineData("EmailIngestion")]
+    [InlineData("ErpConnectors")]
+    [InlineData("CustomSupplierRules")]
+    [InlineData("SftpIngestion")]
+    [InlineData("S3Ingestion")]
     public void DeletedFeatures_StayDeleted(string removed)
     {
         Enum.GetNames<BillingFeature>().Should().NotContain(removed,
-            $"{removed} was removed in WP-11 because there was nothing honest to gate. " +
+            $"{removed} was removed because there was nothing honest left to gate. " +
             "Re-adding it re-creates a promise the ladder cannot keep — if the capability now " +
             "exists, add the enforcement site and its behavioural test in the same change.");
     }

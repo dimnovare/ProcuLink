@@ -1,7 +1,7 @@
 using FluentAssertions;
 using Hangfire.Common;
 using ProcuLink.Infrastructure.Jobs;
-using ProcuLink.Worker.Jobs;
+using ProcuLink.Api.Jobs;
 using Xunit;
 
 namespace ProcuLink.Api.Tests.Jobs;
@@ -27,11 +27,11 @@ public class PerOrgDistributedMutexResourceKeyTests
 {
     private static readonly PerOrgDistributedMutexAttribute Attr = new(orgArgumentIndex: 0, timeoutSeconds: 300);
 
-    private static Job SftpJobFor(Guid orgId) =>
-        Job.FromExpression<SftpPollOrgJob>(j => j.ExecuteAsync(orgId, CancellationToken.None));
+    private static Job PickupJobFor(Guid orgId) =>
+        Job.FromExpression<FlowPickupJob>(j => j.ExecuteAsync(orgId, Guid.Empty, CancellationToken.None));
 
     /// <summary>
-    /// THE throughput fix: org A's SFTP poll and org B's SFTP poll take DIFFERENT locks, so a slow
+    /// THE throughput fix: org A's flow pickup and org B's flow pickup take DIFFERENT locks, so a slow
     /// or hung endpoint on org A cannot block org B's polling. Under the old global lock these two
     /// resources were identical.
     /// </summary>
@@ -41,11 +41,11 @@ public class PerOrgDistributedMutexResourceKeyTests
         var orgA = Guid.NewGuid();
         var orgB = Guid.NewGuid();
 
-        var resourceA = Attr.BuildResource(SftpJobFor(orgA));
-        var resourceB = Attr.BuildResource(SftpJobFor(orgB));
+        var resourceA = Attr.BuildResource(PickupJobFor(orgA));
+        var resourceB = Attr.BuildResource(PickupJobFor(orgB));
 
         resourceA.Should().NotBe(resourceB,
-            "two orgs polling the same channel must take DIFFERENT distributed locks — one slow " +
+            "two orgs picking up for the same flow intake kind must take DIFFERENT distributed locks — one slow " +
             "tenant's endpoint must never block another tenant's poll");
         resourceA.Should().Contain(orgA.ToString("N"), "the resource must key on the orgId argument");
         resourceB.Should().Contain(orgB.ToString("N"), "the resource must key on the orgId argument");
@@ -53,36 +53,19 @@ public class PerOrgDistributedMutexResourceKeyTests
 
     /// <summary>
     /// The correctness half: two activations for the SAME org DO contend, exactly as the old global
-    /// lock made them — this is the TOCTOU-narrowing guard over the claim-first ledger insert.
+    /// lock made them — this is the TOCTOU-narrowing guard over the intake ledger claim.
     /// </summary>
     [Fact]
     public void BuildResource_SameOrgTwice_ProducesIdenticalResource()
     {
         var orgId = Guid.NewGuid();
 
-        var first = Attr.BuildResource(SftpJobFor(orgId));
-        var second = Attr.BuildResource(SftpJobFor(orgId));
+        var first = Attr.BuildResource(PickupJobFor(orgId));
+        var second = Attr.BuildResource(PickupJobFor(orgId));
 
         first.Should().Be(second,
-            "two SftpPollOrgJob activations for the SAME org must take the SAME lock so they " +
+            "two FlowPickupJob activations for the SAME org must take the SAME lock so they " +
             "cannot poll concurrently");
-    }
-
-    /// <summary>
-    /// Channels are independent: an org's SFTP poll and its IMAP poll hit different endpoints and
-    /// different ledgers, so they must not serialise against each other.
-    /// </summary>
-    [Fact]
-    public void BuildResource_SameOrgDifferentChannels_ProduceDifferentResources()
-    {
-        var orgId = Guid.NewGuid();
-
-        var sftp = Attr.BuildResource(SftpJobFor(orgId));
-        var s3 = Attr.BuildResource(Job.FromExpression<S3PollOrgJob>(j => j.ExecuteAsync(orgId, CancellationToken.None)));
-        var email = Attr.BuildResource(Job.FromExpression<EmailPollOrgJob>(j => j.ExecuteAsync(orgId, CancellationToken.None)));
-
-        new[] { sftp, s3, email }.Should().OnlyHaveUniqueItems(
-            "each channel polls a different endpoint for the org — they must not serialise against each other");
     }
 
     /// <summary>
@@ -109,11 +92,11 @@ public class PerOrgDistributedMutexResourceKeyTests
     public void BuildResource_ArgumentIndexOutOfRange_FallsBackToMethodLevelResource()
     {
         var attr = new PerOrgDistributedMutexAttribute(orgArgumentIndex: 7, timeoutSeconds: 300);
-        var job = SftpJobFor(Guid.NewGuid());
+        var job = PickupJobFor(Guid.NewGuid());
 
         var act = () => attr.BuildResource(job);
 
         act.Should().NotThrow();
-        attr.BuildResource(job).Should().Contain(nameof(SftpPollOrgJob));
+        attr.BuildResource(job).Should().Contain(nameof(FlowPickupJob));
     }
 }

@@ -16,7 +16,7 @@ public enum ResendSafety
     /// It does NOT say the re-send succeeds. When the operator has turned <c>overwriteExisting</c>
     /// off for that supplier, a re-send whose predecessor already wrote REFUSES — no duplicate, but
     /// no repair either, and the order would be reported failed while the supplier may already hold
-    /// the document. <c>DeliveryService</c> therefore parks that specific combination (file-drop
+    /// the document. <c>DeliverDocumentJob</c> therefore parks that specific combination (file-drop
     /// channel + overwrite off + crash-recovery re-drive) for a human instead of re-driving it.
     /// </para>
     /// </summary>
@@ -31,7 +31,7 @@ public enum ResendSafety
     /// <summary>
     /// No dedupe signal reaches the counterparty (ERP endpoints ignore the key; a caller-supplied
     /// email <c>Message-ID</c> is rarely honoured by a receiving MTA). A re-send after an unknown
-    /// outcome duplicates the PO, so DeliveryService parks the order for a human decision instead.
+    /// outcome duplicates the PO, so DeliverDocumentJob parks the delivery for a human decision instead.
     /// The interface default — a channel that has not thought about this parks rather than duplicates.
     /// </summary>
     Unsafe,

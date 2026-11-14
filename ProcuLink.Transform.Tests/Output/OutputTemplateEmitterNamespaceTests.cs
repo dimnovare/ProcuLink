@@ -1,6 +1,5 @@
 using System.Text;
 using System.Xml.Linq;
-using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Transform.Output;
@@ -22,27 +21,11 @@ public class OutputTemplateEmitterNamespaceTests
     private static readonly XNamespace CbcNs = CBC;
     private static readonly XNamespace CacNs = CAC;
 
-    private static PurchaseOrderEntity ResolvedOrder()
-    {
-        var id = Guid.NewGuid();
-        return new PurchaseOrderEntity
-        {
-            Id = id, OrgId = Guid.NewGuid(), SupplierId = Guid.NewGuid(),
-            PoNumber = "PO-1", Currency = "EUR", OrderDate = new DateOnly(2026, 6, 15),
-            Lines = { new PurchaseOrderLineEntity { Id = Guid.NewGuid(), OrderId = id, LineNumber = 1,
-                SupplierItemCode = "S-1", Quantity = 3m, UnitPrice = 10m, NeedsReview = false } },
-        };
-    }
-
     private static OutputFieldRule Canon(string f) => new() { OutputPath = f, CanonicalField = f };
 
-    private static string Emit(OutputNodeTemplate t)
-    {
-        var r = new OutputTemplateEmitter().Emit(t, ResolvedOrder(), new OrderMappingOverride());
-        r.Content.Position = 0;
-        using var sr = new StreamReader(r.Content, Encoding.UTF8);
-        return sr.ReadToEnd();
-    }
+    /// <summary>The shared header with one line, S-1 × 3.</summary>
+    private static string Emit(OutputNodeTemplate t) =>
+        EmitterRows.Emit(t, EmitterRows.Header(), EmitterRows.Line(1, "S-1", 3m, 10m)).Text();
 
     // A minimal but real UBL shape rendered as generic namespaced XML (the emitter produces namespaced
     // XML under Format=Xml; cXML/UBL formats are refused — they need their envelope, see Emit).

@@ -52,10 +52,10 @@ public class DbWorkerHealthAlertStateStoreTests
 
         await store.SaveAsync(
             new[] { new WorkerHealthAlertConditionState(
-                OperationalAlertKeys.DeadLetterBacklog, true, first) }, default);
+                OperationalAlertKeys.DeliveryFailureRate, true, first) }, default);
         await store.SaveAsync(
             new[] { new WorkerHealthAlertConditionState(
-                OperationalAlertKeys.DeadLetterBacklog, true, second) }, default);
+                OperationalAlertKeys.DeliveryFailureRate, true, second) }, default);
 
         var loaded = await store.LoadAsync(default);
 

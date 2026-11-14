@@ -40,21 +40,26 @@ public sealed class OrgAdminGateIsRealTests
     /// <para>Changing this number is the deliberate act of widening or narrowing what an
     /// organisation reserves to its administrators, and it should never move on its own.</para>
     /// </summary>
-    private const int ExpectedGatedEndpointCount = 38; // 2026-11-13, plan 9b: +4 Google connect/complete/picker/disconnect
+    // 24 -> 22 on 2026-11-13 (plan 13b Task 6b): POST /api/orders/{id}/send-anyway and
+    // POST /api/orders/{id}/acceptance-gate/override were deleted with the order write API.
+    private const int ExpectedGatedEndpointCount = 26; // 22 + 4 Google connect/complete/picker/disconnect (plan 9b)
 
     /// <summary>
-    /// How many operations are declared destructive. Every gated endpoint reaches a declared primitive;
-    /// <c>UpsertDeliveryConfig</c> reaches two, since it writes the delivery row and republishes the
-    /// live connection revision.
+    /// How many operations are declared destructive. Every gated endpoint reaches a declared primitive.
     /// </summary>
-    private const int ExpectedDestructivePrimitiveCount = 37; // 2026-11-13, plan 9b: +4, one per Google endpoint
+    // 22 -> 19 on 2026-11-13 (plan 13b Task 6b): IAcceptanceGate.RecordOverrideAsync,
+    // OrderIngestionService.ApplyInvoiceProblemsAsync and IOrderService.ResolveAsync left the declared
+    // set with the three endpoints above, their only gated callers.
+    private const int ExpectedDestructivePrimitiveCount = 23; // 19 + 4, one per Google endpoint (plan 9b)
 
     /// <summary>
-    /// Endpoints that gate only PART of a request, in-method: resolve (an invoice's IBAN, number and
-    /// seller), the organisation settings PUT (where invoices go; the order direction stays open) and
-    /// <c>FlowsController.Rename</c> (an automation change).
+    /// Endpoints that gate only PART of a request, in-method: the organisation settings PUT (where
+    /// invoices go; the order direction stays open) and <c>FlowsController.Rename</c> (an automation
+    /// change).
     /// </summary>
-    private const int ExpectedInMethodGatedCount = 3;
+    // 3 -> 2 on 2026-11-13 (plan 13b Task 6b): POST /api/orders/{id}/resolve, which gated an
+    // invoice's IBAN, number and seller in-method, was deleted with the order write API.
+    private const int ExpectedInMethodGatedCount = 2;
 
     private static HashSet<string> AllGated() =>
         GatedActions().Concat(InMethodGatedActions()).Select(a => a.Display).ToHashSet(StringComparer.Ordinal);
@@ -86,32 +91,14 @@ public sealed class OrgAdminGateIsRealTests
     [Fact]
     public void Scanner_Control_ReadsThroughTheAsyncStateMachine()
     {
-        var method = typeof(SuppliersController).GetMethod(nameof(SuppliersController.UpsertDeliveryConfig))!;
+        var method = typeof(BillingController).GetMethod(nameof(BillingController.CreatePortal))!;
 
         method.GetCustomAttribute<System.Runtime.CompilerServices.AsyncStateMachineAttribute>()
             .Should().NotBeNull("this control is only meaningful while the action is genuinely async");
 
-        Destructive(typeof(SuppliersController), nameof(SuppliersController.UpsertDeliveryConfig))
+        Destructive(typeof(BillingController), nameof(BillingController.CreatePortal))
             .Select(p => p.Describe)
-            .Should().Contain("IDeliveryConfigService.UpsertAsync");
-    }
-
-    /// <summary>
-    /// POSITIVE CONTROL, NON-INTERFACE PRIMITIVE. The webhook subscription is the one destructive
-    /// operation with no service seam — the controller mints the entity and adds it to the DbSet
-    /// inline. That match resolves a constructed generic (<c>DbSet&lt;IntegrationSubscription&gt;</c>)
-    /// or a constructor token, neither of which the interface-shaped matches exercise, so it gets its
-    /// own control.
-    /// </summary>
-    [Fact]
-    public void Scanner_Control_SeesTheEntityLevelPrimitiveToo()
-    {
-        Destructive(typeof(IntegrationController), nameof(IntegrationController.Create))
-            .Select(p => p.Describe)
-            .Should().Contain(
-                d => d.Contains("IntegrationSubscription"),
-                "IntegrationController.Create is the redirection primitive with no interface to name; "
-              + "if this match stops resolving, the endpoint quietly leaves the destructive set");
+            .Should().Contain("IBillingService.CreatePortalSessionAsync");
     }
 
     /// <summary>
@@ -158,10 +145,10 @@ public sealed class OrgAdminGateIsRealTests
           + $"{nameof(ExpectedInMethodGatedCount)} deliberately.\nCurrently gated in-method:\n"
           + string.Join("\n", InMethodGatedActions().Select(a => "  • " + a.Display)));
 
-        AllActions().Count.Should().BeGreaterThan(ExpectedGatedEndpointCount * 5,
-            "the gate is meant to be narrow — if it ever covers a large share of the API, the "
-          + "founder's 'gate the destructive few, leave the rest open' decision has been reversed "
-          + "by accretion");
+        // Narrowness is carried by the structural checks below (EveryDestructiveAction_CarriesTheGate,
+        // EveryGatedAction_ReachesADeclaredDestructivePrimitive) plus the exact pins above, not by a share of the API.
+        AllActions().Count.Should().BeGreaterThan(gated.Count,
+            "the scanner must see ungated actions too, or the gated set proves nothing about narrowness");
     }
 
     /// <summary>

@@ -8,8 +8,7 @@ namespace ProcuLink.Infrastructure.Services;
 
 /// <inheritdoc />
 /// <remarks>
-/// Cross-tenant maintenance sweep (mirrors <see cref="StuckOrderDetectionService"/> /
-/// <see cref="DeliverySlaService"/>): it reads across all organisations, but every row it
+/// Cross-tenant maintenance sweep: it reads across all organisations, but every row it
 /// considers is filtered strictly by that row's own created/occurred timestamp. Tenant
 /// isolation is irrelevant for a pure age-based prune of already-tenant-scoped rows.
 /// <para>

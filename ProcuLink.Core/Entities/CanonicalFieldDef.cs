@@ -4,9 +4,7 @@ namespace ProcuLink.Core.Entities;
 /// Phase 2 Tier-2 "extensible canonical": a user-defined canonical field added to the
 /// spine WITHOUT a per-field migration. Scoped to an org and (optionally) a single
 /// <see cref="SupplierConnection"/> so one supplier's custom fields don't leak to another.
-/// VALUES are NOT stored here — they ride on the existing per-order
-/// <c>OrderMappingOverride.CustomFields</c> mechanism (header <c>Value</c> / line
-/// <c>LineValues</c>), keyed by <see cref="Key"/>. This row is the DEFINITION only
+/// VALUES are NOT stored here. This row is the DEFINITION only
 /// (label/scope/type/order/standards) so the mapper can render the field as a wireable
 /// node and validate it. Removal is a SOFT DELETE (<see cref="DeletedAt"/>) so pinned
 /// revisions keep a stable view of the field set. Table <c>canonical_field_defs</c>

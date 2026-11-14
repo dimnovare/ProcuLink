@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Controllers;
+using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
@@ -15,8 +16,8 @@ namespace ProcuLink.Api.Tests.Controllers;
 /// WP-27: <c>PurchaseOrderEntity.IsSample</c> must reach the order read model.
 ///
 /// <para>
-/// The flag has existed on the row since migration <c>20260528150709_AddIsSampleFlags</c> and is
-/// exposed on <see cref="PassportDto"/>, but it was NOT on <see cref="OrderDto"/> — the payload the
+/// The flag has existed on the row since migration <c>20260528150709_AddIsSampleFlags</c> and was
+/// exposed on the (since deleted) passport DTO, but it was NOT on <see cref="OrderDto"/> — the payload the
 /// review screen actually reads. So the frontend drove its "practice order" framing off a
 /// <c>?sample=1</c> query parameter instead, and a practice order opened from a bookmark, the
 /// back button, or an inbox row rendered as a real one. These tests pin the field so that
@@ -30,25 +31,14 @@ public class OrdersControllerIsSampleDtoTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 
-    private static OrdersController BuildController(ProcuLinkDbContext db, Guid orgId, IOrderService ordersSvc)
+    private static OrdersController BuildController(ProcuLinkDbContext db, Guid orgId, IOrderQueryService ordersSvc)
     {
         var tenant = new Mock<ICurrentTenantService>();
         tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
         return new OrdersController(
             ordersSvc,
             tenant.Object,
-            new Mock<IBackgroundJobClient>().Object,
-            db,
-            NullLogger<OrdersController>.Instance,
-            new Mock<IBillingService>().Object,
-            new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
-            new Mock<IFileStorageService>().Object,
-            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
-            Array.Empty<ProcuLink.Core.Services.ITransformService>());
+            db);
     }
 
     private static PurchaseOrderEntity Order(Guid orgId, Guid orderId, Guid supplierId, bool isSample) => new()
@@ -76,7 +66,7 @@ public class OrdersControllerIsSampleDtoTests
 
         await using var db = NewDb();
 
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc.Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
                  .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(Order(orgId, orderId, supplierId, isSample)));
 

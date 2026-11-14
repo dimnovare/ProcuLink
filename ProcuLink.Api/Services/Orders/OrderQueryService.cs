@@ -7,11 +7,25 @@ using ProcuLink.Infrastructure;
 namespace ProcuLink.Api.Services;
 
 /// <summary>
-/// Internal sub-service of <see cref="OrderService"/> owning read-only order queries
-/// and signed-download URL generation. Methods moved verbatim from the original
-/// God-class (audit W1/B1 decomposition).
+/// The read-only order archive's reads: what <c>OrdersController</c> needs, and nothing that writes.
+/// (2026-11-13, plan 13b: the archive's slice of the deleted <c>IOrderService</c> facade.)
 /// </summary>
-internal sealed class OrderQueryService
+public interface IOrderQueryService
+{
+    Task<Result<PurchaseOrderEntity>> GetByIdAsync(Guid organisationId, Guid orderId, CancellationToken ct);
+
+    Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>> ListWindowAsync(
+        Guid organisationId, int skip, int take, string? status, Guid? supplierId,
+        string? search, DateTime? dateFrom, DateTime? dateTo, CancellationToken ct);
+
+    Task<Result<DownloadUrl>> GetDownloadUrlAsync(Guid organisationId, Guid orderId, Guid artifactId, CancellationToken ct);
+}
+
+/// <summary>
+/// The read-only order archive's queries and signed-download URL generation — all that is left of
+/// the order service layer after the document engine replaced the order pipeline.
+/// </summary>
+public sealed class OrderQueryService : IOrderQueryService
 {
     private readonly ProcuLinkDbContext  _db;
     private readonly IFileStorageService _fileStorage;
@@ -43,26 +57,6 @@ internal sealed class OrderQueryService
         return Result<PurchaseOrderEntity>.Ok(entity);
     }
 
-    // ── ListPagedAsync ────────────────────────────────────────────────────────
-
-    public Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>> ListPagedAsync(
-        Guid      organisationId,
-        int       page,
-        int       pageSize,
-        string?   status,
-        Guid?     supplierId,
-        string?   search,
-        DateTime? dateFrom,
-        DateTime? dateTo,
-        CancellationToken ct)
-        // Page/pageSize is just a window: skip whole pages, take one page. The offset/limit
-        // primitive does the real work so both entry points share one code path.
-        => ListWindowAsync(
-            organisationId,
-            skip: (Math.Max(1, page) - 1) * pageSize,
-            take: pageSize,
-            status, supplierId, search, dateFrom, dateTo, ct);
-
     // ── ListWindowAsync ─────────────────────────────────────────────────────────
 
     /// <summary>
@@ -80,7 +74,7 @@ internal sealed class OrderQueryService
     /// saying "1 orders received" and a table listing that order.
     ///
     /// <c>TotalCount - SampleCount</c> is the metered population, so it reconciles with
-    /// <c>OrdersSummaryDto.Total</c> by construction, and <c>SampleCount</c> is the label that
+    /// the metered order total by construction, and <c>SampleCount</c> is the label that
     /// lets a caller explain the difference instead of contradicting itself.</para>
     /// </summary>
     public async Task<Result<(IReadOnlyList<PurchaseOrderSummary> Items, int TotalCount, int SampleCount)>> ListWindowAsync(

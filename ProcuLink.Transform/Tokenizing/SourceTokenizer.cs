@@ -22,7 +22,7 @@ namespace ProcuLink.Transform.Tokenizing;
 ///     <b>XLSX</b> — every non-empty cell in the first worksheet is emitted with id
 ///     <c>"cell:r{row}c{col}"</c> (1-based, Excel row/column numbers). Row 1 is treated as the
 ///     header row (Group="header"); rows 2+ are "line". The token scheme is intentionally
-///     identical to CSV so saved <c>SourceFieldRule.SourceToken</c> values are
+///     identical to CSV so saved <c>OutputFieldRule.SourceToken</c> values are
 ///     format-independent.
 ///   </item>
 ///   <item>

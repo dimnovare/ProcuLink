@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Controllers;
+using ProcuLink.Api.Services;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
@@ -25,25 +26,14 @@ public class OrdersControllerPhase4DtoTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 
-    private static OrdersController BuildController(ProcuLinkDbContext db, Guid orgId, IOrderService ordersSvc)
+    private static OrdersController BuildController(ProcuLinkDbContext db, Guid orgId, IOrderQueryService ordersSvc)
     {
         var tenant = new Mock<ICurrentTenantService>();
         tenant.SetupGet(t => t.OrganisationId).Returns(orgId);
         return new OrdersController(
             ordersSvc,
             tenant.Object,
-            new Mock<IBackgroundJobClient>().Object,
-            db,
-            NullLogger<OrdersController>.Instance,
-            new Mock<IBillingService>().Object,
-            new Mock<IIdempotencyService>().Object,
-            new Mock<IOrderExceptionService>().Object,
-            new Mock<ISupplierAcceptanceService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IOrderMappingOverrideService>().Object,
-            new Mock<ProcuLink.Core.Services.Mapping.IPromoteMappingService>().Object,
-            new Mock<IFileStorageService>().Object,
-            new Mock<ProcuLink.Transform.Tokenizing.ISourceTokenizer>().Object,
-            Array.Empty<ProcuLink.Core.Services.ITransformService>());
+            db);
     }
 
     [Fact]
@@ -99,7 +89,7 @@ public class OrdersControllerPhase4DtoTests
             },
         };
 
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc.Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
                  .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(entity));
 
@@ -165,7 +155,7 @@ public class OrdersControllerPhase4DtoTests
             },
         };
 
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc.Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
                  .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(entity));
 
@@ -244,7 +234,7 @@ public class OrdersControllerPhase4DtoTests
             },
         };
 
-        var ordersSvc = new Mock<IOrderService>();
+        var ordersSvc = new Mock<IOrderQueryService>();
         ordersSvc.Setup(s => s.GetByIdAsync(orgId, orderId, It.IsAny<CancellationToken>()))
                  .ReturnsAsync(Result<PurchaseOrderEntity>.Ok(entity));
 

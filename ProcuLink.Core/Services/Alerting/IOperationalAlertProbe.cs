@@ -1,15 +1,14 @@
 namespace ProcuLink.Core.Services.Alerting;
 
 /// <summary>
-/// CROSS-TENANT probe for the three alert conditions that <see cref="IOpsHealthService"/> does not
-/// already cover (delivery failure rate, pull-channel staleness, AI token-cap latch). Deliberately
+/// CROSS-TENANT probe for the alert conditions that <see cref="IOpsHealthService"/> does not
+/// already cover (delivery failure rate, AI token-cap latch). Deliberately
 /// NOT org-scoped: this is a system health probe for the operator, exactly like
 /// <c>IOpsHealthService.GetWorkerHealthSnapshotAsync</c>, not a tenant-facing view. Nothing here is
 /// ever returned through an org-scoped API surface.
 /// <para>
-/// Kept separate from <see cref="IOpsHealthService"/> so the org-scoped operator surface (consumed
-/// by <c>OpsController</c>) does not grow more cross-tenant aggregates; the two feed the SAME
-/// alert service, job and sink — there is one alerting path, not two.
+/// Kept separate from <see cref="IOpsHealthService"/>, which only reads worker liveness; the two
+/// feed the SAME alert service, job and sink — there is one alerting path, not two.
 /// </para>
 /// </summary>
 public interface IOperationalAlertProbe
@@ -19,7 +18,7 @@ public interface IOperationalAlertProbe
 }
 
 /// <summary>
-/// The three extra signals, read together so one sweep is one round of queries.
+/// The extra signals, read together so one sweep is one round of queries.
 /// <para>
 /// There is deliberately NO all-clear fallback value here. One used to exist and was returned when
 /// the probe threw: zero attempts, no channels, no latched orgs — every one of which evaluates as
@@ -30,7 +29,6 @@ public interface IOperationalAlertProbe
 /// </summary>
 public sealed record OperationalAlertSignals(
     DeliveryFailureRateSignal DeliveryFailureRate,
-    IReadOnlyList<PullChannelSignal> PullChannels,
     AiTokenLatchSignal AiTokenLatch);
 
 /// <summary>
@@ -46,24 +44,6 @@ public sealed record DeliveryFailureRateSignal(int WindowMinutes, int Attempts, 
     /// <summary>Failure share of concluded attempts, 0–100. Zero when nothing concluded.</summary>
     public double FailurePercent => Attempts <= 0 ? 0d : Failures * 100d / Attempts;
 }
-
-/// <summary>
-/// Freshness of one inbound pull channel.
-/// </summary>
-/// <param name="Channel">Channel name as an operator knows it: <c>email</c>, <c>sftp</c>, <c>s3</c>.</param>
-/// <param name="EnabledSources">
-/// How many enabled configurations this channel currently has — orgs for <c>email</c> (the setting
-/// lives on the organisation), ingress-config rows for <c>sftp</c> and <c>s3</c>, where one org may
-/// own several. It is deliberately a count of SOURCES rather than orgs so the number in an alert is
-/// literally what was counted. Zero means nobody is using the channel, and a stale timestamp on an
-/// unused channel is not an incident.
-/// </param>
-/// <param name="MinutesSinceLastSuccess">
-/// Age of the most recent observed success, or <c>null</c> when no success has ever been observed.
-/// Null is deliberately NOT alertable — a channel configured minutes ago has not polled yet, and
-/// paging on that would be a false alarm on every new setup.
-/// </param>
-public sealed record PullChannelSignal(string Channel, int EnabledSources, double? MinutesSinceLastSuccess);
 
 /// <summary>
 /// Orgs whose monthly AI token budget is exhausted. A latched cap silently degrades PDF extraction

@@ -43,8 +43,8 @@ public class AuditController : ControllerBase
         var orgId = _tenant.OrganisationId;
 
         // The ORG-WIDE, cross-order, paginated trail is what Operations advertises as its
-        // "advanced audit trail". The per-order history that every paid plan is sold as an
-        // "audit log" is GET /api/orders/{id}/audit, and that stays open on every plan --
+        // "advanced audit trail". The per-document history that every paid plan is sold as an
+        // "audit log" is GET /api/documents/{id}/history, and that stays open on every plan --
         // gating it would take away something Growth already pays for. Keep the two apart.
         if (!await _billing.HasFeatureAsync(orgId, BillingFeature.AdvancedAudit, ct))
         {

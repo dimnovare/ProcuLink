@@ -5,7 +5,7 @@ namespace ProcuLink.Core.Services.Delivery;
 /// <summary>
 /// Protocol-specific delivery dispatcher. One implementation per protocol
 /// (http / sftp / ftp / erp_erply / erp_directo).
-/// Registered as IEnumerable&lt;IDeliveryDispatcher&gt; in DI; DeliveryService resolves by Protocol.
+/// Registered as IEnumerable&lt;IDeliveryDispatcher&gt; in DI; DeliverDocumentJob resolves by Protocol.
 /// </summary>
 public interface IDeliveryDispatcher
 {

@@ -757,7 +757,7 @@ public class DocsOperationalDataGuardTests
     [InlineData("SSRF guard rejects 10.0.0.5 and 172.16.4.1")]
     [InlineData("the worker saw x-forwarded-for 203.0.113.9")]
     // Not hosts or addresses at all. A detector firing on these would be silenced immediately.
-    [InlineData("see `ProcuLink.Core/Services/Mapping/OrderMappingOverride.cs:65`")]
+    [InlineData("see `ProcuLink.Core/Services/Mapping/OutputMappingConfig.cs:65`")]
     [InlineData("run `node docs/infra/postmark-inbound-verify-worker/check-postmark-ips.mjs`")]
     [InlineData("bumped posthog-js to 1.376.3 and shipped it")]
     // file.cs:line citations, which this corpus is built out of. `.cs` sits exactly where a TLD

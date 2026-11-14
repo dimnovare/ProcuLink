@@ -8,7 +8,6 @@ using ProcuLink.Core.Constants;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
-using ProcuLink.Core.Services.Ai;
 using ProcuLink.Core.Services.Email;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure.Services.Ingress;
@@ -16,70 +15,19 @@ using ProcuLink.Infrastructure.Services.Ingress;
 namespace ProcuLink.Infrastructure.Services.Email;
 
 /// <summary>
-/// Routes inbound emails (today: Postmark Inbound webhook, tomorrow: SendGrid
-/// Inbound Parse) into the existing CreateStub + ParseOrderJob pipeline.
+/// Routes inbound emails (Postmark Inbound webhook) to the flow whose own address received them.
 /// </summary>
 /// <remarks>
-/// A message whose organisation has no supplier is HELD, not rejected: its attachments are
-/// imported via <c>IClaimedOrderCreator.CreateClaimedStubAsync</c> with a null supplier and the parse job parks them
-/// <c>unrouted</c> for <c>POST /api/orders/{id}/assign-supplier</c> — the same hold the pull
-/// channels use. The caller therefore answers 200; a false <c>InboundEmailResult.Success</c>
-/// is reserved for messages this product cannot act on: an unparseable recipient, a recipient
-/// that is not a live inbound address, a missing organisation, and an organisation billing refuses
-/// to ingest for — a read-only / delinquent account status, a plan without
-/// <c>BillingFeature.EmailIngestion</c>, or an exhausted order allowance. Each of those also carries
-/// an <c>InboundEmailRejectionKind</c>, which is what decides whether the mail provider re-delivers
-/// the message — see that enum. All three billing refusals are <c>Transient</c>: every one is
-/// reversible by the customer, and Postmark's ~10.5 hours of re-delivery is the window in which the
-/// purchase order survives the fix.
-///
 /// Tenant resolution runs against <c>org_inbound_addresses</c>: the recipient address is a
 /// per-organisation CREDENTIAL, and the organisation follows from the credential presented
-/// rather than from anything the sender chose. It used to route on the organisation's public
-/// <c>Slug</c>, which meant guessing a slug was enough to file purchase orders into a stranger's
-/// inbox — see <c>InboundAddressService</c> for the full account. Two recipient schemes are
-/// supported: the preferred <c>{token}@{InboundDomain}</c> (local-part; single
-/// MX, set <c>Inbound:Postmark:InboundDomain</c>) and the legacy <c>orders@{token}.proculink.eu</c>
-/// (subdomain; needs a wildcard MX). (Live receipt also needs the
-/// inbound MX + Postmark domain configured — that is one-time infra, not per-org.)
-///
-/// Log levels: this runs once per inbound message an org receives, so the expected
-/// cases — no attachments, an unsupported attachment (signature images ride along on
-/// most mail), body extraction yielding no order — are <c>Debug</c>. API production
-/// runs at <c>Default=Information</c>, so those stay out of the log unless someone
-/// turns them on; the two attachment cases still write their audit row, so demoting
-/// them loses no evidence. <c>Warning</c> is what an operator has to act on: every
-/// message-level reject, and an attachment dropped for a content reason (undecodable,
-/// empty, oversized, stub creation failed). An order actually created is <c>Information</c>
-/// — one line per order, not per message.
-///
-/// Every attachment skip writes a durable audit row, and each names its own cause:
-/// <c>attachment_skipped_unsupported</c>, <c>attachment_skipped_undecodable</c>,
-/// <c>attachment_skipped_empty</c>, <c>attachment_skipped_too_large</c>. The rows carry
-/// <c>Strip</c>ped attachments — file name, type and size, never bytes. A skip that writes
-/// only a log line is invisible to the customer and to the operator both; that is the defect
-/// the undecodable and empty branches were fixing.
+/// rather than from anything the sender chose — see <c>InboundAddressService</c>. Two recipient
+/// schemes are supported: the preferred <c>{token}@{InboundDomain}</c> (local-part; set
+/// <c>Inbound:Postmark:InboundDomain</c>) and the legacy <c>orders@{token}.proculink.eu</c>
+/// (subdomain). Only a flow's own address is acted on; an organisation-level address no longer
+/// receives anything and is answered Transient, so the provider keeps the mail re-fireable.
 /// </remarks>
 public sealed class InboundEmailRouter : IInboundEmailRouter
 {
-    /// <summary>
-    /// Extensions the router accepts. Pre-filter happens here; if a registered
-    /// <c>IPurchaseOrderParser</c> later rejects the file (e.g. EDI parser not
-    /// yet wired up), <c>IClaimedOrderCreator.CreateClaimedStubAsync</c> returns a Failure
-    /// result and the attachment is skipped with a warning log.
-    /// </summary>
-    private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".csv",
-        ".xlsx",
-        ".pdf",
-        ".xml",
-        ".cxml",  // cXML is a first-class input format (CxmlOrderParser) — accept it from email too
-        ".edi",
-        ".x12",   // ANSI X12 850 is a first-class input format (X12OrderParser) — accept from email
-        ".txt",
-    };
-
     /// <summary>
     /// Default host suffix used when parsing the recipient address. The full
     /// recipient is <c>orders@{slug}.proculink.eu</c>; if the founder hosts
@@ -88,50 +36,15 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
     /// </summary>
     private const string DefaultHostSuffix = ".proculink.eu";
 
-    /// <summary>
-    /// Provenance tag stamped on orders the router creates from the email body
-    /// (after the NLP extractor). The review UI reads this from
-    /// <c>PurchaseOrderEntity.CanonicalJson.source</c> to show how the order
-    /// was created (vs. attachment upload, IMAP poll, etc.).
-    /// </summary>
-    private const string EmailBodyNlpSourceTag = "email_body_nlp";
-
-    /// <summary>
-    /// Namespace prefix stamped on the provider's message id before it is stored in
-    /// <see cref="EmailImportRecord.ImapMessageId"/>. That ledger is shared with the IMAP PULL
-    /// channel, whose values are RFC-822 <c>Message-Id</c> headers; a Postmark <c>MessageID</c> is
-    /// the provider's own GUID from a different namespace entirely. Prefixing makes it impossible
-    /// for the two to alias each other on the (OrgId, message id, content hash) unique index, and
-    /// makes a row's channel readable at a glance. The column keeps its <c>imap_message_id</c> name
-    /// — renaming it is a cosmetic migration, deliberately not bundled with a correctness fix.
-    /// </summary>
-    private const string PostmarkClaimPrefix = "postmark:";
-
-    /// <summary>
-    /// Marks a claim whose content hash covers the email BODY rather than an attachment, so a
-    /// body-NLP order and an attachment that happened to hash identically can never collide.
-    /// </summary>
-    private const string BodyClaimPrefix = "body:";
-
-    /// <summary>File-name recorded on a body-NLP claim, which has no attachment to name.</summary>
-    private const string BodyClaimFileName = "(email body)";
-
     private readonly ProcuLinkDbContext _db;
-    private readonly IClaimedOrderCreator _orders;
-    private readonly IParseJobEnqueuer _enqueuer;
-    private readonly IEmailBodyOrderExtractor _bodyExtractor;
     private readonly IInboundAddressService _addresses;
     private readonly IBillingService _billing;
     private readonly IConfiguration _config;
     private readonly IFlowDocumentSubmitter? _flows;
-    private readonly IOrderIntakeSwitch? _intakeSwitch;
     private readonly ILogger<InboundEmailRouter> _logger;
 
     public InboundEmailRouter(
         ProcuLinkDbContext db,
-        IClaimedOrderCreator orders,
-        IParseJobEnqueuer enqueuer,
-        IEmailBodyOrderExtractor bodyExtractor,
         IInboundAddressService addresses,
         // Required, never optional: a default would let a test — or a second host's DI — construct
         // a router whose plan and volume gates silently do not run, which is the state this class
@@ -141,16 +54,10 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         ILogger<InboundEmailRouter> logger,
         // Registered in both hosts that run the router. Optional only so non-flow callers need not
         // supply it; a flow address with none defers (Transient) rather than dropping the mail.
-        IFlowDocumentSubmitter? flows = null,
-        // Null = not retired, so a host or test that does not wire it keeps today's behaviour.
-        IOrderIntakeSwitch? intakeSwitch = null)
+        IFlowDocumentSubmitter? flows = null)
     {
         _flows = flows;
-        _intakeSwitch = intakeSwitch;
         _db = db;
-        _orders = orders;
-        _enqueuer = enqueuer;
-        _bodyExtractor = bodyExtractor;
         _addresses = addresses;
         _billing = billing;
         _config = config;
@@ -208,441 +115,18 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
                     InboundEmailRejectionKind.Permanent);
         }
 
-        // A flow's own address never reaches the purchase-order path below, whatever else is true.
         if (lookup.FlowId is { } flowId)
             return await RouteToFlowAsync(payload, lookup.OrgId!.Value, flowId, ct);
 
-        var orgId = lookup.OrgId;
-
-        // ── 2. Load the organisation + verify account-status gate ───────────
-        var org = await _db.Organisations
-            .AsNoTracking()
-            .Where(o => o.Id == orgId.Value)
-            .Select(o => new { o.Id, o.AccountStatus, o.EmailConfigJson, o.SelfHostedOcr })
-            .FirstOrDefaultAsync(ct);
-
-        if (org is null)
-        {
-            _logger.LogWarning(
-                "Inbound email rejected: inbound address resolved to org {OrgId} but no such organisation exists.",
-                orgId.Value);
-            return new InboundEmailResult(false, OrgId: orgId, Array.Empty<Guid>(),
-                $"Organisation '{orgId.Value}' not found.",
-                // Our own inconsistency: an address row outliving its organisation. The foreign key
-                // makes it unreachable in practice, but retries give the operator a window in which
-                // repairing it lands the order untouched, so this is not the sender's problem to fix.
-                InboundEmailRejectionKind.Transient);
-        }
-
-        // Derived from the canonical set, never a local copy. This used to be a hand-written
-        // 2-of-4 HashSet holding only ReadOnly and TrialExpired, so a past_due or cancelled org —
-        // refused by upload, REST ingress, SFTP, S3 and IMAP alike, all of which route through
-        // AccountStatusConstants.IsReadOnly via StripeBillingService — kept ingesting by email and
-        // kept being billed for it.
-        if (AccountStatusConstants.IsReadOnly(org.AccountStatus))
-        {
-            _logger.LogWarning(
-                "Inbound email for org {OrgId} ignored: account_status={Status} blocks ingest.",
-                org.Id, org.AccountStatus);
-            await WriteAuditAsync(org.Id, "inbound_email.rejected_read_only", payload, ct);
-            return new InboundEmailResult(false, OrgId: orgId, Array.Empty<Guid>(),
-                $"Organisation is in '{org.AccountStatus}' status and cannot ingest new orders.",
-                // A billing state, not a bad message: lifting it is a founder action of
-                // minutes, and Postmark keeps re-delivering for ~10.5 hours before filing
-                // the mail under Failed, where it stays re-fireable by hand. Refusing the
-                // retries here would turn a reversible freeze into a lost purchase order.
-                InboundEmailRejectionKind.Transient);
-        }
-
-        // ── 2a. Orders retired ───────────────────────────────────────────────
-        // An org on the document engine no longer receives legacy purchase orders; its documents
-        // arrive at a flow's own address (branched off above). Transient, never Permanent: a
-        // Permanent answer settles the mail as handled, which here would be silent loss — Transient
-        // keeps it in Postmark's re-delivery window and then its Failed list, re-fireable by hand.
-        if (_intakeSwitch?.IsRetired(org.Id) == true)
-        {
-            _logger.LogInformation("Inbound email for org {OrgId} refused: legacy order intake is retired.", org.Id);
-            await WriteAuditAsync(org.Id, "inbound_email.rejected_orders_retired", payload, ct);
-            return new InboundEmailResult(false, OrgId: orgId, Array.Empty<Guid>(),
-                "Organisation now receives documents through flows.",
-                InboundEmailRejectionKind.Transient);
-        }
-
-        // ── 2b. Plan gate ────────────────────────────────────────────────────
-        // Hosted inbound email is BillingFeature.EmailIngestion — Growth and up — and the inbound
-        // address is auto-minted for EVERY org on EVERY plan by SettingsController.GetInboundAddresses,
-        // with no admin check. The IMAP pull channel has re-checked this every cycle since it
-        // shipped (EmailPollOrgJob); the PUSH webhook checked nothing, so a Pilot could route
-        // unlimited orders through the one channel nobody was watching.
-        if (!await _billing.HasFeatureAsync(org.Id, BillingFeature.EmailIngestion, ct))
-        {
-            _logger.LogWarning(
-                "Inbound email for org {OrgId} ignored: the plan does not include email ingestion.",
-                org.Id);
-            await WriteAuditAsync(org.Id, "inbound_email.rejected_plan_gate", payload, ct);
-            return new InboundEmailResult(false, OrgId: orgId, Array.Empty<Guid>(),
-                "Organisation's plan does not include inbound email ingestion.",
-                // Transient for the same reason the status gate is: an upgrade is minutes away and
-                // Postmark's ~10.5 hours of re-delivery is the window in which the order survives.
-                InboundEmailRejectionKind.Transient);
-        }
-
-        // ── 2c. Volume gate ──────────────────────────────────────────────────
-        // The SAME gate OrdersController.Upload and IngressController apply. A doc comment here
-        // used to assert that "monthly limits are enforced downstream by ParseOrderJob" — that file
-        // contains no billing, limit, overage, quota, plan, meter or usage code of any kind, and the
-        // comment is why nobody looked. Pilot's 20-order cap is the billing model's only HARD cap,
-        // and email walked around it.
-        //
-        // CheckOrderLimitAsync is the SOFT-CAP-SAFE gate: its Allowed flag is
-        // BillingStatus.CanProcessOrders, which for an active paid plan ignores volume entirely.
-        // Going over the monthly allowance still succeeds here and accrues €0.50/order overage;
-        // only a non-processing account status or an expired Pilot refuses.
-        var limitCheck = await _billing.CheckOrderLimitAsync(org.Id, ct);
-        if (!limitCheck.Allowed)
-        {
-            _logger.LogWarning(
-                "Inbound email for org {OrgId} ignored: plan {Plan}, pilotExpired={PilotExpired}, limit={Limit}.",
-                org.Id, limitCheck.Plan, limitCheck.PilotExpired, limitCheck.Limit);
-            await WriteAuditAsync(org.Id, "inbound_email.rejected_order_limit", payload, ct);
-            return new InboundEmailResult(false, OrgId: orgId, Array.Empty<Guid>(),
-                limitCheck.PilotExpired
-                    ? "Organisation's Pilot has ended and cannot ingest new orders."
-                    : "Organisation has reached its plan's order limit.",
-                InboundEmailRejectionKind.Transient);
-        }
-
-        // ── 3. Resolve the org's configured default supplier ─────────────────
-        // The inbound webhook does not carry the supplier identity, so the ONLY
-        // thing that can route it is the supplier the org configured in
-        // Settings → Email intake (same JSONB column IMAP polling uses). With
-        // none configured the message parks — the router never picks a supplier
-        // on the org's behalf. See ResolveSupplierIdAsync for the measurement
-        // that removed the old "oldest active supplier" fallback.
-        //
-        // No supplier at all is NOT a rejection. This used to answer 422 and the
-        // message vanished from the product's view. Attachments are now imported
-        // through the UNROUTED hold instead — the same path the pull channels use
-        // (SftpIngressService / S3IngressService / EmailPollOrgJob) — so the order
-        // lands in the inbox parked 'unrouted' and POST /api/orders/{id}/assign-supplier
-        // routes and re-parses it. The webhook answers 200; a reject is reserved for
-        // messages this product cannot act on (unknown tenant slug, blocked org).
-        var supplierId = await ResolveSupplierIdAsync(org.Id, org.EmailConfigJson, ct);
-        if (supplierId is null)
-        {
-            _logger.LogInformation(
-                "Inbound email for org {OrgId} has no supplier configured — importing attachments unrouted for operator assignment.",
-                org.Id);
-            await WriteAuditAsync(org.Id, "inbound_email.unrouted_no_supplier", payload, ct);
-        }
-
-        // ── 4. Filter attachments ────────────────────────────────────────────
-        // Note: an empty attachment list is no longer an early-return — the
-        // body-NLP fallback below may still produce an order from prose text.
-        if (payload.Attachments.Count == 0)
-        {
-            _logger.LogDebug(
-                "Inbound email for org {OrgId} carried no attachments; the email-body NLP fallback runs if a body is present and a supplier is known.",
-                org.Id);
-            await WriteAuditAsync(org.Id, "inbound_email.no_attachments", payload, ct);
-        }
-
-        // ── 5. Create one stub per supported attachment ──────────────────────
-        var created = new List<Guid>(payload.Attachments.Count);
-        foreach (var att in payload.Attachments)
-        {
-            var extension = Path.GetExtension(att.FileName ?? string.Empty).ToLowerInvariant();
-            if (!SupportedExtensions.Contains(extension))
-            {
-                _logger.LogDebug(
-                    "Inbound email attachment {FileName} ({Ext}) for org {OrgId} skipped: unsupported type.",
-                    att.FileName, extension, org.Id);
-                await WriteAuditAsync(
-                    org.Id,
-                    "inbound_email.attachment_skipped_unsupported",
-                    payload with { Attachments = new[] { Strip(att) } },
-                    ct);
-                continue;
-            }
-
-            // ── Two ways an attachment arrives with no bytes, and they are not the same event ──
-            // Both used to land in one branch that wrote only a log line, while the skip branches
-            // on either side of it wrote durable audit rows. The consequence was specific: a buyer
-            // emails a purchase order, the webhook answers 200 so the provider never re-delivers,
-            // no order is created, and the ONLY trace is a server log the customer cannot see and
-            // the operator has no surface for. From every observable position the order simply
-            // never existed. Each branch now writes its own row, named for its own cause.
-            if (att.Decode == InboundAttachmentDecode.Undecodable)
-            {
-                // The sender attached SOMETHING; we could not turn the wire encoding into bytes.
-                // Nothing here is recoverable by re-delivery — the provider replays the same
-                // stored payload, so the same decode fails again — which is why this does not
-                // reject the message. The audit row is what makes the loss visible instead.
-                _logger.LogWarning(
-                    "Inbound email attachment {FileName} for org {OrgId} could not be decoded from its wire encoding — skipping.",
-                    att.FileName, org.Id);
-                await WriteAuditAsync(
-                    org.Id,
-                    "inbound_email.attachment_skipped_undecodable",
-                    payload with { Attachments = new[] { Strip(att) } },
-                    ct);
-                continue;
-            }
-
-            if (att.Content is null || att.Content.Length == 0)
-            {
-                // Decoded cleanly to nothing: the sender really did attach an empty file.
-                _logger.LogWarning(
-                    "Inbound email attachment {FileName} for org {OrgId} has empty content — skipping.",
-                    att.FileName, org.Id);
-                await WriteAuditAsync(
-                    org.Id,
-                    "inbound_email.attachment_skipped_empty",
-                    payload with { Attachments = new[] { Strip(att) } },
-                    ct);
-                continue;
-            }
-
-            // Size cap — skip oversized attachments before the parse pipeline.
-            if (att.Content.Length > IngressLimits.MaxFileBytes)
-            {
-                _logger.LogWarning(
-                    "Inbound email attachment {FileName} for org {OrgId} is {Bytes} bytes (> {Max} byte cap) — skipping.",
-                    att.FileName, org.Id, att.Content.Length, IngressLimits.MaxFileBytes);
-                await WriteAuditAsync(
-                    org.Id,
-                    "inbound_email.attachment_skipped_too_large",
-                    payload with { Attachments = new[] { Strip(att) } },
-                    ct);
-                continue;
-            }
-
-            await using var ms = new MemoryStream(att.Content, writable: false);
-            var contentType = string.IsNullOrWhiteSpace(att.ContentType)
-                ? "application/octet-stream"
-                : att.ContentType;
-
-            // ── CLAIM-FIRST dedupe ───────────────────────────────────────────
-            // Same contract as the three PULL channels (see IngressDedupe): the ledger row is
-            // committed BEFORE the order is created, and the unique index — not the existence
-            // check — is the real guard. This is what stops a Postmark retry (any non-200 is
-            // re-delivered ten times over ~10.5 hours) from turning one email into N orders and
-            // N supplier deliveries.
-            var claimKey = ClaimKeyFor(payload.ProviderMessageId);
-            var contentHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(att.Content));
-
-            var claim = await ClaimAsync(org.Id, claimKey, contentHash, att.FileName, ct);
-            if (claim is null)
-            {
-                // Either already imported, or a concurrent delivery holds the claim. Both mean
-                // "nothing new to do" — never a second order.
-                _logger.LogInformation(
-                    "Inbound email attachment {FileName} for org {OrgId} already claimed (message {MessageId}); skipping duplicate.",
-                    att.FileName, org.Id, claimKey);
-                continue;
-            }
-
-            var orderId = claim.OrderId;
-
-            // CreateClaimedStubAsync uploads to R2 and creates the stub under the claim's
-            // pre-generated id — a find-or-create on that primary key, so a resume after a
-            // transient failure can never produce a second order. With no supplier we pass null:
-            // same upload, NULL supplier_id, and the parse job parks the order 'unrouted'.
-            var stubResult = await _orders.CreateClaimedStubAsync(
-                org.Id, supplierId, orderId, ms, att.FileName ?? "attachment", contentType,
-                ExtractSenderDomain(payload.FromEmail), ct);
-
-            if (!stubResult.IsSuccess)
-            {
-                // Result.Fail is a PERMANENT content error (empty/unsupported): mark the claim
-                // terminal so a genuinely-bad attachment is bounded rather than retried on every
-                // re-delivery. A TRANSIENT infra failure THROWS instead and propagates, leaving
-                // the claim holding its real OrderId with no order — which the next delivery
-                // RESUMES. That asymmetry is the whole no-lost-order guarantee.
-                _logger.LogWarning(
-                    "Inbound email attachment {FileName} for org {OrgId} could not create order stub; marking claim terminal: {Error}",
-                    att.FileName, org.Id, stubResult.Error);
-                claim.OrderId = IngressDedupe.TerminalOrderId;
-                await _db.SaveChangesAsync(ct);
-                continue;
-            }
-
-            await _enqueuer.EnqueueAsync(orderId, org.Id, ct);
-            created.Add(orderId);
-
-            _logger.LogInformation(
-                "Inbound email created {Mode} order {OrderId} for org {OrgId} (attachment={FileName}).",
-                supplierId is null ? "unrouted" : "routed", orderId, org.Id, att.FileName);
-        }
-
-        // ── 6. Email-body NLP fallback ───────────────────────────────────────
-        // When no attachment produced an order — either nothing was attached or
-        // every attachment was unsupported / empty / rejected — fall back to
-        // extracting a purchase order from the email body itself. The extractor
-        // is a no-op without an OpenAI key, so this is safe in unit tests and
-        // local dev where the body field is set but the AI provider is absent.
-        // No-egress orgs are excluded: the body extractor sends the prose to OpenAI,
-        // which would violate the no-data-leaves guarantee.
-        //
-        // A supplier is NOT required. With none resolvable the extracted order takes the unrouted
-        // sibling, exactly as the attachment path above passes a null supplier: the order is
-        // parked for a human to route rather than dropped. Do not fabricate a supplier id here —
-        // the null is the signal that routing is still owed.
-        if (created.Count == 0
-            && !string.IsNullOrWhiteSpace(payload.Body)
-            && !org.SelfHostedOcr)
-        {
-            try
-            {
-                var extraction = await _bodyExtractor.ExtractAsync(payload.Body!, ct);
-                if (extraction.Success && extraction.Order is not null)
-                {
-                    // The body path creates orders too, so it needs the same claim — otherwise a
-                    // replayed body-only email produces one order per re-delivery. The hash covers
-                    // the BODY text (prefixed, so it cannot alias an attachment hash), which also
-                    // deduplicates a provider that supplies no message id at all.
-                    var bodyClaimKey = ClaimKeyFor(payload.ProviderMessageId);
-                    var bodyHash = BodyClaimPrefix + Convert.ToHexString(
-                        System.Security.Cryptography.SHA256.HashData(
-                            System.Text.Encoding.UTF8.GetBytes(payload.Body!)));
-
-                    var bodyClaim = await ClaimAsync(org.Id, bodyClaimKey, bodyHash, BodyClaimFileName, ct);
-                    if (bodyClaim is null)
-                    {
-                        // Already imported, or a concurrent delivery holds the claim. Fall through
-                        // to the processed-audit row below — the message IS handled, there is just
-                        // nothing new to create.
-                        _logger.LogInformation(
-                            "Inbound email body for org {OrgId} already claimed (message {MessageId}); skipping duplicate.",
-                            org.Id, bodyClaimKey);
-                    }
-                    else
-                    {
-                        var stubResult = await _orders.CreateClaimedFromParsedOrderAsync(
-                            org.Id, supplierId, bodyClaim.OrderId, extraction.Order, EmailBodyNlpSourceTag,
-                            ExtractSenderDomain(payload.FromEmail), ct);
-
-                        if (stubResult.IsSuccess)
-                        {
-                            var orderId = stubResult.Value!.Id;
-                            created.Add(orderId);
-                            _logger.LogInformation(
-                                "Inbound email created {Mode} order {OrderId} for org {OrgId} from email body NLP (confidence={Confidence:F2}).",
-                                supplierId is null ? "unrouted" : "routed", orderId, org.Id, extraction.Confidence);
-                        }
-                        else
-                        {
-                            // Permanent content failure — bound the claim so every later
-                            // re-delivery skips it instead of re-running the extractor and the
-                            // same failure.
-                            _logger.LogWarning(
-                                "Inbound email body extraction for org {OrgId} succeeded but stub creation failed; marking claim terminal: {Error}",
-                                org.Id, stubResult.Error);
-                            bodyClaim.OrderId = IngressDedupe.TerminalOrderId;
-                            await _db.SaveChangesAsync(ct);
-                        }
-                    }
-                }
-                else
-                {
-                    _logger.LogDebug(
-                        "Inbound email body extraction for org {OrgId} did not yield an order (confidence={Confidence:F2}, reason={Reason}).",
-                        org.Id, extraction.Confidence, extraction.FailureReason ?? "n/a");
-                }
-            }
-            catch (Exception ex)
-            {
-                // NLP fallback must never break the webhook — log and continue.
-                _logger.LogWarning(ex,
-                    "Inbound email body extraction for org {OrgId} threw; treating message as having no orders.",
-                    org.Id);
-            }
-        }
-
-        // Key the processed-audit row to the created order when exactly one was created
-        // (the dominant single-attachment case) so the per-order GDPR erase removes it.
-        // For 0 or multiple orders the row stays message-level (EntityId=Guid.Empty), but
-        // it carries no raw sender/subject PII either way (see BuildAuditSummary).
-        await WriteAuditAsync(org.Id, "inbound_email.processed",
-            payload with { Attachments = payload.Attachments.Select(Strip).ToList() }, ct,
-            extra: new { createdOrderIds = created },
-            entityId: created.Count == 1 ? created[0] : (Guid?)null);
-
-        return new InboundEmailResult(true, OrgId: orgId, CreatedOrderIds: created, Error: null);
-    }
-
-    // ── Claim-first dedupe ───────────────────────────────────────────────────
-
-    /// <summary>
-    /// The ledger key for this delivery: the provider's message id, namespaced so it cannot alias an
-    /// IMAP <c>Message-Id</c> in the shared table. A provider that supplies no id yields just the
-    /// prefix, and the content hash then carries the dedupe on its own (the same fallback the IMAP
-    /// poller uses for a server that omits the header).
-    /// </summary>
-    private static string ClaimKeyFor(string? providerMessageId) =>
-        PostmarkClaimPrefix + (providerMessageId?.Trim() ?? string.Empty);
-
-    /// <summary>
-    /// Claims (OrgId, <paramref name="claimKey"/>, <paramref name="contentHash"/>) for import,
-    /// committing the ledger row BEFORE any order exists. Returns the claim to create under, or
-    /// <c>null</c> when this content must NOT be imported again.
-    ///
-    /// <para>Three outcomes, matching <see cref="IngressDedupe"/>'s contract exactly:</para>
-    /// <list type="bullet">
-    /// <item><description>no row → insert a claim carrying a fresh pre-generated order id and
-    /// return it (CREATE). A concurrent delivery that also got here loses the unique-index race,
-    /// catches 23505 and returns null (SKIP) — it must not resume, the winner is mid-flight;</description></item>
-    /// <item><description>a row whose claim is SATISFIED (terminal sentinel, or its order already
-    /// exists) → null (SKIP): a true duplicate, including the "order committed but a later step
-    /// crashed" case;</description></item>
-    /// <item><description>a row whose order does NOT exist → return it (RESUME): a transient failure
-    /// abandoned it, so recreate under the same id. Without this branch an "any existing claim means
-    /// skip" policy would mark the message seen forever and the purchase order would be silently
-    /// LOST — worse than the duplicate the claim prevents.</description></item>
-    /// </list>
-    /// The returned entity is TRACKED by <c>_db</c>, so the caller can mark it terminal on a
-    /// permanent failure and have <c>SaveChangesAsync</c> persist it.
-    /// </summary>
-    private async Task<EmailImportRecord?> ClaimAsync(
-        Guid orgId, string claimKey, string contentHash, string? fileName, CancellationToken ct)
-    {
-        var existing = await _db.EmailImportRecords.FirstOrDefaultAsync(
-            r => r.OrgId == orgId && r.ImapMessageId == claimKey && r.AttachmentHash == contentHash, ct);
-
-        if (existing is not null)
-        {
-            return await IngressDedupe.ClaimSatisfiedAsync(_db, orgId, existing.OrderId, ct)
-                ? null      // SKIP — already imported, or deliberately bounded.
-                : existing; // RESUME — the order was never created.
-        }
-
-        var record = new EmailImportRecord
-        {
-            Id             = Guid.NewGuid(),
-            OrgId          = orgId,
-            ImapMessageId  = claimKey,
-            AttachmentHash = contentHash,
-            // Pre-generated and stored ATOMICALLY with the claim insert — there is no separate
-            // "backfill the id" step whose failure could open a window where the claim exists but
-            // points nowhere.
-            OrderId        = Guid.NewGuid(),
-            FileName       = fileName,
-            ImportedAt     = DateTime.UtcNow,
-        };
-        _db.EmailImportRecords.Add(record);
-
-        try
-        {
-            await _db.SaveChangesAsync(ct);
-            return record;
-        }
-        catch (DbUpdateException ex) when (IngressDedupe.IsUniqueViolation(ex))
-        {
-            // A concurrent delivery of the same message won the claim. Detach so this context is
-            // usable again, and SKIP — the winner owns the order.
-            _db.Entry(record).State = EntityState.Detached;
-            return null;
-        }
+        // An organisation-level address no longer receives anything: documents arrive at a flow's own
+        // address, and no org address can be minted any more, so a retry can never change the
+        // answer: Permanent (the controller answers 200 "ignored"), with one audit row per mail.
+        var orgId = lookup.OrgId!.Value;
+        _logger.LogInformation("Inbound email for org {OrgId} refused: the address is not a flow's address.", orgId);
+        await WriteAuditAsync(orgId, "inbound_email.rejected_orders_retired", payload, ct);
+        return new InboundEmailResult(false, OrgId: orgId, Array.Empty<Guid>(),
+            "Organisation now receives documents through flows.",
+            InboundEmailRejectionKind.Permanent);
     }
 
     /// <summary>Mail sent to one flow's own address: each attachment the flow accepts becomes a document in that flow.</summary>
@@ -844,42 +328,6 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
     // to a real organisation. If a new resolution path is ever added, it belongs behind
     // IInboundAddressService, not beside it.
 
-    // ── Supplier resolution ──────────────────────────────────────────────────
-
-    /// <summary>
-    /// Resolves the org's configured Email-intake default supplier (the <c>defaultSupplierId</c>
-    /// in the same <c>email_config</c> JSONB column IMAP polling uses), or null when the message
-    /// must be imported unrouted. Org-scoped and not-deleted, so a wrong-org or soft-deleted id
-    /// resolves to unrouted rather than cross-tenant — the same contract as the three
-    /// pull-ingress resolvers (<c>SftpIngressService</c>, <c>S3IngressService</c>,
-    /// <c>EmailPollOrgJob</c>), each of which returns null on exactly these conditions.
-    /// <para>
-    /// There is deliberately NO fallback to "the org's only, or oldest, supplier". An inbound
-    /// message carries no supplier identity of its own, so any such pick is a guess, and a
-    /// guessed routing is indistinguishable in the product from one an operator chose.
-    /// Measured on production 2026-07-26 (finding F1 of
-    /// <c>docs/qa/2026-07-fable5-push/2026-07-25-routing-matrix-live-proof.md</c>): with the
-    /// default cleared, an emailed purchase order was attributed to the oldest active supplier
-    /// — a counterparty nobody had chosen — and reached <c>pending_review</c> as a normal,
-    /// actionable order with no audit row recording that it had been guessed. Returning null
-    /// parks it <c>unrouted</c> instead, where assign-supplier resolves it.
-    /// </para>
-    /// </summary>
-    private async Task<Guid?> ResolveSupplierIdAsync(Guid orgId, string emailConfigJson, CancellationToken ct)
-    {
-        var config = EmailPollingConfig.FromJson(emailConfigJson);
-        if (config.DefaultSupplierId is not { } configured || configured == Guid.Empty)
-        {
-            return null;
-        }
-
-        var exists = await _db.Suppliers
-            .AsNoTracking()
-            .AnyAsync(s => s.OrgId == orgId && s.Id == configured && s.DeletedAt == null, ct);
-
-        return exists ? configured : null;
-    }
-
     // ── Audit logging ────────────────────────────────────────────────────────
 
     /// <param name="entityId">
@@ -988,15 +436,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 
-    /// <summary>
-    /// Drops the byte content from an attachment so an audit payload carries only metadata.
-    /// </summary>
-    /// <remarks>
-    /// A <c>with</c> expression rather than a positional rebuild: the positional form named three
-    /// members explicitly and would have SILENTLY dropped every member added to the record after
-    /// it was written — which is exactly what would have happened to <c>Decode</c>. Copy
-    /// everything, then blank the one field that must not travel.
-    /// </remarks>
+    /// <summary>An attachment for an audit payload: name, type and size, never bytes. <c>with</c> copies every member, then blanks the one that must not travel.</summary>
     private static InboundAttachment Strip(InboundAttachment a) =>
         a with { Content = Array.Empty<byte>() };
 }

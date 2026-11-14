@@ -177,7 +177,7 @@ public sealed class InboundEmailFlowPostgresTests(PostgresContainerFixture postg
         var config = InboundAddressTestHarness.Configuration();
         await using var db = new ProcuLinkDbContext(_options!);
         var router = new InboundEmailRouter(
-            db, Mock.Of<IClaimedOrderCreator>(), Mock.Of<IParseJobEnqueuer>(), Mock.Of<IEmailBodyOrderExtractor>(),
+            db,
             InboundAddressTestHarness.Create(db, config), PermissiveBilling.Mock().Object, config,
             NullLogger<InboundEmailRouter>.Instance, submitter ?? new PersistingSubmitter(_options!, formatsOn));
         return await router.RouteAsync(payload, CancellationToken.None);

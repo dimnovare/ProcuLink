@@ -1,6 +1,4 @@
 using Hangfire.Storage;
-using Microsoft.EntityFrameworkCore;
-using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
 
 namespace ProcuLink.Infrastructure.Services;
@@ -9,126 +7,45 @@ namespace ProcuLink.Infrastructure.Services;
 public sealed class OpsHealthService : IOpsHealthService
 {
     /// <summary>
-    /// Mirrors <c>StuckOrderDetectionJob.StuckThreshold</c> (30 min): how long an order may
-    /// sit in a transient status before an operator should treat it as stuck.
-    /// </summary>
-    public TimeSpan StuckThreshold { get; } = TimeSpan.FromMinutes(30);
-
-    /// <summary>
     /// A heartbeat older than this is treated as a dead/missing worker.
-    /// Hangfire's default HeartbeatInterval is 30 s; we allow 2× leeway.
+    /// Hangfire's default HeartbeatInterval is 30 s; we allow 2x leeway.
     /// </summary>
     private static readonly TimeSpan WorkerHeartbeatDeadline = TimeSpan.FromSeconds(60);
 
-    private readonly ProcuLinkDbContext       _db;
-    private readonly IMonitoringApi?          _monitoring;
-    private readonly WorkerHealthAlertOptions _alertOptions;
+    private readonly IMonitoringApi? _monitoring;
 
-    /// <param name="alertOptions">
-    /// OPTIONAL, and only the cross-tenant alerting snapshot reads it — for the trailing window the
-    /// pipeline-failure counts are taken over. The Worker's container registers it (see
-    /// <c>WorkerAlertingRegistration</c>) and the Worker is the only host that runs the alert sweep;
-    /// the API resolves this service without it and gets the same defaults, which is harmless
-    /// because the API never calls <see cref="GetWorkerHealthSnapshotAsync"/>.
-    /// </param>
-    public OpsHealthService(
-        ProcuLinkDbContext db,
-        IMonitoringApi? monitoring = null,
-        WorkerHealthAlertOptions? alertOptions = null)
+    public OpsHealthService(IMonitoringApi? monitoring = null)
     {
-        _db           = db;
-        _monitoring   = monitoring;
-        _alertOptions = alertOptions ?? new WorkerHealthAlertOptions();
+        _monitoring = monitoring;
     }
 
-    public async Task<OpsHealthSummary> GetHealthAsync(Guid organisationId, CancellationToken ct)
+    public Task<WorkerHealthSnapshot> GetWorkerHealthSnapshotAsync(CancellationToken ct)
     {
-        var stuckCutoff = DateTime.UtcNow - StuckThreshold;
+        var (activeWorkers, secondsSince, workerHealthy) = GetWorkerHealth();
 
-        // One org-scoped GROUP BY over orders → all status counts in a single round-trip.
-        // Stuck counts need the time predicate, so they are computed separately but still
-        // as cheap COUNT queries (indexed on OrgId + Status).
-        var byStatus = await _db.PurchaseOrders
-            .AsNoTracking()
-            .Where(o => o.OrgId == organisationId)
-            .GroupBy(o => o.Status)
-            .Select(g => new { Status = g.Key, Count = g.Count() })
-            .ToListAsync(ct);
-
-        int Count(string status) =>
-            byStatus.FirstOrDefault(r => r.Status == status)?.Count ?? 0;
-
-        var parsingStuck = await _db.PurchaseOrders
-            .CountAsync(o => o.OrgId == organisationId
-                          && o.Status == OrderStatusConstants.Parsing
-                          && o.UpdatedAt < stuckCutoff, ct);
-
-        var deliveringStuck = await _db.PurchaseOrders
-            .CountAsync(o => o.OrgId == organisationId
-                          && o.Status == OrderStatusConstants.Delivering
-                          && o.UpdatedAt < stuckCutoff, ct);
-
-        var slaBreached = await _db.PurchaseOrders
-            .CountAsync(o => o.OrgId == organisationId
-                          && o.SlaBreached
-                          && o.Status != OrderStatusConstants.Delivered, ct);
-
-        var openExceptions = await _db.OrderExceptions
-            .CountAsync(e => e.OrgId == organisationId && e.State == "open", ct);
-
-        // ── Worker / Hangfire-server health ──────────────────────────────────────
-        var (activeWorkers, lastHeartbeat, secondsSince, workerHealthy) = GetWorkerHealth();
-
-        return new OpsHealthSummary(
-            ParsingStuck:                 parsingStuck,
-            DeliveringStuck:              deliveringStuck,
-            TransformFailed:              Count(OrderStatusConstants.TransformFailed),
-            DeliveryFailed:               Count(OrderStatusConstants.DeliveryFailed),
-            DeliveryDeadLetter:           Count(OrderStatusConstants.DeliveryDeadLetter),
-            RejectedBySupplier:           Count(OrderStatusConstants.RejectedBySupplier),
-            Failed:                       Count(OrderStatusConstants.Failed),
-            SlaBreached:                  slaBreached,
-            OpenExceptions:               openExceptions,
-            StuckThresholdMinutes:        (int)StuckThreshold.TotalMinutes,
-            ActiveWorkers:                activeWorkers,
-            LastWorkerHeartbeatUtc:       lastHeartbeat,
-            SecondsSinceWorkerHeartbeat:  secondsSince,
-            WorkerHealthy:                workerHealthy,
-            // INFORMATIONAL: manual-review backlog (user action pending), reused from the same
-            // org-scoped GROUP BY — no extra round-trip. NOT a system fault → not in TotalProblemOrders.
-            PendingReview:                Count(OrderStatusConstants.PendingReview),
-            // INFORMATIONAL: routing backlog (orders parked awaiting a supplier), same GROUP BY,
-            // no extra round-trip. Like PendingReview, a user-action backlog → not in TotalProblemOrders.
-            PendingRouting:               Count(OrderStatusConstants.Unrouted),
-            // Deliveries PAUSED on a billing hold, reused from the same org-scoped GROUP BY — no
-            // extra round-trip. Needs a human (settle billing) but releases itself on reactivation,
-            // so it is EXCLUDED from TotalProblemOrders (founder call, 2026-07-16); the health
-            // page's "All clear" gate checks this count directly instead.
-            DeliveryHeld:                 Count(OrderStatusConstants.DeliveryHeld),
-            // A fault, not a backlog — a PO whose delivery outcome is unknown after a crash on a
-            // channel that cannot de-duplicate. Counted in TotalProblemOrders. Same GROUP BY,
-            // no extra round-trip.
-            DeliveryUnconfirmed:          Count(OrderStatusConstants.DeliveryUnconfirmed));
+        return Task.FromResult(new WorkerHealthSnapshot(
+            WorkerHealthy:               workerHealthy,
+            ActiveWorkers:               activeWorkers,
+            SecondsSinceWorkerHeartbeat: secondsSince));
     }
 
     /// <summary>
     /// Queries the Hangfire monitoring API for registered server heartbeats.
     /// Returns safe defaults when the monitoring API is unavailable or throws.
     /// </summary>
-    private (int activeWorkers, DateTime? lastHeartbeat, double? secondsSince, bool healthy)
-        GetWorkerHealth()
+    private (int activeWorkers, double? secondsSince, bool healthy) GetWorkerHealth()
     {
         try
         {
             var api = _monitoring ?? Hangfire.JobStorage.Current?.GetMonitoringApi();
             if (api is null)
-                return (0, null, null, false);
+                return (0, null, false);
 
             var servers = api.Servers();
             if (servers is null || servers.Count == 0)
-                return (0, null, null, false);
+                return (0, null, false);
 
-            var now          = DateTime.UtcNow;
+            var now           = DateTime.UtcNow;
             var lastHeartbeat = servers
                 .Select(s => s.Heartbeat)
                 .Where(h => h.HasValue)
@@ -137,167 +54,16 @@ public sealed class OpsHealthService : IOpsHealthService
                 .Max();
 
             if (lastHeartbeat == default)
-                return (servers.Count, null, null, false);
+                return (servers.Count, null, false);
 
             var age     = (now - lastHeartbeat).TotalSeconds;
             var healthy = age <= WorkerHeartbeatDeadline.TotalSeconds;
-            return (servers.Count, lastHeartbeat, age, healthy);
+            return (servers.Count, age, healthy);
         }
         catch
         {
             // Monitoring API unavailable (e.g. storage not yet ready, test environment).
-            return (0, null, null, false);
+            return (0, null, false);
         }
-    }
-
-    public async Task<WorkerHealthSnapshot> GetWorkerHealthSnapshotAsync(CancellationToken ct)
-    {
-        // Declares the cross-tenant intent AND enforces it. On an unscoped context (the Worker's
-        // alerting job, which is the only caller) this records the reason and changes nothing. If a
-        // future API path ever calls this on a request-scoped context, it throws here instead of
-        // quietly counting one tenant's dead letters and reporting them as the platform's — the
-        // difference between a page nobody gets and a page everybody gets.
-        _db.UseCrossOrganisationScope(
-            "worker health probe: counts dead-lettered and failed deliveries across ALL " +
-            "organisations to answer 'is the product delivering at all'. It is a system-fault " +
-            "signal that drives operational alerting, not a tenant-facing number.");
-
-        // Reuse the same Hangfire heartbeat probe the org-scoped summary uses.
-        var (activeWorkers, _, secondsSince, workerHealthy) = GetWorkerHealth();
-
-        // Cross-tenant counts: a system health probe is intentionally NOT org-scoped.
-        var deadLetter = await _db.PurchaseOrders
-            .CountAsync(o => o.Status == OrderStatusConstants.DeliveryDeadLetter, ct);
-
-        var failedDelivery = await _db.PurchaseOrders
-            .CountAsync(o => o.Status == OrderStatusConstants.DeliveryFailed, ct);
-
-        // Pipeline failures BEFORE the delivery step. These orders never enter the dead-letter
-        // bucket, so counting only delivery states left a broken parser or output template
-        // invisible to the alert sweep.
-        //
-        // COUNTED OVER A TRAILING WINDOW, unlike the two delivery counts above, and the asymmetry
-        // is deliberate. `failed` is DECLARED TERMINAL — OrderStatusMachine.Transitions[Failed] is
-        // the empty set — so an order that lands there can never leave, and an all-time count of it
-        // is monotonically non-decreasing for the life of the workspace. Paired with the alert's
-        // threshold of 1, that made the condition permanently bad after the first unparseable
-        // upload: it could never transition back to healthy, so it re-alerted on every cooldown
-        // expiry forever. The delivery counts have the opposite property — RequeueableFrom admits
-        // both of their statuses, so an operator draining the queue makes those numbers fall — which
-        // is why they are left all-time.
-        //
-        // UpdatedAt is the clock because it is the last time anything happened to the order; an
-        // order that has sat in `failed` untouched for a month is history, not a live incident.
-        var pipelineFailureCutoff =
-            DateTime.UtcNow - _alertOptions.PipelineFailureWindow;
-
-        var failed = await _db.PurchaseOrders
-            .CountAsync(o => o.Status == OrderStatusConstants.Failed
-                          && o.UpdatedAt >= pipelineFailureCutoff, ct);
-
-        var transformFailed = await _db.PurchaseOrders
-            .CountAsync(o => o.Status == OrderStatusConstants.TransformFailed
-                          && o.UpdatedAt >= pipelineFailureCutoff, ct);
-
-        return new WorkerHealthSnapshot(
-            WorkerHealthy:                workerHealthy,
-            ActiveWorkers:               activeWorkers,
-            SecondsSinceWorkerHeartbeat: secondsSince,
-            DeadLetterOrders:            deadLetter,
-            FailedDeliveryOrders:        failedDelivery,
-            FailedOrders:                failed,
-            TransformFailedOrders:       transformFailed,
-            // Carried so the alert message states the window it actually measured, rather than the
-            // reader having to assume one.
-            PipelineFailureWindowMinutes: _alertOptions.EffectivePipelineFailureWindowMinutes);
-    }
-
-    public async Task<IReadOnlyList<DeadLetterOrder>> ListDeadLetterAsync(
-        Guid organisationId, bool includeFailed, CancellationToken ct)
-    {
-        var orders = await _db.PurchaseOrders
-            .AsNoTracking()
-            .Where(o => o.OrgId == organisationId
-                     && (o.Status == OrderStatusConstants.DeliveryDeadLetter
-                      || (includeFailed && o.Status == OrderStatusConstants.DeliveryFailed)))
-            .OrderByDescending(o => o.UpdatedAt)
-            .Select(o => new
-            {
-                o.Id,
-                o.PoNumber,
-                o.SupplierId,
-                o.Status,
-                o.CreatedAt,
-                o.UpdatedAt,
-            })
-            .ToListAsync(ct);
-
-        if (orders.Count == 0)
-            return Array.Empty<DeadLetterOrder>();
-
-        var orderIds    = orders.Select(o => o.Id).ToList();
-        var supplierIds = orders.Select(o => o.SupplierId).Distinct().ToList();
-
-        // Supplier names in one org-scoped lookup (avoids a navigation projection that the
-        // EF InMemory provider mistranslates when no supplier rows exist).
-        var supplierNames = await _db.Suppliers
-            .AsNoTracking()
-            .Where(s => s.OrgId == organisationId && supplierIds.Contains(s.Id))
-            .Select(s => new { s.Id, s.Name })
-            .ToDictionaryAsync(s => s.Id, s => s.Name, ct);
-
-        // Pull the latest delivery attempt per order in one org-scoped query, then reduce
-        // in-memory (InMemory provider doesn't translate GroupBy→First reliably; this is a
-        // small operator list, not a hot path).
-        //
-        // SCALE-GATED CONSTRAINT: the GroupBy→First reduction below runs in the app, over
-        // ALL delivery attempts for the dead-letter/failed orders on this page. That set is
-        // intentionally bounded (dead-letter is a rare terminal state an operator drains),
-        // so the in-memory reduction is cheap. If a future change widens this to a busy or
-        // unbounded set, push the "latest attempt per order" down into SQL (a window
-        // function / DISTINCT ON over (order_id, attempted_at DESC)) instead. See
-        // docs/audit/2026-06-12-scale-gated-constraints.md.
-        var attempts = await _db.DeliveryAttempts
-            .AsNoTracking()
-            .Where(a => a.OrgId == organisationId
-                     && a.OrderId != null
-                     && orderIds.Contains(a.OrderId!.Value))
-            .Select(a => new
-            {
-                OrderId = a.OrderId!.Value,
-                a.AttemptedAt,
-                a.ErrorMessage,
-                a.RejectionReason,
-                a.ResponseCode,
-            })
-            .ToListAsync(ct);
-
-        var byOrder = attempts
-            .GroupBy(a => a.OrderId)
-            .ToDictionary(
-                g => g.Key,
-                g => new
-                {
-                    Count  = g.Count(),
-                    Latest = g.OrderByDescending(a => a.AttemptedAt).First(),
-                });
-
-        return orders.Select(o =>
-        {
-            byOrder.TryGetValue(o.Id, out var att);
-            return new DeadLetterOrder(
-                OrderId:          o.Id,
-                PoNumber:         o.PoNumber,
-                // Dead-letter orders are post-delivery, so a supplier is always set; coalesce for the type.
-                SupplierId:       o.SupplierId ?? Guid.Empty,
-                SupplierName:     supplierNames.GetValueOrDefault(o.SupplierId ?? Guid.Empty, string.Empty),
-                Status:           o.Status,
-                DeliveryAttempts: att?.Count ?? 0,
-                LastError:        att?.Latest.RejectionReason ?? att?.Latest.ErrorMessage,
-                LastResponseCode: att?.Latest.ResponseCode,
-                LastAttemptAt:    att?.Latest.AttemptedAt,
-                CreatedAt:        o.CreatedAt,
-                UpdatedAt:        o.UpdatedAt);
-        }).ToList();
     }
 }

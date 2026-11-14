@@ -1,6 +1,5 @@
 using System.Text;
 using System.Xml.Linq;
-using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Transform.Output;
@@ -30,25 +29,10 @@ public class OutputNodeTemplateInferrerNamespaceTests
     </Order>
     """;
 
-    private static PurchaseOrderEntity OrderWith(params decimal[] qtys)
-    {
-        var id = Guid.NewGuid();
-        var o = new PurchaseOrderEntity { Id = id, OrgId = Guid.NewGuid(), SupplierId = Guid.NewGuid(),
-            PoNumber = "PO-1", Currency = "EUR", OrderDate = new DateOnly(2026, 6, 15) };
-        var n = 1;
-        foreach (var q in qtys)
-            o.Lines.Add(new PurchaseOrderLineEntity { Id = Guid.NewGuid(), OrderId = id, LineNumber = n++,
-                SupplierItemCode = "S-" + n, Quantity = q, UnitPrice = 1m, NeedsReview = false });
-        return o;
-    }
-
-    private static string Emit(OutputNodeTemplate t, PurchaseOrderEntity o)
-    {
-        var r = new OutputTemplateEmitter().Emit(t, o, new OrderMappingOverride());
-        r.Content.Position = 0;
-        using var sr = new StreamReader(r.Content, Encoding.UTF8);
-        return sr.ReadToEnd();
-    }
+    /// <summary>One line per quantity, on the shared header.</summary>
+    private static string EmitLines(OutputNodeTemplate t, params decimal[] qtys) =>
+        EmitterRows.Emit(t, EmitterRows.Header(),
+            qtys.Select((q, i) => (IReadOnlyDictionary<string, string>)EmitterRows.Line(i + 1, "S-" + (i + 2), q, 1m)).ToArray()).Text();
 
     [Fact]
     public void Infer_Ubl_Captures_Default_And_cac_cbc_Prefixes()
@@ -75,7 +59,7 @@ public class OutputNodeTemplateInferrerNamespaceTests
     public void Infer_Then_Emit_Ubl_RoundTrips_Valid_Namespaced_Xml()
     {
         var t = OutputNodeTemplateInferrer.FromSample(UblSample, OutputFormat.Xml);
-        var xml = Emit(t, OrderWith(3m, 5m));     // two real lines
+        var xml = EmitLines(t, 3m, 5m);     // two real lines
 
         var doc = XDocument.Parse(xml);           // must be valid namespaced XML
         Assert.Equal(Order2Ns + "Order", doc.Root!.Name);
@@ -98,6 +82,6 @@ public class OutputNodeTemplateInferrerNamespaceTests
         Assert.Null(t.Root.Prefix);
         Assert.All(t.Root.Children, c => Assert.Null(c.Namespace));
 
-        Assert.DoesNotContain("xmlns", Emit(t, OrderWith(1m)));   // byte-identical legacy path
+        Assert.DoesNotContain("xmlns", EmitLines(t, 1m));   // byte-identical legacy path
     }
 }

@@ -9,6 +9,7 @@ using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
+using ProcuLink.Infrastructure.Services.Delivery;
 
 namespace ProcuLink.Api.Jobs;
 
@@ -58,7 +59,7 @@ public class DeliverDocumentJob(
         var credentials = "";
         if (destination is null) deadLetter = "The destination was removed.";
         else if (dispatcher is null) deadLetter = "No dispatcher for this destination.";
-        else if (reclaimed && (dispatcher.ResendSafety == ResendSafety.Unsafe || DeliveryService.CannotRepairItsOwnFile(config!)))
+        else if (reclaimed && (dispatcher.ResendSafety == ResendSafety.Unsafe || DeliveryRepair.CannotRepairItsOwnFile(config!)))
             deadLetter = "This may already have been sent. Check with the recipient before sending again.";
         else
             try { credentials = destinations.DecryptCredentials(destination); }

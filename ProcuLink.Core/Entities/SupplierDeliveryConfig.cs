@@ -67,10 +67,7 @@ public class SupplierDeliveryConfig
     /// with no way to remove the header. Adding one, or rotating its value, is still refused on both.
     /// Only revision CREATE refuses FLAT: it has no stored predecessor, and an identical header on
     /// some other revision must not license one here. Both cases are surfaced by
-    /// <c>DeliveryConfigResponse.InsecureTransportWarning</c> and by a dispatch-time log that names
-    /// the header and never its value. <c>ConnectionRevisionDto</c> carries the same warning from the
-    /// same composer, so the two DTOs cannot describe one blob differently — though only the delivery
-    /// editor renders it today; the revision field has no frontend consumer yet.</para>
+    /// a dispatch-time log that names the header and never its value.</para>
     /// </summary>
     public string ConfigJson { get; set; } = "{}";
 

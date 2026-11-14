@@ -47,42 +47,9 @@ public class SampleExclusionIsDeclaredNotAssumedTests
     /// </summary>
     private static readonly Dictionary<string, (int Sites, string Why)> SampleInclusiveByDesign = new()
     {
-        ["ProcuLink.Api/Controllers/OrdersController.cs"] =
-            (1,
-             "GET /api/orders/dead-letter-count. Counts work NEEDING ATTENTION, not volume " +
-             "processed, so it is not one of the numbers that has to reconcile with the billing " +
-             "meter. A practice order that dead-lettered is a genuinely broken thing on the " +
-             "user's screen; excluding it would hide a real delivery failure."),
-
-        ["ProcuLink.Infrastructure/Services/OpsHealthService.cs"] =
-            (8,
-             "GET /api/ops/health (4 org-scoped: the status GROUP BY, parsing-stuck, " +
-             "delivering-stuck, SLA-breached) plus 4 deliberately CROSS-TENANT worker probes " +
-             "that are not org-scoped at all: dead-letter and delivery-failed, and — feeding " +
-             "the pipeline_failure_backlog alert — the pre-delivery failed and transform_failed " +
-             "backlogs. Same reasoning as dead-letter-count: these count problems, not " +
-             "throughput. A practice order that genuinely hit failed or transform_failed IS a " +
-             "real pipeline failure the founder should hear about, so the alert counts it on " +
-             "purpose. KNOWN CONSEQUENCE, recorded rather than hidden — a stuck or failed " +
-             "practice order does appear on operations health and does break the 'All clear' " +
-             "gate. That is arguably correct (the job really is stuck) but it has not been " +
-             "decided; it is not the P0-5 defect, which was a VOLUME count."),
-
-        ["ProcuLink.Infrastructure/Services/BuyerService.cs"] =
-            (1,
-             "GET /api/buyers per-buyer orderCount. KNOWN GAP, not a justification. The practice " +
-             "order carries the fixture's buyer name once parsed, so a first-run org sees a buyer " +
-             "it never traded with, carrying one order. This is the same shape as the wire " +
-             "topology, which WAS fixed (DashboardController.cs:140). Left alone here only " +
-             "because it is a different screen from the P0-5 pairing and is tracked separately."),
-
-        ["ProcuLink.Infrastructure/Services/Detection/SupplierSuggestionService.cs"] =
-            (1,
-             "Sender-domain → supplier routing history. UNREACHABLE for practice orders rather " +
-             "than exempt: the predicate requires o.InboundSenderDomain == senderDomain, and " +
-             "SampleOrderService never assigns InboundSenderDomain (verified — the field does not " +
-             "appear in that file), so a sample can never join this aggregate. Filtering IsSample " +
-             "here would be dead code."),
+        // Empty since 2026-11-13 (plan 13b, Task 7b): the two entries — BuyerService.cs and
+        // Detection/SupplierSuggestionService.cs, one site each — left with their files, which were
+        // deleted as orphans. Neither site started filtering IsSample.
     };
 
     /// <summary>
@@ -111,10 +78,19 @@ public class SampleExclusionIsDeclaredNotAssumedTests
     /// it and failed the per-file assertions too. If a future red build here cannot point at a
     /// specific collapsed query, the scan is broken — fix that, do not move these numbers.</para>
     /// </summary>
-    private const int MinimumAggregateSitesExpected = 19;
+    // 19 -> 12 on 2026-11-13: the order-ops cut deleted the stuck/stranded/SLA sweeps, OpsHealthService's
+    // order counts and the dead-letter count; those held the sites that disappeared.
+    // 12 -> 7 later on 2026-11-13 (plan 13b, the order API cut to a read-only archive): the deleted
+    // DashboardController KPI/summary queries, OnboardingController's order counts and
+    // OrdersController's write actions held the five sites. 7 then: 5 sample-aware, 2 inclusive.
+    // 7 -> 5 on 2026-11-13 (plan 13b, Task 7b): the two sample-INCLUSIVE sites were the registry's
+    // two entries, BuyerService.cs and SupplierSuggestionService.cs, both deleted as orphans. 5 today,
+    // all sample-aware; the companion floor below is unchanged because no sample-aware site went.
+    private const int MinimumAggregateSitesExpected = 5;
 
-    /// <summary>Companion floor: the convention must be visibly PRESENT, not merely unviolated.</summary>
-    private const int MinimumSampleAwareSitesExpected = 8;
+    /// <summary>Companion floor: the convention must be visibly PRESENT, not merely unviolated.
+    /// 8 -> 5 with the same plan 13b cut (all five vanished sites above were sample-aware).</summary>
+    private const int MinimumSampleAwareSitesExpected = 5;
 
     [Fact]
     public void EveryAggregateOverPurchaseOrders_DeclaresWhichPopulationItCounts()

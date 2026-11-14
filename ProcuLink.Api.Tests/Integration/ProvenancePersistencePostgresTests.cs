@@ -75,7 +75,7 @@ public sealed class ProvenancePersistencePostgresTests(PostgresContainerFixture 
             await db.SaveChangesAsync();
 
             // Connection first (no active pointer), then the revision — two rows, insertable order.
-            db.SupplierConnections.Add(new SupplierConnection
+            db.Set<SupplierConnection>().Add(new SupplierConnection
             {
                 Id = connectionId, OrgId = orgId, SupplierId = supplierId,
                 Name = "Prov Supplier", ActiveRevisionId = null,

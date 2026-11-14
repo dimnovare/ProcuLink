@@ -158,7 +158,7 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
         json.Should().NotContain("\"p\"").And.Contain("\"hasCredentials\":true");
 
         using var scope = factory.Services.CreateScope();
-        var row = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowDestination>().Single(d => d.Protocol == "sftp");
+        var row = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowDestination>().Single(d => d.Name == "Accounting SFTP");
         var encryption = scope.ServiceProvider.GetRequiredService<DeliveryEncryptionService>();
         var act = () => encryption.Decrypt(row.EncryptedCredentials!,
             new CredentialScope(DocumentEngineTestFactory.OrgA, CredentialPurpose.FlowDestinationCredentials, Guid.NewGuid()));
@@ -174,5 +174,51 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
         });
         s3.StatusCode.Should().Be((HttpStatusCode)422);
         (await s3.Content.ReadAsStringAsync()).Should().Contain("url_requires_tls");
+    }
+
+    private const string HeaderConfig = """{"url":"https://supplier.example/in","headers":{"Authorization":"Bearer t0ps3cret"}}""";
+
+    /// <summary>The destination save path is the only caller of the delivery-config rules: each refusal is a 422 and writes nothing.</summary>
+    [Theory]
+    [InlineData("""{"url":"http://supplier.example/in"}""", null)]
+    [InlineData(HeaderConfig, null)]
+    [InlineData("""{"url":"https://supplier.example/in"}""",
+        """{"type":"oauth2_client_credentials","tokenUrl":"http://auth.supplier.example/token","clientId":"c","clientSecret":"s"}""")]
+    public async Task A_destination_the_delivery_rules_refuse_is_rejected_and_not_saved(string config, string? credentials)
+    {
+        var name = $"refused-{Guid.NewGuid():N}";
+        var response = await factory.ClientFor(DocumentEngineTestFactory.OrgA).PostAsJsonAsync("/api/destinations", new
+        {
+            name, protocol = "http", config = JsonDocument.Parse(config).RootElement,
+            credentials = credentials is null ? (JsonElement?)null : JsonDocument.Parse(credentials).RootElement,
+        });
+
+        response.StatusCode.Should().Be((HttpStatusCode)422);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("\"error\":\"invalid_destination\"");
+        using var scope = factory.Services.CreateScope();
+        scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowDestination>().Any(d => d.Name == name).Should().BeFalse();
+    }
+
+    /// <summary>A credential header stored before the rule existed survives an unchanged round-trip: the save hands the stored config to the rule.</summary>
+    [Fact]
+    public async Task An_unchanged_stored_credential_header_does_not_block_an_edit()
+    {
+        var http = factory.ClientFor(DocumentEngineTestFactory.OrgA);
+        var id = Guid.NewGuid();
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.Set<FlowDestination>().Add(new FlowDestination
+            {
+                Id = id, OrgId = DocumentEngineTestFactory.OrgA, Name = "Webhook", Protocol = "http", ConfigJson = HeaderConfig,
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var put = await http.PutAsJsonAsync($"/api/destinations/{id}",
+            new { name = "Webhook (renamed)", protocol = "http", config = JsonDocument.Parse(HeaderConfig).RootElement });
+
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 }

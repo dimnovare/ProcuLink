@@ -5,11 +5,8 @@ namespace ProcuLink.Core.Services.Alerting;
 /// stays unit-testable, and so a host without a scheduler (or with none registered yet) degrades to
 /// "unknown" rather than throwing.
 /// <para>
-/// This exists because the SFTP and S3 pull channels persist no last-successful-poll timestamp of
-/// their own — unlike IMAP, which stamps <c>EmailPollingConfig.LastPolledAt</c> after a successful
-/// disconnect. Adding such a column is a schema change, and the migration slot is held elsewhere
-/// this round, so the recurring dispatcher's own execution record is the migration-free stand-in.
-/// It proves the channel is still being polled; it does NOT prove a given org's credentials work.
+/// The recurring dispatcher's own execution record is the migration-free evidence that a job is
+/// still being run; the API health check reads it to prove the scheduler is firing.
 /// </para>
 /// </summary>
 public interface IRecurringJobLastExecutionSource

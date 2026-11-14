@@ -14,7 +14,7 @@ namespace ProcuLink.Core.Services.Mapping;
 /// adopted it, the emitter threw, and EVERY future order for that supplier ended in a terminal
 /// <c>transform_failed</c>. One click bricked the supplier and reported success.</para>
 ///
-/// <para>Both members below are exhaustive <c>switch</c>es over <see cref="OutputFormat"/> — no
+/// <para>The member below is an exhaustive <c>switch</c> over <see cref="OutputFormat"/> — no
 /// <c>_ =&gt;</c> arm, no "everything except" — so adding an enum member is a decision, not an
 /// accident. <c>OutputTreeRenderabilityTests</c> EXECUTES the emitter for every enum value and fails
 /// if the two ever disagree.</para>
@@ -43,33 +43,6 @@ public static class OutputTreeFormats
         OutputFormat.CXml          => false,
         OutputFormat.Ubl           => false,
         OutputFormat.X12           => false,
-        OutputFormat.UblOrder      => false,
-        OutputFormat.X12_850       => false,
-        OutputFormat.EdifactOrders => false,
-        OutputFormat.Pdf           => false, // fixed layout, no node tree
-    };
-
-    /// <summary>
-    /// True only for the formats whose fixed transform actually READS an
-    /// <see cref="OutputNodeTemplate.Envelope"/>. For these, a non-renderable tree still has a real
-    /// job — it carries the connection's sender/receiver identity — and for every other format an
-    /// envelope changes not one delivered byte.
-    ///
-    /// <para>Deliberately NOT the complement of <see cref="IsRenderable"/>: <c>Ubl</c>,
-    /// <c>UblOrder</c>, <c>X12_850</c> and <c>EdifactOrders</c> are neither renderable nor
-    /// envelope-reading, so a tree in one of those formats can contribute nothing at all. Treating
-    /// "not renderable" as "envelope-bearing" would re-open the same brick through the envelope
-    /// door.</para>
-    /// </summary>
-    public static bool ReadsEnvelopeIdentity(OutputFormat format) => format switch
-    {
-        OutputFormat.CXml => true,   // CxmlTransformService reads envelope.Cxml
-        OutputFormat.X12  => true,   // X12TransformService  reads envelope.X12
-
-        OutputFormat.Json          => false,
-        OutputFormat.Xml           => false,
-        OutputFormat.Csv           => false,
-        OutputFormat.Ubl           => false,
         OutputFormat.UblOrder      => false,
         OutputFormat.X12_850       => false,
         OutputFormat.EdifactOrders => false,

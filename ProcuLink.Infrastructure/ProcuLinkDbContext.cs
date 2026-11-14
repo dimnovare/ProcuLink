@@ -22,8 +22,8 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     // still the active control. Defaulting to ARMED would have been wrong in both directions —
     //
     //   * Fail-closed-silently is the worse failure. A cross-org sweep that suddenly matches no
-    //     rows looks like a clean run, not an outage. The Worker runs 13 such sweeps (billing
-    //     reconciliation, stuck/stranded/SLA detection, IMAP+SFTP+S3 polling, retention, alerting)
+    //     rows looks like a clean run, not an outage. The Worker runs such sweeps (billing
+    //     reconciliation, flow pickup, delivery sweep, retention, alerting)
     //     and every one of them would have reported success over an empty set.
     //
     //   * Several API paths legitimately read across organisations WITH a tenant resolved —
@@ -133,20 +133,13 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<AppUser> Users => Set<AppUser>();
     public DbSet<Membership> Memberships => Set<Membership>();
     public DbSet<Supplier> Suppliers => Set<Supplier>();
-    public DbSet<SupplierProfileEntity> SupplierProfiles => Set<SupplierProfileEntity>();
     public DbSet<PurchaseOrderEntity> PurchaseOrders => Set<PurchaseOrderEntity>();
     public DbSet<PurchaseOrderLineEntity> PurchaseOrderLines => Set<PurchaseOrderLineEntity>();
-    public DbSet<OrderParty> OrderParties => Set<OrderParty>();
-    public DbSet<SourceCapture> SourceCaptures => Set<SourceCapture>();
-    public DbSet<ItemMapping> ItemMappings => Set<ItemMapping>();
-    public DbSet<SupplierProduct> SupplierProducts => Set<SupplierProduct>();
     public DbSet<SupplierCatalogSource> SupplierCatalogSources => Set<SupplierCatalogSource>();
     public DbSet<AiSuggestionDecision> AiSuggestionDecisions => Set<AiSuggestionDecision>();
     public DbSet<OutboundArtifact> OutboundArtifacts => Set<OutboundArtifact>();
     public DbSet<DeliveryAttempt> DeliveryAttempts => Set<DeliveryAttempt>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
-    public DbSet<AutoSendDryRun> AutoSendDryRuns => Set<AutoSendDryRun>();
-    public DbSet<SupplierPoMapping> SupplierPoMappings => Set<SupplierPoMapping>();
     public DbSet<SupplierDeliveryConfig> SupplierDeliveryConfigs => Set<SupplierDeliveryConfig>();
     public DbSet<IdempotencyKey> IdempotencyKeys => Set<IdempotencyKey>();
     public DbSet<AiUsageMonthly> AiUsageMonthly => Set<AiUsageMonthly>();
@@ -157,28 +150,25 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<ImportedS3Object> ImportedS3Objects => Set<ImportedS3Object>();
     public DbSet<EmailImportRecord> EmailImportRecords => Set<EmailImportRecord>();
     public DbSet<Buyer> Buyers => Set<Buyer>();
-    public DbSet<InvoiceEntity>                Invoices                  => Set<InvoiceEntity>();
-    public DbSet<InvoiceLineEntity>            InvoiceLines              => Set<InvoiceLineEntity>();
-    public DbSet<AdvanceShippingNoticeEntity>  AdvanceShippingNotices    => Set<AdvanceShippingNoticeEntity>();
-    public DbSet<AsnPackageEntity>             AsnPackages               => Set<AsnPackageEntity>();
-    public DbSet<AsnPackageLineEntity>         AsnPackageLines           => Set<AsnPackageLineEntity>();
+    // Invoice and ASN tables (InvoiceEntity, InvoiceLineEntity, AdvanceShippingNoticeEntity, AsnPackageEntity,
+    // AsnPackageLineEntity) have no DbSet since plan 13b: nothing reads them. The entities stay mapped below,
+    // so the tables and migrations are untouched; reach one with Set<T>() if a reader is ever needed.
+    // Likewise since plan 13b Task 7b (2026-11-13): OrderParty, SourceCapture, SupplierProduct,
+    // SupplierPoMapping, SchemaFingerprint, SupplierAcceptanceProfile, SupplierAcceptanceRule,
+    // RuleDefinition and SupplierConnection lost their last reader with the supplier/catalog/mapping
+    // services. Their DbSets went; the entities stay mapped below with explicit table names (R2).
+    // Pass 2 of Task 7b did the same for ItemMapping and ConnectionRevisionItemMapping: their last
+    // reader was the deleted revision-authority resolver.
     public DbSet<TenantApiKey>            TenantApiKeys            => Set<TenantApiKey>();
     public DbSet<IntegrationSubscription> IntegrationSubscriptions => Set<IntegrationSubscription>();
-    public DbSet<SchemaFingerprint>       SchemaFingerprints       => Set<SchemaFingerprint>();
     public DbSet<OrderConfirmationEntity>     OrderConfirmations     => Set<OrderConfirmationEntity>();
     public DbSet<OrderConfirmationLineEntity> OrderConfirmationLines => Set<OrderConfirmationLineEntity>();
     public DbSet<MappingCorrection>  MappingCorrections  { get; set; } = null!;
     public DbSet<PoPassportEvent>    PoPassportEvents    { get; set; } = null!;
     public DbSet<OrderException>              OrderExceptions              { get; set; } = null!;
-    public DbSet<SupplierAcceptanceProfile>   SupplierAcceptanceProfiles   { get; set; } = null!;
-    public DbSet<SupplierAcceptanceRule>      SupplierAcceptanceRules      { get; set; } = null!;
     public DbSet<OrderValidationResult>       OrderValidationResults       { get; set; } = null!;
-    // ── Group V4: unified validation — reusable rule definitions (templates) ─
-    public DbSet<RuleDefinition>              RuleDefinitions              { get; set; } = null!;
     // ── Group V1: versioned Supplier Connection ─────────────────────────────
-    public DbSet<SupplierConnection>             SupplierConnections           { get; set; } = null!;
     public DbSet<SupplierConnectionRevision>     SupplierConnectionRevisions   { get; set; } = null!;
-    public DbSet<ConnectionRevisionItemMapping>  ConnectionRevisionItemMappings { get; set; } = null!;
     public DbSet<ConnectionRevisionTestCase>     ConnectionRevisionTestCases   { get; set; } = null!;
     // ── Phase 2: extensible canonical — user-defined spine fields (Tier-2) ───
     public DbSet<CanonicalFieldDef>              CanonicalFieldDefs            { get; set; } = null!;
@@ -665,7 +655,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             // (OrgId, SupplierId): order-list query filtered/grouped by supplier within a tenant.
             b.HasIndex(x => new { x.OrgId, x.SupplierId })
              .HasDatabaseName("IX_purchase_orders_org_id_supplier_id");
-            // (OrgId, BuyerName): SQL-native buyer-name search in ListPagedAsync (ILike predicate).
+            // (OrgId, BuyerName): SQL-native buyer-name search in ListWindowAsync (ILike predicate).
             b.HasIndex(x => new { x.OrgId, x.BuyerName })
              .HasDatabaseName("IX_purchase_orders_org_id_buyer_name");
             // (OrgId, InboundSenderDomain): supplier auto-detect's sender-domain history probe —

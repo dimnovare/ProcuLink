@@ -8,8 +8,7 @@ namespace ProcuLink.Api.Tests.Jobs;
 
 /// <summary>
 /// Guards the concurrency lock on the recurring cross-tenant sweep jobs. Two overlapping runs of
-/// the same sweep duplicate audit rows (StuckRequeued / DeliverySlaBreached) and lose the
-/// RequeueCount read-modify-write.
+/// the same sweep duplicate rows and lose a read-modify-write.
 ///
 /// <para>On OSS Hangfire, <see cref="DisableConcurrentExecutionAttribute"/> keys its distributed
 /// lock on the job TYPE + METHOD ONLY — never on the job's arguments (per-argument mutexing needs
@@ -31,18 +30,11 @@ namespace ProcuLink.Api.Tests.Jobs;
 ///   <item>DataRetentionSweepJob — pure atomic ExecuteDeleteAsync; no read-modify-write to lose.</item>
 ///   <item>BlobRetentionSweepJob — SELECT-then-act, but storage deletes are idempotent on a missing
 ///     key and the purge flag is a constant write, so the only racing effect is an inflated stat.</item>
-///   <item>Email/S3/SftpPollingJob — dispatcher parents; the children hold [PerOrgDistributedMutex],
-///     which SERIALISES rather than drops, so a duplicate child skips on the committed ledger claim.</item>
 /// </list></para>
 /// </summary>
 public class SweepJobConcurrencyGuardTests
 {
     [Theory]
-    [InlineData(typeof(StuckOrderDetectionJob))]
-    [InlineData(typeof(DeliverySlaSweepJob))]
-    [InlineData(typeof(StuckDeliveryDetectionJob))]
-    [InlineData(typeof(StrandedFailedDeliveryDetectionJob))]
-    [InlineData(typeof(StrandedReadyDeliveryDetectionJob))]
     [InlineData(typeof(BillingReconciliationJob))]
     public void ExecuteAsync_HasDisableConcurrentExecution(Type jobType)
     {

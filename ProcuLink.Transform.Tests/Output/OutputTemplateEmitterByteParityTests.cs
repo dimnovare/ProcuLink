@@ -1,9 +1,6 @@
-using System.Text;
-using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Transform.Output;
-using ProcuLink.Transform.Tokenizing;
 using Xunit;
 
 namespace ProcuLink.Transform.Tests.Output;
@@ -14,23 +11,6 @@ namespace ProcuLink.Transform.Tests.Output;
 /// </summary>
 public class OutputTemplateEmitterByteParityTests
 {
-    private static PurchaseOrderEntity ResolvedOrder()
-    {
-        var orderId = Guid.NewGuid();
-        return new PurchaseOrderEntity
-        {
-            Id = orderId, OrgId = Guid.NewGuid(), SupplierId = Guid.NewGuid(),
-            PoNumber = "PO-1", Currency = "EUR", OrderDate = new DateOnly(2026, 6, 15),
-            Lines =
-            {
-                new PurchaseOrderLineEntity { Id = Guid.NewGuid(), OrderId = orderId, LineNumber = 1,
-                    SupplierItemCode = "S-1", Quantity = 3m, UnitPrice = 10m, NeedsReview = false },
-                new PurchaseOrderLineEntity { Id = Guid.NewGuid(), OrderId = orderId, LineNumber = 2,
-                    SupplierItemCode = "S-2", Quantity = 2m, UnitPrice = 5m, NeedsReview = false },
-            },
-        };
-    }
-
     private static OutputFieldRule Canon(string field) => new() { OutputPath = field, CanonicalField = field };
 
     // Representative non-namespaced trees for each emitter family.
@@ -70,27 +50,17 @@ public class OutputTemplateEmitterByteParityTests
                 OutputNode.FieldOf("Qty", Canon("Quantity"))))),
     };
 
-    private static OutputNodeTemplate CsvTree()
+    private static OutputNodeTemplate CsvTree() => new()
     {
-        var config = new OutputMappingConfig
-        {
-            Header = { ["po"] = new OutputFieldRule { OutputPath = "OrderRef", CanonicalField = "PoNumber" } },
-            Lines =
-            {
-                ["sku"] = new OutputFieldRule { OutputPath = "ItemCode", CanonicalField = "SupplierItemCode" },
-                ["qty"] = new OutputFieldRule { OutputPath = "Qty", CanonicalField = "Quantity" },
-            },
-        };
-        return OutputNodeTemplateConverter.FromFlat(config, OutputFormat.Csv);
-    }
+        Format = OutputFormat.Csv,
+        Root = OutputNode.Obj("root",
+            OutputNode.FieldOf("OrderRef", new OutputFieldRule { OutputPath = "OrderRef", CanonicalField = "PoNumber" }),
+            OutputNode.Arr("lines", OutputNode.Obj("line",
+                OutputNode.FieldOf("ItemCode", new OutputFieldRule { OutputPath = "ItemCode", CanonicalField = "SupplierItemCode" }),
+                OutputNode.FieldOf("Qty", new OutputFieldRule { OutputPath = "Qty", CanonicalField = "Quantity" })))),
+    };
 
-    private static string Emit(OutputNodeTemplate t)
-    {
-        var r = new OutputTemplateEmitter().Emit(t, ResolvedOrder(), new OrderMappingOverride());
-        r.Content.Position = 0;
-        using var sr = new StreamReader(r.Content, Encoding.UTF8);
-        return sr.ReadToEnd();
-    }
+    private static string Emit(OutputNodeTemplate t) => EmitterRows.Emit(t).Text();
 
     // Line-ending-normalized: the emitters emit CRLF (XmlWriter hardcodes it; AppendLine/Utf8JsonWriter
     // follow the runtime) which differs Windows vs Linux CI. Task 3 changes element WRITING, never
@@ -173,43 +143,32 @@ public class OutputTemplateEmitterByteParityTests
         Assert.Equal(expected, N(Emit(CsvTree())));
     }
 
-    // ── F-1 byte-safety oracle: injecting src:: keys with NO rule referencing them is INERT ─────────
+    // ── Byte-safety oracle: keys in the bag that no rule references are INERT ─────────────────────
     //
-    // The core trust gate. Widening the row bag with a full set of header AND line source tokens — none
-    // of which any rule in the tree names — must produce BYTE-IDENTICAL output to the unbound emit, for
-    // every emitter family (JSON / XML / XML+root-namespaces / CSV). Extra keys in the bag are inert.
-    //
-    // F-1 Phase 4: the line tokens ALSO cause the row builder to inject RELATIVE alias keys (cell:c4,
-    // …/Line/Batch, seg:LIN.el1, json:/lines/*/sku). Those aliases must be JUST AS INERT — an unbound
-    // order is byte-identical whether or not the relative aliases are present. The per-format line tokens
-    // below exercise every relative-key shape so the oracle proves the aliases never leak into output.
+    // A read puts every field it found into the bag, and most of them are never bound. Widening the
+    // header AND line bags with keys that no rule in the tree names must produce BYTE-IDENTICAL output
+    // to the narrow bags, for every emitter family (JSON / XML / XML+root-namespaces / CSV).
 
-    /// <summary>A realistic, NOISY token set (header + per-line, every relative-key format) — none referenced by the trees above.</summary>
-    private static IReadOnlyList<SourceToken> NoiseTokens() => new List<SourceToken>
+    /// <summary>A realistic, NOISY key set — none referenced by the trees above.</summary>
+    private static readonly Dictionary<string, string> Noise = new()
     {
-        new("cell:r1c1", "PO Number · header row", "PO-1",        "header"),
-        new("cell:r1c9", "Buyer VAT · header row", "EE100200300", "header"),
-        new("/Order/Header/Note", "Note", "free text, with comma & \"quote\"", "header"),
-        new("seg:RFF[1].el2", "RFF reference number", "REF-XYZ", "header"),
-        // Per-line tokens — each yields a RELATIVE alias the row builder also injects (still inert):
-        new("cell:r2c4", "EAN · row 2", "EAN-FIRST",  "line"),        // → src::cell:c4
-        new("cell:r3c4", "EAN · row 3", "EAN-SECOND", "line"),
-        new("/Order/Lines/Line[1]/Batch", "Batch", "B-1", "line"),    // → src::/Order/Lines/Line/Batch
-        new("/Order/Lines/Line[2]/Batch", "Batch", "B-2", "line"),
-        new("seg:LIN[1].el5", "LIN warehouse", "WH-1", "line"),       // → src::seg:LIN.el5
-        new("seg:LIN[2].el5", "LIN warehouse", "WH-2", "line"),
-        new("json:/lines/0/wh", "warehouse", "JWH-1", "line"),        // → src::json:/lines/*/wh
-        new("json:/lines/1/wh", "warehouse", "JWH-2", "line"),
-        new("raw:Free Field", "Free Field", "ignored", null),
+        ["src::cell:r1c9"] = "EE100200300",
+        ["src::/Order/Header/Note"] = "free text, with comma & \"quote\"",
+        ["src::seg:RFF[1].el2"] = "REF-XYZ",
+        ["src::cell:c4"] = "EAN-FIRST",
+        ["src::/Order/Lines/Line/Batch"] = "B-1",
+        ["src::json:/lines/*/wh"] = "JWH-1",
+        ["raw:Free Field"] = "ignored",
     };
 
-    private static byte[] EmitBytes(OutputNodeTemplate t, IReadOnlyList<SourceToken>? tokens)
+    private static byte[] EmitBytes(OutputNodeTemplate t, bool widened)
     {
-        var r = new OutputTemplateEmitter().Emit(t, ResolvedOrder(), new OrderMappingOverride(), tokens);
-        r.Content.Position = 0;
-        using var ms = new MemoryStream();
-        r.Content.CopyTo(ms);
-        return ms.ToArray();
+        if (!widened) return EmitterRows.Emit(t).Bytes();
+        var header = EmitterRows.Header();
+        foreach (var (k, v) in Noise) header[k] = v;
+        var lines = EmitterRows.TwoLines();
+        foreach (var line in lines) line["src::seg:LIN.el5"] = "WH-" + line["LineNumber"];
+        return EmitterRows.Emit(t, header, lines).Bytes();
     }
 
     public static IEnumerable<object[]> ParityTrees() => new[]
@@ -222,12 +181,12 @@ public class OutputTemplateEmitterByteParityTests
 
     [Theory]
     [MemberData(nameof(ParityTrees))]
-    public void InjectingUnreferencedSrcTokens_IsByteIdentical_PerEmitterFamily(string name, OutputNodeTemplate tree)
+    public void UnreferencedKeysInTheBag_AreByteIdentical_PerEmitterFamily(string name, OutputNodeTemplate tree)
     {
-        var unbound = EmitBytes(tree, tokens: null);            // today's bytes (no tokens)
-        var widened = EmitBytes(tree, tokens: NoiseTokens());   // bag widened with src:: keys, none referenced
+        var unbound = EmitBytes(tree, widened: false);
+        var widened = EmitBytes(tree, widened: true);   // bags widened with keys none of the rules reference
 
         Assert.True(unbound.SequenceEqual(widened),
-            $"[{name}] injecting unreferenced src:: tokens changed the output bytes — byte-safety violated.");
+            $"[{name}] unreferenced keys in the bag changed the output bytes — byte-safety violated.");
     }
 }
