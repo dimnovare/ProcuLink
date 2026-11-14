@@ -132,6 +132,8 @@ public class ActivityApiTests(DocumentEngineTestFactory factory) : IClassFixture
         await Event(Org, uploaded.Id, "document.read", t.AddMinutes(1));
         await Event(Org, uploaded.Id, "document.sent", t.AddMinutes(2), new { mode = "person", by = "user_sender" });
         await Event(Org, uploaded.Id, "document.delivered", t.AddMinutes(3));
+        await Event(Org, uploaded.Id, "document.sent", t.AddMinutes(4), new { mode = "person", by = "user_later" });       // after the delivery
+        await Event(OrgB, uploaded.Id, "document.sent", t.AddSeconds(150), new { mode = "person", by = "user_elsewhere" }); // another workspace
         await Event(Org, emailed.Id, "document.received", t);
         await Event(Org, emailed.Id, "document.sent", t.AddMinutes(2), new { mode = "auto" });
         await Event(Org, emailed.Id, "document.delivery_failed", t.AddMinutes(3), new { error = "Login refused" });
@@ -150,5 +152,23 @@ public class ActivityApiTests(DocumentEngineTestFactory factory) : IClassFixture
         Assert.Equal(JsonValueKind.Null, failed.GetProperty("actorId").ValueKind);        // an automatic send
         Assert.Equal("system", failed.GetProperty("actorType").GetString());              // never "ai"
         Assert.Equal("email", failed.GetProperty("source").GetString());
+    }
+
+    [Fact]
+    public async Task A_platform_admins_identity_never_reaches_the_workspace()
+    {
+        await Save(new AuditEvent
+        {
+            Id = Guid.NewGuid(), OrgId = Org, EntityType = "Organisation", EntityId = Org, Action = "admin.org.limits_changed",
+            CreatedAt = new DateTime(2026, 3, 4, 9, 0, 0, DateTimeKind.Utc),
+            Payload = JsonSerializer.SerializeToDocument(new { actor = new { sub = "user_platform_admin", email = "admin@example.test" }, detail = new { orderLimit = 40 } }),
+        });
+
+        var raw = await factory.ClientFor(Org).GetStringAsync("/api/audit?from=2026-03-04T00:00:00Z&to=2026-03-05T00:00:00Z");
+
+        var payload = JsonDocument.Parse(raw).RootElement.GetProperty("events").EnumerateArray().Single().GetProperty("payload");
+        Assert.False(payload.TryGetProperty("actor", out _));
+        Assert.Equal(40, payload.GetProperty("detail").GetProperty("orderLimit").GetInt32());
+        Assert.DoesNotContain("admin@example.test", raw);
     }
 }

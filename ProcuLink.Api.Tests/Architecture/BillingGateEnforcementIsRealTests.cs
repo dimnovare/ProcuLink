@@ -84,7 +84,8 @@ public sealed class BillingGateEnforcementIsRealTests
           + "and every other assertion in this file is worthless.");
     }
 
-    private static Task<bool> GateFixture(IBillingService billing) => billing.HasFeatureAsync(Guid.Empty, BillingFeature.Sso);
+    // async on purpose: production gate calls sit inside async state machines, so the control must too.
+    private static async Task<bool> GateFixture(IBillingService billing) => await billing.HasFeatureAsync(Guid.Empty, BillingFeature.Sso);
 
     /// <summary>
     /// NEGATIVE CONTROL. A scanner that answered "yes, gated" for everything would pass every test
@@ -105,7 +106,8 @@ public sealed class BillingGateEnforcementIsRealTests
     public void TheWorkspaceActivityList_IsNotGatedByPlan()
     {
         ReachesGatePrimitive(Resolve(typeof(AuditController), nameof(AuditController.GetAuditLog)),
-            GatePrimitive.ServerRefusal).Should().BeFalse();
+            GatePrimitive.ServerRefusal).Should().BeFalse(
+                "the workspace-wide activity list is open on every plan, including a paused or expired trial");
     }
 
     // ── The real assertions ───────────────────────────────────────────────────

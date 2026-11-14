@@ -5,7 +5,7 @@ using ProcuLink.Infrastructure;
 
 namespace ProcuLink.Api.Services.Documents;
 
-/// <summary>The one writer and reader of a document's audit rows. Does not save. <paramref name="userId"/> becomes the payload's <c>by</c>.</summary>
+/// <summary>Writes a document's audit rows (the read job writes its own) and reads who they name. Does not save. <paramref name="userId"/> becomes the payload's <c>by</c>.</summary>
 public static class DocumentAudit
 {
     public static AuditEvent Add(ProcuLinkDbContext db, FlowDocument d, string action, object payload, string? userId)

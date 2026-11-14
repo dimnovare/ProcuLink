@@ -5,14 +5,15 @@ using Xunit;
 namespace ProcuLink.Api.Tests.Controllers;
 
 /// <summary>
-/// WP-11 — <b>the behavioural half of the ladder guard: every declared feature is really
-/// refused below its plan.</b>
+/// WP-11 — <b>the behavioural half of the ladder guard: what each declared feature really does
+/// below its plan.</b>
 ///
 /// <para><c>BillingFeatureGateCoverageTests</c> proves each <see cref="BillingFeature"/> has a
-/// correct plan boundary and a registered enforcement site. This class proves those sites
-/// actually fire, by calling the real controller/service with the feature denied and asserting
-/// a 403 — and, crucially, calling it again with the feature GRANTED and asserting it does not
-/// 403. A one-sided gate test passes just as happily against a gate that refuses everyone.</para>
+/// correct plan boundary and a registered enforcement site. This class pins what that site does.
+/// The one member left, SSO, refuses nothing on the server, so its test asserts the plan predicate
+/// the billing status reads. A feature the server refuses belongs here with two calls to the real
+/// endpoint: denied, asserting the 403, and granted, asserting no 403 — a one-sided gate test
+/// passes just as happily against a gate that refuses everyone.</para>
 ///
 /// <para>Every declared feature except the three ingestion channels was enforced NOWHERE
 /// before this change: a Pilot org could configure a webhook, wire up an Enterprise-only ERP

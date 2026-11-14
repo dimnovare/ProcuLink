@@ -1,8 +1,10 @@
 ﻿using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Services.Documents;
+using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
 
@@ -128,10 +130,9 @@ public class AuditController : ControllerBase
 
         // Who received (uploaded) and who sent each of the page's documents, in one query
         var foundIds = docMeta.Keys.ToList();
-        var handoffs = await _db.AuditEvents.AsNoTracking()
+        List<AuditEvent> handoffs = foundIds.Count == 0 ? [] : await _db.AuditEvents.AsNoTracking()
             .Where(a => a.OrgId == orgId && a.EntityType == "FlowDocument" && foundIds.Contains(a.EntityId)
                 && (a.Action == "document.received" || a.Action == "document.sent"))
-            .Select(a => new { a.EntityId, a.Action, a.CreatedAt, a.Payload })
             .ToListAsync(ct);
         string? ActorOf(Guid docId, string action, DateTime at, JsonDocument? payload) => DocumentAudit.By(payload) ?? action switch
         {
@@ -208,14 +209,14 @@ public class AuditController : ControllerBase
 
             // ── Document enrichment ─────────────────────────────────────────
             Guid? documentId = null;
-            Guid? flowId = null;
+            Guid? docFlowId = null;
             string? documentName = null;
             string? flowName = null;
             string? source = null;
             if (docFound)
             {
                 documentId   = e.EntityId;
-                flowId       = doc.FlowId;
+                docFlowId    = doc.FlowId;
                 documentName = doc.FileName;
                 flowName     = doc.FlowName;
                 source       = doc.Source;
@@ -236,7 +237,7 @@ public class AuditController : ControllerBase
                 supplierName,
                 format,
                 documentId,
-                flowId,
+                flowId        = docFlowId,
                 documentName,
                 flowName,
                 source,
@@ -246,9 +247,7 @@ public class AuditController : ControllerBase
                 actorName,
                 actorInitials,
                 message,
-                payload       = (object?)(e.Payload != null
-                    ? JsonSerializer.Deserialize<object>(e.Payload.RootElement.GetRawText())
-                    : null),
+                payload       = Shown(action, e.Payload),
             };
         }).ToList();
 
@@ -256,6 +255,14 @@ public class AuditController : ControllerBase
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /// <summary>The payload as a workspace member may see it: a platform admin's identity (<c>actor</c> on <c>admin.*</c> rows) is the platform's record, not the workspace's.</summary>
+    private static JsonNode? Shown(string action, JsonDocument? payload)
+    {
+        var node = payload is null ? null : JsonNode.Parse(payload.RootElement.GetRawText());
+        if (action.StartsWith("admin.", StringComparison.Ordinal) && node is JsonObject o) o.Remove("actor");
+        return node;
+    }
 
     private static string? ExtractBuyerName(JsonDocument? doc)
     {

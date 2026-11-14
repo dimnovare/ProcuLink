@@ -67,7 +67,7 @@ public class DocumentListApiTests(DocumentEngineTestFactory factory) : IClassFix
         Assert.Equal(["Invoice-2291.pdf"], await Names(Org, "q=invoice"));                  // any case, this workspace only
         Assert.Equal(["Invoice-2291.pdf"], await Names(Org, "q=inv%202291"));               // the number; spaces and case ignored
         Assert.Equal(["scan_0042.pdf"], await Names(Org, "q=48213"));
-        Assert.Empty(await Names(Org, "q=ab12"));                                           // a file hash is not a number
+        Assert.Empty(await Names(Org, "q=12"));                                             // a file hash is not a number
         Assert.Empty(await Names(Org, "q=%25"));                                            // % is a plain character
         Assert.Equal(["scan_0042.pdf"], await Names(Org, "q=_"));                           // so is _
         Assert.Equal(3, (await Names(Org, $"flowId={flow}&q=%20%20")).Count);               // a blank term is no filter
