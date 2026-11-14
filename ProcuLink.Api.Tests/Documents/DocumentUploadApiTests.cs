@@ -1,10 +1,12 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Jobs;
 using ProcuLink.Core.Documents;
+using ProcuLink.Infrastructure;
 using QuestPDF.Fluent;
 using QuestPDF.Infrastructure;
 using Xunit;
@@ -62,6 +64,10 @@ public class DocumentUploadApiTests : IClassFixture<DocumentEngineTestFactory>
         _factory.Storage.Verify(s => s.UploadAsync(It.IsAny<Stream>(),
             It.Is<string>(k => k.StartsWith($"{DocumentEngineTestFactory.OrgA}/documents/")),
             It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        var received = db.AuditEvents.Single(a => a.EntityId == dto.Id && a.Action == "document.received");
+        Assert.Equal("user_DOC_TEST", received.Payload!.RootElement.GetProperty("by").GetString());   // the caller of this factory's client
     }
 
     [Fact]

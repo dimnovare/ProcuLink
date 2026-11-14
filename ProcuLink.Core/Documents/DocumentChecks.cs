@@ -112,13 +112,17 @@ public static class DocumentChecks
         _ => 2,
     };
 
+    /// <summary>Starts the dedup key of a document without a number, which is built from its file hash.</summary>
+    public const string FileHashKeyPrefix = "sha256:";
+
+    /// <summary>A document number as it is compared: whitespace removed, upper-cased.</summary>
+    public static string NormalizeNumber(string value) => string.Concat(value.Where(c => !char.IsWhiteSpace(c))).ToUpperInvariant();
+
     /// <summary>The document number, trimmed, upper-cased and without whitespace; null when there is none.</summary>
     public static string? DedupKeyOf(ReadResult read)
     {
         var value = read.Fields.FirstOrDefault(f => f.Meaning == FieldMeanings.DocumentNumber)?.Value;
-        return string.IsNullOrWhiteSpace(value)
-            ? null
-            : string.Concat(value.Where(c => !char.IsWhiteSpace(c))).ToUpperInvariant();
+        return string.IsNullOrWhiteSpace(value) ? null : NormalizeNumber(value);
     }
 
     public static string StatusFor(IReadOnlyList<DocumentCheck> failed) =>

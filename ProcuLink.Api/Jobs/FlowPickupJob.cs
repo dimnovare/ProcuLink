@@ -173,7 +173,7 @@ public class FlowPickupJob(
             {
                 using var content = await Remote(() => session.DownloadAsync(file, IngressLimits.MaxFileBytes, ct));
                 var result = await submitter.SubmitAsync(intake.OrgId, intake.FlowId, content, file.FileName,
-                    SourceDocumentMediaType.For(Path.GetExtension(file.FileName).TrimStart('.')).ContentType, intake.Kind, file.SourceRef, ct);
+                    SourceDocumentMediaType.For(Path.GetExtension(file.FileName).TrimStart('.')).ContentType, intake.Kind, file.SourceRef, null, ct);
                 if (result.Limit is { Allowed: false } refused)
                 {
                     await IntakeLedger.ReleaseAsync(db, intake.OrgId, claim.Id, CancellationToken.None);

@@ -36,6 +36,10 @@
 /// order intake settings), and those surfaces were deleted with it. The document engine gates
 /// none of them, so nothing was left to refuse.</para>
 ///
+/// <para><b>Removed in plan 14 (2026-11-14)</b>: <c>AdvancedAudit</c>. It gated the
+/// workspace-wide activity list (<c>GET /api/audit</c>) below Operations. That list is now open
+/// on every plan, the trial included, so nothing was left to refuse.</para>
+///
 /// <para>Deleting members here is ordinal-safe: <c>BillingFeature</c> is never persisted or
 /// serialized -- re-verified repo-wide for plan 13b: no entity, migration, DTO or Stripe metadata
 /// key carries it. Re-verify that before removing any future member, or stored data silently
@@ -43,11 +47,11 @@
 /// </summary>
 public enum BillingFeature
 {
-    AdvancedAudit,
+    // 0 stays unused: the IL scanner reads the last integer constant before a gate call, and 0 is pushed everywhere.
     // Enterprise SSO (SAML/OIDC). The auth itself is handled natively by Clerk
     // Enterprise Connections; this flag is pure plan-gating metadata that drives
     // the Settings "Single sign-on" availability/upsell — it does NOT touch JWT
     // validation or tenant resolution (the session JWT shape is identical for a
     // SAML login). See docs/strategy/2026-06-08-sso-saml-implementation.md.
-    Sso,
+    Sso = 1,
 }

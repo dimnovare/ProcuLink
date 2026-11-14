@@ -322,10 +322,10 @@ public static class PlanConstants
     // BillingGateEnforcementIsRealTests, which reads compiled IL and fails the build otherwise.
     // A row nothing checks is not a gate, it is a false claim about the price list.
     // Plan 13b (2026-11-13) deleted eight rows with the legacy order surfaces they gated.
+    // Plan 14 (2026-11-14) deleted AdvancedAudit: the workspace-wide activity list is open on every plan.
     private static readonly IReadOnlyDictionary<BillingFeature, string> MinimumPlan =
         new Dictionary<BillingFeature, string>
         {
-            [BillingFeature.AdvancedAudit]      = Operations,
             // Enterprise SSO (SAML/OIDC) via Clerk Enterprise Connections.
             [BillingFeature.Sso]                = Enterprise,
         };

@@ -1,8 +1,10 @@
 ﻿using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using ProcuLink.Core.Constants;
+using ProcuLink.Api.Services.Documents;
+using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
 
@@ -15,13 +17,11 @@ public class AuditController : ControllerBase
 {
     private readonly ProcuLinkDbContext  _db;
     private readonly ICurrentTenantService _tenant;
-    private readonly IBillingService      _billing;
 
-    public AuditController(ProcuLinkDbContext db, ICurrentTenantService tenant, IBillingService billing)
+    public AuditController(ProcuLinkDbContext db, ICurrentTenantService tenant)
     {
         _db      = db;
         _tenant  = tenant;
-        _billing = billing;
     }
 
     /// <summary>
@@ -31,41 +31,42 @@ public class AuditController : ControllerBase
     /// </summary>
     [HttpGet]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> GetAuditLog(
         [FromQuery] int page     = 1,
         [FromQuery] int pageSize = 50,
+        [FromQuery] Guid? flowId = null,
+        [FromQuery] string[]? actions = null,
+        [FromQuery] DateTimeOffset? from = null,
+        [FromQuery] DateTimeOffset? to = null,
+        [FromQuery] string? q = null,
         CancellationToken ct     = default)
     {
-        page     = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 200);
+        page     = Math.Clamp(page, 1, int.MaxValue / pageSize); // an absurd page is an empty page, not an overflowed Skip
 
         var orgId = _tenant.OrganisationId;
 
-        // The ORG-WIDE, cross-order, paginated trail is what Operations advertises as its
-        // "advanced audit trail". The per-document history that every paid plan is sold as an
-        // "audit log" is GET /api/documents/{id}/history, and that stays open on every plan --
-        // gating it would take away something Growth already pays for. Keep the two apart.
-        if (!await _billing.HasFeatureAsync(orgId, BillingFeature.AdvancedAudit, ct))
+        // One filtered query for both the count and the page
+        var events = _db.AuditEvents.AsNoTracking().Where(e => e.OrgId == orgId);
+        if (actions is { Length: > 0 }) events = events.Where(e => actions.Contains(e.Action));
+        if (from is { } fromAt) { var since = fromAt.UtcDateTime; events = events.Where(e => e.CreatedAt >= since); }
+        if (to is { } toAt) { var until = toAt.UtcDateTime; events = events.Where(e => e.CreatedAt < until); }
+        // A flow or a text narrows to events of documents that still exist in this workspace.
+        var match = DocumentSearch.Matches(q);
+        if (flowId is not null || match is not null)
         {
-            return StatusCode(StatusCodes.Status403Forbidden, new
-            {
-                error = BillingGateErrors.RequiresPlan("advanced_audit", BillingFeature.AdvancedAudit),
-                upgradeUrl = "/settings",
-            });
+            var docs = _db.FlowDocuments.Where(d => d.OrgId == orgId);
+            if (flowId is { } f) docs = docs.Where(d => d.FlowId == f);
+            if (match is not null) docs = docs.Where(match);
+            events = events.Where(e => e.EntityType == "FlowDocument" && docs.Any(d => d.Id == e.EntityId));
         }
 
-        // Total count for pagination metadata
-        var total = await _db.AuditEvents
-            .AsNoTracking()
-            .Where(e => e.OrgId == orgId)
-            .CountAsync(ct);
+        var total = await events.CountAsync(ct);
 
         // Fetch the page of events with optional user join
-        var rawEvents = await _db.AuditEvents
-            .AsNoTracking()
-            .Where(e => e.OrgId == orgId)
+        var rawEvents = await events
             .OrderByDescending(e => e.CreatedAt)
+            .ThenBy(e => e.Id)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .Select(e => new
@@ -121,11 +122,27 @@ public class AuditController : ControllerBase
         // Load document names in one query (FileName is what DocumentSummaryDto shows)
         var docIds = rawEvents.Where(e => e.EntityType == "FlowDocument").Select(e => e.EntityId).Distinct().ToList();
         var docMeta = docIds.Count == 0
-            ? new Dictionary<Guid, (Guid FlowId, string FileName)>()
+            ? new Dictionary<Guid, (Guid FlowId, string FileName, string? FlowName, string Source)>()
             : (await _db.FlowDocuments.AsNoTracking()
                 .Where(d => d.OrgId == orgId && docIds.Contains(d.Id))
-                .Select(d => new { d.Id, d.FlowId, d.FileName })
-                .ToListAsync(ct)).ToDictionary(d => d.Id, d => (d.FlowId, d.FileName));
+                .Select(d => new { d.Id, d.FlowId, d.FileName, FlowName = d.Flow != null ? d.Flow.Name : null, d.Source })
+                .ToListAsync(ct)).ToDictionary(d => d.Id, d => (d.FlowId, d.FileName, d.FlowName, d.Source));
+
+        // Who received (uploaded) and who sent each of the page's documents, in one query
+        var foundIds = docMeta.Keys.ToList();
+        List<AuditEvent> handoffs = foundIds.Count == 0 ? [] : await _db.AuditEvents.AsNoTracking()
+            .Where(a => a.OrgId == orgId && a.EntityType == "FlowDocument" && foundIds.Contains(a.EntityId)
+                && (a.Action == "document.received" || a.Action == "document.sent"))
+            .ToListAsync(ct);
+        string? ActorOf(Guid docId, string action, DateTime at, JsonDocument? payload) => DocumentAudit.By(payload) ?? action switch
+        {
+            "document.delivered" or "document.delivery_failed" => DocumentAudit.By(handoffs
+                .Where(h => h.EntityId == docId && h.Action == "document.sent" && h.CreatedAt <= at)
+                .MaxBy(h => h.CreatedAt)?.Payload),
+            "document.read" or "document.read_failed" => DocumentAudit.By(handoffs
+                .FirstOrDefault(h => h.EntityId == docId && h.Action == "document.received")?.Payload),
+            _ => null,
+        };
 
         // Map to DTO
         var dtos = rawEvents.Select(e =>
@@ -134,9 +151,18 @@ public class AuditController : ControllerBase
             string actorType;
             string actorName;
             string actorInitials;
+            string? actorId = null;
 
             var action = e.Action ?? string.Empty;
-            if (action.Contains("ai", StringComparison.OrdinalIgnoreCase)
+            var isDocument = e.EntityType == "FlowDocument";
+            var docFound = isDocument & docMeta.TryGetValue(e.EntityId, out var doc);
+            if (isDocument)
+            {
+                // The screen names the person from actorId
+                if (docFound) actorId = ActorOf(e.EntityId, action, e.CreatedAt, e.Payload);
+                (actorType, actorName, actorInitials) = actorId is null ? ("system", "System", "SY") : ("user", "A workspace member", "WM");
+            }
+            else if (action.Contains("ai", StringComparison.OrdinalIgnoreCase)
                 || action.Contains("nlp", StringComparison.OrdinalIgnoreCase)
                 || action.Contains("extract", StringComparison.OrdinalIgnoreCase))
             {
@@ -183,13 +209,17 @@ public class AuditController : ControllerBase
 
             // ── Document enrichment ─────────────────────────────────────────
             Guid? documentId = null;
-            Guid? flowId = null;
+            Guid? docFlowId = null;
             string? documentName = null;
-            if (e.EntityType == "FlowDocument" && docMeta.TryGetValue(e.EntityId, out var doc))
+            string? flowName = null;
+            string? source = null;
+            if (docFound)
             {
                 documentId   = e.EntityId;
-                flowId       = doc.FlowId;
+                docFlowId    = doc.FlowId;
                 documentName = doc.FileName;
+                flowName     = doc.FlowName;
+                source       = doc.Source;
             }
 
             // ── Human-readable message ──────────────────────────────────────
@@ -207,16 +237,17 @@ public class AuditController : ControllerBase
                 supplierName,
                 format,
                 documentId,
-                flowId,
+                flowId        = docFlowId,
                 documentName,
+                flowName,
+                source,
                 action        = action,
+                actorId,
                 actorType,
                 actorName,
                 actorInitials,
                 message,
-                payload       = (object?)(e.Payload != null
-                    ? JsonSerializer.Deserialize<object>(e.Payload.RootElement.GetRawText())
-                    : null),
+                payload       = Shown(action, e.Payload),
             };
         }).ToList();
 
@@ -224,6 +255,14 @@ public class AuditController : ControllerBase
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /// <summary>The payload as a workspace member may see it: a platform admin's identity (<c>actor</c> on <c>admin.*</c> rows) is the platform's record, not the workspace's.</summary>
+    private static JsonNode? Shown(string action, JsonDocument? payload)
+    {
+        var node = payload is null ? null : JsonNode.Parse(payload.RootElement.GetRawText());
+        if (action.StartsWith("admin.", StringComparison.Ordinal) && node is JsonObject o) o.Remove("actor");
+        return node;
+    }
 
     private static string? ExtractBuyerName(JsonDocument? doc)
     {

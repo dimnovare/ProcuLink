@@ -40,7 +40,7 @@ public sealed class DocumentsController(
     {
         await using var stream = file.OpenReadStream();
         var orgId = tenant.OrganisationId;
-        var result = await submitter.SubmitAsync(orgId, flowId, stream, file.FileName, file.ContentType, "upload", null, ct);
+        var result = await submitter.SubmitAsync(orgId, flowId, stream, file.FileName, file.ContentType, "upload", null, tenant.ClerkUserId, ct);
         var flowName = result.Document is null ? ""
             : await db.Flows.Where(f => f.OrgId == orgId && f.Id == flowId).Select(f => f.Name).FirstAsync(ct);
         return IntakeResults.From(this, result, flowName, submitter.AcceptedFormats(orgId));
@@ -62,15 +62,33 @@ public sealed class DocumentsController(
     private static readonly object NotFoundBody = new { error = "document_not_found" };
 
     [HttpGet]
-    public async Task<IActionResult> List(Guid? flowId, string? status, int? take, CancellationToken ct)
+    public async Task<IActionResult> List(Guid? flowId, string? status, int? take, string? q,
+        Guid? waitingOnDestination, int? page, int? pageSize, CancellationToken ct)
     {
         if (Refuse() is { } refused) return refused;
-        var q = db.FlowDocuments.Where(d => d.OrgId == tenant.OrganisationId);
-        if (flowId is { } f) q = q.Where(d => d.FlowId == f);
-        if (status is not null) q = q.Where(d => d.Status == status);
-        var rows = await q.OrderByDescending(d => d.CreatedAt).Take(Math.Clamp(take ?? 50, 1, 200))
-            .Select(d => new { Doc = d, FlowName = d.Flow!.Name }).ToListAsync(ct);
-        return Ok(rows.Select(r => ToSummary(r.Doc, r.FlowName)));
+        var orgId = tenant.OrganisationId;
+        var docs = db.FlowDocuments.Where(d => d.OrgId == orgId);
+        if (flowId is { } f) docs = docs.Where(d => d.FlowId == f);
+        if (status is not null)
+        {
+            var statuses = status.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+            docs = docs.Where(d => statuses.Contains(d.Status));
+        }
+        if (DocumentSearch.Matches(q) is { } match) docs = docs.Where(match);
+        // The documents "Send it now" sends: stopped after their retries at this destination, with an output that still exists.
+        if (waitingOnDestination is { } dest)
+            docs = docs.Where(d => d.Status == DocumentStatus.SendFailed && db.Set<FlowDelivery>().Any(x =>
+                x.OrgId == orgId && x.DocumentId == d.Id && x.DestinationId == dest && x.Status == FlowDeliveryStatus.DeadLetter && x.OutputId != null));
+        docs = docs.OrderByDescending(d => d.CreatedAt).ThenBy(d => d.Id);
+
+        async Task<List<DocumentSummaryDto>> Summaries(IQueryable<FlowDocument> rows) =>
+            (await rows.Select(d => new { Doc = d, FlowName = d.Flow!.Name }).ToListAsync(ct)).Select(r => ToSummary(r.Doc, r.FlowName)).ToList();
+
+        if (page is null) return Ok(await Summaries(docs.Take(Math.Clamp(take ?? 50, 1, 200))));
+        var size = Math.Clamp(pageSize ?? 50, 1, 200);
+        var p = Math.Clamp(page.Value, 1, int.MaxValue / size); // an absurd page is an empty page, not an overflowed Skip
+        var total = await docs.CountAsync(ct);
+        return Ok(new PaginatedResult<DocumentSummaryDto>(await Summaries(docs.Skip((p - 1) * size).Take(size)), total, p, size));
     }
 
     [HttpGet("{id:guid}")]
@@ -118,9 +136,7 @@ public sealed class DocumentsController(
         return Ok(rows.Select(a =>
         {
             var payload = a.Payload?.RootElement.Clone() ?? JsonDocument.Parse("{}").RootElement;
-            var by = payload.ValueKind == JsonValueKind.Object && payload.TryGetProperty("by", out var b) && b.ValueKind == JsonValueKind.String
-                ? b.GetString() : null;
-            return new HistoryEntryDto(a.Action, a.CreatedAt, by, payload);
+            return new HistoryEntryDto(a.Action, a.CreatedAt, DocumentAudit.By(a.Payload), payload);
         }));
     }
 

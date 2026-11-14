@@ -56,8 +56,7 @@ public class PlanLadderTierTests
         new Dictionary<BillingFeature, string>
         {
             // Plan 13b (2026-11-13) deleted the other eight rows with the legacy order surfaces
-            // they gated; the two left are the ones with a gate site.
-            [BillingFeature.AdvancedAudit]       = PlanConstants.Operations,
+            // they gated; plan 14 (2026-11-14) deleted AdvancedAudit. The one left has a gate site.
             [BillingFeature.Sso]                 = PlanConstants.Enterprise,
         };
 
@@ -95,20 +94,13 @@ public class PlanLadderTierTests
     }
 
     /// <summary>
-    /// The pinned tiers must be real plans, and the table must not have collapsed onto one tier —
-    /// a table where every row says the same thing would satisfy the theory above while carrying
-    /// no pricing information at all.
+    /// The pinned tiers must be real plans.
     /// </summary>
     [Fact]
-    public void ThePinnedTiers_AreRealPlans_AcrossMoreThanOneTier()
+    public void ThePinnedTiers_AreRealPlans()
     {
         SoldFrom.Values.Should().OnlyContain(
             plan => PlanConstants.All.Contains(plan),
             "a capability cannot be priced at a tier that is not on the ladder");
-
-        SoldFrom.Values.Distinct().Should().HaveCountGreaterThan(
-            1,
-            "the ladder differentiates tiers by what they include — if every capability were pinned " +
-            "to one plan this file would assert nothing about pricing");
     }
 }

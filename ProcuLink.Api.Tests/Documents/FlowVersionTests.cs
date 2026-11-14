@@ -340,7 +340,6 @@ public class FlowVersionTests(DocumentEngineTestFactory factory) : IClassFixture
     {
         using var scope = factory.Services.CreateScope();
         var (db, flow, _) = await Seed(scope);
-        (await db.Organisations.SingleAsync(o => o.Id == Org)).Plan = PlanConstants.Operations;
         var t = DateTime.UtcNow;
         var doc = new FlowDocument
         {

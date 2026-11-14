@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FluentAssertions;
 using Hangfire;
 using Hangfire.Common;
@@ -88,6 +89,13 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
             await using var db = NewDb();
             return await new FlowDeliveryBounceHandler(db, Jobs.Object, NullLogger<FlowDeliveryBounceHandler>.Instance)
                 .TryHandleAsync(new DeliveryBounceNotification(key, DeliveryBounceKind.Hard, "supplier@example.test", null, null), CancellationToken.None);
+        }
+
+        public async Task<List<JsonElement>> FailurePayloadsAsync()
+        {
+            await using var db = NewDb();
+            return (await db.AuditEvents.Where(a => a.EntityId == DocumentId && a.Action == "document.delivery_failed").OrderBy(a => a.CreatedAt).ToListAsync())
+                .Select(a => a.Payload!.RootElement.Clone()).ToList();
         }
 
         public async Task<int> AuditCountAsync(string action) { await using var db = NewDb(); return await db.AuditEvents.CountAsync(a => a.EntityId == DocumentId && a.Action == action); }
@@ -235,6 +243,11 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
         delivery.Attempts.Should().Be(3);
         (await h.DocStatusAsync()).Should().Be(DocumentStatus.SendFailed);
         h.Jobs.Verify(j => j.Create(It.IsAny<Job>(), It.IsAny<ScheduledState>()), Times.Exactly(2));
+        var failures = await h.FailurePayloadsAsync();
+        failures.Should().ContainSingle();
+        failures[0].GetProperty("attempts").GetInt32().Should().Be(3);
+        failures[0].GetProperty("destinationId").GetGuid().Should().Be(delivery.DestinationId!.Value);
+        failures[0].GetProperty("file").GetString().Should().Be("a.csv");
 
         // A refusal that retrying cannot fix dead-letters on the first attempt.
         h.Dispatcher.Result = new DeliveryResult(false, "rejected", 422, Outcome: DeliveryOutcome.NotRetryable);
@@ -243,6 +256,7 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
         var refused = await h.DeliveryAsync();
         refused.Status.Should().Be(FlowDeliveryStatus.DeadLetter);
         refused.Attempts.Should().Be(1);
+        (await h.FailurePayloadsAsync()).Select(p => p.GetProperty("attempts").GetInt32()).Should().Equal(3, 1);   // the first failure keeps its own count
     }
 
     [DockerRequiredFact]

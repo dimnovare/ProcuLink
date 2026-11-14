@@ -24,8 +24,8 @@ engine, so the purchase-order path was deleted: `OrdersController` is a read-onl
 GETs: list, detail, artifact download) and the old order write path, parse / transform / retry
 jobs and the SFTP / S3 / IMAP order-polling and stuck-order / SLA sweeps are gone, as are the
 order-event integration webhooks, the supplier catalog sync, the acceptance gate, the
-connection-revision / revision-authority machinery and eight `BillingFeature` members (only
-`AdvancedAudit` and `Sso` remain). Every old table, entity and migration stays — no drop
+connection-revision / revision-authority machinery and eight `BillingFeature` members (only `Sso` remains;
+plan 14 removed `AdvancedAudit`, so the workspace-wide activity list is open on every plan). Every old table, entity and migration stays — no drop
 migration — so old orders remain readable and exportable. `DocumentEngineGate` stays as the
 flow-side gate. Do not write code against the deleted names; `git log` has them.
 

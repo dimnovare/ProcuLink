@@ -20,7 +20,7 @@ public static class BillingGateErrors
 {
     /// <summary>
     /// <c>{capability}_requires_{minimum plan of <paramref name="feature"/>}</c>, e.g.
-    /// <c>advanced_audit_requires_operations</c>. Falls back to <c>_requires_upgrade</c> when
+    /// <c>single_sign_on_requires_enterprise</c>. Falls back to <c>_requires_upgrade</c> when
     /// the feature has no gate-table entry (no plan includes it), so the caller still gets
     /// a stable, non-misleading code instead of naming a plan that would not help.
     /// </summary>
