@@ -34,6 +34,10 @@ public class DocumentDeliverySweepJob(ProcuLinkDbContext db, IBackgroundJobClien
         var repaired = new List<(FlowDocument Doc, string Before)>();
         foreach (var doc in stuck) repaired.Add((doc, await DeliverDocumentJob.RollUpAsync(db, doc, null, DateTime.UtcNow, ct)));
         await db.SaveChangesAsync(ct);
-        foreach (var (doc, before) in repaired) await DeliverDocumentJob.AnnounceAsync(db, jobs, doc, before, logger, ct);
+        foreach (var (doc, before) in repaired)
+        {
+            logger.LogWarning("Flow document {DocumentId} (org {OrgId}) was stuck in sending with nothing in flight; repaired to {Status}.", doc.Id, doc.OrgId, doc.Status);
+            await DeliverDocumentJob.AnnounceAsync(db, jobs, doc, before, logger, ct);
+        }
     }
 }

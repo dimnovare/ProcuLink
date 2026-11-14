@@ -142,8 +142,8 @@ public class DeliverDocumentJob(
 
     /// <summary>
     /// Sets the document's status from its counted deliveries (<paramref name="finished"/>, when given, replaces its stored row) and writes the delivered / delivery_failed
-    /// audit row for it. With no finished delivery (the sweep's repair) the row is written only when the document ends up <c>send_failed</c>. Call before save, inside the
-    /// caller's transaction; returns the status the document had before.
+    /// audit row for it. With no finished delivery (the sweep's repair) the row is written only when the document ends up <c>send_failed</c>. Call before save (inside the
+    /// caller's transaction when it holds the document lock); returns the status the document had before.
     /// </summary>
     public static async Task<string> RollUpAsync(ProcuLinkDbContext db, FlowDocument doc, FlowDelivery? finished, DateTime at, CancellationToken ct)
     {

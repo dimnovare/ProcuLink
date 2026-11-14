@@ -82,8 +82,8 @@ public enum DeliveryBounceOutcome
     OrderMarkedFailed,
 
     /// <summary>
-    /// The attempt was found, but the order is no longer in a state a bounce can contradict — it has
-    /// already been re-sent, or already failed. Recorded, not re-applied.
+    /// The attempt or flow delivery was found, but it is no longer in a state a bounce can contradict —
+    /// it has already been re-sent, or already failed. Recorded, not re-applied.
     /// </summary>
     AlreadyResolved,
 
