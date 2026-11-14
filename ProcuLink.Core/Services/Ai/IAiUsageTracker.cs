@@ -5,12 +5,10 @@ namespace ProcuLink.Core.Services.Ai;
 /// features. Backed by the <c>ai_usage_monthly</c> table; calendar months reset
 /// implicitly by switching to a new composite key (OrgId, Year, Month).
 ///
-/// <para>The limit is resolved PER ORG at check time. Precedence: the global
-/// config override <c>Ai:OpenAI:MonthlyTokenLimitPerOrg</c> (when set and
-/// &gt; 0) beats EVERY plan — it is the production emergency lever. Otherwise
-/// the org's plan default from
-/// <c>PlanConstants.GetAiMonthlyTokenLimit</c> applies (unknown or missing
-/// plan falls back to the Pilot value, fail-safe).</para>
+/// <para>The limit is resolved PER ORG at check time: the allowance from
+/// <c>PlanConstants.GetAiMonthlyTokenAllowance</c> for the billing units the org
+/// read this month (or is reading now) and its account status, capped by the
+/// emergency brake <c>Ai:OpenAI:EmergencyMonthlyTokenBrake</c>.</para>
 /// </summary>
 public interface IAiUsageTracker
 {

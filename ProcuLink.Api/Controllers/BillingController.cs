@@ -156,9 +156,9 @@ public sealed class BillingController : ControllerBase
 
     /// <summary>
     /// Returns the current calendar month's OpenAI token usage for the caller's
-    /// organisation, plus the org's RESOLVED monthly cap (the global config
-    /// override <c>Ai:OpenAI:MonthlyTokenLimitPerOrg</c> when set, otherwise the
-    /// org's plan default from <c>PlanConstants.GetAiMonthlyTokenLimit</c>).
+    /// organisation, plus the org's RESOLVED monthly cap (the allowance from
+    /// <c>PlanConstants.GetAiMonthlyTokenAllowance</c> for the documents read this
+    /// month, capped by <c>Ai:OpenAI:EmergencyMonthlyTokenBrake</c>).
     ///
     /// <para><b>No UI consumer exists.</b> This is a support endpoint, reached by curl with an
     /// org token when someone reports that AI extraction or mapping suggestions have gone quiet

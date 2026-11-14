@@ -222,8 +222,8 @@ not page.
   `dispatching` (still in flight) and `unconfirmed` (outcome lost to a crash) are **excluded**,
   so a send that has not resolved is never counted as a failure.
 - **AI token cap** — the verdict is `IAiUsageTracker.IsAtOrOverLimitAsync`, i.e. the exact
-  predicate production checks before every OpenAI call, so the `Ai:OpenAI:MonthlyTokenLimitPerOrg`
-  override and the delinquency clamp are honoured automatically.
+  predicate production checks before every OpenAI call, so the document-based allowance, the
+  account-status clamp and the `Ai:OpenAI:EmergencyMonthlyTokenBrake` are honoured automatically.
 
 ### Deliberate silences (these are not bugs)
 
@@ -516,11 +516,12 @@ supplier — look for a shared cause first.
 Not an outage. PDF extraction for that org silently falls back to the regex path, which is
 worse but not broken, and the counter clears when the calendar month rolls over.
 
-1. Decide whether the spend is legitimate. The per-org counter is `ai_usage_monthly`; the plan
-   ceilings are `PlanConstants.AiMonthlyTokenLimits`.
-2. To lift it now: move the org up a plan, or set `Ai:OpenAI:MonthlyTokenLimitPerOrg` — that
-   config key overrides **every** plan value and is the emergency lever, so put it back after.
-3. If the same org latches every month, its plan is wrong for its volume, not its budget.
+1. Decide whether the spend is legitimate. The per-org counter is `ai_usage_monthly`; the
+   allowance is `PlanConstants.GetAiMonthlyTokenAllowance` (40,000 tokens per billing unit read
+   this month or being read, floor 1,000,000), and `flow_read_calls` shows what each read cost.
+2. The only global lever is `Ai:OpenAI:EmergencyMonthlyTokenBrake` (default 250,000,000 tokens per
+   workspace a month). Lower it to stop runaway spend; never use it to ration a paying customer.
+3. `Ai:OpenAI:MonthlyTokenLimitPerOrg` is no longer read and can be deleted from both services.
 
 ### Support: "PO 4500012580 isn't arriving" — find the org from the PO number
 
