@@ -2,7 +2,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
 
@@ -15,13 +14,11 @@ public class AuditController : ControllerBase
 {
     private readonly ProcuLinkDbContext  _db;
     private readonly ICurrentTenantService _tenant;
-    private readonly IBillingService      _billing;
 
-    public AuditController(ProcuLinkDbContext db, ICurrentTenantService tenant, IBillingService billing)
+    public AuditController(ProcuLinkDbContext db, ICurrentTenantService tenant)
     {
         _db      = db;
         _tenant  = tenant;
-        _billing = billing;
     }
 
     /// <summary>
@@ -31,7 +28,6 @@ public class AuditController : ControllerBase
     /// </summary>
     [HttpGet]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> GetAuditLog(
         [FromQuery] int page     = 1,
         [FromQuery] int pageSize = 50,
@@ -41,19 +37,6 @@ public class AuditController : ControllerBase
         pageSize = Math.Clamp(pageSize, 1, 200);
 
         var orgId = _tenant.OrganisationId;
-
-        // The ORG-WIDE, cross-order, paginated trail is what Operations advertises as its
-        // "advanced audit trail". The per-document history that every paid plan is sold as an
-        // "audit log" is GET /api/documents/{id}/history, and that stays open on every plan --
-        // gating it would take away something Growth already pays for. Keep the two apart.
-        if (!await _billing.HasFeatureAsync(orgId, BillingFeature.AdvancedAudit, ct))
-        {
-            return StatusCode(StatusCodes.Status403Forbidden, new
-            {
-                error = BillingGateErrors.RequiresPlan("advanced_audit", BillingFeature.AdvancedAudit),
-                upgradeUrl = "/settings",
-            });
-        }
 
         // Total count for pagination metadata
         var total = await _db.AuditEvents

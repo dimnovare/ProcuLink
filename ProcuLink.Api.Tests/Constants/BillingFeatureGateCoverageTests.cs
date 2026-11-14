@@ -57,7 +57,6 @@ public class BillingFeatureGateCoverageTests
     public static readonly IReadOnlyDictionary<BillingFeature, string> EnforcedBy =
         new Dictionary<BillingFeature, string>
         {
-            [BillingFeature.AdvancedAudit]       = "AuditController.GetAuditLog (org-wide trail; a document's own history stays open)",
             [BillingFeature.Sso]                 = "StripeBillingService.GetStatusAsync -> BillingStatus.SsoAvailable",
         };
 
@@ -183,6 +182,7 @@ public class BillingFeatureGateCoverageTests
     [InlineData("CustomSupplierRules")]
     [InlineData("SftpIngestion")]
     [InlineData("S3Ingestion")]
+    [InlineData("AdvancedAudit")]
     public void DeletedFeatures_StayDeleted(string removed)
     {
         Enum.GetNames<BillingFeature>().Should().NotContain(removed,

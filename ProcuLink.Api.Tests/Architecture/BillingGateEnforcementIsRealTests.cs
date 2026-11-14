@@ -3,6 +3,7 @@ using FluentAssertions;
 using ProcuLink.Api.Controllers;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Services;
 using Xunit;
 using static ProcuLink.Api.Tests.Architecture.BillingGateIlScanner;
 
@@ -55,11 +56,6 @@ public sealed class BillingGateEnforcementIsRealTests
     private static readonly IReadOnlyDictionary<BillingFeature, Site> Sites =
         new Dictionary<BillingFeature, Site>
         {
-            [BillingFeature.AdvancedAudit] = new(
-                typeof(AuditController), nameof(AuditController.GetAuditLog), Kind.ServerRefusal,
-                "The org-wide trail. A document's own history stays open — gating it would take "
-              + "away something every plan already has."),
-
             [BillingFeature.Sso] = new(
                 typeof(StripeBillingService), nameof(StripeBillingService.GetStatusAsync),
                 Kind.PresentationOnly,
@@ -74,19 +70,21 @@ public sealed class BillingGateEnforcementIsRealTests
     /// <summary>
     /// POSITIVE CONTROL. If the scanner ever returns empty for everything — a bad opcode table, an
     /// unhandled async shape, an assembly that failed to load — every other test in this file would
-    /// pass or fail for reasons that have nothing to do with billing. This pins one site whose gate
-    /// is directly in the method body.
+    /// pass or fail for reasons that have nothing to do with billing. Production no longer refuses
+    /// anything by plan, so this pins a fixture in this class whose gate is directly in its body.
     /// </summary>
     [Fact]
     public void Scanner_Control_FindsAGateThatIsDefinitelyThere()
     {
-        var features = FeaturesGatedBy(Resolve(typeof(AuditController), nameof(AuditController.GetAuditLog)),
+        var features = FeaturesGatedBy(Resolve(typeof(BillingGateEnforcementIsRealTests), nameof(GateFixture)),
             GatePrimitive.ServerRefusal);
 
-        features.Should().Contain(BillingFeature.AdvancedAudit,
-            "AuditController.GetAuditLog calls HasFeatureAsync(AdvancedAudit) directly. If this "
-          + "fails, the scanner is broken and every other assertion in this file is worthless.");
+        features.Should().Contain(BillingFeature.Sso,
+            "GateFixture calls HasFeatureAsync(Sso) directly. If this fails, the scanner is broken "
+          + "and every other assertion in this file is worthless.");
     }
+
+    private static Task<bool> GateFixture(IBillingService billing) => billing.HasFeatureAsync(Guid.Empty, BillingFeature.Sso);
 
     /// <summary>
     /// NEGATIVE CONTROL. A scanner that answered "yes, gated" for everything would pass every test
@@ -101,6 +99,13 @@ public sealed class BillingGateEnforcementIsRealTests
             .Should().BeFalse(
                 "a document's history is deliberately open on every plan. If the scanner "
               + "reports a gate here, it is reporting gates everywhere and proves nothing.");
+    }
+
+    [Fact]
+    public void TheWorkspaceActivityList_IsNotGatedByPlan()
+    {
+        ReachesGatePrimitive(Resolve(typeof(AuditController), nameof(AuditController.GetAuditLog)),
+            GatePrimitive.ServerRefusal).Should().BeFalse();
     }
 
     // ── The real assertions ───────────────────────────────────────────────────
@@ -189,14 +194,14 @@ public sealed class BillingGateEnforcementIsRealTests
     {
         var callSites = DirectGateCallSites();
 
-        callSites.Should().NotBeEmpty(
-            "production must contain at least one HasFeatureAsync call — an empty result means the "
-          + "scanner failed to load the production assemblies, not that the ladder is clean");
+        // Production has no plan refusal today, so an empty result is legitimate. Prove the walk
+        // really read production code rather than failing to load the assemblies.
+        ProductionAssemblies().SelectMany(IlReader.SafeTypes).Should().Contain(typeof(AuditController));
 
         // The reverse walk below reads only the call sites whose feature is a compile-time constant.
         // A call with no constant before it would otherwise be dropped silently, so every
         // production gate call must name its feature at the call site.
-        callSites.Should().OnlyContain(c => c.Feature != null,
+        callSites.Should().NotContain(c => c.Feature == null,
             "no constant feature found at the call site; every HasFeatureAsync call in production "
           + "must name a constant BillingFeature there, or the walk below cannot see it");
 
@@ -209,12 +214,9 @@ public sealed class BillingGateEnforcementIsRealTests
         // A gate call naming a feature nobody declares means an enforcement site was added or moved
         // without updating the map — the map going stale in the direction the per-feature tests
         // cannot see.
-        gatedFeatures.Should().OnlyContain(f => Sites.ContainsKey(f),
+        gatedFeatures.Should().NotContain(f => !Sites.ContainsKey(f),
             "every HasFeatureAsync call in production must be for a feature the gate table declares. "
           + "An undeclared one is a capability being refused that no plan card admits to gating.");
-
-        var serverRefusals = Sites.Where(kv => kv.Value.Kind == Kind.ServerRefusal).Select(kv => kv.Key).ToArray();
-        serverRefusals.Should().NotBeEmpty("the ladder must refuse something, or it is not a ladder");
     }
 
     private static MethodBase Resolve(Type type, string method) =>
