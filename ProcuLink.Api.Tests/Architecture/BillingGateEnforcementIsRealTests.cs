@@ -194,11 +194,11 @@ public sealed class BillingGateEnforcementIsRealTests
           + "scanner failed to load the production assemblies, not that the ladder is clean");
 
         // The reverse walk below reads only the call sites whose feature is a compile-time constant.
-        // A call that passes the feature through a variable would otherwise be dropped silently, so
-        // every production gate call must name its feature at the call site.
+        // A call with no constant before it would otherwise be dropped silently, so every
+        // production gate call must name its feature at the call site.
         callSites.Should().OnlyContain(c => c.Feature != null,
-            "every HasFeatureAsync call in production must name a constant BillingFeature at the call "
-          + "site; one that passes it through a variable is invisible to the walk below");
+            "no constant feature found at the call site; every HasFeatureAsync call in production "
+          + "must name a constant BillingFeature there, or the walk below cannot see it");
 
         var gatedFeatures = callSites.Select(c => c.Feature).OfType<BillingFeature>().Distinct().ToArray();
 

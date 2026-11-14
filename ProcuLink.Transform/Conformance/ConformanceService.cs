@@ -3,7 +3,8 @@ using ProcuLink.Core.Services;
 namespace ProcuLink.Transform.Conformance;
 
 /// <summary>
-/// Default <see cref="IConformanceService"/>. Maps each standards
+/// Validates a generated outbound document against its NAMED standard profile
+/// (the Group V8 conformance report). Maps each standards
 /// <see cref="OutputFormat"/> to its named <see cref="StandardsProfile"/> and
 /// dispatches the document to the matching <see cref="IProfileChecker"/>.
 ///
@@ -14,7 +15,7 @@ namespace ProcuLink.Transform.Conformance;
 /// which is a programming error guarded by <see cref="SupportsFormat"/>.
 /// </para>
 /// </summary>
-public sealed class ConformanceService : IConformanceService
+public sealed class ConformanceService
 {
     private readonly IReadOnlyDictionary<StandardsProfile, IProfileChecker> _checkers;
 

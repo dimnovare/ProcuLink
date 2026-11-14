@@ -670,14 +670,6 @@ if (builder.Configuration.GetValue<bool>("Delivery:EnableSmtp"))
 builder.Services.AddScoped<IDeliveryDispatcher, ErplyDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, DirectoDeliveryDispatcher>();
 
-// ── Group V8: standards conformance reports ─────────────────────────────────
-// Validates a generated outbound document against its NAMED standard profile
-// (cXML 1.2 / UBL 2.1 / X12 850 / EDIFACT ORDERS D.96A / SAP IDoc ORDERS05).
-// Pure/stateless. No endpoint resolves it since plan 13b (2026-11-13) deleted
-// GET /api/orders/{id}/conformance.
-builder.Services.AddSingleton<ProcuLink.Transform.Conformance.IConformanceService,
-    ProcuLink.Transform.Conformance.ConformanceService>();
-
 // GDPR per-order erasure (admin-triggered): deletes the R2 blobs + every order-tied DB row.
 builder.Services.AddScoped<IDataErasureService, ProcuLink.Infrastructure.Services.DataErasureService>();
 // Whole-organisation erase (admin endpoint + Worker DisposableOrgSweepJob); receipt in platform_audit_events.

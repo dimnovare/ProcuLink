@@ -183,7 +183,9 @@ internal static class BillingGateIlScanner
     /// the stack at a <c>HasFeatureAsync</c> call is the feature itself — the org id is a
     /// <c>Guid</c> (loaded, not pushed as <c>ldc.i4</c>) and the cancellation token is an argument.
     /// A site that ever pushes another <c>ldc.i4</c> between the feature and the call would be
-    /// mis-read, so the reverse index reports a null feature rather than guessing.
+    /// mis-read. The constant is cleared only at a call, so a feature passed through a local that
+    /// was set from a constant earlier still reads as that constant; a feature with no constant
+    /// before its call (a field, a parameter) reads as null.
     /// </summary>
     private static IEnumerable<(MethodBase Callee, BillingFeature? Feature)> CallsIn(MethodBase method)
     {
