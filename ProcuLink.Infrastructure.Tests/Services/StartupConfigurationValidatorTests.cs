@@ -190,6 +190,26 @@ public class StartupConfigurationValidatorTests
             e.Level == LogLevel.Error && e.Message.Contains("AllowPrivateNetworkTargets"));
     }
 
+    [Fact]
+    public void Validate_UnusableEmergencyBrake_WarnsWithoutPrintingTheValue()
+    {
+        var logger = new RecordingLogger();
+        var config = new ConfigurationBuilder()
+            .AddConfiguration(BuildConfig(ValidKey))
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Ai:OpenAI:EmergencyMonthlyTokenBrake"] = "1,000" })
+            .Build();
+
+        StartupConfigurationValidator.Validate(
+            config, logger, "Development",
+            StartupConfigurationValidator.ApiRequiredKeys,
+            StartupConfigurationValidator.OptionalKeys,
+            "ProcuLink.Api");
+
+        var warning = Assert.Single(logger.Entries, e => e.Message.Contains("EmergencyMonthlyTokenBrake"));
+        Assert.Equal(LogLevel.Warning, warning.Level);
+        Assert.DoesNotContain("1,000", warning.Message);
+    }
+
     private static IConfiguration BuildConfigWith(string encryptionKey, bool allowPrivateNetworkTargets)
     {
         var dict = new Dictionary<string, string?>();

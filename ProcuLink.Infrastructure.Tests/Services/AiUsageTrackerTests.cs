@@ -178,6 +178,24 @@ public class AiUsageTrackerTests
         (await CreateTracker(db, brake: brake).GetCurrentAsync(orgId)).TokensLimit.Should().Be(250_000_000);
     }
 
+    [Theory]
+    [InlineData(PlanConstants.Pilot, 1_000_000)]
+    [InlineData(PlanConstants.Starter, 8_000_000)]
+    public async Task A_trials_units_are_capped_at_its_document_limit(string plan, long expected)
+    {
+        await using var db = CreateFullDb();
+        var orgId = await SeedOrgAsync(db, plan, AccountStatusConstants.Trialing);
+        db.FlowDocuments.Add(new FlowDocument
+        {
+            Id = Guid.NewGuid(), OrgId = orgId, FlowId = Guid.NewGuid(), FileName = "f.pdf", ContentType = "application/pdf",
+            SourceFileKey = "k", BillingUnits = 200, ReadAt = DateTime.UtcNow, Status = DocumentStatus.Sent,
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        (await CreateTracker(db).GetCurrentAsync(orgId)).TokensLimit.Should().Be(expected);
+    }
+
     // ── Account-status clamp on the AI budget (audit 2026-07-10 P2) ─────────
     // A read-only / delinquent org must not keep spending real OpenAI tokens at
     // its old allowance. Founder decision (2026-07-10): past_due keeps a small

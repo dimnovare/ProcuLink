@@ -14,7 +14,8 @@ namespace ProcuLink.Infrastructure.Services;
 /// <para>The monthly limit follows the documents the org reads: the billing units
 /// read this month or being read now, through
 /// <see cref="PlanConstants.GetAiMonthlyTokenAllowance"/>, capped only by the
-/// emergency brake <c>Ai:OpenAI:EmergencyMonthlyTokenBrake</c>.</para>
+/// emergency brake <c>Ai:OpenAI:EmergencyMonthlyTokenBrake</c>. A trial's units are
+/// capped at its document limit, so a trial stays at the floor.</para>
 /// </summary>
 public sealed class AiUsageTracker : IAiUsageTracker
 {
@@ -56,7 +57,7 @@ public sealed class AiUsageTracker : IAiUsageTracker
         // Zero usage can never be at/over a positive limit — skip the allowance lookup.
         if (row is null) return false;
 
-        var limit = await ResolveLimitAsync(organisationId, ct);
+        var limit = await ResolveLimitAsync(organisationId, year, month, ct);
         return row.TokensUsed >= limit;
     }
 
@@ -155,7 +156,7 @@ public sealed class AiUsageTracker : IAiUsageTracker
                 u => u.OrgId == organisationId && u.Year == year && u.Month == month,
                 ct);
 
-        var limit = await ResolveLimitAsync(organisationId, ct);
+        var limit = await ResolveLimitAsync(organisationId, year, month, ct);
         return new AiUsageSnapshot(organisationId, year, month, row?.TokensUsed ?? 0, limit);
     }
 
@@ -163,22 +164,25 @@ public sealed class AiUsageTracker : IAiUsageTracker
     /// The org's monthly token limit: the allowance for the billing units it read this
     /// month or is reading now (samples excluded) and its account status, capped by the brake.
     /// </summary>
-    private async Task<long> ResolveLimitAsync(Guid organisationId, CancellationToken ct)
+    private async Task<long> ResolveLimitAsync(Guid organisationId, int year, int month, CancellationToken ct)
     {
-        var status = await _db.Organisations
+        var org = await _db.Organisations
             .AsNoTracking()
             .Where(o => o.Id == organisationId)
-            .Select(o => o.AccountStatus)
+            .Select(o => new { o.AccountStatus, o.Plan, o.OrderLimitOverride })
             .FirstOrDefaultAsync(ct);
 
-        var now = _clock().UtcDateTime;
-        var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+        var monthStart = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Utc);
         var units = await _db.FlowDocuments
             .Where(d => d.OrgId == organisationId && !d.IsSample
                 && ((d.ReadAt != null && d.ReadAt >= monthStart) || d.Status == DocumentStatus.Reading))
             .SumAsync(d => (long)d.BillingUnits, ct);
 
-        return Math.Min(PlanConstants.GetAiMonthlyTokenAllowance(units, status), _brake);
+        // A trial is free, so its units never lift the allowance past its own document cap.
+        if (org?.Plan == PlanConstants.Pilot)
+            units = Math.Min(units, PlanConstants.GetEffectiveOrderLimit(org.Plan, org.OrderLimitOverride));
+
+        return Math.Min(PlanConstants.GetAiMonthlyTokenAllowance(units, org?.AccountStatus), _brake);
     }
 
     private (int year, int month) CurrentYearMonth()

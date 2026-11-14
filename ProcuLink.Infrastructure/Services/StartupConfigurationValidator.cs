@@ -116,6 +116,13 @@ public static class StartupConfigurationValidator
                 componentName, key);
         }
 
+        // Same parse as AiUsageTracker; the value itself is never logged.
+        var brake = configuration["Ai:OpenAI:EmergencyMonthlyTokenBrake"];
+        if (!string.IsNullOrWhiteSpace(brake) && !(long.TryParse(brake, out var parsedBrake) && parsedBrake > 0))
+            logger.LogWarning(
+                "{Component} startup: 'Ai:OpenAI:EmergencyMonthlyTokenBrake' is not a positive whole number and is ignored; the default of {Default} tokens applies.",
+                componentName, ProcuLink.Core.Constants.PlanConstants.AiEmergencyBrakeTokens);
+
         if (raisesOperatorAlerts)
             ValidateOperatorAlertDestination(configuration, logger, environmentName, isProduction, componentName);
 

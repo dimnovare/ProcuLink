@@ -100,6 +100,7 @@ public static class PlanConstants
     // ── Monthly AI token allowance ───────────────────────────────────────
     // One allowance per org across every AI feature: 40,000 tokens per billing unit
     // read this month (or being read), floor 1M, capped by the emergency brake.
+    // A trial's units are capped at its document limit (AiUsageTracker), so it stays at the floor.
     public const long AiTokensPerBilledUnit = 40_000;
     public const long AiMonthlyTokenFloor = 1_000_000;
     public const long AiPastDueGraceTokens = 200_000;
