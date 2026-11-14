@@ -30,6 +30,7 @@ public sealed class ActivityAndListPostgresTests(PostgresContainerFixture postgr
         var t = new DateTime(2026, 4, 1, 9, 0, 0, DateTimeKind.Utc);
         var flow = new Flow { Id = Guid.NewGuid(), OrgId = Org, Name = "Synthetic flow", CreatedAt = now, UpdatedAt = now };
         var destination = new FlowDestination { Id = Guid.NewGuid(), OrgId = Org, Name = "Synthetic endpoint", Protocol = "http", CreatedAt = now, UpdatedAt = now };
+        var otherDestination = new FlowDestination { Id = Guid.NewGuid(), OrgId = Org, Name = "Other endpoint", Protocol = "http", CreatedAt = now, UpdatedAt = now };
         FlowDocument Doc(string name, string status) => new()
         {
             Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, FileName = name, ContentType = "application/pdf", Status = status, CreatedAt = now, UpdatedAt = now,
@@ -37,6 +38,7 @@ public sealed class ActivityAndListPostgresTests(PostgresContainerFixture postgr
         var stopped = Doc("rate_100%.pdf", DocumentStatus.SendFailed);
         var lookalike = Doc("rate-100x.pdf", DocumentStatus.NeedsReview);       // matches only if _ or % were wildcards
         var sent = Doc("other.pdf", DocumentStatus.Sent);
+        var elsewhere = Doc("elsewhere.pdf", DocumentStatus.SendFailed);        // stopped too, but at the other destination
         AuditEvent Event(FlowDocument d, string action, DateTime at) => new()
         {
             Id = Guid.NewGuid(), OrgId = Org, EntityType = "FlowDocument", EntityId = d.Id, Action = action, CreatedAt = at,
@@ -44,11 +46,21 @@ public sealed class ActivityAndListPostgresTests(PostgresContainerFixture postgr
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
-            db.AddRange(flow, destination, stopped, lookalike, sent);
+            db.AddRange(flow, destination, otherDestination, stopped, lookalike, sent, elsewhere);
             db.Add(new FlowDelivery
             {
                 Id = Guid.NewGuid(), OrgId = Org, DocumentId = stopped.Id, DestinationId = destination.Id, OutputId = Guid.NewGuid(),
                 Status = FlowDeliveryStatus.DeadLetter, DispatchKey = Guid.NewGuid(), CreatedAt = now, UpdatedAt = now,
+            });
+            db.Add(new FlowDelivery
+            {
+                Id = Guid.NewGuid(), OrgId = Org, DocumentId = elsewhere.Id, DestinationId = otherDestination.Id, OutputId = Guid.NewGuid(),
+                Status = FlowDeliveryStatus.DeadLetter, DispatchKey = Guid.NewGuid(), CreatedAt = now, UpdatedAt = now,
+            });
+            db.Add(new FlowDelivery
+            {
+                Id = Guid.NewGuid(), OrgId = Org, DocumentId = sent.Id, OutputId = Guid.NewGuid(), Status = FlowDeliveryStatus.Delivered,
+                DeliveredAt = t, DispatchKey = Guid.NewGuid(), CreatedAt = t, UpdatedAt = t,
             });
             db.AddRange(Event(stopped, "document.received", t), Event(stopped, "document.read", t.AddMinutes(1)),
                 Event(stopped, "document.delivery_failed", t.AddMinutes(2)), Event(lookalike, "document.read", t.AddMinutes(1)),
@@ -56,12 +68,17 @@ public sealed class ActivityAndListPostgresTests(PostgresContainerFixture postgr
             await db.SaveChangesAsync();
         }
 
-        var narrowed = await http.GetFromJsonAsync<PaginatedResult<DocumentSummaryDto>>(
-            $"/api/documents?flowId={flow.Id}&q=_100%25&status=send_failed,needs_review&waitingOnDestination={destination.Id}&page=1&pageSize=5");
-        Assert.Equal((1, "rate_100%.pdf"), (narrowed!.TotalCount, narrowed.Items.Single().FileName));
+        async Task<JsonElement> List(string query) =>
+            await http.GetFromJsonAsync<JsonElement>($"/api/documents?flowId={flow.Id}&{query}&page=1&pageSize=5");
+        static (int, string?) Only(JsonElement page) => (page.GetProperty("totalCount").GetInt32(), page.GetProperty("items")[0].GetProperty("fileName").GetString());
+        Assert.Equal((1, "rate_100%.pdf"), Only(await List("q=_100%25&status=send_failed,needs_review")));
+        Assert.Equal((1, "rate_100%.pdf"), Only(await List($"waitingOnDestination={destination.Id}")));
         var second = await http.GetFromJsonAsync<PaginatedResult<DocumentSummaryDto>>(
             $"/api/documents?flowId={flow.Id}&status=send_failed,needs_review&page=2&pageSize=1");
-        Assert.Equal((2, 1), (second!.TotalCount, second.Items.Count));
+        Assert.Equal((3, 1), (second!.TotalCount, second.Items.Count));
+        var between = await List("status=sent&sentFrom=2026-04-01T00:00:00Z&sentTo=2026-04-02T00:00:00Z");
+        Assert.Equal((1, "other.pdf"), Only(between));
+        Assert.Equal(t, between.GetProperty("items")[0].GetProperty("sentAt").GetDateTime());
 
         var activity = await http.GetFromJsonAsync<JsonElement>(
             $"/api/audit?flowId={flow.Id}&actions=document.read&actions=document.delivery_failed&from=2026-04-01T00:00:00Z&to=2026-04-02T00:00:00Z&q=_100%25");

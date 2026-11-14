@@ -121,6 +121,40 @@ public class DocumentListApiTests(DocumentEngineTestFactory factory) : IClassFix
     }
 
     [Fact]
+    public async Task Sent_between_reads_when_the_last_output_landed()
+    {
+        var flow = await Flow(Org);
+        var theirFlow = await Flow(OrgB);
+        var monday = new DateTime(2026, 5, 4, 0, 0, 0, DateTimeKind.Utc);
+        async Task Sent(Guid org, Guid flowId, string name, DateTime landed, DateTime? touched = null, string status = DocumentStatus.Sent)
+        {
+            var d = new FlowDocument
+            {
+                Id = Guid.NewGuid(), OrgId = org, FlowId = flowId, FileName = name, ContentType = "application/pdf", Status = status,
+                CreatedAt = monday.AddDays(-30), UpdatedAt = touched ?? landed,
+            };
+            await Save(d);
+            await Save(new FlowDelivery
+            {
+                Id = Guid.NewGuid(), OrgId = org, DocumentId = d.Id, OutputId = Guid.NewGuid(), Status = FlowDeliveryStatus.Delivered,
+                DeliveredAt = landed, DispatchKey = Guid.NewGuid(), CreatedAt = landed, UpdatedAt = landed,
+            });
+        }
+        await Sent(Org, flow, "first-instant.pdf", monday);
+        await Sent(Org, flow, "midweek.pdf", monday.AddDays(2));
+        await Sent(Org, flow, "last-instant.pdf", monday.AddDays(7));                                      // the end is not part of the week
+        await Sent(Org, flow, "last-week-touched-now.pdf", monday.AddDays(-3), touched: monday.AddDays(1)); // the row changed this week; the send did not
+        await Sent(Org, flow, "still-sending.pdf", monday.AddDays(1), status: DocumentStatus.Sending);     // one output landed, another has not
+        await Sent(OrgB, theirFlow, "theirs.pdf", monday.AddDays(2));
+
+        var week = $"sentFrom={monday:o}&sentTo={monday.AddDays(7):o}";
+        Assert.Equal(["first-instant.pdf", "midweek.pdf"], (await Names(Org, $"flowId={flow}&{week}")).Order().ToList());
+        Assert.Equal(2, (await Page(Org, $"flowId={flow}&{week}&page=1&pageSize=1")).TotalCount);           // "n were sent this week" is this total
+        Assert.Equal(3, (await Names(Org, $"flowId={flow}&sentFrom={monday:o}")).Count);                   // no end: the last instant is in
+        Assert.Empty(await Names(Org, $"flowId={theirFlow}&{week}"));                                      // another workspace's flow
+    }
+
+    [Fact]
     public async Task Paged_rows_say_the_number_the_sender_and_when_it_was_sent_or_stopped()
     {
         var flow = await Flow(Org);
@@ -130,12 +164,12 @@ public class DocumentListApiTests(DocumentEngineTestFactory factory) : IClassFix
             new ReadField("no", "Number", number, FieldTypes.Text, FieldMeanings.DocumentNumber, 0.9, null, false, true, false),
             new ReadField("from", "Supplier", sender, FieldTypes.Text, FieldMeanings.SenderName, 0.9, null, false, true, false),
         ]));
-        async Task<FlowDocument> Seed(Guid org, Guid flowId, string name, string status, string read, string checks = "[]", DateTime? updatedAt = null)
+        async Task<FlowDocument> Seed(Guid org, Guid flowId, string name, string status, string read, string checks = "[]", DateTime? updatedAt = null, bool isSample = false)
         {
             var d = new FlowDocument
             {
                 Id = Guid.NewGuid(), OrgId = org, FlowId = flowId, FileName = name, ContentType = "application/pdf", Status = status,
-                ReadJson = read, ChecksJson = checks, CreatedAt = t, UpdatedAt = updatedAt ?? t,
+                ReadJson = read, ChecksJson = checks, CreatedAt = t, UpdatedAt = updatedAt ?? t, IsSample = isSample,
             };
             await Save(d);
             return d;
@@ -154,6 +188,8 @@ public class DocumentListApiTests(DocumentEngineTestFactory factory) : IClassFix
         var theirs = new FlowDestination { Id = Guid.NewGuid(), OrgId = OrgB, Name = "Foreign server", Protocol = "sftp", CreatedAt = t, UpdatedAt = t };
         await Save(ours);
         await Save(theirs);
+        var archive = new FlowDestination { Id = Guid.NewGuid(), OrgId = Org, Name = "Archive server", Protocol = "sftp", CreatedAt = t, UpdatedAt = t };
+        await Save(archive);
 
         var sent = await Seed(Org, flow, "sent.pdf", DocumentStatus.Sent, Read(" INV 2291 ", "Kestrel Supplies"));
         await Landed(sent, t.AddMinutes(5));
@@ -161,12 +197,13 @@ public class DocumentListApiTests(DocumentEngineTestFactory factory) : IClassFix
         var half = await Seed(Org, flow, "half.pdf", DocumentStatus.SendFailed, Read("INV-2290", null));
         await Landed(half, t.AddMinutes(1));
         await Stopped(half, ours.Id, t.AddMinutes(12), "Login refused", Guid.NewGuid());
+        await Stopped(half, archive.Id, t.AddMinutes(20), "Quota exceeded", Guid.NewGuid());               // the newest stop that still has its output
         await Stopped(half, ours.Id, t.AddMinutes(30), "An output that was deleted", outputId: null);      // no longer counts
         var odd = await Seed(Org, flow, "odd.pdf", DocumentStatus.SendFailed, Read(null, null));
         await Stopped(odd, theirs.Id, t.AddMinutes(3), "Refused", Guid.NewGuid());                         // an id from another workspace
         await Seed(Org, flow, "bare.pdf", DocumentStatus.NeedsReview, "{}", checks:
             """[{"code":"required_missing","passed":false,"fieldKey":"a","message":"m"},{"code":"low_confidence","passed":false,"fieldKey":"b","message":"m"},{"code":"required_missing","passed":false,"fieldKey":"c","message":"m"}]""");
-        await Seed(Org, flow, "unread.pdf", DocumentStatus.ReadFailed, "{}", updatedAt: t.AddMinutes(7));
+        await Seed(Org, flow, "unread.pdf", DocumentStatus.ReadFailed, "{}", updatedAt: t.AddMinutes(7), isSample: true);
         await Seed(OrgB, await Flow(OrgB), "sent.pdf", DocumentStatus.Sent, Read("INV 2291", "Kestrel Supplies"));
 
         var http = factory.ClientFor(Org);
@@ -182,8 +219,8 @@ public class DocumentListApiTests(DocumentEngineTestFactory factory) : IClassFix
 
         var h = Row("half.pdf");                                                   // one output landed, one stopped: not sent
         Assert.True(IsNull(h, "sentAt") && IsNull(h, "sender"));
-        Assert.Equal(t.AddMinutes(12), h.GetProperty("failedAt").GetDateTime());   // the stopped output that still exists
-        Assert.Equal((ours.Id, "Accounting server", "Login refused"),
+        Assert.Equal(t.AddMinutes(20), h.GetProperty("failedAt").GetDateTime());   // the stopped output that still exists
+        Assert.Equal((archive.Id, "Archive server", "Quota exceeded"),
             (h.GetProperty("stop").GetProperty("destinationId").GetGuid(), h.GetProperty("stop").GetProperty("destination").GetString(),
              h.GetProperty("stop").GetProperty("error").GetString()));
         Assert.Equal(JsonValueKind.Null, Row("odd.pdf").GetProperty("stop").GetProperty("destination").ValueKind);
@@ -192,6 +229,8 @@ public class DocumentListApiTests(DocumentEngineTestFactory factory) : IClassFix
         Assert.True(IsNull(b, "number") && IsNull(b, "sender") && IsNull(b, "sentAt") && IsNull(b, "failedAt"));
         Assert.Equal(["required_missing", "low_confidence"], b.GetProperty("checks").EnumerateArray().Select(c => c.GetString()!).ToList());
         Assert.Equal(t.AddMinutes(7), Row("unread.pdf").GetProperty("failedAt").GetDateTime());
+        Assert.True(Row("unread.pdf").GetProperty("isSample").GetBoolean());
+        Assert.False(s.GetProperty("isSample").GetBoolean());
 
         // What the file API shares is unchanged, and so is the list without a page.
         var detail = await http.GetFromJsonAsync<JsonElement>($"/api/documents/{sent.Id}");

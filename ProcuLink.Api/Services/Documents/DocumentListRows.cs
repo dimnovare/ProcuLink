@@ -6,9 +6,20 @@ using ProcuLink.Infrastructure;
 
 namespace ProcuLink.Api.Services.Documents;
 
-/// <summary>The app's rows for one page of documents. Two extra queries (deliveries, destination names); none for an empty page.</summary>
+/// <summary>The app's rows for one page of documents. Up to two extra queries (deliveries; destination names, only when a stop names a destination); none for an empty page.</summary>
 public static class DocumentListRows
 {
+    /// <summary>Sent documents whose last output landed in [from, to). Both null: no filter.</summary>
+    public static IQueryable<FlowDocument> SentBetween(ProcuLinkDbContext db, Guid orgId, IQueryable<FlowDocument> docs, DateTime? from, DateTime? to)
+    {
+        if (from is null && to is null) return docs;
+        docs = docs.Where(d => d.Status == DocumentStatus.Sent);
+        // The last output landed: the newest DeliveredAt among this document's own deliveries.
+        if (from is { } a) docs = docs.Where(d => db.Set<FlowDelivery>().Where(x => x.OrgId == orgId && x.DocumentId == d.Id).Max(x => x.DeliveredAt) >= a);
+        if (to is { } b) docs = docs.Where(d => db.Set<FlowDelivery>().Where(x => x.OrgId == orgId && x.DocumentId == d.Id).Max(x => x.DeliveredAt) < b);
+        return docs;
+    }
+
     public static async Task<List<DocumentRowDto>> ForAsync(ProcuLinkDbContext db, Guid orgId, IQueryable<FlowDocument> page, CancellationToken ct)
     {
         var docs = await page.Select(d => new { Doc = d, FlowName = d.Flow!.Name }).ToListAsync(ct);
