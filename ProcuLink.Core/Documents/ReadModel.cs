@@ -20,7 +20,7 @@ public sealed record ReadField(
 
     // Declared in the body, so it would serialise last: the Order attributes above keep the original property order.
     // The backing field is stored as 0 for an empty value too, so equality (which compares it) agrees with what is read and serialised.
-    // Limit: an initialiser or with-expression that sets Confidence BEFORE an empty Value keeps the old figure in the field; every writer here sets Value first.
+    // Limit: the stored figure is only brought to 0 at construction or when Confidence is set after Value became empty; a with-expression that empties Value without also setting Confidence keeps the old figure in the field (it serialises 0 but is unequal to itself loaded back).
     /// <summary>An empty value carries no confidence, however the record was built, loaded or changed.</summary>
     public double Confidence { get => string.IsNullOrWhiteSpace(Value) ? 0 : _confidence; init => _confidence = string.IsNullOrWhiteSpace(Value) ? 0 : value; }
 }
@@ -33,7 +33,7 @@ public sealed record ReadCell(
 
     // Declared in the body, so it would serialise last: the Order attributes above keep the original property order.
     // The backing field is stored as 0 for an empty value too, so equality (which compares it) agrees with what is read and serialised.
-    // Limit: an initialiser or with-expression that sets Confidence BEFORE an empty Value keeps the old figure in the field; every writer here sets Value first.
+    // Limit: the stored figure is only brought to 0 at construction or when Confidence is set after Value became empty; a with-expression that empties Value without also setting Confidence keeps the old figure in the field (it serialises 0 but is unequal to itself loaded back).
     /// <summary>An empty value carries no confidence, however the record was built, loaded or changed.</summary>
     public double Confidence { get => string.IsNullOrWhiteSpace(Value) ? 0 : _confidence; init => _confidence = string.IsNullOrWhiteSpace(Value) ? 0 : value; }
 }

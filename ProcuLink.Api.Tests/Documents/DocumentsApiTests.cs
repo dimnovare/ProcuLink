@@ -139,10 +139,10 @@ public class DocumentsApiTests(DocumentEngineTestFactory factory) : IClassFixtur
         var res = await http.PatchAsJsonAsync($"/api/documents/{id}/values",
             new EditValuesRequest([new FieldEdit("total_gross", "")], null, null, null));
 
-        var dto = (await res.Content.ReadFromJsonAsync<DocumentDto>(DocumentJson.Options))!;
-        var field = Assert.Single(dto.Read.Fields, f => f.Key == "total_gross");
-        Assert.Equal((true, 0d), (field.Edited, field.Confidence));
-        Assert.Equal(DocumentStatus.NeedsReview, dto.Summary.Status);                                // still required, still missing
+        using var body = JsonDocument.Parse(await res.Content.ReadAsStringAsync());                  // the bytes, not ReadField's own getter
+        var field = body.RootElement.GetProperty("read").GetProperty("fields").EnumerateArray().Single(f => f.GetProperty("key").GetString() == "total_gross");
+        Assert.Equal((true, 0d), (field.GetProperty("edited").GetBoolean(), field.GetProperty("confidence").GetDouble()));
+        Assert.Equal(DocumentStatus.NeedsReview, body.RootElement.GetProperty("summary").GetProperty("status").GetString());   // still required, still missing
     }
 
     [Fact]
