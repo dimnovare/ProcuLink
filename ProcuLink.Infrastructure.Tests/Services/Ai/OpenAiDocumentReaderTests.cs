@@ -113,6 +113,7 @@ public class OpenAiDocumentReaderTests
         var outcome = await reader.ReadAsync(Input(), Org, CancellationToken.None);
 
         outcome.FailureReason.Should().Be("usage_cap");
+        outcome.Usage.Should().BeNull();
         client.Verify(c => c.CompleteChatAsync(
             It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatCompletionOptions>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -222,5 +223,62 @@ public class OpenAiDocumentReaderTests
         outcome.Success.Should().BeFalse();
         outcome.FailureReason.Should().Be("ai_error");
         (sent!.ReasoningEffortLevel?.ToString()).Should().Be(effort);
+    }
+
+    [Theory]
+    [InlineData(CannedJson, false, null)]
+    [InlineData(CannedJson, true, "document_too_large")]
+    [InlineData("not json", false, "ai_error")]
+    public async Task Every_answered_call_reports_its_tokens_and_model(string content, bool cutOff, string? failure)
+    {
+        var (reader, client) = Create(model: "other-model");
+        client.Setup(c => c.CompleteChatAsync(
+                It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatCompletionOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ClientResult.FromValue(OpenAIChatModelFactory.ChatCompletion(
+                content: new ChatMessageContent(content),
+                finishReason: cutOff ? ChatFinishReason.Length : ChatFinishReason.Stop,
+                usage: OpenAIChatModelFactory.ChatTokenUsage(outputTokenCount: 300, inputTokenCount: 1200, totalTokenCount: 1500)),
+                Mock.Of<PipelineResponse>()));
+
+        var outcome = await reader.ReadAsync(Input(), Org, CancellationToken.None);
+
+        outcome.FailureReason.Should().Be(failure);
+        outcome.Usage.Should().Be(new ReadUsage("other-model", 1200, 300));
+    }
+
+    [Fact]
+    public async Task A_part_of_a_longer_document_says_so_at_the_start_of_the_prompt()
+    {
+        var (reader, client) = Create();
+        var captured = new List<ChatMessage>();
+        client.Setup(c => c.CompleteChatAsync(
+                It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatCompletionOptions>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<ChatMessage>, ChatCompletionOptions, CancellationToken>((m, _, _) => captured.AddRange(m))
+            .ReturnsAsync(ClientResult.FromValue(
+                OpenAIChatModelFactory.ChatCompletion(content: new ChatMessageContent(CannedJson)), Mock.Of<PipelineResponse>()));
+
+        await reader.ReadAsync(Input() with { Part = 2, Parts = 3 }, Org, CancellationToken.None);
+        var part = captured.OfType<UserChatMessage>().Single().Content[0].Text;
+        captured.Clear();
+        await reader.ReadAsync(Input(), Org, CancellationToken.None);
+        var whole = captured.OfType<UserChatMessage>().Single().Content[0].Text;
+
+        part.Should().StartWith("This is part 2 of 3 of one longer document. Read only what is in this part, and return a null value for an expected key that is not in this part.\n\n");
+        whole.Should().NotContain("of one longer document");
+    }
+
+    [Fact]
+    public async Task A_failing_allowance_check_is_retryable_and_never_calls_the_model()
+    {
+        var tracker = new Mock<IAiUsageTracker>();
+        tracker.Setup(t => t.IsAtOrOverLimitAsync(Org, It.IsAny<CancellationToken>())).ThrowsAsync(new InvalidOperationException("database unavailable"));
+        var (reader, client) = Create(tracker.Object);
+
+        var outcome = await reader.ReadAsync(Input(), Org, CancellationToken.None);
+
+        outcome.FailureReason.Should().Be("ai_error");
+        outcome.Usage.Should().BeNull();
+        client.Verify(c => c.CompleteChatAsync(
+            It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatCompletionOptions>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 }

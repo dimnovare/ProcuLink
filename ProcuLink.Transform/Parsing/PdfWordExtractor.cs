@@ -4,7 +4,8 @@ using UglyToad.PdfPig;
 
 namespace ProcuLink.Transform.Parsing;
 
-public sealed record PdfWords(int PageCount, IReadOnlyList<PageWord> Words, string Text);
+/// <summary><c>PageTexts[i]</c> is page <c>i + 1</c>'s block of <see cref="Text"/>, header line included.</summary>
+public sealed record PdfWords(int PageCount, IReadOnlyList<PageWord> Words, string Text, IReadOnlyList<string> PageTexts);
 
 /// <summary>Words of a PDF with page boxes normalised to 0..1, origin top-left (PdfPig is bottom-left, in points).</summary>
 public static class PdfWordExtractor
@@ -13,7 +14,7 @@ public static class PdfWordExtractor
     {
         using var document = PdfDocument.Open(pdfBytes);
         var words = new List<PageWord>();
-        var text = new StringBuilder();
+        var pageTexts = new List<string>();
 
         foreach (var page in document.GetPages())
         {
@@ -34,11 +35,12 @@ public static class PdfWordExtractor
                     Math.Min(Clamp((b.Top - b.Bottom) / page.Height), 1 - y))));
             }
 
-            text.Append("=== Page ").Append(page.Number).Append(" ===\n");
+            var text = new StringBuilder().Append("=== Page ").Append(page.Number).Append(" ===\n");
             foreach (var line in lines) text.Append(string.Join(" ", line.Select(w => w.Text))).Append('\n');
+            pageTexts.Add(text.ToString());
         }
 
-        return new PdfWords(document.NumberOfPages, words, text.ToString());
+        return new PdfWords(document.NumberOfPages, words, string.Concat(pageTexts), pageTexts);
     }
 
     private static double Clamp(double v) => Math.Clamp(v, 0, 1);

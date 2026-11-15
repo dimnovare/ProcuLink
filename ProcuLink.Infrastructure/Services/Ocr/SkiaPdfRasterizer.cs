@@ -26,7 +26,7 @@ public sealed class SkiaPdfRasterizer : IPdfRasterizer
 
     public SkiaPdfRasterizer(ILogger<SkiaPdfRasterizer> logger) => _logger = logger;
 
-    public IReadOnlyList<byte[]> RenderPagesPng(byte[] pdfBytes, int maxPages)
+    public IReadOnlyList<byte[]> RenderPagesPng(byte[] pdfBytes, int maxPages, int skipPages = 0)
     {
         var pages = new List<byte[]>();
         if (pdfBytes is null || pdfBytes.Length == 0 || maxPages <= 0)
@@ -36,12 +36,13 @@ public sealed class SkiaPdfRasterizer : IPdfRasterizer
         {
             // PDFium isn't thread-safe; PDFtoImage serializes internally.
             var pageCount = Conversion.GetPageCount(pdfBytes);
-            var take = Math.Min(pageCount, maxPages);
+            var first = Math.Max(0, skipPages);
+            var end = Math.Min(pageCount, first + maxPages);
 
             // Width + Height + WithAspectRatio → scale to fit the box, never exceeding it.
             var options = new RenderOptions(Width: MaxRenderSide, Height: MaxRenderSide, WithAspectRatio: true);
 
-            for (var i = 0; i < take; i++)
+            for (var i = first; i < end; i++)
             {
                 using var bitmap = Conversion.ToImage(pdfBytes, page: i, password: null, options: options);
                 using var data = bitmap.Encode(SKEncodedImageFormat.Png, 90);

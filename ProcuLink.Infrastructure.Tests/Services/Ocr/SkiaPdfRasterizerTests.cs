@@ -55,6 +55,32 @@ public class SkiaPdfRasterizerTests
         bmp.Height.Should().BeLessThanOrEqualTo(2500);
     }
 
+    [Fact]
+    public void RenderPagesPng_SkipsLeadingPages()
+    {
+        var pdf = ThreePagePdf();
+
+        New().RenderPagesPng(pdf, maxPages: 10).Should().HaveCount(3);
+        New().RenderPagesPng(pdf, maxPages: 10, skipPages: 2).Should().HaveCount(1);
+        New().RenderPagesPng(pdf, maxPages: 1, skipPages: 1).Should().HaveCount(1);
+        New().RenderPagesPng(pdf, maxPages: 10, skipPages: 3).Should().BeEmpty();
+    }
+
+    private static byte[] ThreePagePdf()
+    {
+        using var stream = new MemoryStream();
+        using (var doc = SKDocument.CreatePdf(stream))
+        {
+            for (var i = 0; i < 3; i++)
+            {
+                doc.BeginPage(595, 842);
+                doc.EndPage();
+            }
+            doc.Close();
+        }
+        return stream.ToArray();
+    }
+
     // A blank single page with the given MediaBox (no content/text).
     private static byte[] CreateBlankPagePdf(int w, int h)
     {
