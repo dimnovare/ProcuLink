@@ -28,7 +28,7 @@ public class FlowWebhookJob(
     {
         if (!gate.IsEnabled(organisationId)) return;
         var doc = await db.FlowDocuments.AsNoTracking().FirstOrDefaultAsync(d => d.Id == documentId && d.OrgId == organisationId, ct);
-        if (doc is null) return;
+        if (doc is null || doc.IsSample) return; // the fresh row: a sample flagged after the read began is still never announced
         var intake = await db.FlowIntakes.AsNoTracking().FirstOrDefaultAsync(
             i => i.OrgId == organisationId && i.FlowId == doc.FlowId && i.Kind == IntakeKind.Api && i.IsEnabled, ct);
         if (intake is null || string.IsNullOrWhiteSpace(FlowWebhook.UrlOf(intake))) return;
