@@ -98,11 +98,7 @@ public static class FlowVersions
         return null;
     }
 
-    /// <summary>The outputs every flow's live version sends, so a destination or lookup they use cannot be deleted.</summary>
-    public static async Task<IReadOnlyList<FlowSnapshotOutput>> LiveVersionOutputsAsync(ProcuLinkDbContext db, Guid orgId, CancellationToken ct) =>
-        (await LiveVersionOutputsByFlowAsync(db, orgId, ct)).Select(x => x.Output).ToList();
-
-    /// <summary>The same outputs, each with the id of the flow whose live version sends it.</summary>
+    /// <summary>The outputs every flow's live version sends, each with the id of that flow.</summary>
     public static async Task<IReadOnlyList<(Guid FlowId, FlowSnapshotOutput Output)>> LiveVersionOutputsByFlowAsync(ProcuLinkDbContext db, Guid orgId, CancellationToken ct)
     {
         var rows = await db.Set<FlowVersion>().AsNoTracking()
