@@ -62,6 +62,8 @@ public class FixtureNamingGuardTests
         // "edi" covers the ".edi" extension EDIFACT interchanges conventionally carry. Both are
         // standards bodies' names for a wire format, not counterparties.
         "x", "edi",
+        // "pdf" is a document format, like csv and xml: the built-in sample document is the first PDF under Fixtures.
+        "pdf",
 
         // Platform / ERP dialects that ProcuLink publicly supports. A dialect is a format,
         // not a customer — see the class doc before adding to this group.
@@ -70,6 +72,8 @@ public class FixtureNamingGuardTests
         // Roles and canonical concepts.
         "buyer", "supplier", "order", "orderrequest", "part", "mpn", "index", "output",
         "sample", "expected", "generic", "real", "rw",
+        // "invoice" is a kind of document, like order: the built-in sample document is the first invoice under Fixtures.
+        "invoice",
 
         // Shapes, quirks and behaviours a fixture exists to pin.
         "bare", "curcy", "deploymentmode", "differs", "dtd", "equals", "lines", "netwr",
