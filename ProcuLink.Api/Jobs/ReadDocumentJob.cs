@@ -24,6 +24,10 @@ public class ReadDocumentJob(
     private const int MinWordsPerTextPage = 5;
     private const int MaxHints = 40;
     private const int LastRetry = 3;
+    private const int TriesPerPart = 2;
+    private static readonly TimeSpan MaxReadTime = TimeSpan.FromMinutes(20);
+
+    internal Func<DateTime> UtcNow { get; init; } = () => DateTime.UtcNow;
 
     [Queue("critical")]
     [AutomaticRetry(Attempts = 3, DelaysInSeconds = new[] { 5, 30, 120 })]
@@ -32,16 +36,26 @@ public class ReadDocumentJob(
         var doc = await db.FlowDocuments.FirstOrDefaultAsync(d => d.Id == documentId && d.OrgId == organisationId, ct);
         if (doc is null || (doc.Status != DocumentStatus.Received && doc.Status != DocumentStatus.Reading)) return;
 
+        // One time budget for the whole read: the download, every part, every retry. A call still running when it ends is cancelled.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         try
         {
             doc.Status = DocumentStatus.Reading;
             doc.UpdatedAt = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
-            await ReadAsync(doc, ct);
+            deadline.CancelAfter(MaxReadTime);
+            await ReadAsync(doc, deadline.Token, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+        {
+            // Out of time during a call: final, as when the time runs out between parts.
+            db.ChangeTracker.Clear();
+            var failed = await db.FlowDocuments.FirstAsync(d => d.Id == documentId && d.OrgId == organisationId, ct);
+            await FailAsync(failed, "document_too_large", ct);
         }
         catch (Exception ex)
         {
@@ -57,8 +71,10 @@ public class ReadDocumentJob(
         }
     }
 
-    private async Task ReadAsync(FlowDocument doc, CancellationToken ct)
+    /// <param name="budget">Ends with the read's time budget; given to the download, OCR and the reader. Saves use <paramref name="ct"/>.</param>
+    private async Task ReadAsync(FlowDocument doc, CancellationToken budget, CancellationToken ct)
     {
+        var started = UtcNow();
         var flow = await db.Flows.FirstAsync(f => f.Id == doc.FlowId && f.OrgId == doc.OrgId, ct);
         var isPdf = Path.GetExtension(doc.FileName).Equals(".pdf", StringComparison.OrdinalIgnoreCase);
         var isImage = DocumentFormats.IsImage(doc.FileName);
@@ -70,10 +86,10 @@ public class ReadDocumentJob(
         var text = "";
 
         byte[] bytes;
-        await using (var stream = await storage.DownloadAsync(doc.SourceFileKey, ct))
+        await using (var stream = await storage.DownloadAsync(doc.SourceFileKey, budget))
         {
             using var buffer = new MemoryStream();
-            await stream.CopyToAsync(buffer, ct);
+            await stream.CopyToAsync(buffer, budget);
             bytes = buffer.ToArray();
         }
 
@@ -86,7 +102,7 @@ public class ReadDocumentJob(
             }
             else if (DocumentFormats.IsMore(doc.FileName))
             {
-                (text, spans) = await DocumentText.ReadAsync(doc.FileName, bytes, tokenizer, ct);
+                (text, spans) = await DocumentText.ReadAsync(doc.FileName, bytes, tokenizer, budget);
             }
             else if (!isImage)
             {
@@ -145,7 +161,7 @@ public class ReadDocumentJob(
                 await FailAsync(doc, "unreadable_file", ct);
                 return;
             }
-            parts.Add((text, await ocr.ReadWordsAsync([upright], ct), [upright]));
+            parts.Add((text, await ocr.ReadWordsAsync([upright], budget), [upright]));
         }
         else if (!isPdf) parts.Add((text, words, null));
         if (!scanPdf && parts.Count == 0)
@@ -164,8 +180,14 @@ public class ReadDocumentJob(
 
         var results = new List<ReadResult>();
         var partCount = scanPdf ? ReadLimits.UnitsFor(pdfPages) : parts.Count;
+        static string? Failure(DocumentReadOutcome o) => o.Success && o.Result is not null ? null : o.FailureReason ?? "ai_error";
         for (var part = 1; part <= partCount; part++)
         {
+            if (part > 1 && UtcNow() - started > MaxReadTime)
+            {
+                await FailAsync(doc, "document_too_large", ct);
+                return;
+            }
             if (scanPdf)
             {
                 // A window is rendered when its turn comes. One that yields no image ends the reading: its pages and the rest were not read.
@@ -178,35 +200,42 @@ public class ReadDocumentJob(
                     await FailAsync(doc, "unreadable_file", ct);
                     return;
                 }
-                var ocrWords = (await ocr.ReadWordsAsync(images, ct)).Select(w => w with { Page = w.Page + skip }).ToList();
+                var ocrWords = (await ocr.ReadWordsAsync(images, budget)).Select(w => w with { Page = w.Page + skip }).ToList();
                 parts.Add((PagesText(skip + 1, Math.Min(skip + ReadLimits.PagesPerUnit, pdfPages)), ocrWords, images));
             }
             var (partText, partWords, partPages) = parts[part - 1];
             var partExpected = expected ?? (results.Count == 0 ? null : ReadMerge.KeysOf(ReadMerge.Merge(results, null)));
-            var outcome = await reader.ReadAsync(new DocumentReadInput(doc.FileName, doc.ContentType, partText, partExpected, partPages,
-                hints.Count > 0 ? hints : null, part, partCount), doc.OrgId, ct);
-            if (outcome.Usage is { } usage)
+            var input = new DocumentReadInput(doc.FileName, doc.ContentType, partText, partExpected, partPages,
+                hints.Count > 0 ? hints : null, part, partCount);
+            DocumentReadOutcome outcome;
+            var tries = 0;
+            do
             {
-                // The cost row and the heartbeat in one save; an answered call is recorded even when the job is stopping.
-                var now = DateTime.UtcNow;
-                db.Set<FlowReadCall>().Add(new FlowReadCall
+                outcome = await reader.ReadAsync(input, doc.OrgId, budget);
+                if (outcome.Usage is { } usage)
                 {
-                    Id = Guid.NewGuid(), OrgId = doc.OrgId, DocumentId = doc.Id, Part = part, Model = usage.Model,
-                    TokensIn = usage.TokensIn, TokensOut = usage.TokensOut, CreatedAt = now,
-                });
-                doc.UpdatedAt = now;
-                await db.SaveChangesAsync(CancellationToken.None);
+                    // The cost row and the heartbeat in one save; an answered call is recorded even when the job is stopping.
+                    var now = DateTime.UtcNow;
+                    db.Set<FlowReadCall>().Add(new FlowReadCall
+                    {
+                        Id = Guid.NewGuid(), OrgId = doc.OrgId, DocumentId = doc.Id, Part = part, Model = usage.Model,
+                        TokensIn = usage.TokensIn, TokensOut = usage.TokensOut, CreatedAt = now,
+                    });
+                    doc.UpdatedAt = now;
+                    await db.SaveChangesAsync(CancellationToken.None);
+                }
             }
-            if (!outcome.Success || outcome.Result is null)
+            // ai_error may be a blip: the part is called once more at once. The other reasons repeat for this document.
+            while (Failure(outcome) == "ai_error" && ++tries < TriesPerPart);
+            if (Failure(outcome) is { } reason)
             {
-                var reason = outcome.FailureReason ?? "ai_error";
-                // ai_error may be a blip: throw so Hangfire retries. The other reasons repeat for this document, so they are final.
-                if (reason == "ai_error") throw new InvalidOperationException("The document reader failed (ai_error).");
+                // Part 1 failing twice is thrown so Hangfire retries the read; on a later part it is final, so the parts already paid for are not read again.
+                if (reason == "ai_error" && part == 1) throw new InvalidOperationException("The document reader failed (ai_error).");
                 await FailAsync(doc, reason, ct);
                 return;
             }
 
-            var r = outcome.Result;
+            var r = outcome.Result!;
             results.Add(new ReadResult(r.KindLabel,
                 r.Fields.Select(f => f with { Location = Find(f.Value, partWords) }).ToList(),
                 r.Tables.Select(t => t with

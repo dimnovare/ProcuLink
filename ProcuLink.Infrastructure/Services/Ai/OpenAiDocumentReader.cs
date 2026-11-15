@@ -103,7 +103,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
             {
                 if (await tracker.IsAtOrOverLimitAsync(organisationId, ct)) return Fail("usage_cap");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // A failed check never calls the model; the read is retried.
                 _logger.LogWarning(ex, "Document read cap check failed for org {OrgId}; skipping to be safe.", organisationId);

@@ -537,12 +537,12 @@ fallback. The counter clears when the calendar month rolls over.
    - To stop all AI reading at once, set it to `1`.
    - Confirm what the API sees with `GET /api/billing/ai-usage` (`tokensLimit`). Nothing shows the
      Worker's value: set both and redeploy both.
-3. `Ai:OpenAI:MonthlyTokenLimitPerOrg` is no longer read. Rollback caveat: images built before
-   this change still carry an old per-workspace limit of 100,000 in the API's settings files and
-   read the old variable. If `Ai__OpenAI__MonthlyTokenLimitPerOrg` has been deleted and the API is
-   rolled back to such an image, every workspace is capped at 100,000 on the API. Keep the old
-   variable until a rollback past this change is no longer possible; then delete it from both
-   services.
+3. `Ai:OpenAI:MonthlyTokenLimitPerOrg` is no longer read, and `Ai__OpenAI__MonthlyTokenLimitPerOrg`
+   was deleted from both services (the API and the Worker) on 2026-11-15. Rollback caveat: an API
+   image built before 2026-11-14 23:00 still carries a per-workspace limit of 100,000 in its
+   settings files and reads the old variable. Rolling the API back to such an image therefore caps
+   every workspace at 100,000 tokens a month until `Ai__OpenAI__MonthlyTokenLimitPerOrg` is set
+   again on the API (for example to 250000000) and the API is redeployed.
 
 ### Support: "PO 4500012580 isn't arriving" — find the org from the PO number
 
