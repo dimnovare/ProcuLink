@@ -50,6 +50,7 @@
     <EmbeddedResource Include="Fixtures\po-templates\cxml-orderrequest.json" />
     <EmbeddedResource Include="Fixtures\po-templates\erply.json" />
     <EmbeddedResource Include="Fixtures\po-templates\directo.json" />
+    <EmbeddedResource Include="Fixtures\sample\invoice-2250.pdf" LogicalName="sample/invoice-2250.pdf" />
   </ItemGroup>
 
 </Project>

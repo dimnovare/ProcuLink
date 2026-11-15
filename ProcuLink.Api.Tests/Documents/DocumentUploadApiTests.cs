@@ -5,8 +5,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Jobs;
+using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Documents;
 using ProcuLink.Infrastructure;
+using ProcuLink.Transform.Parsing;
 using QuestPDF.Fluent;
 using QuestPDF.Infrastructure;
 using Xunit;
@@ -144,5 +146,41 @@ public class DocumentUploadApiTests : IClassFixture<DocumentEngineTestFactory>
         Assert.Equal("unreadable_file", body.RootElement.GetProperty("error").GetString());
         Assert.Empty(_factory.Storage.Invocations);
         Assert.Equal(before, _factory.Enqueued<ReadDocumentJob>());
+    }
+
+    [Fact]
+    public async Task The_sample_is_read_like_an_upload_once_per_flow_and_flagged()
+    {
+        var flowId = await NewFlow();
+        var before = _factory.Enqueued<ReadDocumentJob>();
+
+        var first = await _http.PostAsync($"/api/flows/{flowId}/documents/sample", null);
+        var again = await _http.PostAsync($"/api/flows/{flowId}/documents/sample", null);
+
+        Assert.Equal((HttpStatusCode.Created, HttpStatusCode.OK), (first.StatusCode, again.StatusCode));
+        var dto = (await first.Content.ReadFromJsonAsync<DocumentSummaryDto>(DocumentJson.Options))!;
+        Assert.Equal(("invoice-2250.pdf", 1, DocumentStatus.Received), (dto.FileName, dto.PageCount ?? 0, dto.Status));
+        Assert.Equal(dto.Id, (await again.Content.ReadFromJsonAsync<DocumentSummaryDto>(DocumentJson.Options))!.Id);
+        Assert.Equal(before + 1, _factory.Enqueued<ReadDocumentJob>());                      // one read, however often it is asked for
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        Assert.True(db.FlowDocuments.Single(d => d.FlowId == flowId).IsSample);
+
+        var theirs = await _factory.ClientFor(DocumentEngineTestFactory.OrgB).PostAsync($"/api/flows/{flowId}/documents/sample", null);
+        Assert.Equal(HttpStatusCode.NotFound, theirs.StatusCode);                            // another workspace's flow
+    }
+
+    [Fact]
+    public void The_sample_file_is_one_page_of_text_with_its_number_in_it()
+    {
+        using var buffer = new MemoryStream();
+        using (var file = SampleDocument.Open()) file.CopyTo(buffer);
+        var pdf = PdfWordExtractor.Extract(buffer.ToArray());                                // the extractor the read path uses
+
+        Assert.Equal(1, pdf.PageCount);
+        Assert.Contains("INV-2250", pdf.Text);
+        Assert.Contains("Kestrel Supplies", pdf.Text);
+        Assert.Contains("303.40", pdf.Text);
+        Assert.True(buffer.Length < 100_000);
     }
 }

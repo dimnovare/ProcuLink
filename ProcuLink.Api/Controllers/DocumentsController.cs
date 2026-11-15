@@ -41,6 +41,36 @@ public sealed class DocumentsController(
         await using var stream = file.OpenReadStream();
         var orgId = tenant.OrganisationId;
         var result = await submitter.SubmitAsync(orgId, flowId, stream, file.FileName, file.ContentType, "upload", null, tenant.ClerkUserId, ct);
+        return await AnswerAsync(orgId, flowId, result, ct);
+    }
+
+    /// <summary>The built-in sample, submitted exactly as an upload (same gate, flow, plan limit and rate limit), at most once per flow,
+    /// and flagged <see cref="FlowDocument.IsSample"/> so it never counts as usage.</summary>
+    [HttpPost("~/api/flows/{flowId:guid}/documents/sample")]
+    [EnableRateLimiting("upload")]
+    public async Task<IActionResult> Sample(Guid flowId, CancellationToken ct)
+    {
+        var orgId = tenant.OrganisationId;
+        var existing = await db.FlowDocuments
+            .Where(d => d.OrgId == orgId && d.FlowId == flowId && d.IsSample)
+            .OrderBy(d => d.CreatedAt).ThenBy(d => d.Id)
+            .Select(d => new { Doc = d, FlowName = d.Flow!.Name }).FirstOrDefaultAsync(ct);
+        if (existing is not null) return Refuse() ?? Ok(ToSummary(existing.Doc, existing.FlowName));
+
+        await using var stream = SampleDocument.Open();
+        var result = await submitter.SubmitAsync(orgId, flowId, stream, SampleDocument.FileName, SampleDocument.ContentType, "upload", null, tenant.ClerkUserId, ct);
+        if (result.Document is { } doc)
+        {
+            // Never cancelled half-way: the intake has saved the document, and only the flag keeps it out of usage.
+            var sample = await db.FlowDocuments.FirstAsync(d => d.OrgId == orgId && d.Id == doc.Id, CancellationToken.None);
+            sample.IsSample = true;
+            await db.SaveChangesAsync(CancellationToken.None);
+        }
+        return await AnswerAsync(orgId, flowId, result, ct);
+    }
+
+    private async Task<IActionResult> AnswerAsync(Guid orgId, Guid flowId, FlowSubmitResult result, CancellationToken ct)
+    {
         var flowName = result.Document is null ? ""
             : await db.Flows.Where(f => f.OrgId == orgId && f.Id == flowId).Select(f => f.Name).FirstAsync(ct);
         return IntakeResults.From(this, result, flowName, submitter.AcceptedFormats(orgId));
