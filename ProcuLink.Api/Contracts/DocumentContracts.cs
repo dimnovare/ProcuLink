@@ -5,7 +5,14 @@ using ProcuLink.Core.Entities;
 namespace ProcuLink.Api.Contracts;
 
 public record FlowDto(Guid Id, string Name, bool FieldsConfirmed, FlowFieldList Fields, int DocumentCount, DateTime CreatedAt, string Automation = "review", bool ScansOn = false, bool FormatsOn = false, bool DocsOutputsOn = false, bool PeppolOn = false,
-    int? PublishedVersion = null, bool HasChanges = false, int? NoCorrectionStreak = null);
+    int? PublishedVersion = null, bool HasChanges = false, int? NoCorrectionStreak = null, FlowSummaryDto? Summary = null);
+
+/// <summary>One file a flow sends: Destination is the destination's name, null for a download-only output or a destination that is gone.</summary>
+public sealed record FlowSummaryOutputDto(string Name, string Format, string? Standard, string? Destination);
+
+/// <summary>What a flow does and what needs a person, for the flows list. NeedsYou counts needs_review plus ready.</summary>
+public sealed record FlowSummaryDto(int NeedsYou, int CouldNotSend, int CouldNotRead, DateTime? LastDocumentAt,
+    IReadOnlyList<string> WaysIn, IReadOnlyList<FlowSummaryOutputDto> Outputs);
 
 public record FlowVersionDto(int VersionNo, DateTime PublishedAt, string? PublishedBy, bool Live);
 
