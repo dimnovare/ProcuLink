@@ -166,8 +166,11 @@ public class DocumentUploadApiTests : IClassFixture<DocumentEngineTestFactory>
         var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
         Assert.True(db.FlowDocuments.Single(d => d.FlowId == flowId).IsSample);
 
+        _factory.Storage.Invocations.Clear();
         var theirs = await _factory.ClientFor(DocumentEngineTestFactory.OrgB).PostAsync($"/api/flows/{flowId}/documents/sample", null);
         Assert.Equal(HttpStatusCode.NotFound, theirs.StatusCode);                            // another workspace's flow
+        Assert.Empty(_factory.Storage.Invocations);                                          // nothing stored for it
+        Assert.Equal(before + 1, _factory.Enqueued<ReadDocumentJob>());                      // nor queued
     }
 
     [Fact]

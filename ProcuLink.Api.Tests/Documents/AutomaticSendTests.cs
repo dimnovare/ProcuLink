@@ -28,7 +28,7 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
     private Task<HttpResponseMessage> Patch(Guid flowId, object body) =>
         factory.ClientFor(Org).PatchAsync($"/api/flows/{flowId}", JsonContent.Create(body));
 
-    private async Task ReadAsync(Guid documentId)
+    private async Task ReadAsync(Guid documentId, ReadResult? result = null)
     {
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
@@ -36,7 +36,7 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
         storage.Setup(s => s.DownloadAsync("k", It.IsAny<CancellationToken>())).ReturnsAsync(() => new MemoryStream("a,b\r\n1,2\r\n"u8.ToArray()));
         var reader = new Mock<IDocumentReader>();
         reader.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new DocumentReadOutcome(true, new ReadResult("Invoice", []), null));
+            .ReturnsAsync(new DocumentReadOutcome(true, result ?? new ReadResult("Invoice", []), null));
         var job = new ReadDocumentJob(db, storage.Object, reader.Object, new DocumentRechecker(db, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), Moq.Mock.Of<ProcuLink.Core.Documents.IStandardValidator>()), factory.Jobs.Object, Mock.Of<ProcuLink.Core.Services.Ocr.IPdfRasterizer>(), Mock.Of<ProcuLink.Core.Services.Ocr.IDocumentOcrService>(), new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), new ProcuLink.Transform.Tokenizing.SourceTokenizer(), NullLogger<ReadDocumentJob>.Instance);
         await job.ExecuteAsync(documentId, Org, null, CancellationToken.None);
     }
@@ -77,6 +77,40 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
         var invalid = await Patch(flow.Id, new { automation = "always" });
         invalid.StatusCode.Should().Be((HttpStatusCode)422);
         (await invalid.Content.ReadAsStringAsync()).Should().Contain("invalid_automation");
+    }
+
+    [Fact]
+    public async Task A_sample_is_never_sent_or_announced_by_itself_and_never_holds_a_real_document()
+    {
+        var now = DateTime.UtcNow;
+        var flow = new Flow
+        {
+            Id = Guid.NewGuid(), OrgId = Org, Name = "Synthetic flow", FieldsConfirmed = true, Automation = FlowAutomation.Auto, CreatedAt = now, UpdatedAt = now,
+            FieldsJson = DocumentJson.Serialize(new FlowFieldList([new FlowField("invoice_no", "Invoice number", FieldTypes.Text, null, Required: false)])),
+        };
+        FlowDocument NewDoc(bool sample, DateTime at) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, FileName = "synthetic.csv", ContentType = "text/csv",
+            SourceFileKey = "k", Status = DocumentStatus.Received, IsSample = sample, CreatedAt = at, UpdatedAt = at,
+        };
+        var (sample, real) = (NewDoc(true, now.AddMinutes(-1)), NewDoc(false, now));
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.Flows.Add(flow);
+            db.FlowIntakes.Add(new FlowIntake { Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, Kind = IntakeKind.Api, ConfigJson = """{"webhookUrl":"https://hooks.example.test/in"}""", CreatedAt = now, UpdatedAt = now });
+            db.FlowDocuments.AddRange(sample, real);
+            await db.SaveChangesAsync();
+        }
+        var numbered = new ReadResult("Invoice", [new ReadField("invoice_no", "Invoice number", "INV-2250", FieldTypes.Text, FieldMeanings.DocumentNumber, 0.99, null, false, true, false)]);
+        var before = (factory.Enqueued<SendDocumentJob>(), factory.Enqueued<FlowWebhookJob>());
+
+        await ReadAsync(sample.Id, numbered);
+        (factory.Enqueued<SendDocumentJob>(), factory.Enqueued<FlowWebhookJob>()).Should().Be(before);
+
+        // The same number, read later: the sample before it does not make it a repeat, so it sends and is announced.
+        await ReadAsync(real.Id, numbered);
+        (factory.Enqueued<SendDocumentJob>(), factory.Enqueued<FlowWebhookJob>()).Should().Be((before.Item1 + 1, before.Item2 + 1));
     }
 
     [Fact]

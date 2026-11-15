@@ -31,8 +31,9 @@ public sealed class DocumentRechecker(ProcuLinkDbContext db, DocumentEngineGate 
         var duplicate = false;
         if (doc.DedupKey is { } key)
         {
+            // A sample is invented: its number never makes a real document a repeat.
             var others = await db.FlowDocuments
-                .Where(d => d.OrgId == doc.OrgId && d.FlowId == doc.FlowId && d.DedupKey == key && d.Id != doc.Id)
+                .Where(d => d.OrgId == doc.OrgId && d.FlowId == doc.FlowId && d.DedupKey == key && d.Id != doc.Id && !d.IsSample)
                 .Select(d => new { d.Id, d.CreatedAt })
                 .ToListAsync(ct);
             duplicate = others.Any(d => d.CreatedAt < doc.CreatedAt
