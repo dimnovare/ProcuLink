@@ -12,7 +12,7 @@ namespace ProcuLink.Api.Controllers;
 
 public sealed record LookupRequest(string Name, List<LookupEntry>? Entries, List<LookupCandidate>? Candidates = null);
 
-public sealed record LookupSummaryDto(Guid Id, string Name, int Count, DateTime UpdatedAt, bool HasCandidates, bool SuggestionsOn);
+public sealed record LookupSummaryDto(Guid Id, string Name, int Count, DateTime UpdatedAt, bool HasCandidates, bool SuggestionsOn, IReadOnlyList<LookupUse> UsedBy);
 
 public sealed record LookupDto(Guid Id, string Name, List<LookupEntry> Entries, DateTime UpdatedAt, List<LookupCandidate> Candidates, bool SuggestionsOn);
 
@@ -58,7 +58,8 @@ public sealed class LookupsController(ProcuLinkDbContext db, ICurrentTenantServi
         var orgId = tenant.OrganisationId;
         var suggestionsOn = gate.LookupSuggestionsOn(orgId);
         var rows = await db.Set<Lookup>().AsNoTracking().Where(l => l.OrgId == orgId).OrderBy(l => l.Name).ToListAsync(ct);
-        return Ok(rows.Select(l => new LookupSummaryDto(l.Id, l.Name, EntriesOf(l).Count, l.UpdatedAt, l.CandidatesJson != "[]", suggestionsOn)));
+        var uses = await DocumentLookups.UsesAsync(db, orgId, ct);
+        return Ok(rows.Select(l => new LookupSummaryDto(l.Id, l.Name, EntriesOf(l).Count, l.UpdatedAt, l.CandidatesJson != "[]", suggestionsOn, uses[l.Id].ToList())));
     }
 
     [HttpPost("api/lookups")]
@@ -101,9 +102,7 @@ public sealed class LookupsController(ProcuLinkDbContext db, ICurrentTenantServi
         var lookup = await db.Set<Lookup>().FirstOrDefaultAsync(l => l.OrgId == orgId && l.Id == id, ct);
         if (lookup is null) return NotFoundResult();
 
-        var templates = await db.Set<FlowOutput>().AsNoTracking().Where(o => o.OrgId == orgId).Select(o => o.TemplateJson).ToListAsync(ct);
-        templates.AddRange((await FlowVersions.LiveVersionOutputsAsync(db, orgId, ct)).Select(o => o.TemplateJson));
-        if (templates.Any(t => DocumentLookups.UsedBy(DocumentJson.Deserialize<OutputNodeTemplate>(t)).Contains(id)))
+        if ((await DocumentLookups.UsesAsync(db, orgId, ct)).Contains(id))
             return Conflict(new { error = "lookup_in_use" });
 
         db.Set<Lookup>().Remove(lookup);

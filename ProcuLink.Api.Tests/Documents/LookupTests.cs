@@ -1,8 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using ProcuLink.Api.Controllers;
+using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -148,5 +150,50 @@ public class LookupTests(DocumentEngineTestFactory factory) : IClassFixture<Docu
         }
 
         (await http.DeleteAsync($"/api/lookups/{id}")).StatusCode.Should().Be(HttpStatusCode.NoContent);
+    }
+
+    [Fact]
+    public async Task The_list_says_which_flows_use_a_lookup_draft_or_live_each_flow_once_never_another_organisations()
+    {
+        var http = factory.ClientFor(Org);
+        var (used, idle) = ((await Create(http, "Item codes", ("BLT-10", "A"))).Id, (await Create(http, "Unused codes", ("X", "Y"))).Id);
+        var t = DateTime.UtcNow;
+        string Template(Guid lookup) => DocumentJson.Serialize(new OutputNodeTemplate
+        {
+            Format = OutputFormat.Csv,
+            Root = new OutputNode { Name = "root", NodeType = OutputNodeType.Object, Children = [OutputNode.FieldOf("Code", new OutputFieldRule
+            {
+                OutputPath = "Code", CanonicalField = "sku", FieldManipulators = [new ManipulatorEntry { Type = "Lookup", Params = [lookup.ToString(), "keep"] }],
+            })] },
+        });
+        Flow FlowOf(Guid org, string name) => new()   // confirmed fields, as FlowVersionTests.Seed does, so publish accepts it
+            { Id = Guid.NewGuid(), OrgId = org, Name = name, FieldsConfirmed = true, FieldsJson = DocumentJson.Serialize(FlowFieldList.Empty), CreatedAt = t, UpdatedAt = t };
+        FlowOutput OutputOf(Flow f, string name, string template) => new()
+            { Id = Guid.NewGuid(), OrgId = f.OrgId, FlowId = f.Id, Name = name, Format = "csv", TemplateJson = template, CreatedAt = t, UpdatedAt = t };
+        var (draftOnly, liveOnly, theirs) = (FlowOf(Org, "Supplier invoices"), FlowOf(Org, "Delivery notes"), FlowOf(DocumentEngineTestFactory.OrgB, "Their flow"));
+        var liveOutput = OutputOf(liveOnly, "Notes CSV", Template(used));
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.AddRange(draftOnly, liveOnly, theirs, liveOutput,
+                OutputOf(draftOnly, "Invoice CSV", Template(used)), OutputOf(draftOnly, "Credit CSV", Template(used)),   // one flow, two outputs
+                OutputOf(theirs, "Their CSV", Template(used)));                                                        // another organisation naming our id
+            await db.SaveChangesAsync();
+        }
+        (await http.PostAsync($"/api/flows/{liveOnly.Id}/publish", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            (await db.Set<FlowOutput>().SingleAsync(o => o.Id == liveOutput.Id)).TemplateJson = Template(idle);  // the draft moves on; the live version still names `used`
+            await db.SaveChangesAsync();
+        }
+
+        var list = (await http.GetFromJsonAsync<List<LookupSummaryDto>>("/api/lookups", DocumentJson.Options))!;
+        list.Single(l => l.Id == used).UsedBy.Select(u => (u.FlowId, u.FlowName))
+            .Should().Equal((liveOnly.Id, "Delivery notes"), (draftOnly.Id, "Supplier invoices"));    // by name, each once, no "Their flow"
+        list.Single(l => l.Id == idle).UsedBy.Select(u => u.FlowName).Should().Equal("Delivery notes");   // used by a draft only
+        (await http.DeleteAsync($"/api/lookups/{used}")).StatusCode.Should().Be(HttpStatusCode.Conflict); // the list and the refusal agree
+        var unused = (await Create(http, "Pallet types")).Id;
+        (await http.GetFromJsonAsync<List<LookupSummaryDto>>("/api/lookups", DocumentJson.Options))!.Single(l => l.Id == unused).UsedBy.Should().BeEmpty();
     }
 }
