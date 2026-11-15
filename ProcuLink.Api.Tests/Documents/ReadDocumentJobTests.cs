@@ -36,6 +36,29 @@ public sealed class ReadDocumentJobTests
         })).GeneratePdf();
     }
 
+    private static byte[] TextPdf(int pages, Func<int, bool>? blank = null)
+    {
+        QuestPDF.Settings.License = LicenseType.Community;
+        return Document.Create(c =>
+        {
+            for (var n = 1; n <= pages; n++)
+            {
+                var page = n;
+                c.Page(p =>
+                {
+                    p.Size(PageSizes.A4);
+                    p.Margin(40);
+                    if (blank?.Invoke(page) == true) p.Content().Width(200).Height(200).Background(Colors.Grey.Medium);
+                    else p.Content().Text($"Statement page {page} carries line ITEM-{page:000} for the synthetic customer");
+                });
+            }
+        }).GeneratePdf();
+    }
+
+    private static ReadTable Lines(params string[] skus) =>
+        new("lines", "Lines", [new ReadColumn("sku", "SKU", FieldTypes.Text, null)],
+            skus.Select(s => new ReadRow(new Dictionary<string, ReadCell> { ["sku"] = new(s, 0.9, null, false, false) })).ToList(), false);
+
     private static byte[] ImageOnlyPdf(int pages = 1)
     {
         QuestPDF.Settings.License = LicenseType.Community;
@@ -75,7 +98,7 @@ public sealed class ReadDocumentJobTests
 
     private static (ReadDocumentJob Job, ProcuLinkDbContext Db, Mock<IDocumentReader> Reader, Guid DocId) Arrange(
         byte[] pdf, bool scans = false, string fileName = "invoice.pdf", IPdfRasterizer? rasterizer = null,
-        IReadOnlyList<PageWord>? ocrWords = null, ReadField[]? readFields = null)
+        IReadOnlyList<PageWord>? ocrWords = null, ReadField[]? readFields = null, bool fieldsConfirmed = true)
     {
         var db = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase($"read-job-{Guid.NewGuid()}").Options);
@@ -84,7 +107,7 @@ public sealed class ReadDocumentJobTests
             new FlowField("document_number", "Invoice number", FieldTypes.Text, null, true),
             new FlowField("sender_name", "Sender", FieldTypes.Text, null, true),
         ]);
-        var flow = new Flow { Id = Guid.NewGuid(), OrgId = Org, Name = "Invoices", FieldsJson = DocumentJson.Serialize(fields), FieldsConfirmed = true };
+        var flow = new Flow { Id = Guid.NewGuid(), OrgId = Org, Name = "Invoices", FieldsJson = DocumentJson.Serialize(fields), FieldsConfirmed = fieldsConfirmed };
         var doc = new FlowDocument
         {
             Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, FileName = fileName, ContentType = "application/pdf",
@@ -250,5 +273,77 @@ public sealed class ReadDocumentJobTests
         await job.ExecuteAsync(id, Org, null, CancellationToken.None);
 
         reader.Verify(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_long_pdf_is_read_ten_pages_at_a_time_up_to_page_100_and_billed_for_the_parts_read()
+    {
+        var (job, db, reader, id) = Arrange(TextPdf(105));
+        var seen = new List<DocumentReadInput>();
+        reader.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DocumentReadInput i, Guid _, CancellationToken _) =>
+            {
+                seen.Add(i);
+                return new DocumentReadOutcome(true,
+                    new ReadResult("Statement", [Field("document_number", "ST-1")], [Lines($"ITEM-{i.Part}")]),
+                    null, new ReadUsage("test-model", 100 * i.Part, 10));
+            });
+
+        await job.ExecuteAsync(id, Org, null, CancellationToken.None);
+
+        seen.Select(i => (i.Part, i.Parts)).Should().Equal(Enumerable.Range(1, 10).Select(n => (n, 10)));
+        seen[1].Text.Should().Contain("=== Page 11 ===").And.Contain("=== Page 20 ===")
+            .And.NotContain("=== Page 10 ===").And.NotContain("=== Page 21 ===");
+        var doc = await db.FlowDocuments.SingleAsync(d => d.Id == id);
+        doc.BillingUnits.Should().Be(10);
+        doc.ReadAt.Should().NotBeNull();
+        doc.ChecksJson.Should().Contain(DocumentChecks.TextTruncated, "pages 101 to 105 were not read");
+        var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
+        read.Truncated.Should().BeTrue();
+        read.Tables.Single().Rows.Select(r => r.Cells["sku"].Value).Should().Equal(Enumerable.Range(1, 10).Select(n => $"ITEM-{n}"));
+        var calls = await db.Set<FlowReadCall>().OrderBy(c => c.Part).ToListAsync();
+        calls.Select(c => c.Part).Should().Equal(Enumerable.Range(1, 10));
+        calls.Should().OnlyContain(c => c.OrgId == Org && c.DocumentId == id && c.Model == "test-model");
+        calls.Sum(c => c.TokensIn).Should().Be(5500);
+    }
+
+    [Fact]
+    public async Task Ten_pages_with_no_text_are_not_sent_and_not_billed()
+    {
+        var (job, db, reader, id) = Arrange(TextPdf(25, blank: n => n is >= 11 and <= 20));
+        var seen = new List<DocumentReadInput>();
+        reader.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DocumentReadInput i, Guid _, CancellationToken _) =>
+            {
+                seen.Add(i);
+                return new DocumentReadOutcome(true, new ReadResult("Statement", [Field("document_number", "ST-1")]), null);
+            });
+
+        await job.ExecuteAsync(id, Org, null, CancellationToken.None);
+
+        seen.Select(i => (i.Part, i.Parts)).Should().Equal((1, 2), (2, 2));
+        seen[1].Text.Should().Contain("=== Page 21 ===").And.NotContain("=== Page 11 ===");
+        (await db.FlowDocuments.SingleAsync(d => d.Id == id)).BillingUnits.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task A_flow_with_no_confirmed_fields_gives_later_parts_the_keys_found_so_far()
+    {
+        var (job, db, reader, id) = Arrange(TextPdf(11), fieldsConfirmed: false);
+        var seen = new List<DocumentReadInput>();
+        reader.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DocumentReadInput i, Guid _, CancellationToken _) =>
+            {
+                seen.Add(i);
+                return new DocumentReadOutcome(true, new ReadResult("Statement", [Field("invoice_no", "7")], [Lines("A")]), null);
+            });
+
+        await job.ExecuteAsync(id, Org, null, CancellationToken.None);
+
+        seen[0].Expected.Should().BeNull();
+        seen[1].Expected!.Fields.Select(f => f.Key).Should().Equal("invoice_no");
+        seen[1].Expected!.Tables.Single().Columns.Select(c => c.Key).Should().Equal("sku");
+        DocumentJson.Deserialize<ReadResult>((await db.FlowDocuments.SingleAsync(d => d.Id == id)).ReadJson)
+            .Fields.Should().OnlyContain(f => f.Listed);
     }
 }
