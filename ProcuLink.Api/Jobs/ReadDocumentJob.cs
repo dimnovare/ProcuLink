@@ -28,6 +28,9 @@ public class ReadDocumentJob(
     private static readonly TimeSpan MaxReadTime = TimeSpan.FromMinutes(20);
 
     internal Func<DateTime> UtcNow { get; init; } = () => DateTime.UtcNow;
+    internal TimeSpan ReadBudget { get; init; } = MaxReadTime;
+    internal TimeSpan RetryDelay { get; init; } = TimeSpan.FromSeconds(10);
+    private int _partsRead;
 
     [Queue("critical")]
     [AutomaticRetry(Attempts = 3, DelaysInSeconds = new[] { 5, 30, 120 })]
@@ -36,14 +39,14 @@ public class ReadDocumentJob(
         var doc = await db.FlowDocuments.FirstOrDefaultAsync(d => d.Id == documentId && d.OrgId == organisationId, ct);
         if (doc is null || (doc.Status != DocumentStatus.Received && doc.Status != DocumentStatus.Reading)) return;
 
-        // One time budget for the whole read: the download, every part, every retry. A call still running when it ends is cancelled.
+        // One time budget for this run of the read: the download, every part and its second try. A call still running when it ends is cancelled.
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         try
         {
             doc.Status = DocumentStatus.Reading;
             doc.UpdatedAt = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
-            deadline.CancelAfter(MaxReadTime);
+            deadline.CancelAfter(ReadBudget);
             await ReadAsync(doc, deadline.Token, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -53,6 +56,7 @@ public class ReadDocumentJob(
         catch (OperationCanceledException) when (deadline.IsCancellationRequested)
         {
             // Out of time during a call: final, as when the time runs out between parts.
+            logger.LogWarning("Read of document {DocumentId} stopped at the time limit after {Parts} part(s).", documentId, _partsRead);
             db.ChangeTracker.Clear();
             var failed = await db.FlowDocuments.FirstAsync(d => d.Id == documentId && d.OrgId == organisationId, ct);
             await FailAsync(failed, "document_too_large", ct);
@@ -183,16 +187,21 @@ public class ReadDocumentJob(
         static string? Failure(DocumentReadOutcome o) => o.Success && o.Result is not null ? null : o.FailureReason ?? "ai_error";
         for (var part = 1; part <= partCount; part++)
         {
-            if (part > 1 && UtcNow() - started > MaxReadTime)
+            if (part > 1 && UtcNow() - started > ReadBudget)
             {
+                logger.LogWarning("Read of document {DocumentId} stopped at the time limit after {Parts} part(s).", doc.Id, results.Count);
                 await FailAsync(doc, "document_too_large", ct);
                 return;
             }
+            // The heartbeat: a read still working is not taken for stranded.
+            doc.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(ct);
             if (scanPdf)
             {
-                // A window is rendered when its turn comes. One that yields no image ends the reading: its pages and the rest were not read.
+                // A window is rendered when its turn comes and stops at its first page that cannot be decoded, so every value keeps its page.
+                // One that yields no image ends the reading: its pages and the rest were not read.
                 var skip = (part - 1) * ReadLimits.PagesPerUnit;
-                var images = rasterizer.RenderPagesPng(bytes, ReadLimits.PagesPerUnit, skip).Select(ScanImages.Upright).OfType<byte[]>().ToList();
+                var images = rasterizer.RenderPagesPng(bytes, ReadLimits.PagesPerUnit, skip).Select(ScanImages.Upright).TakeWhile(i => i is not null).OfType<byte[]>().ToList();
                 truncated |= images.Count < Math.Min(ReadLimits.PagesPerUnit, pdfPages - skip);
                 if (images.Count == 0)
                 {
@@ -211,6 +220,7 @@ public class ReadDocumentJob(
             var tries = 0;
             do
             {
+                if (tries > 0) await Task.Delay(RetryDelay, budget);
                 outcome = await reader.ReadAsync(input, doc.OrgId, budget);
                 if (outcome.Usage is { } usage)
                 {
@@ -225,7 +235,7 @@ public class ReadDocumentJob(
                     await db.SaveChangesAsync(CancellationToken.None);
                 }
             }
-            // ai_error may be a blip: the part is called once more at once. The other reasons repeat for this document.
+            // ai_error may be a blip: the part is called once more after RetryDelay. The other reasons repeat for this document.
             while (Failure(outcome) == "ai_error" && ++tries < TriesPerPart);
             if (Failure(outcome) is { } reason)
             {
@@ -243,6 +253,7 @@ public class ReadDocumentJob(
                     Rows = t.Rows.Select(row => new ReadRow(row.Cells.ToDictionary(c => c.Key, c => c.Value with { Location = Find(c.Value.Value, partWords) }))).ToList(),
                 }).ToList(),
                 r.Truncated));
+            _partsRead = results.Count;
         }
 
         // OCR words but nothing located (sideways photo, non-Latin scan, noise): flagging every value would be noise.
@@ -259,6 +270,8 @@ public class ReadDocumentJob(
             }).ToList(),
             truncated || merged.Truncated);
 
+        // Another run may have finished this document meanwhile: then this run writes nothing.
+        if (await db.FlowDocuments.AsNoTracking().Where(d => d.Id == doc.Id && d.OrgId == doc.OrgId).Select(d => d.Status).FirstAsync(ct) != DocumentStatus.Reading) return;
         await rechecker.ApplyAsync(doc, flow, read, ct, config);
         doc.ReadJson = DocumentJson.Serialize(read);
         doc.ReadAt = DateTime.UtcNow;

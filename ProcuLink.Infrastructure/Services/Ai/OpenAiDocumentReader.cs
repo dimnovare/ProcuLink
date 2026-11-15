@@ -105,7 +105,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // A failed check never calls the model; the read is retried.
+                // A failed check never calls the model; it answers ai_error.
                 _logger.LogWarning(ex, "Document read cap check failed for org {OrgId}; skipping to be safe.", organisationId);
                 return Fail("ai_error");
             }
@@ -134,7 +134,8 @@ public sealed class OpenAiDocumentReader : IDocumentReader
             var tokens = completion.Usage?.TotalTokenCount ?? 0;
             if (tracker is not null && tokens > 0)
             {
-                try { await tracker.IncrementAsync(organisationId, tokens, ct); }
+                // An answered call is counted even when the read is stopping.
+                try { await tracker.IncrementAsync(organisationId, tokens, CancellationToken.None); }
                 catch (Exception ex) { _logger.LogWarning(ex, "Failed to record AI token usage for org {OrgId}.", organisationId); }
             }
 
@@ -147,7 +148,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             // Our own deadline fired, not the caller's. A slow provider is not proof the document is
-            // too big, so this is retryable: the job retries ai_error.
+            // too big, so this answers ai_error, not document_too_large.
             _logger.LogWarning("Document read timed out (org {OrgId}).", organisationId);
             return Fail("ai_error");
         }

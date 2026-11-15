@@ -137,7 +137,9 @@ builder.Services.AddHangfire(cfg => cfg
     .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
     .UseSimpleAssemblyNameTypeSerializer()
     .UseRecommendedSerializerSettings()
-    .UsePostgreSqlStorage(c => c.UseNpgsqlConnection(connectionString)));
+    // A fetched job is handed to another worker after this time; the read job's 20-minute budget is sized below it.
+    .UsePostgreSqlStorage(c => c.UseNpgsqlConnection(connectionString),
+        new PostgreSqlStorageOptions { InvisibilityTimeout = TimeSpan.FromMinutes(30) }));
 builder.Services.AddHangfireServer(opts =>
 {
     // Named queues by workload type — prevents polling bursts from starving parse/delivery.

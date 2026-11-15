@@ -231,7 +231,7 @@ public class OpenAiDocumentReaderTests
     [InlineData("not json", false, "ai_error")]
     public async Task Every_answered_call_reports_its_tokens_and_model(string content, bool cutOff, string? failure)
     {
-        var (reader, client) = Create();
+        var (reader, client) = Create(model: "other-model");
         client.Setup(c => c.CompleteChatAsync(
                 It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatCompletionOptions>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(ClientResult.FromValue(OpenAIChatModelFactory.ChatCompletion(
@@ -243,7 +243,7 @@ public class OpenAiDocumentReaderTests
         var outcome = await reader.ReadAsync(Input(), Org, CancellationToken.None);
 
         outcome.FailureReason.Should().Be(failure);
-        outcome.Usage.Should().Be(new ReadUsage("gpt-6-luna", 1200, 300));
+        outcome.Usage.Should().Be(new ReadUsage("other-model", 1200, 300));
     }
 
     [Fact]

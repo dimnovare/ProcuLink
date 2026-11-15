@@ -523,8 +523,10 @@ fallback. The counter clears when the calendar month rolls over.
    reading is what is refused, so a workspace stopped at the floor stays stopped until the month
    ends. Look at why it spent a million tokens without reading documents (failed or repeated
    reads, AI helpers) and tell the founder. Evidence: the monthly counter `ai_usage_monthly` and
-   `GET /api/billing/ai-usage`. (`flow_read_calls` will show what each read cost once reads write
-   to it; nothing does yet.)
+   `GET /api/billing/ai-usage`. `flow_read_calls` has one row per answered document-read call
+   (part, model, tokens in and out), retried and failed reads and samples included; a call cut off
+   by the reader's 240-second timeout or by the 20-minute read limit has no row. Lookup
+   suggestions and output drafts are not in it.
 2. There is no setting that raises one workspace's allowance. The only global lever is the
    emergency brake `Ai:OpenAI:EmergencyMonthlyTokenBrake` (default 250,000,000 tokens per
    workspace a month). It lowers, never raises: it only bites for a workspace above 6,250 units a
@@ -539,10 +541,16 @@ fallback. The counter clears when the calendar month rolls over.
      Worker's value: set both and redeploy both.
 3. `Ai:OpenAI:MonthlyTokenLimitPerOrg` is no longer read, and `Ai__OpenAI__MonthlyTokenLimitPerOrg`
    was deleted from both services (the API and the Worker) on 2026-11-15. Rollback caveat: an API
-   image built before 2026-11-14 23:00 still carries a per-workspace limit of 100,000 in its
-   settings files and reads the old variable. Rolling the API back to such an image therefore caps
-   every workspace at 100,000 tokens a month until `Ai__OpenAI__MonthlyTokenLimitPerOrg` is set
-   again on the API (for example to 250000000) and the API is redeployed.
+   image built before backend PR 310 (commit 968c4494, merged 2026-11-14 21:01 UTC) still carries
+   a per-workspace limit of 100,000 in its settings files and reads the old variable. Rolling the
+   API back to such an image therefore caps every workspace at 100,000 tokens a month until
+   `Ai__OpenAI__MonthlyTokenLimitPerOrg` is set again on the API (for example to 250000000) and
+   the API is redeployed.
+   - The Worker is the worse case, because it reads documents: a Worker image built before PR 310
+     has no limit in its settings files and, with the variable unset, applies the old per-plan
+     limits to document reads (200,000 tokens a month for a trial, 10,000,000 at most). Roll
+     forward instead, or set `Ai__OpenAI__MonthlyTokenLimitPerOrg` (for example to 250000000) on
+     the Worker before rolling it back.
 
 ### Support: "PO 4500012580 isn't arriving" — find the org from the PO number
 

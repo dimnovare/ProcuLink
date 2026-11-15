@@ -1,5 +1,7 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcuLink.Api.Jobs;
@@ -55,6 +57,10 @@ public sealed class ReadDocumentJobTests
         }).GeneratePdf();
     }
 
+    private static void VerifyTimeLimitLogged(Mock<ILogger<ReadDocumentJob>> logger, Times times) =>
+        logger.Verify(l => l.Log(LogLevel.Warning, It.IsAny<EventId>(), It.Is<It.IsAnyType>((v, _) => v.ToString()!.Contains("time limit")),
+            It.IsAny<Exception?>(), It.IsAny<Func<It.IsAnyType, Exception?, string>>()), times);
+
     private static ReadTable Lines(params string[] skus) =>
         new("lines", "Lines", [new ReadColumn("sku", "SKU", FieldTypes.Text, null)],
             skus.Select(s => new ReadRow(new Dictionary<string, ReadCell> { ["sku"] = new(s, 0.9, null, false, false) })).ToList(), false);
@@ -91,19 +97,21 @@ public sealed class ReadDocumentJobTests
     private static readonly byte[] TinyPng = Convert.FromBase64String(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==");
 
-    private static IPdfRasterizer Rasterizer(int pages)
+    private static IPdfRasterizer Rasterizer(int pages, int undecodablePage = 0)
     {
         var r = new Mock<IPdfRasterizer>();
         r.Setup(x => x.RenderPagesPng(It.IsAny<byte[]>(), It.IsAny<int>(), It.IsAny<int>()))
             // `bytes`, not `_`: a lone `_` is a named parameter, and the inner `_ =>` would then not compile.
-            .Returns((byte[] bytes, int max, int skip) => Enumerable.Range(0, Math.Clamp(pages - skip, 0, max)).Select(_ => TinyPng).ToList());
+            .Returns((byte[] bytes, int max, int skip) => Enumerable.Range(0, Math.Clamp(pages - skip, 0, max))
+                .Select(n => skip + n + 1 == undecodablePage ? new byte[] { 1 } : TinyPng).ToList());
         return r.Object;
     }
 
     private static (ReadDocumentJob Job, ProcuLinkDbContext Db, Mock<IDocumentReader> Reader, Guid DocId) Arrange(
         byte[] pdf, bool scans = false, string fileName = "invoice.pdf", IPdfRasterizer? rasterizer = null,
         IReadOnlyList<PageWord>? ocrWords = null, ReadField[]? readFields = null, bool fieldsConfirmed = true,
-        Func<IReadOnlyList<byte[]>, IReadOnlyList<PageWord>>? ocrPages = null, Func<DateTime>? utcNow = null)
+        Func<IReadOnlyList<byte[]>, IReadOnlyList<PageWord>>? ocrPages = null, Func<DateTime>? utcNow = null,
+        Hangfire.IBackgroundJobClient? jobs = null, TimeSpan? readBudget = null, ILogger<ReadDocumentJob>? logger = null)
     {
         var db = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase($"read-job-{Guid.NewGuid()}").Options);
@@ -138,10 +146,12 @@ public sealed class ReadDocumentJobTests
         ocr.Setup(o => o.ReadWordsAsync(It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<byte[]> images, CancellationToken _) => ocrPages?.Invoke(images) ?? ocrWords ?? []);
         var gate = new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions { EnabledForAll = true, ScansForAll = scans }));
-        var job = new ReadDocumentJob(db, storage.Object, reader.Object, new DocumentRechecker(db, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), Moq.Mock.Of<ProcuLink.Core.Documents.IStandardValidator>()), Mock.Of<Hangfire.IBackgroundJobClient>(),
-            rasterizer ?? Mock.Of<IPdfRasterizer>(), ocr.Object, gate, new ProcuLink.Transform.Tokenizing.SourceTokenizer(), NullLogger<ReadDocumentJob>.Instance)
+        var job = new ReadDocumentJob(db, storage.Object, reader.Object, new DocumentRechecker(db, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), Moq.Mock.Of<ProcuLink.Core.Documents.IStandardValidator>()), jobs ?? Mock.Of<Hangfire.IBackgroundJobClient>(),
+            rasterizer ?? Mock.Of<IPdfRasterizer>(), ocr.Object, gate, new ProcuLink.Transform.Tokenizing.SourceTokenizer(), logger ?? NullLogger<ReadDocumentJob>.Instance)
         {
             UtcNow = utcNow ?? (() => DateTime.UtcNow),
+            ReadBudget = readBudget ?? TimeSpan.FromMinutes(20),
+            RetryDelay = TimeSpan.Zero,
         };
         return (job, db, reader, doc.Id);
     }
@@ -251,6 +261,17 @@ public sealed class ReadDocumentJobTests
         located.Page.Should().Be(11);
         located.Box.Should().BeEquivalentTo(box, o => o.Using<double>(c => c.Subject.Should().BeApproximately(c.Expectation, 1e-9)).WhenTypeIs<double>());
         read.Fields.Single(f => f.Key == "ghost").NotOnPage.Should().BeTrue();
+
+        // Page 13 cannot be decoded: part 2 ends at page 12, so no later image takes its page number, and the rest is flagged.
+        var (job2, db2, reader2, id2) = Arrange(ImageOnlyPdf(25), scans: true, rasterizer: Rasterizer(25, undecodablePage: 13));
+        var counts = new List<int>();
+        reader2.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DocumentReadInput i, Guid _, CancellationToken _) => { counts.Add(i.Pages!.Count); return Read(); });
+
+        await job2.ExecuteAsync(id2, Org, null, CancellationToken.None);
+
+        counts.Should().Equal(10, 2, 5);
+        DocumentJson.Deserialize<ReadResult>((await db2.FlowDocuments.SingleAsync(d => d.Id == id2)).ReadJson).Truncated.Should().BeTrue();
     }
 
     [Theory]
@@ -289,6 +310,32 @@ public sealed class ReadDocumentJobTests
         await job.ExecuteAsync(id, Org, null, CancellationToken.None);
 
         reader.Verify(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_document_sent_by_another_run_while_this_one_reads_is_left_as_it_is()
+    {
+        var jobs = new Mock<Hangfire.IBackgroundJobClient>();
+        var (job, db, reader, id) = Arrange(TextPdf(), jobs: jobs.Object);
+        (await db.Flows.SingleAsync()).Automation = FlowAutomation.Auto;
+        await db.SaveChangesAsync();
+        var options = (DbContextOptions<ProcuLinkDbContext>)db.GetService<IDbContextOptions>();
+        reader.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                // The other run finishes first and sends the document.
+                using var other = new ProcuLinkDbContext(options);
+                other.FlowDocuments.Single(d => d.Id == id).Status = DocumentStatus.Sent;
+                other.SaveChanges();
+                return Read();
+            });
+
+        await job.ExecuteAsync(id, Org, null, CancellationToken.None);
+
+        using var check = new ProcuLinkDbContext(options);
+        (await check.FlowDocuments.SingleAsync(d => d.Id == id)).Status.Should().Be(DocumentStatus.Sent);
+        (await check.AuditEvents.CountAsync(a => a.EntityId == id)).Should().Be(0);
+        jobs.Verify(j => j.Create(It.IsAny<Hangfire.Common.Job>(), It.IsAny<Hangfire.States.IState>()), Times.Never);
     }
 
     [Fact]
@@ -339,7 +386,9 @@ public sealed class ReadDocumentJobTests
 
         seen.Select(i => (i.Part, i.Parts)).Should().Equal((1, 2), (2, 2));
         seen[1].Text.Should().Contain("=== Page 21 ===").And.NotContain("=== Page 11 ===");
-        (await db.FlowDocuments.SingleAsync(d => d.Id == id)).BillingUnits.Should().Be(2);
+        var doc = await db.FlowDocuments.SingleAsync(d => d.Id == id);
+        doc.BillingUnits.Should().Be(2);
+        doc.ChecksJson.Should().NotContain(DocumentChecks.TextTruncated, "every page was read");
     }
 
     [Fact]
@@ -440,5 +489,43 @@ public sealed class ReadDocumentJobTests
         doc.Status.Should().Be(DocumentStatus.ReadFailed);
         doc.StatusReason.Should().Be("document_too_large");
         doc.ReadAt.Should().BeNull();
+
+        // The time limit ends during part 2's call: final, no throw, not billed, part 1's cost kept.
+        var usage = new ReadUsage("test-model", 100, 10);
+        var log2 = new Mock<ILogger<ReadDocumentJob>>();
+        var (job2, db2, reader2, id2) = Arrange(TextPdf(11), utcNow: () => t0, readBudget: TimeSpan.FromMilliseconds(200), logger: log2.Object);
+        reader2.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()))
+            .Returns(async (DocumentReadInput i, Guid _, CancellationToken t) =>
+            {
+                if (i.Part == 2) await Task.Delay(Timeout.Infinite, t);
+                return Read(usage);
+            });
+
+        await job2.ExecuteAsync(id2, Org, null, CancellationToken.None);
+
+        var doc2 = await db2.FlowDocuments.SingleAsync(d => d.Id == id2);
+        (doc2.Status, doc2.StatusReason, doc2.ReadAt).Should().Be((DocumentStatus.ReadFailed, "document_too_large", (DateTime?)null));
+        (await db2.Set<FlowReadCall>().CountAsync()).Should().Be(1);
+        VerifyTimeLimitLogged(log2, Times.Once());
+
+        // The worker shuts down during part 2's call: the stop propagates, the document is left to be read again,
+        // and it is not reported as a time-limit stop (the only trace that tells the two stops apart).
+        using var shutdown = new CancellationTokenSource();
+        var log3 = new Mock<ILogger<ReadDocumentJob>>();
+        var (job3, db3, reader3, id3) = Arrange(TextPdf(11), logger: log3.Object);
+        reader3.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DocumentReadInput i, Guid _, CancellationToken t) =>
+            {
+                if (i.Part == 2) { shutdown.Cancel(); t.ThrowIfCancellationRequested(); }
+                return Read(usage);
+            });
+
+        await FluentActions.Awaiting(() => job3.ExecuteAsync(id3, Org, null, shutdown.Token))
+            .Should().ThrowAsync<OperationCanceledException>();
+        db3.ChangeTracker.Clear();
+        (await db3.FlowDocuments.SingleAsync(d => d.Id == id3)).Status.Should().Be(DocumentStatus.Reading);
+        (await db3.AuditEvents.CountAsync(a => a.EntityId == id3)).Should().Be(0);
+        (await db3.Set<FlowReadCall>().CountAsync()).Should().Be(1);
+        VerifyTimeLimitLogged(log3, Times.Never());
     }
 }

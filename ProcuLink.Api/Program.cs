@@ -381,7 +381,8 @@ builder.Services.AddHangfire(cfg => cfg
     .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
     .UseSimpleAssemblyNameTypeSerializer()
     .UseRecommendedSerializerSettings()
-    .UsePostgreSqlStorage(c => c.UseNpgsqlConnection(connectionString)));
+    .UsePostgreSqlStorage(c => c.UseNpgsqlConnection(connectionString),
+        new PostgreSqlStorageOptions { InvisibilityTimeout = TimeSpan.FromMinutes(30) }));
 // No AddHangfireServer here — the Worker process is the sole Hangfire executor.
 // The API only enqueues jobs; running a server here would cause it to try to
 // deserialize ProcuLink.Worker types (e.g. WorkerHeartbeatJob) that it can't load.
