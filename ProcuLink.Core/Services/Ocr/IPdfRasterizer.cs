@@ -9,8 +9,9 @@ namespace ProcuLink.Core.Services.Ocr;
 public interface IPdfRasterizer
 {
     /// <summary>
-    /// Renders up to <paramref name="maxPages"/> leading pages of the PDF to PNG
-    /// byte arrays (one per page). Empty when the PDF can't be rasterized.
+    /// Renders up to <paramref name="maxPages"/> pages of the PDF after the first
+    /// <paramref name="skipPages"/> to PNG byte arrays (one per page). Empty when the PDF
+    /// can't be rasterized or <paramref name="skipPages"/> is at or past its end.
     /// </summary>
-    IReadOnlyList<byte[]> RenderPagesPng(byte[] pdfBytes, int maxPages);
+    IReadOnlyList<byte[]> RenderPagesPng(byte[] pdfBytes, int maxPages, int skipPages = 0);
 }

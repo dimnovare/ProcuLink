@@ -63,7 +63,7 @@ public sealed class DocumentIntakeService(
 
         var sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
         int? pages = ext == "pdf" ? CountPages(bytes) : null;
-        var units = pages is { } p ? Math.Max(1, (int)Math.Ceiling(p / 10.0)) : 1;
+        var units = pages is { } p ? ReadLimits.UnitsFor(p) : 1;
 
         var id = Guid.NewGuid();
         var key = $"{orgId}/documents/{id}/{safeName}";

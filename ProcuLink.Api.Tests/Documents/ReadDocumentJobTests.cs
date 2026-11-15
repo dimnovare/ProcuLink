@@ -68,7 +68,7 @@ public sealed class ReadDocumentJobTests
     private static IPdfRasterizer Rasterizer(int pages)
     {
         var r = new Mock<IPdfRasterizer>();
-        r.Setup(x => x.RenderPagesPng(It.IsAny<byte[]>(), It.IsAny<int>()))
+        r.Setup(x => x.RenderPagesPng(It.IsAny<byte[]>(), It.IsAny<int>(), It.IsAny<int>()))
             .Returns(Enumerable.Range(0, pages).Select(_ => TinyPng).ToList());
         return r.Object;
     }
