@@ -111,6 +111,16 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
         // The same number, read later: the sample before it does not make it a repeat, so it sends and is announced.
         await ReadAsync(real.Id, numbered);
         (factory.Enqueued<SendDocumentJob>(), factory.Enqueued<FlowWebhookJob>()).Should().Be((before.Item1 + 1, before.Item2 + 1));
+
+        // A send queued before the route flagged it: the job reloads the row, sees a sample and makes no delivery.
+        (await factory.ClientFor(Org).PostAsJsonAsync($"/api/flows/{flow.Id}/outputs", new { name = "JSON", format = "json" })).StatusCode.Should().Be(HttpStatusCode.Created);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            (await db.FlowDocuments.SingleAsync(d => d.Id == sample.Id)).Status.Should().Be(DocumentStatus.Ready);
+            await new SendDocumentJob(db, scope.ServiceProvider.GetRequiredService<DocumentSender>()).ExecuteAsync(sample.Id, Org, CancellationToken.None);
+            (await db.Set<FlowDelivery>().AnyAsync(d => d.DocumentId == sample.Id)).Should().BeFalse();
+        }
     }
 
     [Fact]

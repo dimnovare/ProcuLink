@@ -112,6 +112,13 @@ public sealed class FlowWebhookTests
             .Should().Be(WebhookSignature.Header(handler.Body, "s3cret")).And.StartWith("sha256=");
         handler.Request.Headers.GetValues("X-ProcuLink-Event-Id").Single().Should().Be(eventId.ToString());
         JsonDocument.Parse(handler.Body).RootElement.GetProperty("document").GetProperty("id").GetGuid().Should().Be(doc.Id);
+
+        // Queued before the route flagged it a sample: the job reads the row as it is now and posts nothing.
+        var posted = handler.Request;
+        doc.IsSample = true;
+        await db.SaveChangesAsync();
+        await job.ExecuteAsync(Org, doc.Id, "document.read", Guid.NewGuid(), CancellationToken.None);
+        handler.Request.Should().BeSameAs(posted);
     }
 
     [Fact]

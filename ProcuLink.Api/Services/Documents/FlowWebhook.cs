@@ -18,7 +18,8 @@ public static class FlowWebhookEvent
 }
 
 /// <summary>Tells a flow's webhook that a document was read or sent. One enqueue per transition; nothing when the flow has no webhook,
-/// and nothing for a sample, which is invented and must not reach an outside system.</summary>
+/// and nothing for a sample, which is invented and must not reach an outside system: checked here and again by
+/// <see cref="FlowWebhookJob"/> on the row as it is when the job runs.</summary>
 public static class FlowWebhook
 {
     public static async Task EnqueueAsync(ProcuLinkDbContext db, IBackgroundJobClient jobs, FlowDocument doc, string eventType, ILogger logger, CancellationToken ct)
