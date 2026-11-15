@@ -118,7 +118,14 @@ public sealed class FlowDestinationService(
         if (d is null) return null;
         if ((await UsesAsync(orgId, ct)).Contains(id)) return false;
         db.Set<FlowDestination>().Remove(d);
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            return false; // an output saved after the check: the foreign key refused the delete
+        }
         return true;
     }
 
@@ -132,7 +139,8 @@ public sealed class FlowDestinationService(
             .Where(x => x.Output.DestinationId is not null)
             .Select(x => new { x.FlowId, x.Output.Id, x.Output.Name, Destination = x.Output.DestinationId!.Value });
         // Editable first, so an output that is both keeps its current name.
-        var uses = editable.Concat(live).DistinctBy(u => (u.Destination, u.Id)).ToList();
+        var uses = editable.Concat(live).DistinctBy(u => (u.Destination, u.Id))
+            .OrderBy(u => u.Name, StringComparer.Ordinal).ThenBy(u => u.Id).ToList();
         var flowIds = uses.Select(u => u.FlowId).Distinct().ToList();
         var names = flowIds.Count == 0
             ? new Dictionary<Guid, string>()
@@ -160,7 +168,7 @@ public sealed class FlowDestinationService(
         {
             var sent = r.Sent is { } s ? new DestinationLastSend("document", s.At, s.Ok) : null;
             var tested = r.Tested is { } t
-                ? new DestinationLastSend("test", t.At, t.Payload?.RootElement.TryGetProperty("success", out var ok) == true && ok.ValueKind == JsonValueKind.True)
+                ? new DestinationLastSend("test", t.At, t.Payload?.RootElement is { ValueKind: JsonValueKind.Object } p && p.TryGetProperty("success", out var ok) && ok.ValueKind == JsonValueKind.True)
                 : null;
             if ((tested is null || sent?.At >= tested.At ? sent : tested) is { } newer) last[r.Id] = newer;
         }

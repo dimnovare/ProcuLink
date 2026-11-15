@@ -235,6 +235,7 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
         var retested = Destination(OrgA, "Test failed after a send");
         var flow = new Flow { Id = Guid.NewGuid(), OrgId = OrgA, Name = "Supplier invoices", CreatedAt = t, UpdatedAt = t };
         var output = new FlowOutput { Id = Guid.NewGuid(), OrgId = OrgA, FlowId = flow.Id, Name = "Invoice CSV", Format = "csv", DestinationId = failed.Id, CreatedAt = t, UpdatedAt = t };
+        FlowOutput OutputTo(FlowDestination d, string name) => new() { Id = Guid.NewGuid(), OrgId = OrgA, FlowId = flow.Id, Name = name, Format = "csv", DestinationId = d.Id, CreatedAt = t, UpdatedAt = t };
         var document = new FlowDocument { Id = Guid.NewGuid(), OrgId = OrgA, FlowId = flow.Id, FileName = "invoice.pdf", ContentType = "application/pdf", CreatedAt = t, UpdatedAt = t };
         AuditEvent Test(FlowDestination d, bool success, DateTime at) => new()
         {
@@ -249,7 +250,8 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
-            db.AddRange(tested, failed, idle, theirs, retested, flow, output, document);
+            db.AddRange(tested, failed, idle, theirs, retested, flow, output, document,
+                OutputTo(retested, "Remittance CSV"), OutputTo(retested, "Credit notes CSV"));   // inserted against name order
             db.AddRange(Test(tested, false, t.AddMinutes(1)), Test(tested, true, t.AddMinutes(2)), Test(failed, true, t.AddMinutes(1)), Test(theirs, true, t.AddMinutes(5)));
             db.AddRange(Delivery(FlowDeliveryStatus.Delivered, t.AddMinutes(3)), Delivery(FlowDeliveryStatus.DeadLetter, t.AddMinutes(4)), Delivery(FlowDeliveryStatus.Failed, t.AddMinutes(9)));
             db.AddRange(Delivery(FlowDeliveryStatus.Delivered, t.AddMinutes(3), retested), Test(retested, false, t.AddMinutes(6)));
@@ -270,6 +272,8 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
         Row(idle).GetProperty("usedBy").GetArrayLength().Should().Be(0);
         var use = Row(failed).GetProperty("usedBy").EnumerateArray().Single();
         (use.GetProperty("flowName").GetString(), use.GetProperty("outputName").GetString()).Should().Be(("Supplier invoices", "Invoice CSV"));
+        Row(retested).GetProperty("usedBy").EnumerateArray().Select(u => u.GetProperty("outputName").GetString())
+            .Should().Equal("Credit notes CSV", "Remittance CSV");                         // a steady order: by output name
 
         var updated = await (await http.PutAsJsonAsync($"/api/destinations/{failed.Id}",
             new { name = failed.Name, protocol = "http", config = JsonDocument.Parse(failed.ConfigJson).RootElement })).Content.ReadFromJsonAsync<JsonElement>();
