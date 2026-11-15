@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Microsoft.Extensions.Options;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Services.Documents;
@@ -104,5 +105,77 @@ public class FlowsApiTests(DocumentEngineTestFactory factory) : IClassFixture<Do
         var res = await OrgOnPlan("scale", 30).PostAsJsonAsync("/api/flows", new CreateFlowRequest("Thirty-first"));
 
         Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+    }
+
+    /// <summary>A flow for <paramref name="org"/> with documents in <paramref name="statuses"/> (one second apart, the last
+    /// newest), the given intakes, and one csv output named <paramref name="output"/> sent to <paramref name="destination"/>.</summary>
+    private async Task<(Flow Flow, FlowOutput Output, DateTime Newest)> SeedSummaryFlow(
+        Guid org, string[] statuses, (string Kind, bool Enabled)[] intakes, string output, string destination)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        var now = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        var flow = new Flow { Id = Guid.NewGuid(), OrgId = org, Name = "Supplier invoices", FieldsJson = DocumentJson.Serialize(FlowFieldList.Empty), CreatedAt = now, UpdatedAt = now };
+        var dest = new FlowDestination { Id = Guid.NewGuid(), OrgId = org, Name = destination, Protocol = "http", CreatedAt = now, UpdatedAt = now };
+        var o = new FlowOutput { Id = Guid.NewGuid(), OrgId = org, FlowId = flow.Id, Name = output, Format = "csv", DestinationId = dest.Id, CreatedAt = now, UpdatedAt = now };
+        db.Flows.Add(flow);
+        db.Set<FlowDestination>().Add(dest);
+        db.Set<FlowOutput>().Add(o);
+        foreach (var (kind, enabled) in intakes)
+            db.Set<FlowIntake>().Add(new FlowIntake { Id = Guid.NewGuid(), OrgId = org, FlowId = flow.Id, Kind = kind, IsEnabled = enabled, CreatedAt = now, UpdatedAt = now });
+        for (var n = 0; n < statuses.Length; n++)
+            db.FlowDocuments.Add(new FlowDocument
+            {
+                Id = Guid.NewGuid(), OrgId = org, FlowId = flow.Id, FileName = "synthetic.pdf", ContentType = "application/pdf",
+                Status = statuses[n], CreatedAt = now.AddSeconds(n), UpdatedAt = now,
+            });
+        await db.SaveChangesAsync();
+        return (flow, o, now.AddSeconds(statuses.Length - 1));
+    }
+
+    [Fact]
+    public async Task List_carries_each_flows_summary_and_never_another_orgs()
+    {
+        var (mine, _, newest) = await SeedSummaryFlow(DocumentEngineTestFactory.OrgA,
+            [DocumentStatus.NeedsReview, DocumentStatus.Ready, DocumentStatus.SendFailed, DocumentStatus.ReadFailed, DocumentStatus.Sent],
+            [(IntakeKind.Sftp, true), (IntakeKind.Imap, false)], "Invoice CSV", "Accounting server");
+        var (theirs, _, _) = await SeedSummaryFlow(DocumentEngineTestFactory.OrgB,
+            [DocumentStatus.NeedsReview, DocumentStatus.NeedsReview], [(IntakeKind.S3, true)], "Their CSV", "Other server");
+        var http = factory.ClientFor(DocumentEngineTestFactory.OrgA);
+
+        var body = await http.GetStringAsync("/api/flows");
+        var summary = JsonSerializer.Deserialize<List<FlowDto>>(body, DocumentJson.Options)!.Single(f => f.Id == mine.Id).Summary!;
+
+        Assert.Equal(2, summary.NeedsYou);
+        Assert.Equal(1, summary.CouldNotSend);
+        Assert.Equal(1, summary.CouldNotRead);
+        Assert.Equal(newest, summary.LastDocumentAt);
+        Assert.Equal(["sftp"], summary.WaysIn);
+        Assert.Equal("Accounting server", Assert.Single(summary.Outputs).Destination);
+        Assert.DoesNotContain(theirs.Id.ToString(), body);
+        Assert.DoesNotContain("Other server", body);
+        Assert.Null((await http.GetFromJsonAsync<FlowDto>($"/api/flows/{mine.Id}", DocumentJson.Options))!.Summary);
+    }
+
+    [Fact]
+    public async Task List_summary_reads_the_live_version_outputs_once_published()
+    {
+        var (flow, output, _) = await SeedSummaryFlow(DocumentEngineTestFactory.OrgA, [], [], "Invoice CSV", "Accounting server");
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.Set<FlowVersion>().Add(new FlowVersion
+            {
+                Id = Guid.NewGuid(), OrgId = flow.OrgId, FlowId = flow.Id, VersionNo = 1, PublishedAt = DateTime.UtcNow,
+                SnapshotJson = FlowSnapshot.Of(flow, [output]).Canonical(),
+            });
+            db.Flows.Single(f => f.Id == flow.Id).PublishedVersionNo = 1;
+            db.Set<FlowOutput>().Single(o => o.Id == output.Id).Name = "Invoice CSV v2";
+            await db.SaveChangesAsync();
+        }
+
+        var list = (await factory.ClientFor(DocumentEngineTestFactory.OrgA).GetFromJsonAsync<List<FlowDto>>("/api/flows", DocumentJson.Options))!;
+
+        Assert.Equal("Invoice CSV", list.Single(f => f.Id == flow.Id).Summary!.Outputs[0].Name);
     }
 }

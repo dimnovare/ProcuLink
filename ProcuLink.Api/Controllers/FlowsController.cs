@@ -23,8 +23,8 @@ public sealed class FlowsController(
 
     private static IActionResult FlowNotFound() => new NotFoundObjectResult(new { error = "flow_not_found" });
 
-    private FlowDto ToDto(Flow f, int documentCount, bool hasChanges = false, int? streak = null) =>
-        new(f.Id, f.Name, f.FieldsConfirmed, DocumentJson.Deserialize<FlowFieldList>(f.FieldsJson), documentCount, f.CreatedAt, f.Automation, gate.ScansOn(f.OrgId), gate.FormatsOn(f.OrgId), gate.DocsOutputsOn(f.OrgId), gate.PeppolOn(f.OrgId), f.PublishedVersionNo, hasChanges, streak);
+    private FlowDto ToDto(Flow f, int documentCount, bool hasChanges = false, int? streak = null, FlowSummaryDto? summary = null) =>
+        new(f.Id, f.Name, f.FieldsConfirmed, DocumentJson.Deserialize<FlowFieldList>(f.FieldsJson), documentCount, f.CreatedAt, f.Automation, gate.ScansOn(f.OrgId), gate.FormatsOn(f.OrgId), gate.DocsOutputsOn(f.OrgId), gate.PeppolOn(f.OrgId), f.PublishedVersionNo, hasChanges, streak, summary);
 
     private static bool TryName(string? raw, out string name)
     {
@@ -48,7 +48,8 @@ public sealed class FlowsController(
         var counts = await db.FlowDocuments.Where(d => d.OrgId == orgId)
             .GroupBy(d => d.FlowId).Select(g => new { FlowId = g.Key, N = g.Count() })
             .ToDictionaryAsync(x => x.FlowId, x => x.N, ct);
-        return Ok(flows.Select(f => ToDto(f, counts.GetValueOrDefault(f.Id))));
+        var summaries = await FlowSummaries.ForOrgAsync(db, orgId, flows, ct);
+        return Ok(flows.Select(f => ToDto(f, counts.GetValueOrDefault(f.Id), summary: summaries.GetValueOrDefault(f.Id))));
     }
 
     [HttpPost]
