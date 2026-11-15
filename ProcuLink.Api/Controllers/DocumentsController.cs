@@ -63,7 +63,7 @@ public sealed class DocumentsController(
 
     [HttpGet]
     public async Task<IActionResult> List(Guid? flowId, string? status, int? take, string? q,
-        Guid? waitingOnDestination, int? page, int? pageSize, CancellationToken ct)
+        Guid? waitingOnDestination, DateTimeOffset? sentFrom, DateTimeOffset? sentTo, int? page, int? pageSize, CancellationToken ct)
     {
         if (Refuse() is { } refused) return refused;
         var orgId = tenant.OrganisationId;
@@ -79,6 +79,7 @@ public sealed class DocumentsController(
         if (waitingOnDestination is { } dest)
             docs = docs.Where(d => d.Status == DocumentStatus.SendFailed && db.Set<FlowDelivery>().Any(x =>
                 x.OrgId == orgId && x.DocumentId == d.Id && x.DestinationId == dest && x.Status == FlowDeliveryStatus.DeadLetter && x.OutputId != null));
+        docs = DocumentListRows.SentBetween(db, orgId, docs, sentFrom?.UtcDateTime, sentTo?.UtcDateTime);
         docs = docs.OrderByDescending(d => d.CreatedAt).ThenBy(d => d.Id);
 
         async Task<List<DocumentSummaryDto>> Summaries(IQueryable<FlowDocument> rows) =>
@@ -88,7 +89,7 @@ public sealed class DocumentsController(
         var size = Math.Clamp(pageSize ?? 50, 1, 200);
         var p = Math.Clamp(page.Value, 1, int.MaxValue / size); // an absurd page is an empty page, not an overflowed Skip
         var total = await docs.CountAsync(ct);
-        return Ok(new PaginatedResult<DocumentSummaryDto>(await Summaries(docs.Skip((p - 1) * size).Take(size)), total, p, size));
+        return Ok(new PaginatedResult<DocumentRowDto>(await DocumentListRows.ForAsync(db, orgId, docs.Skip((p - 1) * size).Take(size), ct), total, p, size));
     }
 
     [HttpGet("{id:guid}")]

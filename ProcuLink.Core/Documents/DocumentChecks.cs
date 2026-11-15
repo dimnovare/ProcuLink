@@ -118,12 +118,15 @@ public static class DocumentChecks
     /// <summary>A document number as it is compared: whitespace removed, upper-cased.</summary>
     public static string NormalizeNumber(string value) => string.Concat(value.Where(c => !char.IsWhiteSpace(c))).ToUpperInvariant();
 
-    /// <summary>The document number, trimmed, upper-cased and without whitespace; null when there is none.</summary>
-    public static string? DedupKeyOf(ReadResult read)
+    /// <summary>The document number as it was read, trimmed; null when there is none.</summary>
+    public static string? NumberOf(ReadResult read)
     {
         var value = read.Fields.FirstOrDefault(f => f.Meaning == FieldMeanings.DocumentNumber)?.Value;
-        return string.IsNullOrWhiteSpace(value) ? null : NormalizeNumber(value);
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
+
+    /// <summary>The document number, trimmed, upper-cased and without whitespace; null when there is none.</summary>
+    public static string? DedupKeyOf(ReadResult read) => NumberOf(read) is { } number ? NormalizeNumber(number) : null;
 
     public static string StatusFor(IReadOnlyList<DocumentCheck> failed) =>
         failed.Count > 0 ? DocumentStatus.NeedsReview : DocumentStatus.Ready;

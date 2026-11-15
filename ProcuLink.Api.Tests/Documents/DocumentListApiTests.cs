@@ -119,4 +119,130 @@ public class DocumentListApiTests(DocumentEngineTestFactory factory) : IClassFix
 
         Assert.Equal(["stopped.pdf"], await Names(Org, $"waitingOnDestination={here}"));
     }
+
+    [Fact]
+    public async Task Sent_between_reads_when_the_last_output_landed()
+    {
+        var flow = await Flow(Org);
+        var theirFlow = await Flow(OrgB);
+        var monday = new DateTime(2026, 5, 4, 0, 0, 0, DateTimeKind.Utc);
+        async Task Sent(Guid org, Guid flowId, string name, DateTime landed, DateTime? touched = null, string status = DocumentStatus.Sent, DateTime? more = null)
+        {
+            var d = new FlowDocument
+            {
+                Id = Guid.NewGuid(), OrgId = org, FlowId = flowId, FileName = name, ContentType = "application/pdf", Status = status,
+                CreatedAt = monday.AddDays(-30), UpdatedAt = touched ?? landed,
+            };
+            await Save(d);
+            await Save(new FlowDelivery
+            {
+                Id = Guid.NewGuid(), OrgId = org, DocumentId = d.Id, OutputId = Guid.NewGuid(), Status = FlowDeliveryStatus.Delivered,
+                DeliveredAt = landed, DispatchKey = Guid.NewGuid(), CreatedAt = landed, UpdatedAt = landed,
+            });
+            if (more is { } later)
+                await Save(new FlowDelivery
+                {
+                    Id = Guid.NewGuid(), OrgId = org, DocumentId = d.Id, OutputId = Guid.NewGuid(), Status = FlowDeliveryStatus.Delivered,
+                    DeliveredAt = later, DispatchKey = Guid.NewGuid(), CreatedAt = later, UpdatedAt = later,
+                });
+        }
+        await Sent(Org, flow, "first-instant.pdf", monday);
+        await Sent(Org, flow, "midweek.pdf", monday.AddDays(2));
+        await Sent(Org, flow, "last-instant.pdf", monday.AddDays(7));                                      // the end is not part of the week
+        await Sent(Org, flow, "last-week-touched-now.pdf", monday.AddDays(-3), touched: monday.AddDays(1)); // the row changed this week; the send did not
+        await Sent(Org, flow, "still-sending.pdf", monday.AddDays(1), status: DocumentStatus.Sending);     // one output landed, another has not
+        await Sent(OrgB, theirFlow, "theirs.pdf", monday.AddDays(2));
+        await Sent(Org, flow, "two-deliveries.pdf", monday.AddDays(2), more: monday.AddDays(9));             // the first output landed in the week, the last one after it: judged by the last
+
+        var week = $"sentFrom={monday:o}&sentTo={monday.AddDays(7):o}";
+        Assert.Equal(["first-instant.pdf", "midweek.pdf"], (await Names(Org, $"flowId={flow}&{week}")).Order().ToList());
+        Assert.Equal(2, (await Page(Org, $"flowId={flow}&{week}&page=1&pageSize=1")).TotalCount);           // "n were sent this week" is this total
+        Assert.Equal(4, (await Names(Org, $"flowId={flow}&sentFrom={monday:o}")).Count);                   // no end: the last instant is in
+        Assert.Empty(await Names(Org, $"flowId={theirFlow}&{week}"));                                      // another workspace's flow
+    }
+
+    [Fact]
+    public async Task Paged_rows_say_the_number_the_sender_and_when_it_was_sent_or_stopped()
+    {
+        var flow = await Flow(Org);
+        var t = new DateTime(2026, 3, 10, 9, 0, 0, DateTimeKind.Utc);
+        string Read(string? number, string? sender) => DocumentJson.Serialize(new ReadResult("Invoice",
+        [
+            new ReadField("no", "Number", number, FieldTypes.Text, FieldMeanings.DocumentNumber, 0.9, null, false, true, false),
+            new ReadField("from", "Supplier", sender, FieldTypes.Text, FieldMeanings.SenderName, 0.9, null, false, true, false),
+        ]));
+        async Task<FlowDocument> Seed(Guid org, Guid flowId, string name, string status, string read, string checks = "[]", DateTime? updatedAt = null, bool isSample = false)
+        {
+            var d = new FlowDocument
+            {
+                Id = Guid.NewGuid(), OrgId = org, FlowId = flowId, FileName = name, ContentType = "application/pdf", Status = status,
+                ReadJson = read, ChecksJson = checks, CreatedAt = t, UpdatedAt = updatedAt ?? t, IsSample = isSample,
+            };
+            await Save(d);
+            return d;
+        }
+        Task Landed(FlowDocument d, DateTime at) => Save(new FlowDelivery
+        {
+            Id = Guid.NewGuid(), OrgId = d.OrgId, DocumentId = d.Id, OutputId = Guid.NewGuid(), Status = FlowDeliveryStatus.Delivered,
+            DeliveredAt = at, DispatchKey = Guid.NewGuid(), CreatedAt = t, UpdatedAt = at,
+        });
+        Task Stopped(FlowDocument d, Guid destination, DateTime at, string error, Guid? outputId) => Save(new FlowDelivery
+        {
+            Id = Guid.NewGuid(), OrgId = d.OrgId, DocumentId = d.Id, DestinationId = destination, OutputId = outputId,
+            Status = FlowDeliveryStatus.DeadLetter, LastError = error, DispatchKey = Guid.NewGuid(), CreatedAt = t, UpdatedAt = at,
+        });
+        var ours = new FlowDestination { Id = Guid.NewGuid(), OrgId = Org, Name = "Accounting server", Protocol = "sftp", CreatedAt = t, UpdatedAt = t };
+        var theirs = new FlowDestination { Id = Guid.NewGuid(), OrgId = OrgB, Name = "Foreign server", Protocol = "sftp", CreatedAt = t, UpdatedAt = t };
+        await Save(ours);
+        await Save(theirs);
+        var archive = new FlowDestination { Id = Guid.NewGuid(), OrgId = Org, Name = "Archive server", Protocol = "sftp", CreatedAt = t, UpdatedAt = t };
+        await Save(archive);
+
+        var sent = await Seed(Org, flow, "sent.pdf", DocumentStatus.Sent, Read(" INV 2291 ", "Kestrel Supplies"));
+        await Landed(sent, t.AddMinutes(5));
+        await Landed(sent, t.AddMinutes(9));
+        var half = await Seed(Org, flow, "half.pdf", DocumentStatus.SendFailed, Read("INV-2290", null));
+        await Landed(half, t.AddMinutes(1));
+        await Stopped(half, ours.Id, t.AddMinutes(12), "Login refused", Guid.NewGuid());
+        await Stopped(half, archive.Id, t.AddMinutes(20), "Quota exceeded", Guid.NewGuid());               // the newest stop that still has its output
+        await Stopped(half, ours.Id, t.AddMinutes(30), "An output that was deleted", outputId: null);      // no longer counts
+        var odd = await Seed(Org, flow, "odd.pdf", DocumentStatus.SendFailed, Read(null, null));
+        await Stopped(odd, theirs.Id, t.AddMinutes(3), "Refused", Guid.NewGuid());                         // an id from another workspace
+        await Seed(Org, flow, "bare.pdf", DocumentStatus.NeedsReview, "{}", checks:
+            """[{"code":"required_missing","passed":false,"fieldKey":"a","message":"m"},{"code":"low_confidence","passed":false,"fieldKey":"b","message":"m"},{"code":"required_missing","passed":false,"fieldKey":"c","message":"m"}]""");
+        await Seed(Org, flow, "unread.pdf", DocumentStatus.ReadFailed, "{}", updatedAt: t.AddMinutes(7), isSample: true);
+        await Seed(OrgB, await Flow(OrgB), "sent.pdf", DocumentStatus.Sent, Read("INV 2291", "Kestrel Supplies"));
+
+        var http = factory.ClientFor(Org);
+        var page = await http.GetFromJsonAsync<JsonElement>($"/api/documents?flowId={flow}&page=1&pageSize=50");
+        Assert.Equal(5, page.GetProperty("totalCount").GetInt32());
+        JsonElement Row(string name) => page.GetProperty("items").EnumerateArray().Single(r => r.GetProperty("fileName").GetString() == name);
+        static bool IsNull(JsonElement row, string name) => row.GetProperty(name).ValueKind == JsonValueKind.Null;
+
+        var s = Row("sent.pdf");
+        Assert.Equal(("INV 2291", "Kestrel Supplies", t.AddMinutes(9)),
+            (s.GetProperty("number").GetString(), s.GetProperty("sender").GetString(), s.GetProperty("sentAt").GetDateTime()));
+        Assert.True(IsNull(s, "failedAt") && IsNull(s, "stop"));
+
+        var h = Row("half.pdf");                                                   // one output landed, one stopped: not sent
+        Assert.True(IsNull(h, "sentAt") && IsNull(h, "sender"));
+        Assert.Equal(t.AddMinutes(20), h.GetProperty("failedAt").GetDateTime());   // the stopped output that still exists
+        Assert.Equal((archive.Id, "Archive server", "Quota exceeded"),
+            (h.GetProperty("stop").GetProperty("destinationId").GetGuid(), h.GetProperty("stop").GetProperty("destination").GetString(),
+             h.GetProperty("stop").GetProperty("error").GetString()));
+        Assert.Equal(JsonValueKind.Null, Row("odd.pdf").GetProperty("stop").GetProperty("destination").ValueKind);
+
+        var b = Row("bare.pdf");
+        Assert.True(IsNull(b, "number") && IsNull(b, "sender") && IsNull(b, "sentAt") && IsNull(b, "failedAt"));
+        Assert.Equal(["required_missing", "low_confidence"], b.GetProperty("checks").EnumerateArray().Select(c => c.GetString()!).ToList());
+        Assert.Equal(t.AddMinutes(7), Row("unread.pdf").GetProperty("failedAt").GetDateTime());
+        Assert.True(Row("unread.pdf").GetProperty("isSample").GetBoolean());
+        Assert.False(s.GetProperty("isSample").GetBoolean());
+
+        // What the file API shares is unchanged, and so is the list without a page.
+        var detail = await http.GetFromJsonAsync<JsonElement>($"/api/documents/{sent.Id}");
+        Assert.False(detail.GetProperty("summary").TryGetProperty("number", out _));
+        var bareList = await http.GetFromJsonAsync<JsonElement>($"/api/documents?flowId={flow}&take=1");
+        Assert.False(bareList[0].TryGetProperty("number", out _));
+    }
 }

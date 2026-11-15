@@ -130,6 +130,33 @@ public class DocumentsApiTests(DocumentEngineTestFactory factory) : IClassFixtur
         Assert.Equal(HttpStatusCode.BadRequest, unknown.StatusCode);
         Assert.Contains("unknown_target", await unknown.Content.ReadAsStringAsync());
     }
+    [Fact]
+    public async Task Clearing_a_value_leaves_it_edited_with_no_confidence()
+    {
+        var http = factory.ClientFor(Org);
+        var id = await SeedDocument(DocumentStatus.NeedsReview);
+
+        var res = await http.PatchAsJsonAsync($"/api/documents/{id}/values",
+            new EditValuesRequest([new FieldEdit("total_gross", "")], null, null, null));
+
+        using var body = JsonDocument.Parse(await res.Content.ReadAsStringAsync());                  // the bytes, not ReadField's own getter
+        var field = body.RootElement.GetProperty("read").GetProperty("fields").EnumerateArray().Single(f => f.GetProperty("key").GetString() == "total_gross");
+        Assert.Equal((true, 0d), (field.GetProperty("edited").GetBoolean(), field.GetProperty("confidence").GetDouble()));
+        Assert.Equal(DocumentStatus.NeedsReview, body.RootElement.GetProperty("summary").GetProperty("status").GetString());   // still required, still missing
+    }
+
+    [Fact]
+    public async Task Clearing_an_empty_value_again_writes_no_second_history_row()
+    {
+        var http = factory.ClientFor(Org);
+        var id = await SeedDocument(DocumentStatus.NeedsReview);
+
+        for (var i = 0; i < 2; i++)
+            await http.PatchAsJsonAsync($"/api/documents/{id}/values", new EditValuesRequest([new FieldEdit("total_gross", "")], null, null, null));
+
+        var history = (await http.GetFromJsonAsync<List<HistoryEntryDto>>($"/api/documents/{id}/history", DocumentJson.Options))!;
+        Assert.Single(history, h => h.Action == "document.value_edited");
+    }
 
     [Fact]
     public async Task Edit_value_reruns_checks_and_writes_history()

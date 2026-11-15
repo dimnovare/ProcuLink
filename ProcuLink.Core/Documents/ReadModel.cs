@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace ProcuLink.Core.Documents;
 
 /// <summary>Normalised 0..1 rectangle, origin top-left.</summary>
@@ -11,10 +13,30 @@ public sealed record SourceLocation(int? Page, Box? Box, string? Address);
 
 public sealed record ReadField(
     string Key, string Label, string? Value, string Type, string? Meaning,
-    double Confidence, SourceLocation? Location, bool NotOnPage, bool Listed, bool Edited);
+    double Confidence, [property: JsonPropertyOrder(1)] SourceLocation? Location,
+    [property: JsonPropertyOrder(1)] bool NotOnPage, [property: JsonPropertyOrder(1)] bool Listed, [property: JsonPropertyOrder(1)] bool Edited)
+{
+    private readonly double _confidence = string.IsNullOrWhiteSpace(Value) ? 0 : Confidence;
+
+    // Declared in the body, so it would serialise last: the Order attributes above keep the original property order.
+    // The backing field is stored as 0 for an empty value too, so equality (which compares it) agrees with what is read and serialised.
+    // Limit: the stored figure is only brought to 0 at construction or when Confidence is set after Value became empty; a with-expression that empties Value without also setting Confidence keeps the old figure in the field (it serialises 0 but is unequal to itself loaded back).
+    /// <summary>An empty value carries no confidence, however the record was built, loaded or changed.</summary>
+    public double Confidence { get => string.IsNullOrWhiteSpace(Value) ? 0 : _confidence; init => _confidence = string.IsNullOrWhiteSpace(Value) ? 0 : value; }
+}
 
 public sealed record ReadCell(
-    string? Value, double Confidence, SourceLocation? Location, bool NotOnPage, bool Edited);
+    string? Value, double Confidence, [property: JsonPropertyOrder(1)] SourceLocation? Location,
+    [property: JsonPropertyOrder(1)] bool NotOnPage, [property: JsonPropertyOrder(1)] bool Edited)
+{
+    private readonly double _confidence = string.IsNullOrWhiteSpace(Value) ? 0 : Confidence;
+
+    // Declared in the body, so it would serialise last: the Order attributes above keep the original property order.
+    // The backing field is stored as 0 for an empty value too, so equality (which compares it) agrees with what is read and serialised.
+    // Limit: the stored figure is only brought to 0 at construction or when Confidence is set after Value became empty; a with-expression that empties Value without also setting Confidence keeps the old figure in the field (it serialises 0 but is unequal to itself loaded back).
+    /// <summary>An empty value carries no confidence, however the record was built, loaded or changed.</summary>
+    public double Confidence { get => string.IsNullOrWhiteSpace(Value) ? 0 : _confidence; init => _confidence = string.IsNullOrWhiteSpace(Value) ? 0 : value; }
+}
 
 public sealed record ReadColumn(string Key, string Label, string Type, string? Meaning);
 
