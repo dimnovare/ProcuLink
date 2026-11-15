@@ -149,6 +149,21 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
         (await h.DocStatusAsync()).Should().Be(DocumentStatus.SendFailed);
         (await h.AuditCountAsync("document.delivery_failed")).Should().Be(1);
         h.WebhookEvents().Should().Equal(FlowWebhookEvent.Sent, FlowWebhookEvent.SendFailed);
+        (await h.FailurePayloadsAsync()).Single().GetProperty("destination").GetString().Should().Be("Accounting webhook");
+
+        // A destination id naming another workspace's destination never lends that workspace's name.
+        await using (var db = h.NewDb())
+        {
+            var other = Guid.NewGuid();
+            var foreign = new FlowDestination { Id = Guid.NewGuid(), OrgId = other, Name = "Foreign webhook", Protocol = "http", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+            db.Organisations.Add(new Organisation { Id = other, ClerkOrgId = "org_" + other.ToString("N"), Name = "Test Org B", Slug = "other-" + other.ToString("N") });
+            db.Set<FlowDestination>().Add(foreign);
+            await db.SaveChangesAsync();
+            await db.Set<FlowDelivery>().Where(d => d.Id == h.DeliveryId)
+                .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, FlowDeliveryStatus.Delivered).SetProperty(d => d.DestinationId, foreign.Id));
+        }
+        (await h.BounceAsync(key))!.Outcome.Should().Be(DeliveryBounceOutcome.FlowDeliveryMarkedFailed);
+        (await h.FailurePayloadsAsync())[1].GetProperty("destination").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
     [DockerRequiredFact]
@@ -228,6 +243,9 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
         var h = await SeedAsync();
         h.Dispatcher.Result = new DeliveryResult(false, "503", 503);
 
+        await using (var db = h.NewDb())
+            await db.FlowDocuments.Where(d => d.Id == h.DocumentId).ExecuteUpdateAsync(x => x.SetProperty(d => d.FlowVersion, 4));
+
         await h.RunAsync();
         (await h.DeliveryAsync()).Status.Should().Be(FlowDeliveryStatus.Failed);
         (await h.DeliveryAsync()).NextAttemptAt.Should().NotBeNull();
@@ -248,6 +266,8 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
         failures[0].GetProperty("attempts").GetInt32().Should().Be(3);
         failures[0].GetProperty("destinationId").GetGuid().Should().Be(delivery.DestinationId!.Value);
         failures[0].GetProperty("file").GetString().Should().Be("a.csv");
+        failures[0].GetProperty("destination").GetString().Should().Be("Accounting webhook");   // the seeded destination's name, kept in the event itself
+        failures[0].GetProperty("version").GetInt32().Should().Be(4);
 
         // A refusal that retrying cannot fix dead-letters on the first attempt.
         h.Dispatcher.Result = new DeliveryResult(false, "rejected", 422, Outcome: DeliveryOutcome.NotRetryable);

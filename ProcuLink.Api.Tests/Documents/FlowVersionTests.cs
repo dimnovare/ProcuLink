@@ -286,6 +286,8 @@ public class FlowVersionTests(DocumentEngineTestFactory factory) : IClassFixture
         var refused = await client.DeleteAsync($"/api/destinations/{destination.Id}");
         refused.StatusCode.Should().Be(HttpStatusCode.Conflict);
         (await Body(refused)).GetProperty("error").GetString().Should().Be("destination_in_use");
+        var listed = (await Body(await client.GetAsync("/api/destinations"))).EnumerateArray().Single(d => d.GetProperty("id").GetGuid() == destination.Id);
+        listed.GetProperty("usedBy").EnumerateArray().Single().GetProperty("outputId").GetGuid().Should().Be(outputId);   // the list and the refusal agree
 
         using (var scope = factory.Services.CreateScope())
         {

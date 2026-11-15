@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
@@ -40,6 +42,13 @@ public static class FlowVersions
             SnapshotJson = FlowSnapshot.Of(flow, live.Outputs).Canonical(), PublishedAt = DateTime.UtcNow, PublishedBy = userId,
         };
         db.Set<FlowVersion>().Add(version);
+        var payload = new JsonObject { ["version"] = version.VersionNo, ["flow"] = flow.Name };
+        if (userId is not null) payload["by"] = userId;
+        var published = db.AuditEvents.Add(new AuditEvent
+        {
+            Id = Guid.NewGuid(), OrgId = flow.OrgId, EntityType = "Flow", EntityId = flow.Id, Action = "flow.published",
+            CreatedAt = version.PublishedAt, Payload = JsonSerializer.SerializeToDocument(payload),
+        }).Entity;
         flow.PublishedVersionNo = version.VersionNo;
         try
         {
@@ -48,6 +57,7 @@ public static class FlowVersions
         catch (DbUpdateException ex) when (IngressDedupe.IsUniqueViolation(ex))
         {
             db.Entry(version).State = EntityState.Detached;
+            db.Entry(published).State = EntityState.Detached;
             flow.PublishedVersionNo = previous;
             db.Entry(flow).Property(x => x.PublishedVersionNo).IsModified = false;
             return (null, "publish_conflict");
@@ -89,11 +99,15 @@ public static class FlowVersions
     }
 
     /// <summary>The outputs every flow's live version sends, so a destination or lookup they use cannot be deleted.</summary>
-    public static async Task<IReadOnlyList<FlowSnapshotOutput>> LiveVersionOutputsAsync(ProcuLinkDbContext db, Guid orgId, CancellationToken ct)
+    public static async Task<IReadOnlyList<FlowSnapshotOutput>> LiveVersionOutputsAsync(ProcuLinkDbContext db, Guid orgId, CancellationToken ct) =>
+        (await LiveVersionOutputsByFlowAsync(db, orgId, ct)).Select(x => x.Output).ToList();
+
+    /// <summary>The same outputs, each with the id of the flow whose live version sends it.</summary>
+    public static async Task<IReadOnlyList<(Guid FlowId, FlowSnapshotOutput Output)>> LiveVersionOutputsByFlowAsync(ProcuLinkDbContext db, Guid orgId, CancellationToken ct)
     {
-        var json = await db.Set<FlowVersion>().AsNoTracking()
+        var rows = await db.Set<FlowVersion>().AsNoTracking()
             .Where(v => v.OrgId == orgId && db.Flows.Any(f => f.OrgId == orgId && f.Id == v.FlowId && f.PublishedVersionNo == v.VersionNo))
-            .Select(v => v.SnapshotJson).ToListAsync(ct);
-        return json.SelectMany(j => DocumentJson.Deserialize<FlowSnapshot>(j).Outputs).ToList();
+            .Select(v => new { v.FlowId, v.SnapshotJson }).ToListAsync(ct);
+        return rows.SelectMany(r => (DocumentJson.Deserialize<FlowSnapshot>(r.SnapshotJson)?.Outputs ?? []).Select(o => (r.FlowId, o))).ToList();
     }
 }

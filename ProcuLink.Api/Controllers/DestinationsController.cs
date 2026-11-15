@@ -21,12 +21,14 @@ public sealed class DestinationsController(
 
     private static IActionResult NotFoundBody() => new NotFoundObjectResult(new { error = "destination_not_found" });
 
-    private static object ToDto(FlowDestination d) =>
+    /// <summary>A create answers with no uses and no last send (it has none), so every answer has one shape.</summary>
+    private static object ToDto(FlowDestination d, IEnumerable<DestinationUse>? usedBy = null, DestinationLastSend? lastSend = null) =>
         new
         {
             id = d.Id, name = d.Name, protocol = d.Protocol,
             config = JsonDocument.Parse(d.ConfigJson).RootElement.Clone(),
             hasCredentials = !string.IsNullOrEmpty(d.EncryptedCredentials), createdAt = d.CreatedAt,
+            usedBy = usedBy ?? [], lastSend,
         };
 
     [HttpGet]
@@ -35,7 +37,9 @@ public sealed class DestinationsController(
         if (Refuse() is { } refused) return refused;
         var orgId = tenant.OrganisationId;
         var rows = await db.Set<FlowDestination>().Where(d => d.OrgId == orgId).OrderBy(d => d.Name).ToListAsync(ct);
-        return Ok(rows.Select(ToDto));
+        var uses = await destinations.UsesAsync(orgId, ct);
+        var last = await destinations.LastSendsAsync(orgId, ct);
+        return Ok(rows.Select(d => ToDto(d, uses[d.Id], last.GetValueOrDefault(d.Id))));
     }
 
     [HttpPost]
@@ -61,7 +65,10 @@ public sealed class DestinationsController(
         if (Refuse() is { } refused) return refused;
         try
         {
-            return Ok(ToDto(await destinations.SaveAsync(tenant.OrganisationId, id, request, ct)));
+            var saved = await destinations.SaveAsync(tenant.OrganisationId, id, request, ct);
+            var uses = await destinations.UsesAsync(tenant.OrganisationId, ct);
+            var last = await destinations.LastSendsAsync(tenant.OrganisationId, ct);
+            return Ok(ToDto(saved, uses[saved.Id], last.GetValueOrDefault(saved.Id)));
         }
         catch (DestinationException ex)
         {
