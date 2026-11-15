@@ -22,7 +22,6 @@ public class ReadDocumentJob(
 {
     private const int MaxChars = 60_000;
     private const int MinWordsPerTextPage = 5;
-    private const int MaxScanPages = 10;
     private const int MaxHints = 40;
     private const int LastRetry = 3;
 
@@ -103,51 +102,53 @@ public class ReadDocumentJob(
             return;
         }
 
-        IReadOnlyList<byte[]>? pages = null;
-        var truncated = false;
-        if (isImage || (isPdf && !words.GroupBy(w => w.Page).Any(g => g.Count() >= MinWordsPerTextPage)))
+        var scan = isImage || (isPdf && !words.GroupBy(w => w.Page).Any(g => g.Count() >= MinWordsPerTextPage));
+        if (scan && !gate.ScansOn(doc.OrgId))
         {
-            if (!gate.ScansOn(doc.OrgId))
-            {
-                await FailAsync(doc, "scanned_not_supported", ct);
-                return;
-            }
-            var upright = isImage ? ScanImages.Upright(bytes) : null;
-            pages = isImage ? (upright is null ? [] : [upright]) : rasterizer.RenderPagesPng(bytes, MaxScanPages).Select(ScanImages.Upright).OfType<byte[]>().ToList();
-            if (pages.Count == 0)
-            {
-                await FailAsync(doc, "unreadable_file", ct);
-                return;
-            }
-            truncated = pdfPages > pages.Count;
-            words = await ocr.ReadWordsAsync(pages, ct);
+            await FailAsync(doc, "scanned_not_supported", ct);
+            return;
+        }
+
+        var truncated = isPdf && pdfPages > ReadLimits.MaxPages;
+        string PagesText(int from, int to)
+        {
+            var t = string.Concat(pageTexts.Skip(from - 1).Take(to - from + 1));
+            if (t.Length > MaxChars) (truncated, t) = (true, t[..MaxChars]);
+            return t;
         }
 
         // A PDF with text is read ten pages per part, up to ReadLimits.MaxPages; a window with no word is skipped.
-        var textPdf = isPdf && pages is null;
-        var parts = new List<(string Text, IReadOnlyList<PageWord> Words)>();
-        if (textPdf)
+        // A scanned PDF's parts are rendered one window at a time in the loop below; any other file is one part.
+        var scanPdf = isPdf && scan;
+        var parts = new List<(string Text, IReadOnlyList<PageWord> Words, IReadOnlyList<byte[]>? Pages)>();
+        if (isPdf && !scan)
         {
-            truncated = pdfPages > ReadLimits.MaxPages;
             var last = Math.Min(pdfPages, ReadLimits.MaxPages);
             for (var from = 1; from <= last; from += ReadLimits.PagesPerUnit)
             {
                 var to = Math.Min(from + ReadLimits.PagesPerUnit - 1, last);
                 var partWords = words.Where(w => w.Page >= from && w.Page <= to).ToList();
-                if (partWords.Count == 0) continue;
-                var partText = string.Concat(pageTexts.Skip(from - 1).Take(to - from + 1));
-                if (partText.Length > MaxChars) (truncated, partText) = (true, partText[..MaxChars]);
-                parts.Add((partText, partWords));
+                if (partWords.Count > 0) parts.Add((PagesText(from, to), partWords, null));
             }
         }
 
         if (text.Length > MaxChars)
         {
-            truncated |= !textPdf;
+            truncated |= !isPdf;
             text = text[..MaxChars];
         }
-        if (!textPdf) parts.Add((text, words));
-        if (parts.Count == 0)
+        if (isImage)
+        {
+            var upright = ScanImages.Upright(bytes);
+            if (upright is null)
+            {
+                await FailAsync(doc, "unreadable_file", ct);
+                return;
+            }
+            parts.Add((text, await ocr.ReadWordsAsync([upright], ct), [upright]));
+        }
+        else if (!isPdf) parts.Add((text, words, null));
+        if (!scanPdf && parts.Count == 0)
         {
             await FailAsync(doc, "empty_document", ct);
             return;
@@ -162,12 +163,28 @@ public class ReadDocumentJob(
             : spans is not null ? ValueLocator.LocateInSpans(value, spans) : ValueLocator.LocateInCells(value, cells);
 
         var results = new List<ReadResult>();
-        foreach (var (partText, partWords) in parts)
+        var partCount = scanPdf ? ReadLimits.UnitsFor(pdfPages) : parts.Count;
+        for (var part = 1; part <= partCount; part++)
         {
-            var part = results.Count + 1;
+            if (scanPdf)
+            {
+                // A window is rendered when its turn comes. One that yields no image ends the reading: its pages and the rest were not read.
+                var skip = (part - 1) * ReadLimits.PagesPerUnit;
+                var images = rasterizer.RenderPagesPng(bytes, ReadLimits.PagesPerUnit, skip).Select(ScanImages.Upright).OfType<byte[]>().ToList();
+                truncated |= images.Count < Math.Min(ReadLimits.PagesPerUnit, pdfPages - skip);
+                if (images.Count == 0)
+                {
+                    if (part > 1) break;
+                    await FailAsync(doc, "unreadable_file", ct);
+                    return;
+                }
+                var ocrWords = (await ocr.ReadWordsAsync(images, ct)).Select(w => w with { Page = w.Page + skip }).ToList();
+                parts.Add((PagesText(skip + 1, Math.Min(skip + ReadLimits.PagesPerUnit, pdfPages)), ocrWords, images));
+            }
+            var (partText, partWords, partPages) = parts[part - 1];
             var partExpected = expected ?? (results.Count == 0 ? null : ReadMerge.KeysOf(ReadMerge.Merge(results, null)));
-            var outcome = await reader.ReadAsync(new DocumentReadInput(doc.FileName, doc.ContentType, partText, partExpected, pages,
-                hints.Count > 0 ? hints : null, part, parts.Count), doc.OrgId, ct);
+            var outcome = await reader.ReadAsync(new DocumentReadInput(doc.FileName, doc.ContentType, partText, partExpected, partPages,
+                hints.Count > 0 ? hints : null, part, partCount), doc.OrgId, ct);
             if (outcome.Usage is { } usage)
             {
                 // The cost row and the heartbeat in one save; an answered call is recorded even when the job is stopping.

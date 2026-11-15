@@ -92,13 +92,15 @@ public sealed class ReadDocumentJobTests
     {
         var r = new Mock<IPdfRasterizer>();
         r.Setup(x => x.RenderPagesPng(It.IsAny<byte[]>(), It.IsAny<int>(), It.IsAny<int>()))
-            .Returns(Enumerable.Range(0, pages).Select(_ => TinyPng).ToList());
+            // `bytes`, not `_`: a lone `_` is a named parameter, and the inner `_ =>` would then not compile.
+            .Returns((byte[] bytes, int max, int skip) => Enumerable.Range(0, Math.Clamp(pages - skip, 0, max)).Select(_ => TinyPng).ToList());
         return r.Object;
     }
 
     private static (ReadDocumentJob Job, ProcuLinkDbContext Db, Mock<IDocumentReader> Reader, Guid DocId) Arrange(
         byte[] pdf, bool scans = false, string fileName = "invoice.pdf", IPdfRasterizer? rasterizer = null,
-        IReadOnlyList<PageWord>? ocrWords = null, ReadField[]? readFields = null, bool fieldsConfirmed = true)
+        IReadOnlyList<PageWord>? ocrWords = null, ReadField[]? readFields = null, bool fieldsConfirmed = true,
+        Func<IReadOnlyList<byte[]>, IReadOnlyList<PageWord>>? ocrPages = null)
     {
         var db = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase($"read-job-{Guid.NewGuid()}").Options);
@@ -130,7 +132,8 @@ public sealed class ReadDocumentJobTests
             ]), null));
 
         var ocr = new Mock<IDocumentOcrService>();
-        ocr.Setup(o => o.ReadWordsAsync(It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>())).ReturnsAsync(ocrWords ?? []);
+        ocr.Setup(o => o.ReadWordsAsync(It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((IReadOnlyList<byte[]> images, CancellationToken _) => ocrPages?.Invoke(images) ?? ocrWords ?? []);
         var gate = new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions { EnabledForAll = true, ScansForAll = scans }));
         var job = new ReadDocumentJob(db, storage.Object, reader.Object, new DocumentRechecker(db, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), Moq.Mock.Of<ProcuLink.Core.Documents.IStandardValidator>()), Mock.Of<Hangfire.IBackgroundJobClient>(),
             rasterizer ?? Mock.Of<IPdfRasterizer>(), ocr.Object, gate, new ProcuLink.Transform.Tokenizing.SourceTokenizer(), NullLogger<ReadDocumentJob>.Instance);
@@ -216,23 +219,30 @@ public sealed class ReadDocumentJobTests
     }
 
     [Fact]
-    public async Task Scanned_pdf_is_read_from_page_images_when_scans_are_on()
+    public async Task A_scan_is_read_ten_pages_at_a_time_and_a_value_on_page_11_is_shown_on_page_11()
     {
         var box = new Box(0.1, 0.2, 0.3, 0.05);
-        var (job, db, reader, id) = Arrange(ImageOnlyPdf(11), scans: true, rasterizer: Rasterizer(10),
-            ocrWords: [new PageWord("PO-77", 2, box)], readFields: [Field("po", "PO-77"), Field("ghost", "ZZZ")]);
-        (await db.FlowDocuments.SingleAsync(d => d.Id == id)).BillingUnits = 2; // what intake bills for 11 pages
-        await db.SaveChangesAsync();
+        // 25 pages in the file, 11 that render: two parts are read, the third window yields nothing.
+        // The word is reported on the first page of the one-page part, which is page 11 of the file.
+        var (job, db, reader, id) = Arrange(ImageOnlyPdf(25), scans: true, rasterizer: Rasterizer(11),
+            ocrPages: pages => pages.Count == 1 ? new[] { new PageWord("PO-77", 1, box) } : Array.Empty<PageWord>());
+        var seen = new List<DocumentReadInput>();
+        reader.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DocumentReadInput i, Guid _, CancellationToken _) =>
+            {
+                seen.Add(i);
+                return new DocumentReadOutcome(true, new ReadResult("Order", [Field("po", "PO-77"), Field("ghost", "ZZZ")]), null);
+            });
 
         await job.ExecuteAsync(id, Org, null, CancellationToken.None);
 
-        reader.Verify(r => r.ReadAsync(It.Is<DocumentReadInput>(i => i.Pages!.Count == 10), Org, It.IsAny<CancellationToken>()), Times.Once);
+        seen.Select(i => (i.Pages!.Count, i.Part, i.Parts)).Should().Equal((10, 1, 3), (1, 2, 3));
         var doc = await db.FlowDocuments.SingleAsync(d => d.Id == id);
-        doc.BillingUnits.Should().Be(1);
+        doc.BillingUnits.Should().Be(2);
         var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
-        read.Truncated.Should().BeTrue();
+        read.Truncated.Should().BeTrue("pages 12 to 25 did not render");
         var located = read.Fields.Single(f => f.Key == "po").Location!;
-        located.Page.Should().Be(2);
+        located.Page.Should().Be(11);
         located.Box.Should().BeEquivalentTo(box, o => o.Using<double>(c => c.Subject.Should().BeApproximately(c.Expectation, 1e-9)).WhenTypeIs<double>());
         read.Fields.Single(f => f.Key == "ghost").NotOnPage.Should().BeTrue();
     }
