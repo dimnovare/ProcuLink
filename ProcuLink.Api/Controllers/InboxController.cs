@@ -5,7 +5,9 @@ using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Auth;
+using Microsoft.Net.Http.Headers;
 using ProcuLink.Api.Contracts;
+using ProcuLink.Api.Helpers;
 using ProcuLink.Api.Jobs;
 using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Documents;
@@ -13,6 +15,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Ingress;
 using ProcuLink.Infrastructure;
+using ProcuLink.Transform.Documents;
 
 namespace ProcuLink.Api.Controllers;
 
@@ -142,6 +145,34 @@ public sealed class InboxController(
         await db.SaveChangesAsync(ct);
         await RememberAndResortAsync(doc, ct);
         return Created($"/api/flows/{flow.Id}", new SetUpResultDto(flow.Id, flow.Name, DocumentSummaryDto.From(doc, flow.Name)));
+    }
+
+    /// <summary>"Just this one": the read as a CSV or Excel file, with nothing set up. Allowed while processing is paused; downloading again is allowed.</summary>
+    [HttpPost("api/documents/{id:guid}/download")]
+    public async Task<IActionResult> Download(Guid id, DownloadDocumentRequest request, CancellationToken ct)
+    {
+        if (Refuse() is { } refused) return refused;
+        var doc = await FindAsync(id, ct);
+        if (doc is null) return NotFound(DocumentNotFound);
+        if (!await InInboxAsync(doc, ct)) return Conflict(new { error = "not_in_inbox" });
+        var downloaded = doc.Status == DocumentStatus.Sent && doc.StatusReason == DocumentSort.Downloaded;
+        if (doc.ReadAt is null || !(downloaded || doc.Status is DocumentStatus.NeedsReview or DocumentStatus.Ready))
+            return Conflict(new { error = "not_read" });
+        if (request.Format is not (FlowOutputFormats.Csv or FlowOutputFormats.Xlsx)) return BadRequest(new { error = "invalid_format" });
+
+        var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
+        var tableKey = read.Tables.FirstOrDefault()?.Key;
+        var render = DocumentOutputRenderer.Render(request.Format, DefaultOutputTemplate.For(ReadMerge.KeysOf(read), request.Format, tableKey), read, tableKey);
+        if (!render.Ok) return UnprocessableEntity(new { error = render.Error, detail = render.Detail });
+        if (!downloaded)
+        {
+            DocumentSort.MarkDownloaded(db, doc, request.Format, tenant.ClerkUserId);
+            await db.SaveChangesAsync(ct);
+        }
+        Response.Headers[HeaderNames.CacheControl] = "no-store";
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        return File(render.Result!.Content, render.Result.ContentType,
+            FileNameSanitiser.Sanitise(Path.GetFileNameWithoutExtension(doc.FileName)) + render.Result.FileExtension);
     }
 
     /// <summary>Remembers the document's flow, saves, then sorts again the inbox documents of its kind and enqueues their reads.</summary>

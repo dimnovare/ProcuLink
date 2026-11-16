@@ -84,6 +84,15 @@ public static class DocumentSort
         return !duplicateFile;
     }
 
+    /// <summary>A person took the read as a file ("just this one"): the document is done, with nothing set up.</summary>
+    public static void MarkDownloaded(ProcuLinkDbContext db, FlowDocument doc, string format, string? userId)
+    {
+        doc.Status = DocumentStatus.Sent;
+        doc.StatusReason = Downloaded;
+        doc.UpdatedAt = DateTime.UtcNow;
+        DocumentAudit.Add(db, doc, "document.downloaded", new { format }, userId);
+    }
+
     /// <summary>Remembers the document's person flow for its sender and kind; the last write wins.</summary>
     public static async Task RememberAsync(ProcuLinkDbContext db, FlowDocument doc, CancellationToken ct)
     {
