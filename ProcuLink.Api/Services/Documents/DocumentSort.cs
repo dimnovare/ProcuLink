@@ -49,7 +49,7 @@ public static class DocumentSort
         };
     }
 
-    /// <summary>Moves the document to an inbox-sorted target, or leaves it waiting with its reason. True when it moved.</summary>
+    /// <summary>Moves the document to an inbox-sorted target, or leaves it waiting with its reason. True when it moved and must be read there.</summary>
     public static async Task<bool> SortAsync(ProcuLinkDbContext db, FlowDocument doc, CancellationToken ct)
     {
         var (target, waitReason) = await DecideAsync(db, doc, ct);
@@ -58,21 +58,28 @@ public static class DocumentSort
             doc.StatusReason = waitReason;
             return false;
         }
-        MoveTo(db, doc, target.FlowId, target.FlowName, target.Certain, Sorted, null);
-        return true;
+        return await MoveToAsync(db, doc, target.FlowId, target.FlowName, target.Certain, Sorted, null, ct);
     }
 
-    /// <summary>Puts the document in <paramref name="flowId"/> to be read there, marked unconfirmed unless <paramref name="certain"/>.</summary>
-    public static void MoveTo(ProcuLinkDbContext db, FlowDocument doc, Guid flowId, string flowName, bool certain, string action, string? userId)
+    /// <summary>
+    /// Puts the document in <paramref name="flowId"/>, marked unconfirmed unless <paramref name="certain"/>. True when it must be read
+    /// there; false when that flow already holds the same file, and the document waits there as a duplicate file, unread.
+    /// </summary>
+    public static async Task<bool> MoveToAsync(
+        ProcuLinkDbContext db, FlowDocument doc, Guid flowId, string flowName, bool certain, string action, string? userId, CancellationToken ct)
     {
+        var duplicateFile = doc.Sha256.Length > 0 && await db.FlowDocuments.AnyAsync(
+            d => d.OrgId == doc.OrgId && d.FlowId == flowId && d.Sha256 == doc.Sha256 && d.Id != doc.Id && !d.IsSample, ct);
         var fromFlowId = doc.FlowId;
         doc.FlowId = flowId;
         doc.Status = DocumentStatus.Received;
         doc.StatusReason = null;
         doc.ChecksJson = "[]";
+        if (duplicateFile) DocumentIntakeService.HoldAsDuplicateFile(doc);
         doc.SortUnconfirmed = !certain;
         doc.UpdatedAt = DateTime.UtcNow;
-        DocumentAudit.Add(db, doc, action, new { fromFlowId, flowId, flow = flowName, certain }, userId);
+        DocumentAudit.Add(db, doc, action, new { fromFlowId, flowId, flow = flowName, certain, duplicateFile }, userId);
+        return !duplicateFile;
     }
 
     /// <summary>Remembers the document's person flow for its sender and kind; the last write wins.</summary>
@@ -104,7 +111,7 @@ public static class DocumentSort
         await RememberAsync(db, doc, ct);
     }
 
-    /// <summary>Sorts again up to 50 inbox documents of this kind that wait for a person. Returns the ids moved; the caller saves, then enqueues their reads.</summary>
+    /// <summary>Sorts again up to 50 inbox documents of this kind that wait for a person. Returns the ids moved to be read; the caller saves, then enqueues their reads.</summary>
     public static async Task<IReadOnlyList<Guid>> ResortWaitingAsync(ProcuLinkDbContext db, Guid orgId, string kind, CancellationToken ct)
     {
         var waiting = await db.FlowDocuments

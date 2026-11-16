@@ -147,11 +147,14 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
     /// An automatic flow with one output, holding one earlier document of a kind no other test uses (the class shares OrgA's data),
     /// and an inbox document of that kind from a new sender. Reads it twice: in the inbox, then in the flow it was sorted into.
     /// </summary>
-    private async Task<(Guid FlowId, Guid DocId, string Kind, string SenderKey)> SortIntoAutomaticFlowAsync(bool remembered)
+    private async Task<(Guid FlowId, Guid DocId, string Kind, string SenderKey)> SortIntoAutomaticFlowAsync(
+        bool remembered, string? sameFile = null, string? sameNumber = null)
     {
         var now = DateTime.UtcNow;
-        var result = new ReadResult($"Invoice {Guid.NewGuid():N}",
-            [new ReadField("sender_name", "Sender", "Alex Example", FieldTypes.Text, FieldMeanings.SenderName, 0.95, null, false, false, false)]);
+        List<ReadField> fields = [new("sender_name", "Sender", "Alex Example", FieldTypes.Text, FieldMeanings.SenderName, 0.95, null, false, false, false)];
+        if (sameNumber is not null)
+            fields.Add(new ReadField("invoice_no", "Invoice number", sameNumber, FieldTypes.Text, FieldMeanings.DocumentNumber, 0.99, null, false, true, false));
+        var result = new ReadResult($"Invoice {Guid.NewGuid():N}", fields);
         var (kind, senderKey) = (DocumentKind.Normalize(result.KindLabel)!, DocumentKind.SenderKeyOf(result, "upload", null)!);
         var flow = new Flow
         {
@@ -169,8 +172,13 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
             var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
             var inbox = await InboxFlow.GetOrCreateAsync(db, Org, CancellationToken.None);
             db.Flows.Add(flow);
-            db.FlowDocuments.Add(NewDoc(flow.Id, kind, DocumentStatus.Sent));
+            var earlier = NewDoc(flow.Id, kind, DocumentStatus.Sent);
+            earlier.Sha256 = sameFile ?? "";
+            earlier.DedupKey = sameNumber is null ? null : DocumentChecks.DedupKeyOf(result);
+            db.FlowDocuments.Add(earlier);
             var doc = NewDoc(inbox.Id, null, DocumentStatus.Received);
+            doc.Sha256 = sameFile ?? "";
+            doc.CreatedAt = now.AddSeconds(1);
             db.FlowDocuments.Add(doc);
             docId = doc.Id;
             if (remembered)
@@ -212,6 +220,30 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
         var before = factory.Enqueued<SendDocumentJob>();
         await SortIntoAutomaticFlowAsync(remembered: true);
         factory.Enqueued<SendDocumentJob>().Should().Be(before + 1);
+
+        // A different file carrying a number the flow already holds is read there, and held as a repeat.
+        var (_, repeatId, _, _) = await SortIntoAutomaticFlowAsync(remembered: true, sameNumber: "INV-7781");
+        factory.Enqueued<SendDocumentJob>().Should().Be(before + 1);
+        using var scope = factory.Services.CreateScope();
+        var repeat = await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().FlowDocuments.SingleAsync(d => d.Id == repeatId);
+        repeat.Status.Should().Be(DocumentStatus.NeedsReview);
+        DocumentJson.Deserialize<List<DocumentCheck>>(repeat.ChecksJson).Should().Contain(c => c.Code == DocumentChecks.Duplicate && !c.Passed);
+    }
+
+    [Fact]
+    public async Task Certain_sort_of_a_file_already_in_the_flow_is_held_not_sent()
+    {
+        var (sends, reads) = (factory.Enqueued<SendDocumentJob>(), factory.Enqueued<ReadDocumentJob>());
+        var (flowId, docId, _, _) = await SortIntoAutomaticFlowAsync(remembered: true, sameFile: new string('e', 64));
+
+        factory.Enqueued<SendDocumentJob>().Should().Be(sends);
+        factory.Enqueued<ReadDocumentJob>().Should().Be(reads);
+        using var scope = factory.Services.CreateScope();
+        var doc = await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().FlowDocuments.SingleAsync(d => d.Id == docId);
+        doc.FlowId.Should().Be(flowId);
+        doc.Status.Should().Be(DocumentStatus.NeedsReview);
+        doc.StatusReason.Should().Be("duplicate_file");
+        DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).Should().ContainSingle(c => c.Code == DocumentChecks.Duplicate && !c.Passed);
     }
 
     [Fact]
