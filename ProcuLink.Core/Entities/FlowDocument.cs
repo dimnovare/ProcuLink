@@ -32,6 +32,12 @@ public class FlowDocument
 
     public string? DedupKey { get; set; }
     public bool IsSample { get; set; }
+    /// <summary>The normalised kind label of the first successful read.</summary>
+    public string? Kind { get; set; }
+    /// <summary>A <c>vat:</c> or <c>name:</c> sender key from the first successful read.</summary>
+    public string? SenderKey { get; set; }
+    /// <summary>Sorted into this flow without a person confirming it.</summary>
+    public bool SortUnconfirmed { get; set; }
 
     /// <summary>The flow version this document was processed under; null if the flow was never published.</summary>
     public int? FlowVersion { get; set; }

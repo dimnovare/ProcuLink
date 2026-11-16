@@ -775,6 +775,12 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasDefaultValue("[]")
                         .HasColumnName("hints_json");
 
+                    b.Property<bool>("IsInbox")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("is_inbox");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("text")
@@ -795,6 +801,10 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("OrgId");
+
+                    b.HasIndex(new[] { "OrgId" }, "ux_flows_one_inbox_per_org")
+                        .IsUnique()
+                        .HasFilter("is_inbox");
 
                     b.ToTable("flows", (string)null);
                 });
@@ -996,6 +1006,11 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("is_sample");
 
+                    b.Property<string>("Kind")
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)")
+                        .HasColumnName("kind");
+
                     b.Property<Guid>("OrgId")
                         .HasColumnType("uuid")
                         .HasColumnName("org_id");
@@ -1015,10 +1030,21 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasDefaultValue("{}")
                         .HasColumnName("read_json");
 
+                    b.Property<string>("SenderKey")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("sender_key");
+
                     b.Property<string>("Sha256")
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("sha256");
+
+                    b.Property<bool>("SortUnconfirmed")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("sort_unconfirmed");
 
                     b.Property<string>("Source")
                         .IsRequired()
@@ -1052,6 +1078,8 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("FlowId");
+
+                    b.HasIndex("OrgId", "Kind");
 
                     b.HasIndex("OrgId", "FlowId", "DedupKey");
 
@@ -1287,6 +1315,51 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.HasIndex("OrgId", "CreatedAt");
 
                     b.ToTable("flow_read_calls", (string)null);
+                });
+
+            modelBuilder.Entity("ProcuLink.Core.Entities.FlowSortMemory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("FlowId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("flow_id");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)")
+                        .HasColumnName("kind");
+
+                    b.Property<Guid>("OrgId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("org_id");
+
+                    b.Property<string>("SenderKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("sender_key");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FlowId");
+
+                    b.HasIndex("OrgId", "SenderKey", "Kind")
+                        .IsUnique();
+
+                    b.ToTable("flow_sort_memory", (string)null);
                 });
 
             modelBuilder.Entity("ProcuLink.Core.Entities.FlowVersion", b =>
@@ -4681,6 +4754,23 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasForeignKey("OrgId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("ProcuLink.Core.Entities.FlowSortMemory", b =>
+                {
+                    b.HasOne("ProcuLink.Core.Entities.Flow", "Flow")
+                        .WithMany()
+                        .HasForeignKey("FlowId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("ProcuLink.Core.Entities.Organisation", null)
+                        .WithMany()
+                        .HasForeignKey("OrgId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Flow");
                 });
 
             modelBuilder.Entity("ProcuLink.Core.Entities.FlowVersion", b =>
