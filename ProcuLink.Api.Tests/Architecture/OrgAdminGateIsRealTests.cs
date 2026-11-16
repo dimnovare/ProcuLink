@@ -42,7 +42,7 @@ public sealed class OrgAdminGateIsRealTests
     /// </summary>
     // 24 -> 22 on 2026-11-13 (plan 13b Task 6b): POST /api/orders/{id}/send-anyway and
     // POST /api/orders/{id}/acceptance-gate/override were deleted with the order write API.
-    private const int ExpectedGatedEndpointCount = 26; // 22 + 4 Google connect/complete/picker/disconnect (plan 9b)
+    private const int ExpectedGatedEndpointCount = 27; // 22 + 4 Google connect/complete/picker/disconnect (plan 9b) + inbox new-address
 
     /// <summary>
     /// How many operations are declared destructive. Every gated endpoint reaches a declared primitive.
