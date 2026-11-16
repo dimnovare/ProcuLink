@@ -15,6 +15,7 @@ using Xunit;
 
 namespace ProcuLink.Api.Tests.Documents;
 
+[Collection("postgres-container")]
 public class InboxFlowTests(DocumentEngineTestFactory factory) : IClassFixture<DocumentEngineTestFactory>
 {
     private static readonly Guid OrgA = DocumentEngineTestFactory.OrgA;

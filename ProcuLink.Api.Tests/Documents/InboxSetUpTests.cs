@@ -15,6 +15,7 @@ using Xunit;
 namespace ProcuLink.Api.Tests.Documents;
 
 /// <summary>The class shares one database: only the first test makes flows for OrgA.</summary>
+[Collection("postgres-container")]
 public sealed class InboxSetUpTests(DocumentEngineTestFactory factory) : IClassFixture<DocumentEngineTestFactory>
 {
     private static readonly Guid OrgA = DocumentEngineTestFactory.OrgA;

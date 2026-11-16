@@ -13,6 +13,7 @@ using Xunit;
 namespace ProcuLink.Api.Tests.Documents;
 
 /// <summary>The class shares one database: each test uses its own kind, so a resort never sees another test's documents.</summary>
+[Collection("postgres-container")]
 public sealed class InboxMoveTests(DocumentEngineTestFactory factory) : IClassFixture<DocumentEngineTestFactory>
 {
     private static readonly Guid OrgA = DocumentEngineTestFactory.OrgA;

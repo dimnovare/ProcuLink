@@ -17,6 +17,7 @@ using Xunit;
 namespace ProcuLink.Api.Tests.Documents;
 
 /// <summary>Each test uses fresh organisations: the factory's database is shared by every test in the class.</summary>
+[Collection("postgres-container")]
 public sealed class InboxSortTests(DocumentEngineTestFactory factory) : IClassFixture<DocumentEngineTestFactory>
 {
     private static readonly string FlowFields = DocumentJson.Serialize(FlowFieldList.Empty);

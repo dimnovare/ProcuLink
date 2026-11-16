@@ -11,6 +11,7 @@ using Xunit;
 
 namespace ProcuLink.Api.Tests.Documents;
 
+[Collection("postgres-container")]
 public class InboxApiTests(DocumentEngineTestFactory factory) : IClassFixture<DocumentEngineTestFactory>
 {
     private static readonly Guid OrgA = DocumentEngineTestFactory.OrgA;
@@ -33,7 +34,7 @@ public class InboxApiTests(DocumentEngineTestFactory factory) : IClassFixture<Do
         return (await res.Content.ReadFromJsonAsync<InboxDto>(DocumentJson.Options))!;
     }
 
-    /// <summary>The address's token, in either composed form ("token@domain" or "orders@token.host").</summary>
+    /// <summary>The address's token, in either composed form ("token@example.test" or "orders@token.example.com").</summary>
     private static string TokenOf(string address)
     {
         var (local, host) = (address.Split('@')[0], address.Split('@')[1]);

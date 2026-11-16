@@ -13,6 +13,7 @@ using Xunit;
 namespace ProcuLink.Api.Tests.Documents;
 
 /// <summary>The class shares one database: every document here carries a kind unless the backfill test needs it missing.</summary>
+[Collection("postgres-container")]
 public sealed class InboxRowsTests(DocumentEngineTestFactory factory) : IClassFixture<DocumentEngineTestFactory>
 {
     private static readonly Guid Org = DocumentEngineTestFactory.OrgA;

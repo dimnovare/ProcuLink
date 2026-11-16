@@ -12,6 +12,7 @@ using Xunit;
 
 namespace ProcuLink.Api.Tests.Documents;
 
+[Collection("postgres-container")]
 public sealed class InboxDownloadTests(DocumentEngineTestFactory factory) : IClassFixture<DocumentEngineTestFactory>
 {
     private static readonly Guid OrgA = DocumentEngineTestFactory.OrgA;
@@ -85,15 +86,20 @@ public sealed class InboxDownloadTests(DocumentEngineTestFactory factory) : ICla
     [Fact]
     public async Task Download_refusals()
     {
-        async Task Refused(HttpResponseMessage res, HttpStatusCode status, string error)
+        var waiting = await DocAsync();
+        (HttpResponseMessage Res, HttpStatusCode Status, string Error)[] refusals =
+        [
+            (await Download(OrgA, await DocAsync(inFlow: true), "csv"), HttpStatusCode.Conflict, "not_in_inbox"),
+            (await Download(OrgA, waiting, "pdf"), HttpStatusCode.BadRequest, "invalid_format"),
+            // No format at all reaches the controller's own answer, not the framework's validation 400.
+            (await factory.ClientFor(OrgA).PostAsJsonAsync($"/api/documents/{waiting}/download", new { }), HttpStatusCode.BadRequest, "invalid_format"),
+            (await Download(OrgA, await DocAsync(DocumentStatus.Received), "csv"), HttpStatusCode.Conflict, "not_read"),
+            (await Download(OrgB, waiting, "csv"), HttpStatusCode.NotFound, "document_not_found"),
+        ];
+        foreach (var (res, status, error) in refusals)
         {
             res.StatusCode.Should().Be(status);
             (await res.Content.ReadAsStringAsync()).Should().Contain(error);
         }
-        var waiting = await DocAsync();
-        await Refused(await Download(OrgA, await DocAsync(inFlow: true), "csv"), HttpStatusCode.Conflict, "not_in_inbox");
-        await Refused(await Download(OrgA, waiting, "pdf"), HttpStatusCode.BadRequest, "invalid_format");
-        await Refused(await Download(OrgA, await DocAsync(DocumentStatus.Received), "csv"), HttpStatusCode.Conflict, "not_read");
-        await Refused(await Download(OrgB, waiting, "csv"), HttpStatusCode.NotFound, "document_not_found");
     }
 }
