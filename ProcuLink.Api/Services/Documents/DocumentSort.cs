@@ -97,6 +97,13 @@ public static class DocumentSort
         }
     }
 
+    /// <summary>A person confirmed the document's flow: the hold is lifted and the flow remembered for its sender and kind.</summary>
+    public static async Task ConfirmAsync(ProcuLinkDbContext db, FlowDocument doc, CancellationToken ct)
+    {
+        doc.SortUnconfirmed = false;
+        await RememberAsync(db, doc, ct);
+    }
+
     /// <summary>Sorts again up to 50 inbox documents of this kind that wait for a person. Returns the ids moved; the caller saves, then enqueues their reads.</summary>
     public static async Task<IReadOnlyList<Guid>> ResortWaitingAsync(ProcuLinkDbContext db, Guid orgId, string kind, CancellationToken ct)
     {

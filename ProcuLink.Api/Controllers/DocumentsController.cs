@@ -354,7 +354,13 @@ public sealed class DocumentsController(
         var doc = await FindAsync(id, ct);
         if (doc is null) return NotFound(NotFoundBody);
         var outcome = await sender.SendAsync(doc, SendMode.Person, tenant.ClerkUserId, ct);
-        if (outcome.Ok) return Ok(outcome.Deliveries.OrderBy(d => d.CreatedAt).Select(ToDeliveryDto));
+        if (outcome.Ok)
+        {
+            // A person sent it: its sort is confirmed.
+            await DocumentSort.ConfirmAsync(db, doc, ct);
+            await db.SaveChangesAsync(ct);
+            return Ok(outcome.Deliveries.OrderBy(d => d.CreatedAt).Select(ToDeliveryDto));
+        }
         return outcome.Error switch
         {
             "output_invalid" when outcome.Detail is OutputFailure f => UnprocessableEntity(new { error = outcome.Error, output = f.Output, detail = f.Detail }),
