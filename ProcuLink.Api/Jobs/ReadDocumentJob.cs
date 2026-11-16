@@ -274,15 +274,29 @@ public class ReadDocumentJob(
         if (await db.FlowDocuments.AsNoTracking().Where(d => d.Id == doc.Id && d.OrgId == doc.OrgId).Select(d => d.Status).FirstAsync(ct) != DocumentStatus.Reading) return;
         await rechecker.ApplyAsync(doc, flow, read, ct, config);
         doc.ReadJson = DocumentJson.Serialize(read);
-        doc.ReadAt = DateTime.UtcNow;
-        // Bill the parts read, not the pages uploaded.
-        doc.BillingUnits = Math.Max(1, results.Count);
+        // The first successful read is the billed one: a re-read after sorting keeps its time and units.
+        if (doc.ReadAt is null)
+        {
+            doc.ReadAt = DateTime.UtcNow;
+            // Bill the parts read, not the pages uploaded.
+            doc.BillingUnits = Math.Max(1, results.Count);
+        }
+        doc.Kind ??= DocumentKind.Normalize(read.KindLabel);
+        doc.SenderKey ??= DocumentKind.SenderKeyOf(read, doc.Source, doc.SourceRef);
         AddAudit(doc, "document.read", new
         {
             status = doc.Status, version = config.VersionNo,
             failedChecks = DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).Select(c => c.Code).ToList(),
         });
+        var sorted = flow.IsInbox && !doc.IsSample && await DocumentSort.SortAsync(db, doc, ct);
         await db.SaveChangesAsync(ct);
+        if (flow.IsInbox)
+        {
+            // A sorted document is read again in its new flow; one left in the inbox waits for a person.
+            if (!doc.IsSample) logger.LogInformation("Inbox document {DocumentId} outcome {Outcome}.", doc.Id, sorted ? "sorted" : doc.StatusReason);
+            if (sorted) Enqueue(jobs, doc.Id, doc.OrgId);
+            return;
+        }
         SendDocumentJob.EnqueueIfAutomatic(jobs, doc, flow);
         // Committed: a shutdown must not skip the announcement or throw.
         await FlowWebhook.EnqueueAsync(db, jobs, doc, FlowWebhookEvent.Read, logger, CancellationToken.None);
