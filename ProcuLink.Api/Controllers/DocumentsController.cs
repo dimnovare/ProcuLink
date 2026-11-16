@@ -229,6 +229,8 @@ public sealed class DocumentsController(
         if (doc is null) return refused!;
 
         var flow = await db.Flows.FirstAsync(f => f.OrgId == doc.OrgId && f.Id == doc.FlowId, ct);
+        // The inbox reads every document generically, so it keeps no fields or hints of its own.
+        if (flow.IsInbox) return Conflict(new { error = "not_in_flow" });
         var flowFields = DocumentJson.Deserialize<FlowFieldList>(flow.FieldsJson);
         var label = string.IsNullOrWhiteSpace(req.NewLabel) ? null : req.NewLabel.Trim();
         if (string.IsNullOrWhiteSpace(req.Key) == (label is null) || label?.Length > 100) return BadRequest(new { error = "unknown_target" });

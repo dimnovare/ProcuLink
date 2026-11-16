@@ -32,7 +32,7 @@ public sealed class FlowFilesController(
         var orgId = tenant.OrganisationId;
         if (!gate.IsEnabled(orgId)) return StatusCode(403, new { error = "document_engine_not_enabled" });
         // Ownership first: the ledger's unique index has no OrgId, so claiming on another org's flow would collide with its keys.
-        var flowName = await db.Flows.Where(f => f.OrgId == orgId && f.Id == flowId).Select(f => f.Name).FirstOrDefaultAsync(ct);
+        var flowName = await db.Flows.PersonFlows(orgId).Where(f => f.Id == flowId).Select(f => f.Name).FirstOrDefaultAsync(ct);
         if (flowName is null) return NotFound(new { error = "flow_not_found" });
         var key = string.IsNullOrWhiteSpace(idempotencyKey) ? null : idempotencyKey;
         if (key is { Length: > MaxKeyLength }) return BadRequest(new { error = "invalid_idempotency_key" });

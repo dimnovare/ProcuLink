@@ -67,7 +67,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
     {
         if (Refuse() is { } refused) return refused;
         var orgId = tenant.OrganisationId;
-        var flow = await db.Flows.FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == flowId, ct);
+        var flow = await db.Flows.PersonFlows(orgId).FirstOrDefaultAsync(f => f.Id == flowId, ct);
         if (flow is null) return FlowNotFound();
         if (published) return Ok((await FlowConfigLoader.CurrentAsync(db, flow, ct)).Outputs.Select(ToDto));
         var rows = await db.Set<FlowOutput>().Where(o => o.OrgId == orgId && o.FlowId == flowId).OrderBy(o => o.CreatedAt).ToListAsync(ct);
@@ -156,7 +156,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
     {
         if (Refuse() is { } refused) return refused;
         var orgId = tenant.OrganisationId;
-        var flow = await db.Flows.AsNoTracking().FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == flowId, ct);
+        var flow = await db.Flows.PersonFlows(orgId).AsNoTracking().FirstOrDefaultAsync(f => f.Id == flowId, ct);
         if (flow is null) return FlowNotFound();
         if (!flow.FieldsConfirmed) return Conflict(new { error = "fields_unconfirmed" });
         if (file.Length > MaxSampleBytes) return StatusCode(413, new { error = "file_too_large" });
@@ -188,7 +188,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         if (Refuse() is { } refused) return refused;
         var orgId = tenant.OrganisationId;
         if (!gate.DocsOutputsOn(orgId)) return StatusCode(403, new { error = "docs_outputs_off" });
-        var flow = await db.Flows.AsNoTracking().FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == flowId, ct);
+        var flow = await db.Flows.PersonFlows(orgId).AsNoTracking().FirstOrDefaultAsync(f => f.Id == flowId, ct);
         if (flow is null) return FlowNotFound();
         if (!flow.FieldsConfirmed) return Conflict(new { error = "fields_unconfirmed" });
         if (file.Length > IngressLimits.MaxFileBytes) return StatusCode(413, new { error = "file_too_large" });
@@ -221,7 +221,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         var orgId = tenant.OrganisationId;
         var doc = await db.FlowDocuments.AsNoTracking().FirstOrDefaultAsync(d => d.OrgId == orgId && d.Id == documentId && d.FlowId == flowId, ct);
         if (doc is null) return NotFound(new { error = "document_not_found" });
-        var flow = await db.Flows.AsNoTracking().FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == flowId, ct);
+        var flow = await db.Flows.PersonFlows(orgId).AsNoTracking().FirstOrDefaultAsync(f => f.Id == flowId, ct);
         if (flow is null) return FlowNotFound();
         var config = await FlowConfigLoader.LiveAsync(db, flow, ct);
         var output = config.Outputs.FirstOrDefault(o => o.Id == outputId);
@@ -340,7 +340,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
     private async Task<IActionResult?> Apply(FlowOutput output, OutputRequest request, CancellationToken ct)
     {
         var orgId = tenant.OrganisationId;
-        var flow = await db.Flows.AsNoTracking().FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == output.FlowId, ct);
+        var flow = await db.Flows.PersonFlows(orgId).AsNoTracking().FirstOrDefaultAsync(f => f.Id == output.FlowId, ct);
         if (flow is null) return FlowNotFound();
 
         var name = request.Name?.Trim() ?? "";
