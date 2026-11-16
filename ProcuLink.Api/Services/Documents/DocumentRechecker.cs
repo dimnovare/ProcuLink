@@ -36,8 +36,8 @@ public sealed class DocumentRechecker(ProcuLinkDbContext db, DocumentEngineGate 
                 .Where(d => d.OrgId == doc.OrgId && d.FlowId == doc.FlowId && d.DedupKey == key && d.Id != doc.Id && !d.IsSample)
                 .Select(d => new { d.Id, d.CreatedAt, d.Status })
                 .ToListAsync(ct);
-            // A copy the flow already sent is a repeat whenever it arrived: a document moved in later must not send the number twice.
-            duplicate = others.Any(d => d.Status == DocumentStatus.Sent || d.CreatedAt < doc.CreatedAt
+            // A copy the flow already sent, or is sending, is a repeat whenever it arrived: a document moved in later must not send the number twice.
+            duplicate = others.Any(d => d.Status is DocumentStatus.Sent or DocumentStatus.Sending || d.CreatedAt < doc.CreatedAt
                 || (d.CreatedAt == doc.CreatedAt && d.Id.CompareTo(doc.Id) < 0));
         }
 

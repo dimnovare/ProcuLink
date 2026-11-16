@@ -226,8 +226,7 @@ public static class EndpointReachabilityScanner
 
         foreach (var wrapper in Wrappers(joined))
         {
-            // The type argument may be an inline object type: `apiFetch<{ id: string; name: string }[]>(…)`.
-            var use = new Regex(@"\b" + Regex.Escape(wrapper) + @"\s*(?:<(?:[^;{}<>]|\{[^{}]*\})*?>)?\s*\(\s*[`""'](/[^`""'\s\\]*)");
+            var use = new Regex(@"\b" + Regex.Escape(wrapper) + @"\s*(?:<[^;{}]*?>)?\s*\(\s*[`""'](/[^`""'\s\\]*)");
             foreach (Match m in use.Matches(joined)) hits.Add((m.Index, "/api" + m.Groups[1].Value));
         }
 

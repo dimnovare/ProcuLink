@@ -264,8 +264,10 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
         doc.Status.Should().Be(DocumentStatus.NeedsReview);
     }
 
-    [Fact]
-    public async Task A_number_the_flow_already_sent_is_a_repeat_even_when_it_arrived_later()
+    [Theory]
+    [InlineData(DocumentStatus.Sent)]
+    [InlineData(DocumentStatus.Sending)]
+    public async Task A_number_the_flow_already_sent_is_a_repeat_even_when_it_arrived_later(string twinStatus)
     {
         var now = DateTime.UtcNow;
         var result = new ReadResult($"Invoice {Guid.NewGuid():N}",
@@ -297,7 +299,7 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
-            (await db.FlowDocuments.SingleAsync(d => d.Id == copy.Id)).Status = DocumentStatus.Sent;
+            (await db.FlowDocuments.SingleAsync(d => d.Id == copy.Id)).Status = twinStatus;
             await db.SaveChangesAsync();
         }
 
