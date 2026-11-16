@@ -31,6 +31,7 @@ public class ReadDocumentJob(
     internal TimeSpan ReadBudget { get; init; } = MaxReadTime;
     internal TimeSpan RetryDelay { get; init; } = TimeSpan.FromSeconds(10);
     private int _partsRead;
+    private Guid _runFlowId;
 
     [Queue("critical")]
     [AutomaticRetry(Attempts = 3, DelaysInSeconds = new[] { 5, 30, 120 })]
@@ -41,7 +42,7 @@ public class ReadDocumentJob(
 
         // One time budget for this run of the read: the download, every part and its second try. A call still running when it ends is cancelled.
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var runFlowId = doc.FlowId;
+        _runFlowId = doc.FlowId;
         try
         {
             doc.Status = DocumentStatus.Reading;
@@ -58,7 +59,7 @@ public class ReadDocumentJob(
         {
             // Out of time during a call: final, as when the time runs out between parts.
             logger.LogWarning("Read of document {DocumentId} stopped at the time limit after {Parts} part(s).", documentId, _partsRead);
-            await FailIfStillReadingAsync(documentId, organisationId, runFlowId, "document_too_large", ct);
+            await ReloadAndFailAsync(documentId, organisationId, "document_too_large", ct);
         }
         catch (Exception ex)
         {
@@ -66,19 +67,17 @@ public class ReadDocumentJob(
             if (context is null || context.GetJobParameter<int>("RetryCount") >= LastRetry)
             {
                 // Drop whatever the failed attempt tracked (ReadAt, ReadJson, the read audit row): an unread document is not billed.
-                await FailIfStillReadingAsync(documentId, organisationId, runFlowId, "ai_error", ct);
+                await ReloadAndFailAsync(documentId, organisationId, "ai_error", ct);
             }
             throw;
         }
     }
 
-    /// <summary>Fails the reloaded document only while this run still owns it: a stale run never fails a document already moved on.</summary>
-    private async Task FailIfStillReadingAsync(Guid documentId, Guid organisationId, Guid runFlowId, string reason, CancellationToken ct)
+    /// <summary>Fails the reloaded document, dropping whatever the failed attempt tracked.</summary>
+    private async Task ReloadAndFailAsync(Guid documentId, Guid organisationId, string reason, CancellationToken ct)
     {
         db.ChangeTracker.Clear();
-        var failed = await db.FlowDocuments.FirstAsync(d => d.Id == documentId && d.OrgId == organisationId, ct);
-        if (failed.FlowId == runFlowId && failed.Status is DocumentStatus.Reading or DocumentStatus.Received)
-            await FailAsync(failed, reason, ct);
+        await FailAsync(await db.FlowDocuments.FirstAsync(d => d.Id == documentId && d.OrgId == organisationId, ct), reason, ct);
     }
 
     /// <param name="budget">Ends with the read's time budget; given to the download, OCR and the reader. Saves use <paramref name="ct"/>.</param>
@@ -311,8 +310,14 @@ public class ReadDocumentJob(
         await FlowWebhook.EnqueueAsync(db, jobs, doc, FlowWebhookEvent.Read, logger, CancellationToken.None);
     }
 
+    /// <summary>
+    /// Fails the document only while this run still owns it: in the flow the run started in, and still reading or received.
+    /// A stale run never fails a document already moved on; a read that failed in the document's own flow always does.
+    /// </summary>
     private async Task FailAsync(FlowDocument doc, string reason, CancellationToken ct)
     {
+        var current = await db.FlowDocuments.AsNoTracking().Where(d => d.Id == doc.Id && d.OrgId == doc.OrgId).Select(d => new { d.Status, d.FlowId }).FirstAsync(ct);
+        if (current.FlowId != _runFlowId || current.Status is not (DocumentStatus.Reading or DocumentStatus.Received)) return;
         doc.Status = DocumentStatus.ReadFailed;
         doc.StatusReason = reason;
         doc.UpdatedAt = DateTime.UtcNow;

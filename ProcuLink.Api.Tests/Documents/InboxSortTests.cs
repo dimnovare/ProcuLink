@@ -193,6 +193,7 @@ public sealed class InboxSortTests(DocumentEngineTestFactory factory) : IClassFi
         var second = Doc(await UploadAsync());
 
         (second.ReadAt, second.StatusReason).Should().Be(((DateTime?)null, "duplicate_file"));
+        DocumentJson.Deserialize<List<DocumentCheck>>(second.ChecksJson).Single().Message.Should().Be("This file is already in your workspace.");
         factory.Enqueued<ReadDocumentJob>().Should().Be(reads);
     }
 

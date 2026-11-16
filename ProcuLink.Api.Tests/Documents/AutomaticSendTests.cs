@@ -255,13 +255,14 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
         doc.StatusReason.Should().Be("duplicate_file");
         DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).Should().ContainSingle(c => c.Code == DocumentChecks.Duplicate && !c.Passed);
 
-        // Held as not certain and rechecked (a fields change or a publish): still a duplicate file, never check_sort.
+        // Held as not certain and rechecked (a fields change or a publish): left exactly as the hold wrote it, never check_sort.
         var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
         doc.SortUnconfirmed = true;
+        await db.SaveChangesAsync();
         await scope.ServiceProvider.GetRequiredService<DocumentRechecker>()
-            .ApplyAsync(doc, await db.Flows.SingleAsync(f => f.Id == flowId), DocumentJson.Deserialize<ReadResult>(doc.ReadJson), CancellationToken.None);
-        doc.StatusReason.Should().Be("duplicate_file");
-        doc.Status.Should().Be(DocumentStatus.NeedsReview);
+            .RecheckPendingAsync(await db.Flows.SingleAsync(f => f.Id == flowId), CancellationToken.None);
+        (doc.Status, doc.StatusReason).Should().Be((DocumentStatus.NeedsReview, "duplicate_file"));
+        DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).Should().ContainSingle(c => c.Code == DocumentChecks.Duplicate && !c.Passed);
     }
 
     [Theory]
