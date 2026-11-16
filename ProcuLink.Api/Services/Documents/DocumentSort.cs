@@ -67,7 +67,8 @@ public static class DocumentSort
     /// there; false when that flow already holds the same file, and the document waits there as a duplicate file, unread.
     /// </summary>
     public static async Task<bool> MoveToAsync(
-        ProcuLinkDbContext db, FlowDocument doc, Guid flowId, string flowName, bool certain, string action, string? userId, CancellationToken ct)
+        ProcuLinkDbContext db, FlowDocument doc, Guid flowId, string flowName, bool certain, string action, string? userId, CancellationToken ct,
+        bool newFlow = false)
     {
         var duplicateFile = doc.Sha256.Length > 0 && await db.FlowDocuments.AnyAsync(
             d => d.OrgId == doc.OrgId && d.FlowId == flowId && d.Sha256 == doc.Sha256 && d.Id != doc.Id && !d.IsSample, ct);
@@ -79,7 +80,7 @@ public static class DocumentSort
         if (duplicateFile) DocumentIntakeService.HoldAsDuplicateFile(doc);
         doc.SortUnconfirmed = !certain;
         doc.UpdatedAt = DateTime.UtcNow;
-        DocumentAudit.Add(db, doc, action, new { fromFlowId, flowId, flow = flowName, certain, duplicateFile }, userId);
+        DocumentAudit.Add(db, doc, action, new { fromFlowId, flowId, flow = flowName, certain, duplicateFile, newFlow }, userId);
         return !duplicateFile;
     }
 

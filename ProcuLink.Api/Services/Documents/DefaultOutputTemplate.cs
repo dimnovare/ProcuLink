@@ -1,4 +1,5 @@
 using ProcuLink.Core.Documents;
+using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 
@@ -32,4 +33,11 @@ public static class DefaultOutputTemplate
             Root = OutputNode.Obj("document", children.ToArray()),
         };
     }
+
+    /// <summary>The output a flow starts with, as its first run creates it: a CSV file of the header values and the first table, no destination.</summary>
+    public static FlowOutput CsvFile(Flow flow, FlowFieldList fields) => new()
+    {
+        Id = Guid.NewGuid(), OrgId = flow.OrgId, FlowId = flow.Id, Name = "CSV file", Format = FlowOutputFormats.Csv,
+        TemplateJson = DocumentJson.Serialize(For(fields, FlowOutputFormats.Csv, null)), CreatedAt = flow.CreatedAt, UpdatedAt = flow.CreatedAt,
+    };
 }

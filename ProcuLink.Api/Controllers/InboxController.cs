@@ -1,6 +1,7 @@
 using Hangfire;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Auth;
@@ -109,6 +110,38 @@ public sealed class InboxController(
         await RememberAndResortAsync(doc, ct);
         if (mustRead) ReadDocumentJob.Enqueue(jobs, doc.Id, orgId);
         return Ok(DocumentSummaryDto.From(doc, flow.Name));
+    }
+
+    private Task<bool> InInboxAsync(FlowDocument doc, CancellationToken ct) =>
+        db.Flows.AnyAsync(f => f.OrgId == doc.OrgId && f.Id == doc.FlowId && f.IsInbox, ct);
+
+    /// <summary>"Do the same every time": a new flow from the document's read, with the document in it, already checked there.</summary>
+    [HttpPost("api/documents/{id:guid}/set-up")]
+    public async Task<IActionResult> SetUp(Guid id, [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] SetUpDocumentRequest? request, CancellationToken ct)
+    {
+        if (Refuse() is { } refused) return refused;
+        var orgId = tenant.OrganisationId;
+        var doc = await FindAsync(id, ct);
+        if (doc is null) return NotFound(DocumentNotFound);
+        if (!await InInboxAsync(doc, ct)) return Conflict(new { error = "not_in_inbox" });
+        if (!DocumentStatus.IsEditable(doc.Status, doc.StatusReason) || doc.ReadAt is null) return Conflict(new { error = "not_movable" });
+        if (!await billing.CanProcessOrdersAsync(orgId, ct)) return Conflict(new { error = "processing_paused" });
+        if (await FlowCreation.LimitReachedAsync(db, orgId, ct) is { } reached)
+            return StatusCode(429, new { error = "flow_limit_reached", plan = reached.Plan, limit = reached.Cap, upgradeUrl = "/settings" });
+        var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
+        if (!FlowCreation.TryName(request?.Name ?? DocumentKind.FlowNameFor(read.KindLabel), out var name)) return BadRequest(new { error = "invalid_name" });
+        var fields = ReadMerge.KeysOf(read);
+        if (FlowCreation.InvalidFields(fields) is { } detail) return UnprocessableEntity(new { error = "invalid_fields", detail });
+
+        var flow = FlowCreation.New(orgId, name, fields, confirmed: true);
+        db.Flows.Add(flow);
+        db.Set<FlowOutput>().Add(DefaultOutputTemplate.CsvFile(flow, fields));
+        // Read in the inbox already: checked against the new flow straight away, never read again.
+        await DocumentSort.MoveToAsync(db, doc, flow.Id, flow.Name, true, "document.moved", tenant.ClerkUserId, ct, newFlow: true);
+        await rechecker.ApplyAsync(doc, flow, read, ct);
+        await db.SaveChangesAsync(ct);
+        await RememberAndResortAsync(doc, ct);
+        return Created($"/api/flows/{flow.Id}", new SetUpResultDto(flow.Id, flow.Name, DocumentSummaryDto.From(doc, flow.Name)));
     }
 
     /// <summary>Remembers the document's flow, saves, then sorts again the inbox documents of its kind and enqueues their reads.</summary>

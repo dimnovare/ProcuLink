@@ -23,6 +23,10 @@ public record CreateFlowRequest(string Name);
 
 public sealed record MoveDocumentRequest(Guid FlowId);
 
+public sealed record SetUpDocumentRequest(string? Name = null);
+
+public sealed record SetUpResultDto(Guid FlowId, string FlowName, DocumentSummaryDto Document);
+
 public record RenameFlowRequest(string? Name = null, string? Automation = null);
 
 public record DocumentSummaryDto(
