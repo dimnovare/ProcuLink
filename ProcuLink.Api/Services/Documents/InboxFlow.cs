@@ -26,7 +26,7 @@ public static class InboxFlow
         catch (DbUpdateException ex) when (IngressDedupe.IsUniqueViolation(ex))
         {
             db.Entry(flow).State = EntityState.Detached;
-            return await db.Flows.FirstAsync(f => f.OrgId == orgId && f.IsInbox, ct);
+            return await db.Flows.FirstOrDefaultAsync(f => f.OrgId == orgId && f.IsInbox, ct) ?? throw ex;
         }
     }
 

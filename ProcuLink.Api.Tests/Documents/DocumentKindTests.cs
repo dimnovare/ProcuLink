@@ -38,6 +38,10 @@ public class DocumentKindTests
         Assert.Equal("name:example supplies", DocumentKind.SenderKeyOf(named, IntakeKind.Email, "orders@example.test"));
 
         Assert.Equal("Invoices", DocumentKind.FlowNameFor("Invoice"));
+        Assert.Equal("Invoices", DocumentKind.FlowNameFor("Invoice (copy)"));
+        Assert.Equal("Invoices", DocumentKind.FlowNameFor("INVOICE"));
+        Assert.Equal("Purchase orders", DocumentKind.FlowNameFor("Purchase Orders"));
+        Assert.Equal("Analysis", DocumentKind.FlowNameFor("Analysis"));
         Assert.Equal("Documents", DocumentKind.FlowNameFor(null));
     }
 }

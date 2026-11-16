@@ -45,16 +45,15 @@ public static class DocumentKind
             ? key
             : null;
 
-    /// <summary>A flow name for documents of this kind: the label capitalised and made plural; "Documents" when there is none.</summary>
+    /// <summary>A flow name for documents of this kind: the normalised label capitalised and made plural; "Documents" when there is none.</summary>
     public static string FlowNameFor(string? kindLabel)
     {
-        var label = kindLabel?.Trim() ?? "";
-        if (label.Length == 0) return "Documents";
-        label = char.ToUpperInvariant(label[0]) + label[1..];
-        var lower = label.ToLowerInvariant();
-        var name = lower.EndsWith('s') ? label
-            : lower.EndsWith('y') && lower.Length > 1 && !"aeiou".Contains(lower[^2]) ? label[..^1] + "ies"
-            : lower.EndsWith('x') || lower.EndsWith("ch") || lower.EndsWith("sh") ? label + "es"
+        var kind = Normalize(kindLabel);
+        if (kind is null) return "Documents";
+        var label = char.ToUpperInvariant(kind[0]) + kind[1..];
+        var name = kind.EndsWith('s') ? label
+            : kind.EndsWith('y') && kind.Length > 1 && !"aeiou".Contains(kind[^2]) ? label[..^1] + "ies"
+            : kind.EndsWith('x') || kind.EndsWith("ch") || kind.EndsWith("sh") ? label + "es"
             : label + "s";
         return name.Length > MaxFlowName ? name[..MaxFlowName].TrimEnd() : name;
     }

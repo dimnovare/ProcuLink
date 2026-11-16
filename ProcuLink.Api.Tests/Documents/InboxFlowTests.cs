@@ -42,14 +42,25 @@ public class InboxFlowTests(DocumentEngineTestFactory factory) : IClassFixture<D
 
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
-        (await db.Organisations.SingleAsync(o => o.Id == OrgA)).Plan = PlanConstants.Pilot;
-        var cap = PlanConstants.GetFlowLimit(PlanConstants.Pilot)!.Value;
-        var existing = await db.Flows.CountAsync(f => f.OrgId == OrgA && !f.IsInbox);
-        for (var i = existing; i < cap - 1; i++)
-            db.Flows.Add(FlowCreation.New(OrgA, $"Supplier invoices {i}", FlowFieldList.Empty, confirmed: false));
-        await db.SaveChangesAsync();
+        var org = await db.Organisations.SingleAsync(o => o.Id == OrgA);
+        var plan = org.Plan;
+        org.Plan = PlanConstants.Pilot;
+        try
+        {
+            var cap = PlanConstants.GetFlowLimit(PlanConstants.Pilot)!.Value;
+            var existing = await db.Flows.CountAsync(f => f.OrgId == OrgA && !f.IsInbox);
+            for (var i = existing; i < cap - 1; i++)
+                db.Flows.Add(FlowCreation.New(OrgA, $"Supplier invoices {i}", FlowFieldList.Empty, confirmed: false));
+            await db.SaveChangesAsync();
 
-        Assert.Null(await FlowCreation.LimitReachedAsync(db, OrgA, CancellationToken.None));
+            Assert.Null(await FlowCreation.LimitReachedAsync(db, OrgA, CancellationToken.None));
+        }
+        finally
+        {
+            org.Plan = plan;
+            await db.SaveChangesAsync();
+        }
+        Assert.Equal(plan, (await db.Organisations.AsNoTracking().SingleAsync(o => o.Id == OrgA)).Plan);
     }
 
     [Fact]
@@ -65,6 +76,10 @@ public class InboxFlowTests(DocumentEngineTestFactory factory) : IClassFixture<D
             await http.PostAsync($"/api/flows/{id}/publish", null),
             await http.GetAsync($"/api/flows/{id}/outputs"),
             await http.GetAsync($"/api/flows/{id}/intakes"),
+            await http.PostAsync($"/api/flows/{id}/documents/sample", null),
+            await http.PatchAsJsonAsync($"/api/flows/{id}", new { automation = "auto" }),
+            await factory.ApiKeyClientFor(OrgA).PostAsync($"/api/v1/flows/{id}/documents",
+                new MultipartFormDataContent { { new ByteArrayContent("sku,qty\nA-1,2\n"u8.ToArray()), "file", "orders.csv" } }),
         })
         {
             Assert.Equal(HttpStatusCode.NotFound, res.StatusCode);

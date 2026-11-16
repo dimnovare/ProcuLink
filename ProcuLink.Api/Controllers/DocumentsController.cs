@@ -51,6 +51,8 @@ public sealed class DocumentsController(
     public async Task<IActionResult> Sample(Guid flowId, CancellationToken ct)
     {
         var orgId = tenant.OrganisationId;
+        if (!await db.Flows.PersonFlows(orgId).AnyAsync(f => f.Id == flowId, ct))
+            return Refuse() ?? NotFound(new { error = "flow_not_found" });
         var existing = await db.FlowDocuments
             .Where(d => d.OrgId == orgId && d.FlowId == flowId && d.IsSample)
             .OrderBy(d => d.CreatedAt).ThenBy(d => d.Id)
