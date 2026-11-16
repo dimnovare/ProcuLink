@@ -31,6 +31,7 @@ public class ReadDocumentJob(
     internal TimeSpan ReadBudget { get; init; } = MaxReadTime;
     internal TimeSpan RetryDelay { get; init; } = TimeSpan.FromSeconds(10);
     private int _partsRead;
+    private Guid _runFlowId;
 
     [Queue("critical")]
     [AutomaticRetry(Attempts = 3, DelaysInSeconds = new[] { 5, 30, 120 })]
@@ -41,6 +42,7 @@ public class ReadDocumentJob(
 
         // One time budget for this run of the read: the download, every part and its second try. A call still running when it ends is cancelled.
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _runFlowId = doc.FlowId;
         try
         {
             doc.Status = DocumentStatus.Reading;
@@ -57,9 +59,7 @@ public class ReadDocumentJob(
         {
             // Out of time during a call: final, as when the time runs out between parts.
             logger.LogWarning("Read of document {DocumentId} stopped at the time limit after {Parts} part(s).", documentId, _partsRead);
-            db.ChangeTracker.Clear();
-            var failed = await db.FlowDocuments.FirstAsync(d => d.Id == documentId && d.OrgId == organisationId, ct);
-            await FailAsync(failed, "document_too_large", ct);
+            await ReloadAndFailAsync(documentId, organisationId, "document_too_large", ct);
         }
         catch (Exception ex)
         {
@@ -67,12 +67,17 @@ public class ReadDocumentJob(
             if (context is null || context.GetJobParameter<int>("RetryCount") >= LastRetry)
             {
                 // Drop whatever the failed attempt tracked (ReadAt, ReadJson, the read audit row): an unread document is not billed.
-                db.ChangeTracker.Clear();
-                var failed = await db.FlowDocuments.FirstAsync(d => d.Id == documentId && d.OrgId == organisationId, ct);
-                await FailAsync(failed, "ai_error", ct);
+                await ReloadAndFailAsync(documentId, organisationId, "ai_error", ct);
             }
             throw;
         }
+    }
+
+    /// <summary>Fails the reloaded document, dropping whatever the failed attempt tracked.</summary>
+    private async Task ReloadAndFailAsync(Guid documentId, Guid organisationId, string reason, CancellationToken ct)
+    {
+        db.ChangeTracker.Clear();
+        await FailAsync(await db.FlowDocuments.FirstAsync(d => d.Id == documentId && d.OrgId == organisationId, ct), reason, ct);
     }
 
     /// <param name="budget">Ends with the read's time budget; given to the download, OCR and the reader. Saves use <paramref name="ct"/>.</param>
@@ -270,32 +275,56 @@ public class ReadDocumentJob(
             }).ToList(),
             truncated || merged.Truncated);
 
-        // Another run may have finished this document meanwhile: then this run writes nothing.
-        if (await db.FlowDocuments.AsNoTracking().Where(d => d.Id == doc.Id && d.OrgId == doc.OrgId).Select(d => d.Status).FirstAsync(ct) != DocumentStatus.Reading) return;
+        // Another run may have finished this document meanwhile, or it was sorted into another flow: then this run writes nothing.
+        var current = await db.FlowDocuments.AsNoTracking().Where(d => d.Id == doc.Id && d.OrgId == doc.OrgId).Select(d => new { d.Status, d.FlowId }).FirstAsync(ct);
+        if (current.Status != DocumentStatus.Reading || current.FlowId != flow.Id) return;
         await rechecker.ApplyAsync(doc, flow, read, ct, config);
         doc.ReadJson = DocumentJson.Serialize(read);
-        doc.ReadAt = DateTime.UtcNow;
-        // Bill the parts read, not the pages uploaded.
-        doc.BillingUnits = Math.Max(1, results.Count);
+        // The first successful read is the billed one: a re-read after sorting keeps its time and units.
+        if (doc.ReadAt is null)
+        {
+            doc.ReadAt = DateTime.UtcNow;
+            // Bill the parts read, not the pages uploaded.
+            doc.BillingUnits = Math.Max(1, results.Count);
+        }
+        doc.Kind ??= DocumentKind.Normalize(read.KindLabel);
+        doc.SenderKey ??= DocumentKind.SenderKeyOf(read, doc.Source, doc.SourceRef);
         AddAudit(doc, "document.read", new
         {
             status = doc.Status, version = config.VersionNo,
             failedChecks = DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).Select(c => c.Code).ToList(),
         });
+        var sorted = flow.IsInbox && !doc.IsSample && await DocumentSort.SortAsync(db, doc, ct);
         await db.SaveChangesAsync(ct);
+        if (flow.IsInbox)
+        {
+            // A sorted document is read again in its new flow; one left in the inbox waits for a person.
+            if (!doc.IsSample) logger.LogInformation("Inbox document {DocumentId} outcome {Outcome}.", doc.Id, sorted ? "sorted" : doc.StatusReason);
+            if (sorted) Enqueue(jobs, doc.Id, doc.OrgId);
+            return;
+        }
         SendDocumentJob.EnqueueIfAutomatic(jobs, doc, flow);
+        // A sort that is not certain announces nothing until a person confirms it.
+        if (doc.SortUnconfirmed) return;
         // Committed: a shutdown must not skip the announcement or throw.
         await FlowWebhook.EnqueueAsync(db, jobs, doc, FlowWebhookEvent.Read, logger, CancellationToken.None);
     }
 
+    /// <summary>
+    /// Fails the document only while this run still owns it: in the flow the run started in, and still reading or received.
+    /// A stale run never fails a document already moved on; a read that failed in the document's own flow always does.
+    /// </summary>
     private async Task FailAsync(FlowDocument doc, string reason, CancellationToken ct)
     {
+        var current = await db.FlowDocuments.AsNoTracking().Where(d => d.Id == doc.Id && d.OrgId == doc.OrgId).Select(d => new { d.Status, d.FlowId }).FirstAsync(ct);
+        if (current.FlowId != _runFlowId || current.Status is not (DocumentStatus.Reading or DocumentStatus.Received)) return;
         doc.Status = DocumentStatus.ReadFailed;
         doc.StatusReason = reason;
         doc.UpdatedAt = DateTime.UtcNow;
         AddAudit(doc, "document.read_failed", new { reason });
         await db.SaveChangesAsync(ct);
-        await FlowWebhook.EnqueueAsync(db, jobs, doc, FlowWebhookEvent.ReadFailed, logger, CancellationToken.None);
+        // A sort that is not certain announces nothing, a failed read included, until a person confirms it.
+        if (!doc.SortUnconfirmed) await FlowWebhook.EnqueueAsync(db, jobs, doc, FlowWebhookEvent.ReadFailed, logger, CancellationToken.None);
     }
 
     private void AddAudit(FlowDocument doc, string action, object payload) =>

@@ -78,16 +78,11 @@ public sealed class DocumentIntakeService(
             Source = source, SourceRef = sourceRef, Status = DocumentStatus.Received, CreatedAt = now, UpdatedAt = now,
         };
 
-        var duplicate = await db.FlowDocuments.AnyAsync(d => d.OrgId == orgId && d.FlowId == flowId && d.Sha256 == sha, ct);
-        if (duplicate)
-        {
-            doc.Status = DocumentStatus.NeedsReview;
-            doc.StatusReason = "duplicate_file";
-            doc.ChecksJson = DocumentJson.Serialize(new[]
-            {
-                new DocumentCheck(DocumentChecks.Duplicate, false, null, "This file was already uploaded to this flow."),
-            });
-        }
+        // The inbox sorts documents on into flows, so a file the workspace already holds anywhere is held at the door.
+        var toInbox = await db.Flows.AnyAsync(f => f.OrgId == orgId && f.Id == flowId && f.IsInbox, ct);
+        var duplicate = await db.FlowDocuments.AnyAsync(
+            d => d.OrgId == orgId && d.Sha256 == sha && (d.FlowId == flowId || (toInbox && !d.IsSample)), ct);
+        if (duplicate) HoldAsDuplicateFile(doc, toInbox ? "This file is already in your workspace." : null);
 
         db.FlowDocuments.Add(doc);
         var audit = DocumentAudit.Add(db, doc, "document.received", new { fileName = safeName, flowId, source, sourceRef }, userId);
@@ -114,6 +109,17 @@ public sealed class DocumentIntakeService(
         }
 
         return doc;
+    }
+
+    /// <summary>Marks a file its flow already holds: waits for a person, unread, until "read it anyway".</summary>
+    public static void HoldAsDuplicateFile(FlowDocument doc, string? message = null)
+    {
+        doc.Status = DocumentStatus.NeedsReview;
+        doc.StatusReason = "duplicate_file";
+        doc.ChecksJson = DocumentJson.Serialize(new[]
+        {
+            new DocumentCheck(DocumentChecks.Duplicate, false, null, message ?? "This file was already uploaded to this flow."),
+        });
     }
 
     private static int CountPages(byte[] pdf)

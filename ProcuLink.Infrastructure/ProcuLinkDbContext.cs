@@ -2131,9 +2131,11 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(f => f.HintsJson).HasColumnName("hints_json").HasColumnType("jsonb").HasDefaultValue("[]");
             b.Property(f => f.Automation).HasColumnName("automation").HasDefaultValue("review");
             b.Property(f => f.PublishedVersionNo).HasColumnName("published_version_no");
+            b.Property(f => f.IsInbox).HasColumnName("is_inbox").HasDefaultValue(false);
             b.Property(f => f.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             b.Property(f => f.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             b.HasIndex(f => f.OrgId);
+            b.HasIndex(f => f.OrgId, "ux_flows_one_inbox_per_org").IsUnique().HasFilter("is_inbox");
             b.HasOne<Organisation>().WithMany().HasForeignKey(f => f.OrgId).OnDelete(DeleteBehavior.Cascade);
         });
 
@@ -2190,12 +2192,16 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(d => d.SourceRef).HasColumnName("source_ref");
             b.Property(d => d.DedupKey).HasColumnName("dedup_key");
             b.Property(d => d.IsSample).HasColumnName("is_sample");
+            b.Property(d => d.Kind).HasColumnName("kind").HasMaxLength(80);
+            b.Property(d => d.SenderKey).HasColumnName("sender_key").HasMaxLength(200);
+            b.Property(d => d.SortUnconfirmed).HasColumnName("sort_unconfirmed").HasDefaultValue(false);
             b.Property(d => d.FlowVersion).HasColumnName("flow_version");
             b.Property(d => d.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             b.Property(d => d.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
             b.Property(d => d.ReadAt).HasColumnName("read_at").HasColumnType("timestamptz");
             b.HasIndex(d => new { d.OrgId, d.FlowId, d.Sha256 });
             b.HasIndex(d => new { d.OrgId, d.FlowId, d.DedupKey });
+            b.HasIndex(d => new { d.OrgId, d.Kind });
             b.HasOne<Organisation>().WithMany().HasForeignKey(d => d.OrgId).OnDelete(DeleteBehavior.Cascade);
             b.HasOne(d => d.Flow).WithMany().HasForeignKey(d => d.FlowId).OnDelete(DeleteBehavior.Cascade);
         });
@@ -2320,6 +2326,22 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasIndex(c => c.DocumentId);
             b.HasOne<Organisation>().WithMany().HasForeignKey(c => c.OrgId).OnDelete(DeleteBehavior.Cascade);
             b.HasOne<FlowDocument>().WithMany().HasForeignKey(c => c.DocumentId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<FlowSortMemory>(b =>
+        {
+            b.ToTable("flow_sort_memory");
+            b.HasKey(m => m.Id);
+            b.Property(m => m.Id).HasColumnName("id");
+            b.Property(m => m.OrgId).HasColumnName("org_id");
+            b.Property(m => m.SenderKey).HasColumnName("sender_key").HasMaxLength(200);
+            b.Property(m => m.Kind).HasColumnName("kind").HasMaxLength(80);
+            b.Property(m => m.FlowId).HasColumnName("flow_id");
+            b.Property(m => m.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(m => m.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
+            b.HasIndex(m => new { m.OrgId, m.SenderKey, m.Kind }).IsUnique();
+            b.HasOne<Organisation>().WithMany().HasForeignKey(m => m.OrgId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne(m => m.Flow).WithMany().HasForeignKey(m => m.FlowId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<FlowIntake>(b =>

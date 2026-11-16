@@ -26,7 +26,7 @@ public sealed class FlowIntakesController(
     {
         if (Refuse() is { } refused) return refused;
         var orgId = tenant.OrganisationId;
-        return await db.Flows.AnyAsync(f => f.OrgId == orgId && f.Id == flowId, ct)
+        return await db.Flows.PersonFlows(orgId).AnyAsync(f => f.Id == flowId, ct)
             ? null
             : new NotFoundObjectResult(new { error = "flow_not_found" });
     }

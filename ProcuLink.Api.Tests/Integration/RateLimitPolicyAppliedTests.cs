@@ -35,6 +35,8 @@ public sealed class RateLimitPolicyAppliedTests : IClassFixture<HardeningTestFac
     [Theory]
     // AI-invoking endpoints → "ai" (15/min — protects the OpenAI bill).
     [InlineData(typeof(DocumentsController), nameof(DocumentsController.RetryRead), "ai")]
+    [InlineData(typeof(InboxController), nameof(InboxController.Move), "ai")]
+    [InlineData(typeof(InboxController), nameof(InboxController.SetUp), "ai")]
     // Signed-URL / file-download surfaces → "signed-url" (60/min).
     [InlineData(typeof(OrdersController), nameof(OrdersController.Download), "signed-url")]
     // The source document is STREAMED rather than signed, but it is the same surface — a

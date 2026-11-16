@@ -120,6 +120,12 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
             (await db.FlowDocuments.SingleAsync(d => d.Id == sample.Id)).Status.Should().Be(DocumentStatus.Ready);
             await new SendDocumentJob(db, scope.ServiceProvider.GetRequiredService<DocumentSender>()).ExecuteAsync(sample.Id, Org, CancellationToken.None);
             (await db.Set<FlowDelivery>().AnyAsync(d => d.DocumentId == sample.Id)).Should().BeFalse();
+
+            // A person may send the sample, but its public sender never teaches sort memory.
+            (await db.FlowDocuments.SingleAsync(d => d.Id == sample.Id)).SenderKey = "name:example sample sender";
+            await db.SaveChangesAsync();
+            (await factory.ClientFor(Org).PostAsync($"/api/documents/{sample.Id}/send", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+            (await db.Set<FlowSortMemory>().AnyAsync(m => m.OrgId == Org && m.SenderKey == "name:example sample sender")).Should().BeFalse();
         }
     }
 
@@ -141,6 +147,211 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
         doc.ChecksJson = DocumentJson.Serialize(new[] { new DocumentCheck(DocumentChecks.RequiredMissing, false, "invoice_no", "Missing.") });
         SendDocumentJob.EnqueueIfAutomatic(jobs.Object, doc, flow);
         jobs.Invocations.Should().ContainSingle(i => i.Method.Name == nameof(IBackgroundJobClient.Create));
+    }
+
+    /// <summary>
+    /// An automatic flow with one output, holding one earlier document of a kind no other test uses (the class shares OrgA's data),
+    /// and an inbox document of that kind from a new sender. Reads it twice: in the inbox, then in the flow it was sorted into.
+    /// </summary>
+    private async Task<(Guid FlowId, Guid DocId, string Kind, string SenderKey)> SortIntoAutomaticFlowAsync(
+        bool remembered, string? sameFile = null, string? sameNumber = null)
+    {
+        var now = DateTime.UtcNow;
+        List<ReadField> fields = [new("sender_name", "Sender", "Alex Example", FieldTypes.Text, FieldMeanings.SenderName, 0.95, null, false, false, false)];
+        if (sameNumber is not null)
+            fields.Add(new ReadField("invoice_no", "Invoice number", sameNumber, FieldTypes.Text, FieldMeanings.DocumentNumber, 0.99, null, false, true, false));
+        var result = new ReadResult($"Invoice {Guid.NewGuid():N}", fields);
+        var (kind, senderKey) = (DocumentKind.Normalize(result.KindLabel)!, DocumentKind.SenderKeyOf(result, "upload", null)!);
+        var flow = new Flow
+        {
+            Id = Guid.NewGuid(), OrgId = Org, Name = "Supplier invoices", FieldsConfirmed = true, Automation = FlowAutomation.Auto, CreatedAt = now, UpdatedAt = now,
+            FieldsJson = DocumentJson.Serialize(new FlowFieldList([new FlowField("invoice_no", "Invoice number", FieldTypes.Text, null, Required: false)])),
+        };
+        FlowDocument NewDoc(Guid flowId, string? docKind, string status) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = Org, FlowId = flowId, FileName = "synthetic.csv", ContentType = "text/csv",
+            SourceFileKey = "k", Kind = docKind, Status = status, CreatedAt = now, UpdatedAt = now,
+        };
+        Guid docId;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            var inbox = await InboxFlow.GetOrCreateAsync(db, Org, CancellationToken.None);
+            db.Flows.Add(flow);
+            db.FlowIntakes.Add(new FlowIntake { Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, Kind = IntakeKind.Api, ConfigJson = """{"webhookUrl":"https://hooks.example.test/in"}""", CreatedAt = now, UpdatedAt = now });
+            var earlier = NewDoc(flow.Id, kind, DocumentStatus.Sent);
+            earlier.Sha256 = sameFile ?? "";
+            earlier.DedupKey = sameNumber is null ? null : DocumentChecks.DedupKeyOf(result);
+            db.FlowDocuments.Add(earlier);
+            var doc = NewDoc(inbox.Id, null, DocumentStatus.Received);
+            doc.Sha256 = sameFile ?? "";
+            doc.CreatedAt = now.AddSeconds(1);
+            db.FlowDocuments.Add(doc);
+            docId = doc.Id;
+            if (remembered)
+                db.Set<FlowSortMemory>().Add(new FlowSortMemory { Id = Guid.NewGuid(), OrgId = Org, SenderKey = senderKey, Kind = kind, FlowId = flow.Id, CreatedAt = now, UpdatedAt = now });
+            await db.SaveChangesAsync();
+        }
+        (await factory.ClientFor(Org).PostAsJsonAsync($"/api/flows/{flow.Id}/outputs", new { name = "JSON", format = "json" })).StatusCode.Should().Be(HttpStatusCode.Created);
+
+        await ReadAsync(docId, result);
+        await ReadAsync(docId, result);
+        return (flow.Id, docId, kind, senderKey);
+    }
+
+    [Fact]
+    public async Task Not_certain_sort_into_an_automatic_flow_sends_nothing()
+    {
+        var (before, hooks) = (factory.Enqueued<SendDocumentJob>(), factory.Enqueued<FlowWebhookJob>());
+        var (flowId, docId, _, _) = await SortIntoAutomaticFlowAsync(remembered: false);
+        factory.Enqueued<FlowWebhookJob>().Should().Be(hooks);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        var doc = await db.FlowDocuments.SingleAsync(d => d.Id == docId);
+        doc.FlowId.Should().Be(flowId);
+        doc.Status.Should().Be(DocumentStatus.NeedsReview);
+        doc.StatusReason.Should().Be("check_sort");
+        factory.Enqueued<SendDocumentJob>().Should().Be(before);
+
+        // A send already queued, or a status changed by hand: the job itself still refuses the held document.
+        doc.Status = DocumentStatus.Ready;
+        await db.SaveChangesAsync();
+        await new SendDocumentJob(db, scope.ServiceProvider.GetRequiredService<DocumentSender>()).ExecuteAsync(docId, Org, CancellationToken.None);
+        (await db.Set<FlowDelivery>().AnyAsync(d => d.DocumentId == docId)).Should().BeFalse();
+        (await db.FlowDocuments.AsNoTracking().SingleAsync(d => d.Id == docId)).Status.Should().NotBe(DocumentStatus.Sent);
+
+        // A failed read again of the held document (a file that cannot be opened) announces nothing either.
+        async Task FailedReadAsync(bool confirmed)
+        {
+            db.ChangeTracker.Clear(); // the read runs in its own scope
+            var held = await db.FlowDocuments.SingleAsync(d => d.Id == docId);
+            (held.Status, held.FileName, held.SortUnconfirmed) = (DocumentStatus.Received, "synthetic.pdf", !confirmed);
+            await db.SaveChangesAsync();
+            await ReadAsync(docId);
+        }
+        await FailedReadAsync(confirmed: false);
+        (await db.FlowDocuments.AsNoTracking().SingleAsync(d => d.Id == docId)).Status.Should().Be(DocumentStatus.ReadFailed);
+        factory.Enqueued<FlowWebhookJob>().Should().Be(hooks);
+        // Control: once the sort is confirmed, a failed read is announced.
+        await FailedReadAsync(confirmed: true);
+        factory.Enqueued<FlowWebhookJob>().Should().Be(hooks + 1);
+    }
+
+    [Fact]
+    public async Task Certain_sort_into_an_automatic_flow_sends_once()
+    {
+        var before = factory.Enqueued<SendDocumentJob>();
+        var hooks = factory.Enqueued<FlowWebhookJob>();
+        await SortIntoAutomaticFlowAsync(remembered: true);
+        factory.Enqueued<SendDocumentJob>().Should().Be(before + 1);
+        factory.Enqueued<FlowWebhookJob>().Should().Be(hooks + 1);
+
+        // A different file carrying a number the flow already holds is read there, and held as a repeat.
+        var (_, repeatId, _, _) = await SortIntoAutomaticFlowAsync(remembered: true, sameNumber: "INV-7781");
+        factory.Enqueued<SendDocumentJob>().Should().Be(before + 1);
+        using var scope = factory.Services.CreateScope();
+        var repeat = await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().FlowDocuments.SingleAsync(d => d.Id == repeatId);
+        repeat.Status.Should().Be(DocumentStatus.NeedsReview);
+        DocumentJson.Deserialize<List<DocumentCheck>>(repeat.ChecksJson).Should().Contain(c => c.Code == DocumentChecks.Duplicate && !c.Passed);
+    }
+
+    [Fact]
+    public async Task Certain_sort_of_a_file_already_in_the_flow_is_held_not_sent()
+    {
+        var (sends, reads) = (factory.Enqueued<SendDocumentJob>(), factory.Enqueued<ReadDocumentJob>());
+        var (flowId, docId, _, _) = await SortIntoAutomaticFlowAsync(remembered: true, sameFile: new string('e', 64));
+
+        factory.Enqueued<SendDocumentJob>().Should().Be(sends);
+        factory.Enqueued<ReadDocumentJob>().Should().Be(reads);
+        using var scope = factory.Services.CreateScope();
+        var doc = await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().FlowDocuments.SingleAsync(d => d.Id == docId);
+        doc.FlowId.Should().Be(flowId);
+        doc.Status.Should().Be(DocumentStatus.NeedsReview);
+        doc.StatusReason.Should().Be("duplicate_file");
+        DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).Should().ContainSingle(c => c.Code == DocumentChecks.Duplicate && !c.Passed);
+
+        // Held as not certain and rechecked (a fields change or a publish): left exactly as the hold wrote it, never check_sort.
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        doc.SortUnconfirmed = true;
+        await db.SaveChangesAsync();
+        await scope.ServiceProvider.GetRequiredService<DocumentRechecker>()
+            .RecheckPendingAsync(await db.Flows.SingleAsync(f => f.Id == flowId), CancellationToken.None);
+        (doc.Status, doc.StatusReason).Should().Be((DocumentStatus.NeedsReview, "duplicate_file"));
+        DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).Should().ContainSingle(c => c.Code == DocumentChecks.Duplicate && !c.Passed);
+    }
+
+    [Theory]
+    [InlineData(DocumentStatus.Sent)]
+    [InlineData(DocumentStatus.Sending)]
+    public async Task A_number_the_flow_already_sent_is_a_repeat_even_when_it_arrived_later(string twinStatus)
+    {
+        var now = DateTime.UtcNow;
+        var result = new ReadResult($"Invoice {Guid.NewGuid():N}",
+            [new ReadField("invoice_no", "Invoice number", "INV-9901", FieldTypes.Text, FieldMeanings.DocumentNumber, 0.99, null, false, true, false)]);
+        var flow = new Flow
+        {
+            Id = Guid.NewGuid(), OrgId = Org, Name = "Supplier invoices", FieldsConfirmed = true, Automation = FlowAutomation.Auto, CreatedAt = now, UpdatedAt = now,
+            FieldsJson = DocumentJson.Serialize(new FlowFieldList([new FlowField("invoice_no", "Invoice number", FieldTypes.Text, null, Required: false)])),
+        };
+        FlowDocument NewDoc(Guid flowId, DateTime at) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = Org, FlowId = flowId, FileName = "invoice-2292.csv", ContentType = "text/csv",
+            SourceFileKey = "k", Status = DocumentStatus.Received, CreatedAt = at, UpdatedAt = at,
+        };
+        FlowDocument waiting, copy;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            waiting = NewDoc((await InboxFlow.GetOrCreateAsync(db, Org, CancellationToken.None)).Id, now.AddMinutes(-1));
+            copy = NewDoc(flow.Id, now);
+            db.Flows.Add(flow);
+            db.FlowDocuments.AddRange(waiting, copy);
+            await db.SaveChangesAsync();
+        }
+        await ReadAsync(waiting.Id, result); // waits in the inbox: no flow holds its kind yet
+        var sends = factory.Enqueued<SendDocumentJob>();
+        await ReadAsync(copy.Id, result);
+        factory.Enqueued<SendDocumentJob>().Should().Be(sends + 1);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            (await db.FlowDocuments.SingleAsync(d => d.Id == copy.Id)).Status = twinStatus;
+            await db.SaveChangesAsync();
+        }
+
+        (await factory.ClientFor(Org).PostAsJsonAsync($"/api/documents/{waiting.Id}/move", new { flowId = flow.Id })).StatusCode.Should().Be(HttpStatusCode.OK);
+        await ReadAsync(waiting.Id, result);
+
+        factory.Enqueued<SendDocumentJob>().Should().Be(sends + 1);
+        using var check = factory.Services.CreateScope();
+        var moved = await check.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().FlowDocuments.AsNoTracking().SingleAsync(d => d.Id == waiting.Id);
+        moved.Status.Should().Be(DocumentStatus.NeedsReview);
+        DocumentJson.Deserialize<List<DocumentCheck>>(moved.ChecksJson).Should().Contain(c => c.Code == DocumentChecks.Duplicate && !c.Passed);
+    }
+
+    [Fact]
+    public async Task A_persons_send_confirms_the_sort_and_teaches_memory()
+    {
+        var (flowId, docId, kind, senderKey) = await SortIntoAutomaticFlowAsync(remembered: false);
+
+        (await factory.ClientFor(Org).PostAsync($"/api/documents/{docId}/send", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        var sent = await db.FlowDocuments.SingleAsync(d => d.Id == docId);
+        sent.SortUnconfirmed.Should().BeFalse();
+        sent.StatusReason.Should().BeNull();
+        (await db.Set<FlowSortMemory>().Where(m => m.OrgId == Org && m.SenderKey == senderKey && m.Kind == kind).ToListAsync())
+            .Should().ContainSingle().Which.FlowId.Should().Be(flowId);
+
+        // Confirming without a send lifts the hold and its reason too.
+        var (_, heldId, _, _) = await SortIntoAutomaticFlowAsync(remembered: false);
+        var held = await db.FlowDocuments.SingleAsync(d => d.Id == heldId);
+        held.StatusReason.Should().Be(DocumentSort.CheckSort);
+        await DocumentSort.ConfirmAsync(db, held, CancellationToken.None);
+        await DocumentSort.SaveRememberedAsync(db, held, CancellationToken.None);
+        (await db.FlowDocuments.AsNoTracking().SingleAsync(d => d.Id == heldId)).StatusReason.Should().BeNull();
     }
 
     [DockerRequiredFact]

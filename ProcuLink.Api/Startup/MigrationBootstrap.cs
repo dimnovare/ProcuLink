@@ -269,6 +269,21 @@ public static class MigrationBootstrap
                 "Org plan-history baseline seed failed (app stays up; unseeded orgs meter with current plan values).");
             SentrySdk.CaptureException(planHistorySeedEx);
         }
+
+        // ── Document kind backfill ───────────────────────────────────
+        // Documents read before the kind was stamped get it from their own read, so the inbox can
+        // sort them. Idempotent: a stamped row is skipped. Best-effort: an unstamped document only
+        // waits in the inbox for a person.
+        try
+        {
+            var kinds = await ProcuLink.Api.Services.Documents.DocumentSort.BackfillKindsAsync(db, CancellationToken.None, migLogger);
+            migLogger.LogInformation("Document kind backfill complete: {Count} document(s) stamped.", kinds);
+        }
+        catch (Exception kindEx)
+        {
+            migLogger.LogError(kindEx, "Document kind backfill failed (app stays up; unstamped documents wait for a person).");
+            SentrySdk.CaptureException(kindEx);
+        }
     }
 
     // ── Phantom-migration helpers ────────────────────────────────────────────

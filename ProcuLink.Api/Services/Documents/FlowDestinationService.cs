@@ -144,7 +144,7 @@ public sealed class FlowDestinationService(
         var flowIds = uses.Select(u => u.FlowId).Distinct().ToList();
         var names = flowIds.Count == 0
             ? new Dictionary<Guid, string>()
-            : await db.Flows.AsNoTracking().Where(f => f.OrgId == orgId && flowIds.Contains(f.Id))
+            : await db.Flows.PersonFlows(orgId).AsNoTracking().Where(f => flowIds.Contains(f.Id))
                 .Select(f => new { f.Id, f.Name }).ToDictionaryAsync(f => f.Id, f => f.Name, ct);
         return uses.ToLookup(u => u.Destination, u => new DestinationUse(u.FlowId, names.GetValueOrDefault(u.FlowId, ""), u.Id, u.Name));
     }

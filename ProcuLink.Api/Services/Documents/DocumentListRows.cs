@@ -22,7 +22,7 @@ public static class DocumentListRows
 
     public static async Task<List<DocumentRowDto>> ForAsync(ProcuLinkDbContext db, Guid orgId, IQueryable<FlowDocument> page, CancellationToken ct)
     {
-        var docs = await page.Select(d => new { Doc = d, FlowName = d.Flow!.Name }).ToListAsync(ct);
+        var docs = await page.Select(d => new { Doc = d, FlowName = d.Flow!.Name, d.Flow.IsInbox }).ToListAsync(ct);
         if (docs.Count == 0) return [];
 
         var ids = docs.Select(r => r.Doc.Id).ToList();
@@ -61,6 +61,8 @@ public static class DocumentListRows
                 Stop = stop is null ? null
                     : new DocumentStopDto(stop.DestinationId, stop.DestinationId is { } id ? names.GetValueOrDefault(id) : null, stop.LastError),
                 IsSample = d.IsSample,
+                Kind = read.KindLabel?.Trim() is { Length: > 0 } kind ? kind[..Math.Min(kind.Length, 80)] : null,
+                InInbox = r.IsInbox,
             };
         }).ToList();
     }

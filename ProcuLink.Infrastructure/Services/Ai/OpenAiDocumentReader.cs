@@ -26,6 +26,8 @@ public sealed class OpenAiDocumentReader : IDocumentReader
     private static readonly string SystemPrompt =
         "You read business documents. Read every field and every table in the document text. " +
         "Keys are stable snake_case identifiers. " +
+        "'kind_label' is a short common English name for the kind of document, singular, one to three words, " +
+        "with no company or person names; null when unclear. " +
         "When an expected list is given, use exactly those keys for them, return a null value for an expected key " +
         "that is not present in the document, and report all other fields and tables you find too. " +
         $"Each field and column 'type' is one of: {string.Join(", ", FieldTypes.All)}. " +

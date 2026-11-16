@@ -7,6 +7,9 @@ namespace ProcuLink.Api.Contracts;
 public record FlowDto(Guid Id, string Name, bool FieldsConfirmed, FlowFieldList Fields, int DocumentCount, DateTime CreatedAt, string Automation = "review", bool ScansOn = false, bool FormatsOn = false, bool DocsOutputsOn = false, bool PeppolOn = false,
     int? PublishedVersion = null, bool HasChanges = false, int? NoCorrectionStreak = null, FlowSummaryDto? Summary = null);
 
+/// <summary>The workspace inbox: its flow, its email address and the address's intake id, and which file kinds it reads.</summary>
+public sealed record InboxDto(Guid FlowId, string? Address, Guid? IntakeId, bool ScansOn, bool FormatsOn);
+
 /// <summary>One file a flow sends: Destination is the destination's name, null for a download-only output or a destination that is gone.</summary>
 public sealed record FlowSummaryOutputDto(string Name, string Format, string? Standard, string? Destination);
 
@@ -17,6 +20,14 @@ public sealed record FlowSummaryDto(int NeedsYou, int CouldNotSend, int CouldNot
 public record FlowVersionDto(int VersionNo, DateTime PublishedAt, string? PublishedBy, bool Live);
 
 public record CreateFlowRequest(string Name);
+
+public sealed record MoveDocumentRequest(Guid FlowId);
+
+public sealed record SetUpDocumentRequest(string? Name = null);
+
+public sealed record DownloadDocumentRequest(string? Format);
+
+public sealed record SetUpResultDto(Guid FlowId, string FlowName, DocumentSummaryDto Document);
 
 public record RenameFlowRequest(string? Name = null, string? Automation = null);
 
@@ -44,6 +55,9 @@ public sealed record DocumentRowDto : DocumentSummaryDto
     public DateTime? FailedAt { get; init; }
     public DocumentStopDto? Stop { get; init; }
     public bool IsSample { get; init; }
+    /// <summary>What the read says the document is, as written: trimmed, at most 80 characters.</summary>
+    public string? Kind { get; init; }
+    public bool InInbox { get; init; }
 }
 
 public record DocumentDto(DocumentSummaryDto Summary, string ContentType, ReadResult Read, IReadOnlyList<DocumentCheck> Checks,

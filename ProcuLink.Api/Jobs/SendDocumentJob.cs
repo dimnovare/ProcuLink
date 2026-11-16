@@ -26,9 +26,9 @@ public class SendDocumentJob(ProcuLinkDbContext db, DocumentSender sender)
         await sender.SendAsync(doc, SendMode.Automatic, null, ct);
     }
 
-    // A sample is invented: it is never sent by itself, only by a person (DocumentsController.Send, which does not come here).
+    // A sample is invented, and a sort that was not certain is unconfirmed: neither is sent by itself, only by a person (DocumentsController.Send, which does not come here).
     private static bool ShouldSend(FlowDocument doc, Flow flow) =>
-        !doc.IsSample && flow.Automation == FlowAutomation.Auto && doc.Status is DocumentStatus.NeedsReview or DocumentStatus.Ready && DocumentStatus.IsEditable(doc.Status, doc.StatusReason)
+        !doc.IsSample && !doc.SortUnconfirmed && flow.Automation == FlowAutomation.Auto && doc.Status is DocumentStatus.NeedsReview or DocumentStatus.Ready && DocumentStatus.IsEditable(doc.Status, doc.StatusReason)
         && !DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).Any(c => c.Code == DocumentChecks.Duplicate && !c.Passed);
 
     public static void EnqueueIfAutomatic(IBackgroundJobClient jobs, FlowDocument doc, Flow flow)

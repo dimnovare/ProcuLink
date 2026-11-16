@@ -51,6 +51,8 @@ public sealed class DocumentsController(
     public async Task<IActionResult> Sample(Guid flowId, CancellationToken ct)
     {
         var orgId = tenant.OrganisationId;
+        if (!await db.Flows.PersonFlows(orgId).AnyAsync(f => f.Id == flowId, ct))
+            return Refuse() ?? NotFound(new { error = "flow_not_found" });
         var existing = await db.FlowDocuments
             .Where(d => d.OrgId == orgId && d.FlowId == flowId && d.IsSample)
             .OrderBy(d => d.CreatedAt).ThenBy(d => d.Id)
@@ -229,6 +231,8 @@ public sealed class DocumentsController(
         if (doc is null) return refused!;
 
         var flow = await db.Flows.FirstAsync(f => f.OrgId == doc.OrgId && f.Id == doc.FlowId, ct);
+        // The inbox reads every document generically, so it keeps no fields or hints of its own.
+        if (flow.IsInbox) return Conflict(new { error = "not_in_flow" });
         var flowFields = DocumentJson.Deserialize<FlowFieldList>(flow.FieldsJson);
         var label = string.IsNullOrWhiteSpace(req.NewLabel) ? null : req.NewLabel.Trim();
         if (string.IsNullOrWhiteSpace(req.Key) == (label is null) || label?.Length > 100) return BadRequest(new { error = "unknown_target" });
@@ -352,7 +356,21 @@ public sealed class DocumentsController(
         var doc = await FindAsync(id, ct);
         if (doc is null) return NotFound(NotFoundBody);
         var outcome = await sender.SendAsync(doc, SendMode.Person, tenant.ClerkUserId, ct);
-        if (outcome.Ok) return Ok(outcome.Deliveries.OrderBy(d => d.CreatedAt).Select(ToDeliveryDto));
+        if (outcome.Ok)
+        {
+            // A person sent it: its sort is confirmed. Best effort: the send is committed and is never answered as a failure.
+            try
+            {
+                await DocumentSort.ConfirmAsync(db, doc, CancellationToken.None);
+                await DocumentSort.SaveRememberedAsync(db, doc, CancellationToken.None);
+            }
+            catch (Exception)
+            {
+                // An id and a code only: the exception text can carry the sender and kind.
+                logger.LogWarning("Sort not confirmed after send for {DocumentId}: {Reason}", id, "confirm_failed");
+            }
+            return Ok(outcome.Deliveries.OrderBy(d => d.CreatedAt).Select(ToDeliveryDto));
+        }
         return outcome.Error switch
         {
             "output_invalid" when outcome.Detail is OutputFailure f => UnprocessableEntity(new { error = outcome.Error, output = f.Output, detail = f.Detail }),
