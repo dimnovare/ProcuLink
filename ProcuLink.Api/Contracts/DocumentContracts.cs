@@ -21,6 +21,8 @@ public record FlowVersionDto(int VersionNo, DateTime PublishedAt, string? Publis
 
 public record CreateFlowRequest(string Name);
 
+public sealed record MoveDocumentRequest(Guid FlowId);
+
 public record RenameFlowRequest(string? Name = null, string? Automation = null);
 
 public record DocumentSummaryDto(
