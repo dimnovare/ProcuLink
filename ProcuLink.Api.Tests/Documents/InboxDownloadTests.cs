@@ -76,6 +76,10 @@ public sealed class InboxDownloadTests(DocumentEngineTestFactory factory) : ICla
             (doc.Status, doc.StatusReason).Should().Be((DocumentStatus.Sent, "downloaded"));
         }
         Downloads(id).Should().Be(1);
+        // Sent by status, never sent this week: the since-date reads the deliveries' DeliveredAt, and a download makes none.
+        var since = Uri.EscapeDataString(DateTime.UtcNow.AddDays(-7).ToString("o"));
+        (await factory.ClientFor(OrgA).GetStringAsync("/api/documents?status=sent&take=200")).Should().Contain(id.ToString());
+        (await factory.ClientFor(OrgA).GetStringAsync($"/api/documents?status=sent&sentFrom={since}")).Should().NotContain(id.ToString());
 
         var xlsx = await Download(OrgA, id, "xlsx");
         xlsx.StatusCode.Should().Be(HttpStatusCode.OK);
