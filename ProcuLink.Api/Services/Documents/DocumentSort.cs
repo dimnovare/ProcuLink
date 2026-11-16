@@ -19,6 +19,7 @@ public static class DocumentSort
 
     private const string Sorted = "document.sorted";
     private const int ResortBatch = 50;
+    private const int BackfillBatch = 200;
 
     public sealed record SortTarget(Guid FlowId, string FlowName, bool Certain);
 
@@ -146,6 +147,26 @@ public static class DocumentSort
         doc.SortUnconfirmed = false;
         if (doc.StatusReason == CheckSort) doc.StatusReason = null;
         await RememberAsync(db, doc, ct);
+    }
+
+    /// <summary>
+    /// Stamps the kind on read documents that have none, from each row's own read, across organisations in pages of 200 by id.
+    /// Returns how many got a kind. A read with no kind label leaves the row as it is, so a rerun returns 0.
+    /// </summary>
+    public static async Task<int> BackfillKindsAsync(ProcuLinkDbContext db, CancellationToken ct)
+    {
+        var (stamped, lastId) = (0, Guid.Empty);
+        while (true)
+        {
+            var batch = await db.FlowDocuments
+                .Where(d => d.ReadAt != null && d.Kind == null && d.Id.CompareTo(lastId) > 0)
+                .OrderBy(d => d.Id).Take(BackfillBatch).ToListAsync(ct);
+            if (batch.Count == 0) return stamped;
+            foreach (var doc in batch)
+                if ((doc.Kind = DocumentKind.Normalize(DocumentJson.Deserialize<ReadResult>(doc.ReadJson).KindLabel)) is not null) stamped++;
+            await db.SaveChangesAsync(ct);
+            lastId = batch[^1].Id;
+        }
     }
 
     /// <summary>Sorts again up to 50 inbox documents of this kind that wait for a person. Returns the ids moved to be read; the caller saves, then enqueues their reads.</summary>

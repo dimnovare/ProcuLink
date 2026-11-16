@@ -55,6 +55,9 @@ public sealed record DocumentRowDto : DocumentSummaryDto
     public DateTime? FailedAt { get; init; }
     public DocumentStopDto? Stop { get; init; }
     public bool IsSample { get; init; }
+    /// <summary>What the read says the document is, as written: trimmed, at most 80 characters.</summary>
+    public string? Kind { get; init; }
+    public bool InInbox { get; init; }
 }
 
 public record DocumentDto(DocumentSummaryDto Summary, string ContentType, ReadResult Read, IReadOnlyList<DocumentCheck> Checks,

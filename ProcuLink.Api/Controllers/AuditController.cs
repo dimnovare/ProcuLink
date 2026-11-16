@@ -326,6 +326,9 @@ public class AuditController : ControllerBase
         ["document.sent"]            = "Sent",
         ["document.delivered"]       = "Delivered",
         ["document.delivery_failed"] = "Couldn't send",
+        ["document.sorted"]          = "Put with a flow",
+        ["document.moved"]           = "Moved to another flow",
+        ["document.downloaded"]      = "Downloaded",
     };
 
     private static string BuildMessage(string action, string? poNumber)
