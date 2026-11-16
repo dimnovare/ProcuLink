@@ -175,7 +175,11 @@ public sealed class InboxSortTests(DocumentEngineTestFactory factory) : IClassFi
     {
         var (orgA, orgB) = (Guid.NewGuid(), Guid.NewGuid());
         var x = await FlowAsync(orgB, "Supplier invoices", holdsInvoice: true);
+        var y = await FlowAsync(orgA, "Item codes", holdsInvoice: false);
         await RememberAsync(orgB, x.Id);
+        // Crossed rows: OrgB's memory naming OrgA's flow, and OrgA's memory naming OrgB's flow. Neither is ever used.
+        await RememberAsync(orgB, y.Id);
+        await RememberAsync(orgA, x.Id);
         var (inbox, id) = await InboxDocAsync(orgA);
 
         await ReadAsync(orgA, id, Result("Invoice"));

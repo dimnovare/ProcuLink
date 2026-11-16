@@ -120,6 +120,12 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
             (await db.FlowDocuments.SingleAsync(d => d.Id == sample.Id)).Status.Should().Be(DocumentStatus.Ready);
             await new SendDocumentJob(db, scope.ServiceProvider.GetRequiredService<DocumentSender>()).ExecuteAsync(sample.Id, Org, CancellationToken.None);
             (await db.Set<FlowDelivery>().AnyAsync(d => d.DocumentId == sample.Id)).Should().BeFalse();
+
+            // A person may send the sample, but its public sender never teaches sort memory.
+            (await db.FlowDocuments.SingleAsync(d => d.Id == sample.Id)).SenderKey = "name:example sample sender";
+            await db.SaveChangesAsync();
+            (await factory.ClientFor(Org).PostAsync($"/api/documents/{sample.Id}/send", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+            (await db.Set<FlowSortMemory>().AnyAsync(m => m.OrgId == Org && m.SenderKey == "name:example sample sender")).Should().BeFalse();
         }
     }
 
@@ -172,6 +178,7 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
             var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
             var inbox = await InboxFlow.GetOrCreateAsync(db, Org, CancellationToken.None);
             db.Flows.Add(flow);
+            db.FlowIntakes.Add(new FlowIntake { Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, Kind = IntakeKind.Api, ConfigJson = """{"webhookUrl":"https://hooks.example.test/in"}""", CreatedAt = now, UpdatedAt = now });
             var earlier = NewDoc(flow.Id, kind, DocumentStatus.Sent);
             earlier.Sha256 = sameFile ?? "";
             earlier.DedupKey = sameNumber is null ? null : DocumentChecks.DedupKeyOf(result);
@@ -195,8 +202,9 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
     [Fact]
     public async Task Not_certain_sort_into_an_automatic_flow_sends_nothing()
     {
-        var before = factory.Enqueued<SendDocumentJob>();
+        var (before, hooks) = (factory.Enqueued<SendDocumentJob>(), factory.Enqueued<FlowWebhookJob>());
         var (flowId, docId, _, _) = await SortIntoAutomaticFlowAsync(remembered: false);
+        factory.Enqueued<FlowWebhookJob>().Should().Be(hooks);
 
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
@@ -218,8 +226,10 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
     public async Task Certain_sort_into_an_automatic_flow_sends_once()
     {
         var before = factory.Enqueued<SendDocumentJob>();
+        var hooks = factory.Enqueued<FlowWebhookJob>();
         await SortIntoAutomaticFlowAsync(remembered: true);
         factory.Enqueued<SendDocumentJob>().Should().Be(before + 1);
+        factory.Enqueued<FlowWebhookJob>().Should().Be(hooks + 1);
 
         // A different file carrying a number the flow already holds is read there, and held as a repeat.
         var (_, repeatId, _, _) = await SortIntoAutomaticFlowAsync(remembered: true, sameNumber: "INV-7781");
@@ -244,6 +254,13 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
         doc.Status.Should().Be(DocumentStatus.NeedsReview);
         doc.StatusReason.Should().Be("duplicate_file");
         DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).Should().ContainSingle(c => c.Code == DocumentChecks.Duplicate && !c.Passed);
+
+        // Held as not certain and rechecked (a fields change or a publish): still a duplicate file, never check_sort.
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        doc.SortUnconfirmed = true;
+        await scope.ServiceProvider.GetRequiredService<DocumentRechecker>()
+            .ApplyAsync(doc, await db.Flows.SingleAsync(f => f.Id == flowId), DocumentJson.Deserialize<ReadResult>(doc.ReadJson), CancellationToken.None);
+        doc.StatusReason.Should().Be("duplicate_file");
     }
 
     [Fact]

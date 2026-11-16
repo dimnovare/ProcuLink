@@ -47,8 +47,8 @@ public sealed class DocumentRechecker(ProcuLinkDbContext db, DocumentEngineGate 
         doc.Status = DocumentChecks.StatusFor(failed);
         IReadOnlyList<DocumentCheck> withRules = [.. failed, .. await OutputRuleChecks.RunAsync(gate, validator, doc.OrgId, read, config, ct, batch)];
         doc.ChecksJson = DocumentJson.Serialize(withRules);
-        // A sort that was not certain waits for a person, whatever the checks say.
-        if (doc.SortUnconfirmed)
+        // A sort that was not certain waits for a person, whatever the checks say; a duplicate file keeps its own reason.
+        if (doc.SortUnconfirmed && doc.StatusReason != "duplicate_file")
         {
             doc.Status = DocumentStatus.NeedsReview;
             doc.StatusReason = DocumentSort.CheckSort;

@@ -270,8 +270,9 @@ public class ReadDocumentJob(
             }).ToList(),
             truncated || merged.Truncated);
 
-        // Another run may have finished this document meanwhile: then this run writes nothing.
-        if (await db.FlowDocuments.AsNoTracking().Where(d => d.Id == doc.Id && d.OrgId == doc.OrgId).Select(d => d.Status).FirstAsync(ct) != DocumentStatus.Reading) return;
+        // Another run may have finished this document meanwhile, or it was sorted into another flow: then this run writes nothing.
+        var current = await db.FlowDocuments.AsNoTracking().Where(d => d.Id == doc.Id && d.OrgId == doc.OrgId).Select(d => new { d.Status, d.FlowId }).FirstAsync(ct);
+        if (current.Status != DocumentStatus.Reading || current.FlowId != flow.Id) return;
         await rechecker.ApplyAsync(doc, flow, read, ct, config);
         doc.ReadJson = DocumentJson.Serialize(read);
         // The first successful read is the billed one: a re-read after sorting keeps its time and units.
@@ -298,6 +299,8 @@ public class ReadDocumentJob(
             return;
         }
         SendDocumentJob.EnqueueIfAutomatic(jobs, doc, flow);
+        // A sort that is not certain announces nothing until a person confirms it.
+        if (doc.SortUnconfirmed) return;
         // Committed: a shutdown must not skip the announcement or throw.
         await FlowWebhook.EnqueueAsync(db, jobs, doc, FlowWebhookEvent.Read, logger, CancellationToken.None);
     }

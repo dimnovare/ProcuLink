@@ -86,7 +86,8 @@ public static class DocumentSort
     /// <summary>Remembers the document's person flow for its sender and kind; the last write wins.</summary>
     public static async Task RememberAsync(ProcuLinkDbContext db, FlowDocument doc, CancellationToken ct)
     {
-        if (doc.SenderKey is null || doc.Kind is null) return;
+        // A sample's sender is public: it never teaches memory.
+        if (doc.IsSample || doc.SenderKey is null || doc.Kind is null) return;
         if (!await db.Flows.PersonFlows(doc.OrgId).AnyAsync(f => f.Id == doc.FlowId, ct)) return;
         var memory = db.Set<FlowSortMemory>();
         var row = memory.Local.FirstOrDefault(m => m.OrgId == doc.OrgId && m.SenderKey == doc.SenderKey && m.Kind == doc.Kind)
