@@ -261,6 +261,54 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
         await scope.ServiceProvider.GetRequiredService<DocumentRechecker>()
             .ApplyAsync(doc, await db.Flows.SingleAsync(f => f.Id == flowId), DocumentJson.Deserialize<ReadResult>(doc.ReadJson), CancellationToken.None);
         doc.StatusReason.Should().Be("duplicate_file");
+        doc.Status.Should().Be(DocumentStatus.NeedsReview);
+    }
+
+    [Fact]
+    public async Task A_number_the_flow_already_sent_is_a_repeat_even_when_it_arrived_later()
+    {
+        var now = DateTime.UtcNow;
+        var result = new ReadResult($"Invoice {Guid.NewGuid():N}",
+            [new ReadField("invoice_no", "Invoice number", "INV-9901", FieldTypes.Text, FieldMeanings.DocumentNumber, 0.99, null, false, true, false)]);
+        var flow = new Flow
+        {
+            Id = Guid.NewGuid(), OrgId = Org, Name = "Supplier invoices", FieldsConfirmed = true, Automation = FlowAutomation.Auto, CreatedAt = now, UpdatedAt = now,
+            FieldsJson = DocumentJson.Serialize(new FlowFieldList([new FlowField("invoice_no", "Invoice number", FieldTypes.Text, null, Required: false)])),
+        };
+        FlowDocument NewDoc(Guid flowId, DateTime at) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = Org, FlowId = flowId, FileName = "invoice-2292.csv", ContentType = "text/csv",
+            SourceFileKey = "k", Status = DocumentStatus.Received, CreatedAt = at, UpdatedAt = at,
+        };
+        FlowDocument waiting, copy;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            waiting = NewDoc((await InboxFlow.GetOrCreateAsync(db, Org, CancellationToken.None)).Id, now.AddMinutes(-1));
+            copy = NewDoc(flow.Id, now);
+            db.Flows.Add(flow);
+            db.FlowDocuments.AddRange(waiting, copy);
+            await db.SaveChangesAsync();
+        }
+        await ReadAsync(waiting.Id, result); // waits in the inbox: no flow holds its kind yet
+        var sends = factory.Enqueued<SendDocumentJob>();
+        await ReadAsync(copy.Id, result);
+        factory.Enqueued<SendDocumentJob>().Should().Be(sends + 1);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            (await db.FlowDocuments.SingleAsync(d => d.Id == copy.Id)).Status = DocumentStatus.Sent;
+            await db.SaveChangesAsync();
+        }
+
+        (await factory.ClientFor(Org).PostAsJsonAsync($"/api/documents/{waiting.Id}/move", new { flowId = flow.Id })).StatusCode.Should().Be(HttpStatusCode.OK);
+        await ReadAsync(waiting.Id, result);
+
+        factory.Enqueued<SendDocumentJob>().Should().Be(sends + 1);
+        using var check = factory.Services.CreateScope();
+        var moved = await check.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().FlowDocuments.AsNoTracking().SingleAsync(d => d.Id == waiting.Id);
+        moved.Status.Should().Be(DocumentStatus.NeedsReview);
+        DocumentJson.Deserialize<List<DocumentCheck>>(moved.ChecksJson).Should().Contain(c => c.Code == DocumentChecks.Duplicate && !c.Passed);
     }
 
     [Fact]

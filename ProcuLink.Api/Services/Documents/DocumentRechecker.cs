@@ -34,9 +34,10 @@ public sealed class DocumentRechecker(ProcuLinkDbContext db, DocumentEngineGate 
             // A sample is invented: its number never makes a real document a repeat.
             var others = await db.FlowDocuments
                 .Where(d => d.OrgId == doc.OrgId && d.FlowId == doc.FlowId && d.DedupKey == key && d.Id != doc.Id && !d.IsSample)
-                .Select(d => new { d.Id, d.CreatedAt })
+                .Select(d => new { d.Id, d.CreatedAt, d.Status })
                 .ToListAsync(ct);
-            duplicate = others.Any(d => d.CreatedAt < doc.CreatedAt
+            // A copy the flow already sent is a repeat whenever it arrived: a document moved in later must not send the number twice.
+            duplicate = others.Any(d => d.Status == DocumentStatus.Sent || d.CreatedAt < doc.CreatedAt
                 || (d.CreatedAt == doc.CreatedAt && d.Id.CompareTo(doc.Id) < 0));
         }
 
@@ -47,8 +48,9 @@ public sealed class DocumentRechecker(ProcuLinkDbContext db, DocumentEngineGate 
         doc.Status = DocumentChecks.StatusFor(failed);
         IReadOnlyList<DocumentCheck> withRules = [.. failed, .. await OutputRuleChecks.RunAsync(gate, validator, doc.OrgId, read, config, ct, batch)];
         doc.ChecksJson = DocumentJson.Serialize(withRules);
-        // A sort that was not certain waits for a person, whatever the checks say; a duplicate file keeps its own reason.
-        if (doc.SortUnconfirmed && doc.StatusReason != "duplicate_file")
+        // A duplicate file waits for a person with its own reason ("Read it anyway"); a sort that was not certain waits too, whatever the checks say.
+        if (doc.StatusReason == "duplicate_file") doc.Status = DocumentStatus.NeedsReview;
+        else if (doc.SortUnconfirmed)
         {
             doc.Status = DocumentStatus.NeedsReview;
             doc.StatusReason = DocumentSort.CheckSort;
