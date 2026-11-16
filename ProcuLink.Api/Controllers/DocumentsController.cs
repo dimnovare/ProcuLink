@@ -358,9 +358,17 @@ public sealed class DocumentsController(
         var outcome = await sender.SendAsync(doc, SendMode.Person, tenant.ClerkUserId, ct);
         if (outcome.Ok)
         {
-            // A person sent it: its sort is confirmed.
-            await DocumentSort.ConfirmAsync(db, doc, ct);
-            await DocumentSort.SaveRememberedAsync(db, doc, ct);
+            // A person sent it: its sort is confirmed. Best effort: the send is committed and is never answered as a failure.
+            try
+            {
+                await DocumentSort.ConfirmAsync(db, doc, CancellationToken.None);
+                await DocumentSort.SaveRememberedAsync(db, doc, CancellationToken.None);
+            }
+            catch (Exception)
+            {
+                // An id and a code only: the exception text can carry the sender and kind.
+                logger.LogWarning("Sort not confirmed after send for {DocumentId}: {Reason}", id, "confirm_failed");
+            }
             return Ok(outcome.Deliveries.OrderBy(d => d.CreatedAt).Select(ToDeliveryDto));
         }
         return outcome.Error switch

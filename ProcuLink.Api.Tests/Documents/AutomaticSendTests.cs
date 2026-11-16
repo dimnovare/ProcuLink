@@ -220,6 +220,22 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
         await new SendDocumentJob(db, scope.ServiceProvider.GetRequiredService<DocumentSender>()).ExecuteAsync(docId, Org, CancellationToken.None);
         (await db.Set<FlowDelivery>().AnyAsync(d => d.DocumentId == docId)).Should().BeFalse();
         (await db.FlowDocuments.AsNoTracking().SingleAsync(d => d.Id == docId)).Status.Should().NotBe(DocumentStatus.Sent);
+
+        // A failed read again of the held document (a file that cannot be opened) announces nothing either.
+        async Task FailedReadAsync(bool confirmed)
+        {
+            db.ChangeTracker.Clear(); // the read runs in its own scope
+            var held = await db.FlowDocuments.SingleAsync(d => d.Id == docId);
+            (held.Status, held.FileName, held.SortUnconfirmed) = (DocumentStatus.Received, "synthetic.pdf", !confirmed);
+            await db.SaveChangesAsync();
+            await ReadAsync(docId);
+        }
+        await FailedReadAsync(confirmed: false);
+        (await db.FlowDocuments.AsNoTracking().SingleAsync(d => d.Id == docId)).Status.Should().Be(DocumentStatus.ReadFailed);
+        factory.Enqueued<FlowWebhookJob>().Should().Be(hooks);
+        // Control: once the sort is confirmed, a failed read is announced.
+        await FailedReadAsync(confirmed: true);
+        factory.Enqueued<FlowWebhookJob>().Should().Be(hooks + 1);
     }
 
     [Fact]

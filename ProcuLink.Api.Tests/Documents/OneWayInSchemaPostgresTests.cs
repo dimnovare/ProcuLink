@@ -114,6 +114,35 @@ public sealed class OneWayInSchemaPostgresTests(PostgresContainerFixture postgre
     }
 
     [DockerRequiredFact]
+    public async Task A_released_claim_can_be_claimed_again_and_a_stale_release_changes_nothing()
+    {
+        var (options, orgId, first, second) = await SeedAsync();
+        var now = DateTime.UtcNow;
+        await using (var seed = new ProcuLinkDbContext(options))
+        {
+            seed.FlowDocuments.Add(new FlowDocument
+            {
+                Id = Guid.NewGuid(), OrgId = orgId, FlowId = first, FileName = "invoice-2292.pdf", ContentType = "application/pdf",
+                Status = DocumentStatus.NeedsReview, CreatedAt = now, UpdatedAt = now,
+            });
+            await seed.SaveChangesAsync();
+        }
+        async Task<FlowDocument> LoadAsync() { await using var db = new ProcuLinkDbContext(options); return await db.FlowDocuments.AsNoTracking().SingleAsync(d => d.OrgId == orgId); }
+
+        await using var a = new ProcuLinkDbContext(options);
+        var doc = await a.FlowDocuments.SingleAsync(d => d.OrgId == orgId);
+        Assert.True(await DocumentSort.ClaimAsync(a, doc, DocumentStatus.Received, CancellationToken.None));
+        await DocumentSort.ReleaseAsync(a, doc, first, DocumentStatus.NeedsReview, DocumentStatus.Received);
+        Assert.Equal(DocumentStatus.NeedsReview, (await LoadAsync()).Status);
+
+        await using var b = new ProcuLinkDbContext(options);
+        Assert.True(await DocumentSort.ClaimAsync(b, await b.FlowDocuments.SingleAsync(d => d.OrgId == orgId), DocumentStatus.Received, CancellationToken.None));
+        // A release keyed on a flow the document is not in (its work already moved it on) matches nothing.
+        await DocumentSort.ReleaseAsync(b, doc, second, DocumentStatus.NeedsReview, DocumentStatus.Received);
+        Assert.Equal(DocumentStatus.Received, (await LoadAsync()).Status);
+    }
+
+    [DockerRequiredFact]
     public async Task Backfill_stamps_kinds_across_organisations_in_pages_and_then_stops()
     {
         var (options, orgA, flowA, _) = await SeedAsync();

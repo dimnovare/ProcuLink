@@ -276,7 +276,7 @@ public static class MigrationBootstrap
         // waits in the inbox for a person.
         try
         {
-            var kinds = await ProcuLink.Api.Services.Documents.DocumentSort.BackfillKindsAsync(db, CancellationToken.None);
+            var kinds = await ProcuLink.Api.Services.Documents.DocumentSort.BackfillKindsAsync(db, CancellationToken.None, migLogger);
             migLogger.LogInformation("Document kind backfill complete: {Count} document(s) stamped.", kinds);
         }
         catch (Exception kindEx)

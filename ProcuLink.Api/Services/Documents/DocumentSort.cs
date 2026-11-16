@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure;
@@ -88,27 +89,35 @@ public static class DocumentSort
     /// <summary>
     /// Takes the document for one request, moving it to <paramref name="status"/>, only while it is still in the flow, status and
     /// time this request read: a second request that read the same values finds zero rows and gets false. Sets the claimed values on
-    /// the tracked document, so the caller's later save keeps them.
+    /// the tracked document, so the caller's later save keeps them. A non-null <paramref name="reason"/> is written with the claim.
     /// </summary>
-    public static async Task<bool> ClaimAsync(ProcuLinkDbContext db, FlowDocument doc, string status, CancellationToken ct)
+    public static async Task<bool> ClaimAsync(ProcuLinkDbContext db, FlowDocument doc, string status, CancellationToken ct, string? reason = null)
     {
         var (flowId, from, at, now) = (doc.FlowId, doc.Status, doc.UpdatedAt, DateTime.UtcNow);
         var claimed = db.Database.IsRelational()
             ? await db.FlowDocuments.Where(d => d.Id == doc.Id && d.OrgId == doc.OrgId && d.FlowId == flowId && d.Status == from && d.UpdatedAt == at)
-                .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, status).SetProperty(d => d.UpdatedAt, now), ct) == 1
+                .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, status).SetProperty(d => d.UpdatedAt, now)
+                    .SetProperty(d => d.StatusReason, d => reason ?? d.StatusReason), ct) == 1
             // EF InMemory cannot translate ExecuteUpdateAsync (single-threaded there): the same check, written by the caller's save.
             : await db.FlowDocuments.AsNoTracking().AnyAsync(d => d.Id == doc.Id && d.OrgId == doc.OrgId && d.FlowId == flowId && d.Status == from && d.UpdatedAt == at, ct);
-        if (claimed) (doc.Status, doc.UpdatedAt) = (status, now);
+        if (claimed) (doc.Status, doc.UpdatedAt, doc.StatusReason) = (status, now, reason ?? doc.StatusReason);
         return claimed;
     }
 
-    /// <summary>A person took the read as a file ("just this one"): the document is done, with nothing set up.</summary>
-    public static void MarkDownloaded(ProcuLinkDbContext db, FlowDocument doc, string format, string? userId)
-    {
-        doc.Status = DocumentStatus.Sent;
-        doc.StatusReason = Downloaded;
-        doc.UpdatedAt = DateTime.UtcNow;
+    /// <summary>The audit of a download ("just this one"); the claim to sent, downloaded has already marked the document done.</summary>
+    public static void MarkDownloaded(ProcuLinkDbContext db, FlowDocument doc, string format, string? userId) =>
         DocumentAudit.Add(db, doc, "document.downloaded", new { format }, userId);
+
+    /// <summary>
+    /// Undoes a claim whose work failed: back to <paramref name="observedStatus"/>, only while the document is still in the flow and
+    /// the status the claim left. Once the work's save has moved it on, this matches nothing. Never cancelled.
+    /// </summary>
+    public static async Task ReleaseAsync(ProcuLinkDbContext db, FlowDocument doc, Guid observedFlowId, string observedStatus, string claimedStatus)
+    {
+        // EF InMemory: the claim wrote nothing, so there is nothing to undo.
+        if (!db.Database.IsRelational()) return;
+        await db.FlowDocuments.Where(d => d.Id == doc.Id && d.OrgId == doc.OrgId && d.FlowId == observedFlowId && d.Status == claimedStatus)
+            .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, observedStatus), CancellationToken.None);
     }
 
     /// <summary>Remembers the document's person flow for its sender and kind; the last write wins.</summary>
@@ -168,9 +177,9 @@ public static class DocumentSort
 
     /// <summary>
     /// Stamps the kind on read documents that have none, from each row's own read, across organisations in pages of 200 by id.
-    /// Returns how many got a kind. A read with no kind label leaves the row as it is, so a rerun returns 0.
+    /// Returns how many got a kind. A read with no kind label, or one that cannot be parsed, leaves the row as it is, so a rerun returns 0.
     /// </summary>
-    public static async Task<int> BackfillKindsAsync(ProcuLinkDbContext db, CancellationToken ct)
+    public static async Task<int> BackfillKindsAsync(ProcuLinkDbContext db, CancellationToken ct, ILogger? logger = null)
     {
         var (stamped, lastId) = (0, Guid.Empty);
         while (true)
@@ -180,8 +189,18 @@ public static class DocumentSort
                 .OrderBy(d => d.Id).Take(BackfillBatch).ToListAsync(ct);
             if (batch.Count == 0) return stamped;
             foreach (var doc in batch)
-                if ((doc.Kind = DocumentKind.Normalize(DocumentJson.Deserialize<ReadResult>(doc.ReadJson).KindLabel)) is not null) stamped++;
+                try
+                {
+                    if ((doc.Kind = DocumentKind.Normalize(DocumentJson.Deserialize<ReadResult>(doc.ReadJson).KindLabel)) is not null) stamped++;
+                }
+                catch (Exception)
+                {
+                    // Ids and a code only: never the read.
+                    logger?.LogWarning("Document kind backfill skipped {DocumentId}: {Reason}", doc.Id, "read_unparseable");
+                }
             await db.SaveChangesAsync(ct);
+            // Each tracked row carries its whole read: let the batch go before the next.
+            db.ChangeTracker.Clear();
             lastId = batch[^1].Id;
         }
     }
@@ -201,7 +220,15 @@ public static class DocumentSort
         foreach (var doc in waiting)
         {
             if (doc.Sha256.Length > 0 && movedFiles.Contains(doc.Sha256)) continue;
-            if (!await SortAsync(db, doc, ct)) continue;
+            var (target, waitReason) = await DecideAsync(db, doc, ct);
+            if (target is null)
+            {
+                doc.StatusReason = waitReason;
+                continue;
+            }
+            // Claimed before it moves: a download or move that read the same document wins, and this one is left alone.
+            if (!await ClaimAsync(db, doc, DocumentStatus.Received, ct)
+                || !await MoveToAsync(db, doc, target.FlowId, target.FlowName, target.Certain, Sorted, null, ct)) continue;
             moved.Add(doc.Id);
             if (doc.Sha256.Length > 0) movedFiles.Add(doc.Sha256);
         }

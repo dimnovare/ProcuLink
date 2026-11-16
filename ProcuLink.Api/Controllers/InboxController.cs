@@ -104,18 +104,30 @@ public sealed class InboxController(
         if (doc.Status == DocumentStatus.SendFailed || !DocumentStatus.IsEditable(doc.Status, doc.StatusReason)) return Conflict(new { error = "not_movable" });
         if (!await billing.CanProcessOrdersAsync(orgId, ct)) return Conflict(new { error = "processing_paused" });
         // Received until the move is saved: a second move, a set-up or a download that read the same document is refused.
+        var (observedFlowId, observedStatus) = (doc.FlowId, doc.Status);
         if (!await DocumentSort.ClaimAsync(db, doc, DocumentStatus.Received, ct)) return Conflict(new { error = "not_movable" });
 
-        if (doc.FlowId == flow.Id)
+        // Claimed: a client that goes away cannot strand the document half-moved; a failure gives the claim back.
+        ct = CancellationToken.None;
+        try
         {
-            await DocumentSort.ConfirmAsync(db, doc, ct);
-            await rechecker.ApplyAsync(doc, flow, DocumentJson.Deserialize<ReadResult>(doc.ReadJson), ct);
-            await DocumentSort.SaveRememberedAsync(db, doc, ct);
+            if (doc.FlowId == flow.Id)
+            {
+                await DocumentSort.ConfirmAsync(db, doc, ct);
+                await rechecker.ApplyAsync(doc, flow, DocumentJson.Deserialize<ReadResult>(doc.ReadJson), ct);
+                await DocumentSort.SaveRememberedAsync(db, doc, ct);
+                return Ok(DocumentSummaryDto.From(doc, flow.Name));
+            }
+            var mustRead = await DocumentSort.MoveToAsync(db, doc, flow.Id, flow.Name, true, "document.moved", tenant.ClerkUserId, ct);
+            await RememberAndResortAsync(doc, ct, readIt: mustRead);
             return Ok(DocumentSummaryDto.From(doc, flow.Name));
         }
-        var mustRead = await DocumentSort.MoveToAsync(db, doc, flow.Id, flow.Name, true, "document.moved", tenant.ClerkUserId, ct);
-        await RememberAndResortAsync(doc, ct, readIt: mustRead);
-        return Ok(DocumentSummaryDto.From(doc, flow.Name));
+        catch
+        {
+            db.ChangeTracker.Clear();
+            await DocumentSort.ReleaseAsync(db, doc, observedFlowId, observedStatus, DocumentStatus.Received);
+            throw;
+        }
     }
 
     private Task<bool> InInboxAsync(FlowDocument doc, CancellationToken ct) =>
@@ -142,17 +154,29 @@ public sealed class InboxController(
         var taken = (await db.Flows.Where(f => f.OrgId == orgId).Select(f => f.Name).ToListAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
         for (var (stem, n) = (name, 2); taken.Contains(name); n++) name = stem[..Math.Min(stem.Length, 120 - $" {n}".Length)] + $" {n}";
         // Before the flow exists: of two set-ups that read the same document, one makes the flow and the other is refused.
+        var (observedFlowId, observedStatus) = (doc.FlowId, doc.Status);
         if (!await DocumentSort.ClaimAsync(db, doc, DocumentStatus.Received, ct)) return Conflict(new { error = "not_in_inbox" });
 
-        var flow = FlowCreation.New(orgId, name, fields, confirmed: true);
-        db.Flows.Add(flow);
-        db.Set<FlowOutput>().Add(DefaultOutputTemplate.CsvFile(flow, fields));
-        // Read in the inbox already: checked against the new flow straight away, never read again.
-        await DocumentSort.MoveToAsync(db, doc, flow.Id, flow.Name, true, "document.moved", tenant.ClerkUserId, ct, newFlow: true);
-        await rechecker.ApplyAsync(doc, flow, read, ct);
-        await db.SaveChangesAsync(ct);
-        await RememberAndResortAsync(doc, ct);
-        return Created($"/api/flows/{flow.Id}", new SetUpResultDto(flow.Id, flow.Name, DocumentSummaryDto.From(doc, flow.Name)));
+        // Claimed: as in Move, never cancelled from here, and a failure gives the claim back.
+        ct = CancellationToken.None;
+        try
+        {
+            var flow = FlowCreation.New(orgId, name, fields, confirmed: true);
+            db.Flows.Add(flow);
+            db.Set<FlowOutput>().Add(DefaultOutputTemplate.CsvFile(flow, fields));
+            // Read in the inbox already: checked against the new flow straight away, never read again.
+            await DocumentSort.MoveToAsync(db, doc, flow.Id, flow.Name, true, "document.moved", tenant.ClerkUserId, ct, newFlow: true);
+            await rechecker.ApplyAsync(doc, flow, read, ct);
+            await db.SaveChangesAsync(ct);
+            await RememberAndResortAsync(doc, ct);
+            return Created($"/api/flows/{flow.Id}", new SetUpResultDto(flow.Id, flow.Name, DocumentSummaryDto.From(doc, flow.Name)));
+        }
+        catch
+        {
+            db.ChangeTracker.Clear();
+            await DocumentSort.ReleaseAsync(db, doc, observedFlowId, observedStatus, DocumentStatus.Received);
+            throw;
+        }
     }
 
     /// <summary>"Just this one": the read as a CSV or Excel file, with nothing set up. Allowed while processing is paused; downloading again is allowed.</summary>
@@ -175,9 +199,10 @@ public sealed class InboxController(
         if (!downloaded)
         {
             // A move that read the same document first wins: nothing is marked downloaded outside the inbox.
-            if (!await DocumentSort.ClaimAsync(db, doc, DocumentStatus.Sent, ct)) return Conflict(new { error = "not_in_inbox" });
+            // The claim writes the final state itself, so there is nothing half-done to give back.
+            if (!await DocumentSort.ClaimAsync(db, doc, DocumentStatus.Sent, ct, DocumentSort.Downloaded)) return Conflict(new { error = "not_in_inbox" });
             DocumentSort.MarkDownloaded(db, doc, request.Format, tenant.ClerkUserId);
-            await db.SaveChangesAsync(ct);
+            await db.SaveChangesAsync(CancellationToken.None);
         }
         Response.Headers[HeaderNames.CacheControl] = "no-store";
         Response.Headers["X-Content-Type-Options"] = "nosniff";

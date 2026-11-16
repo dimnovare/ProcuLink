@@ -323,7 +323,8 @@ public class ReadDocumentJob(
         doc.UpdatedAt = DateTime.UtcNow;
         AddAudit(doc, "document.read_failed", new { reason });
         await db.SaveChangesAsync(ct);
-        await FlowWebhook.EnqueueAsync(db, jobs, doc, FlowWebhookEvent.ReadFailed, logger, CancellationToken.None);
+        // A sort that is not certain announces nothing, a failed read included, until a person confirms it.
+        if (!doc.SortUnconfirmed) await FlowWebhook.EnqueueAsync(db, jobs, doc, FlowWebhookEvent.ReadFailed, logger, CancellationToken.None);
     }
 
     private void AddAudit(FlowDocument doc, string action, object payload) =>
