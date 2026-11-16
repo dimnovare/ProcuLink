@@ -360,7 +360,7 @@ public sealed class DocumentsController(
         {
             // A person sent it: its sort is confirmed.
             await DocumentSort.ConfirmAsync(db, doc, ct);
-            await db.SaveChangesAsync(ct);
+            await DocumentSort.SaveRememberedAsync(db, doc, ct);
             return Ok(outcome.Deliveries.OrderBy(d => d.CreatedAt).Select(ToDeliveryDto));
         }
         return outcome.Error switch

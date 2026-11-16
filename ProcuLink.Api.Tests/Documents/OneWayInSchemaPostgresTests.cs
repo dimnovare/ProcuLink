@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Api.Services.Documents;
 using ProcuLink.Api.Tests.Integration;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure;
@@ -55,6 +56,26 @@ public sealed class OneWayInSchemaPostgresTests(PostgresContainerFixture postgre
         db.Set<FlowSortMemory>().Add(Memory(orgId, second));
         var memory = await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
         Assert.True(IngressDedupe.IsUniqueViolation(memory));
+    }
+
+    [DockerRequiredFact]
+    public async Task Two_people_remembering_the_same_sender_and_kind_keep_one_row_for_the_later_flow()
+    {
+        var (options, orgId, first, second) = await SeedAsync();
+        FlowDocument Doc(Guid flowId) => new() { Id = Guid.NewGuid(), OrgId = orgId, FlowId = flowId, SenderKey = "name:alex example supplies", Kind = "invoice" };
+        var (docA, docB) = (Doc(first), Doc(second));
+        await using var a = new ProcuLinkDbContext(options);
+        await using var b = new ProcuLinkDbContext(options);
+
+        // Both look before either saves: both add a row.
+        await DocumentSort.RememberAsync(a, docA, CancellationToken.None);
+        await DocumentSort.RememberAsync(b, docB, CancellationToken.None);
+        await DocumentSort.SaveRememberedAsync(a, docA, CancellationToken.None);
+        await DocumentSort.SaveRememberedAsync(b, docB, CancellationToken.None);
+
+        await using var check = new ProcuLinkDbContext(options);
+        var row = Assert.Single(await check.Set<FlowSortMemory>().Where(m => m.OrgId == orgId).ToListAsync());
+        Assert.Equal(second, row.FlowId);
     }
 
     [DockerRequiredFact]

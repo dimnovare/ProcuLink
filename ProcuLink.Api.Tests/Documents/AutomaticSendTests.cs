@@ -255,9 +255,19 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
 
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
-        (await db.FlowDocuments.SingleAsync(d => d.Id == docId)).SortUnconfirmed.Should().BeFalse();
+        var sent = await db.FlowDocuments.SingleAsync(d => d.Id == docId);
+        sent.SortUnconfirmed.Should().BeFalse();
+        sent.StatusReason.Should().BeNull();
         (await db.Set<FlowSortMemory>().Where(m => m.OrgId == Org && m.SenderKey == senderKey && m.Kind == kind).ToListAsync())
             .Should().ContainSingle().Which.FlowId.Should().Be(flowId);
+
+        // Confirming without a send lifts the hold and its reason too.
+        var (_, heldId, _, _) = await SortIntoAutomaticFlowAsync(remembered: false);
+        var held = await db.FlowDocuments.SingleAsync(d => d.Id == heldId);
+        held.StatusReason.Should().Be(DocumentSort.CheckSort);
+        await DocumentSort.ConfirmAsync(db, held, CancellationToken.None);
+        await DocumentSort.SaveRememberedAsync(db, held, CancellationToken.None);
+        (await db.FlowDocuments.AsNoTracking().SingleAsync(d => d.Id == heldId)).StatusReason.Should().BeNull();
     }
 
     [DockerRequiredFact]

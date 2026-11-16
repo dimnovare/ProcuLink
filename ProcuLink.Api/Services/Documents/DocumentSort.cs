@@ -2,10 +2,11 @@ using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure;
+using ProcuLink.Infrastructure.Services.Ingress;
 
 namespace ProcuLink.Api.Services.Documents;
 
-/// <summary>Sorts a document out of the workspace inbox into the person flow it belongs to. Nothing here saves.</summary>
+/// <summary>Sorts a document out of the workspace inbox into the person flow it belongs to. Only SaveRememberedAsync saves.</summary>
 public static class DocumentSort
 {
     /// <summary>Waits in the inbox: no person flow holds this kind.</summary>
@@ -104,10 +105,35 @@ public static class DocumentSort
         }
     }
 
-    /// <summary>A person confirmed the document's flow: the hold is lifted and the flow remembered for its sender and kind.</summary>
+    /// <summary>
+    /// Saves every pending change after <see cref="RememberAsync"/>. When another request added the same sender and kind first,
+    /// its row is updated to this document's flow instead, and the save runs once more.
+    /// </summary>
+    public static async Task SaveRememberedAsync(ProcuLinkDbContext db, FlowDocument doc, CancellationToken ct)
+    {
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (IngressDedupe.IsUniqueViolation(ex))
+        {
+            var lost = db.ChangeTracker.Entries<FlowSortMemory>()
+                .FirstOrDefault(e => e.State == EntityState.Added && e.Entity.OrgId == doc.OrgId && e.Entity.SenderKey == doc.SenderKey && e.Entity.Kind == doc.Kind);
+            if (lost is null) throw;
+            lost.State = EntityState.Detached;
+            var row = await db.Set<FlowSortMemory>()
+                .FirstOrDefaultAsync(m => m.OrgId == doc.OrgId && m.SenderKey == doc.SenderKey && m.Kind == doc.Kind, ct) ?? throw ex;
+            row.FlowId = lost.Entity.FlowId;
+            row.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(ct);
+        }
+    }
+
+    /// <summary>A person confirmed the document's flow: the hold and its reason are lifted and the flow remembered for its sender and kind.</summary>
     public static async Task ConfirmAsync(ProcuLinkDbContext db, FlowDocument doc, CancellationToken ct)
     {
         doc.SortUnconfirmed = false;
+        if (doc.StatusReason == CheckSort) doc.StatusReason = null;
         await RememberAsync(db, doc, ct);
     }
 
