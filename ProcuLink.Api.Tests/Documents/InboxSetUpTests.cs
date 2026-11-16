@@ -63,7 +63,7 @@ public sealed class InboxSetUpTests(DocumentEngineTestFactory factory) : IClassF
 
         res.StatusCode.Should().Be(HttpStatusCode.Created);
         var result = (await res.Content.ReadFromJsonAsync<SetUpResultDto>(DocumentJson.Options))!;
-        result.FlowName.Should().Be("Invoices");
+        result.FlowName.Should().Be("Invoice");
         res.Headers.Location!.ToString().Should().Be($"/api/flows/{result.FlowId}");
         var flow = Db(db => db.Flows.AsNoTracking().Single(f => f.Id == result.FlowId));
         flow.FieldsConfirmed.Should().BeTrue();
@@ -91,7 +91,7 @@ public sealed class InboxSetUpTests(DocumentEngineTestFactory factory) : IClassF
 
         // A name already used by a flow of the organisation gets a number.
         var c = await InboxDocAsync(OrgA, "name:example second sender");
-        (await (await SetUp(OrgA, c)).Content.ReadFromJsonAsync<SetUpResultDto>(DocumentJson.Options))!.FlowName.Should().Be("Invoices 2");
+        (await (await SetUp(OrgA, c)).Content.ReadFromJsonAsync<SetUpResultDto>(DocumentJson.Options))!.FlowName.Should().Be("Invoice 2");
     }
 
     [Fact]

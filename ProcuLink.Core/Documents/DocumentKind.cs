@@ -5,7 +5,7 @@ public static class DocumentKind
 {
     private const int MaxKind = 80;
     private const int MaxSenderKey = 200;
-    private const int MaxFlowName = 120;
+    private const int MaxFlowName = 80;
 
     private static readonly HashSet<string> Filler =
     [
@@ -45,16 +45,24 @@ public static class DocumentKind
             ? key
             : null;
 
-    /// <summary>A flow name for documents of this kind: the normalised label capitalised and made plural; "Documents" when there is none.</summary>
+    /// <summary>
+    /// A flow name for documents of this kind: the label as read, tidied, with no plural and no word dropped
+    /// (an all-capitals label in sentence case); "Documents" when no letter or digit is left.
+    /// </summary>
     public static string FlowNameFor(string? kindLabel)
     {
-        var kind = Normalize(kindLabel);
-        if (kind is null) return "Documents";
-        var label = char.ToUpperInvariant(kind[0]) + kind[1..];
-        var name = kind.EndsWith('s') ? label
-            : kind.EndsWith('y') && kind.Length > 1 && !"aeiou".Contains(kind[^2]) ? label[..^1] + "ies"
-            : kind.EndsWith('x') || kind.EndsWith("ch") || kind.EndsWith("sh") ? label + "es"
-            : label + "s";
-        return name.Length > MaxFlowName ? name[..MaxFlowName].TrimEnd() : name;
+        var name = string.Join(' ', string.Concat((kindLabel ?? "").Select(c =>
+                char.IsWhiteSpace(c) ? " " : char.IsLetterOrDigit(c) || "-/&.'()".Contains(c) ? c.ToString() : ""))
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        if (name.Length > MaxFlowName)
+        {
+            var space = name.LastIndexOf(' ', MaxFlowName);
+            name = name[..(space > 40 ? space : MaxFlowName)];
+            if (name.Count(c => c == '(') > name.Count(c => c == ')')) name = name[..name.LastIndexOf('(')];
+            name = name.TrimEnd();
+        }
+        if (!name.Any(char.IsLetterOrDigit)) return "Documents";
+        var rest = name.Length > 4 && !name.Any(char.IsLower) ? name[1..].ToLowerInvariant() : name[1..];
+        return char.ToUpperInvariant(name[0]) + rest;
     }
 }

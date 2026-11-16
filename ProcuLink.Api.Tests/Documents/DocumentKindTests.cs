@@ -36,12 +36,32 @@ public class DocumentKindTests
         var named = new ReadResult("Invoice",
             [new ReadField("supplier", "Supplier", "Example Supplies", FieldTypes.Text, FieldMeanings.SenderName, 0.9, null, false, false, false)]);
         Assert.Equal("name:example supplies", DocumentKind.SenderKeyOf(named, IntakeKind.Email, "orders@example.test"));
+    }
 
-        Assert.Equal("Invoices", DocumentKind.FlowNameFor("Invoice"));
-        Assert.Equal("Invoices", DocumentKind.FlowNameFor("Invoice (copy)"));
-        Assert.Equal("Invoices", DocumentKind.FlowNameFor("INVOICE"));
-        Assert.Equal("Purchase orders", DocumentKind.FlowNameFor("Purchase Orders"));
-        Assert.Equal("Analysis", DocumentKind.FlowNameFor("Analysis"));
-        Assert.Equal("Documents", DocumentKind.FlowNameFor(null));
+    [Theory]
+    [InlineData("Invoice", "Invoice")]
+    [InlineData("invoice", "Invoice")]
+    [InlineData("INVOICE", "Invoice")]
+    [InlineData("PURCHASE ORDER", "Purchase order")]
+    [InlineData("Purchase Orders", "Purchase Orders")]
+    [InlineData("Sales order", "Sales order")]
+    [InlineData("Bill of lading", "Bill of lading")]
+    [InlineData("CMR note", "CMR note")]
+    [InlineData("Rechnung", "Rechnung")]
+    [InlineData("Supplier invoice", "Supplier invoice")]
+    [InlineData("Invoice (copy)", "Invoice (copy)")]
+    [InlineData("  Credit   note ", "Credit note")]
+    [InlineData("?!", "Documents")]
+    [InlineData(null, "Documents")]
+    public void Flow_name_is_the_kind_as_read(string? label, string expected) =>
+        Assert.Equal(expected, DocumentKind.FlowNameFor(label));
+
+    [Fact]
+    public void A_long_kind_is_cut_at_a_word()
+    {
+        var name = DocumentKind.FlowNameFor(string.Join(' ', Enumerable.Repeat("Delivery", 22)) + " (copy)"); // 205 characters
+        Assert.InRange(name.Length, 41, 80);
+        Assert.Equal(name.Trim(), name);
+        Assert.DoesNotContain("(", name);
     }
 }
