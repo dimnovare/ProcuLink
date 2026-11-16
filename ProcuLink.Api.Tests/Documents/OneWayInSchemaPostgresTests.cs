@@ -1,5 +1,9 @@
+using System.Net;
+using System.Net.Http.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using ProcuLink.Api.Services.Documents;
+using ProcuLink.Core.Documents;
 using ProcuLink.Api.Tests.Integration;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure;
@@ -76,6 +80,63 @@ public sealed class OneWayInSchemaPostgresTests(PostgresContainerFixture postgre
         await using var check = new ProcuLinkDbContext(options);
         var row = Assert.Single(await check.Set<FlowSortMemory>().Where(m => m.OrgId == orgId).ToListAsync());
         Assert.Equal(second, row.FlowId);
+    }
+
+    [DockerRequiredFact]
+    public async Task Two_set_ups_of_one_inbox_document_make_one_flow()
+    {
+        using var factory = new DocumentEngineTestFactory { PostgresConnection = await postgres.CreateDatabaseAsync("one_way_in_setup_race") };
+        var org = DocumentEngineTestFactory.OrgA;
+        var http = factory.ClientFor(org);
+        var now = DateTime.UtcNow;
+        var doc = new FlowDocument
+        {
+            Id = Guid.NewGuid(), OrgId = org, FileName = "invoice-2292.pdf", ContentType = "application/pdf", SourceFileKey = "k", BillingUnits = 1,
+            Kind = "invoice", Status = DocumentStatus.NeedsReview, StatusReason = DocumentSort.NewKind, ReadAt = now, CreatedAt = now, UpdatedAt = now,
+            ReadJson = DocumentJson.Serialize(new ReadResult("Invoice",
+                [new ReadField("invoice_number", "Invoice number", "INV-2292", FieldTypes.Text, FieldMeanings.DocumentNumber, 0.99, null, false, true, false)])),
+        };
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            doc.FlowId = (await InboxFlow.GetOrCreateAsync(db, org, CancellationToken.None)).Id;
+            db.FlowDocuments.Add(doc);
+            await db.SaveChangesAsync();
+        }
+
+        var answers = await Task.WhenAll(Enumerable.Range(0, 2).Select(_ => http.PostAsJsonAsync($"/api/documents/{doc.Id}/set-up", new { })));
+
+        Assert.Equal([HttpStatusCode.Created, HttpStatusCode.Conflict], answers.Select(a => a.StatusCode).Order());
+        using var check = factory.Services.CreateScope();
+        var checkDb = check.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        var flow = Assert.Single(await checkDb.Flows.Where(f => f.OrgId == org && !f.IsInbox).ToListAsync());
+        Assert.Single(await checkDb.Set<FlowOutput>().Where(o => o.OrgId == org && o.FlowId == flow.Id).ToListAsync());
+    }
+
+    [DockerRequiredFact]
+    public async Task Backfill_stamps_kinds_across_organisations_in_pages_and_then_stops()
+    {
+        var (options, orgA, flowA, _) = await SeedAsync();
+        var (orgB, flowB) = (Guid.NewGuid(), Guid.NewGuid());
+        FlowDocument Doc(Guid orgId, Guid flowId, string? kindLabel) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = orgId, FlowId = flowId, FileName = "invoice-2292.pdf", ContentType = "application/pdf",
+            Status = DocumentStatus.NeedsReview, ReadAt = DateTime.UtcNow, ReadJson = DocumentJson.Serialize(new ReadResult(kindLabel)),
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        };
+        await using (var seed = new ProcuLinkDbContext(options))
+        {
+            seed.Organisations.Add(new Organisation { Id = orgB, Name = "Sample Traders Ltd", Slug = "sample-" + orgB.ToString("N"), ClerkOrgId = "org_" + orgB.ToString("N") });
+            seed.Flows.Add(new Flow { Id = flowB, OrgId = orgB, Name = "Supplier invoices", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+            seed.FlowDocuments.AddRange(Doc(orgA, flowA, "Invoice"), Doc(orgB, flowB, "Invoice"), Doc(orgB, flowB, null));
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = new ProcuLinkDbContext(options);
+        Assert.Equal(2, await DocumentSort.BackfillKindsAsync(db, CancellationToken.None));
+        Assert.Equal(0, await DocumentSort.BackfillKindsAsync(db, CancellationToken.None));
+        await using var check = new ProcuLinkDbContext(options);
+        Assert.Equal(["invoice", "invoice"], await check.FlowDocuments.Where(d => d.Kind != null).Select(d => d.Kind!).ToListAsync());
     }
 
     [DockerRequiredFact]

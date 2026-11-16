@@ -74,6 +74,9 @@ public sealed class InboxSetUpTests(DocumentEngineTestFactory factory) : IClassF
         var docA = Db(db => db.FlowDocuments.AsNoTracking().Single(d => d.Id == a));
         docA.FlowId.Should().Be(flow.Id);
         docA.StatusReason.Should().NotBe(DocumentSort.NewKind);
+        // Checked in the new flow, not left received: the rechecker ran.
+        docA.Status.Should().BeOneOf(DocumentStatus.NeedsReview, DocumentStatus.Ready);
+        docA.DedupKey.Should().NotBeNull().And.Be(DocumentChecks.DedupKeyOf(DocumentJson.Deserialize<ReadResult>(Read)));
         DocumentJson.Deserialize<List<DocumentCheck>>(docA.ChecksJson).Should().NotContain(c => c.Code == DocumentChecks.FieldsUnconfirmed);
         var docB = Db(db => db.FlowDocuments.AsNoTracking().Single(d => d.Id == b));
         docB.FlowId.Should().Be(flow.Id);
@@ -84,6 +87,10 @@ public sealed class InboxSetUpTests(DocumentEngineTestFactory factory) : IClassF
         var again = await SetUp(OrgA, b);
         again.StatusCode.Should().Be(HttpStatusCode.Conflict);
         (await again.Content.ReadAsStringAsync()).Should().Contain("not_in_inbox");
+
+        // A name already used by a flow of the organisation gets a number.
+        var c = await InboxDocAsync(OrgA, "name:example second sender");
+        (await (await SetUp(OrgA, c)).Content.ReadFromJsonAsync<SetUpResultDto>(DocumentJson.Options))!.FlowName.Should().Be("Invoices 2");
     }
 
     [Fact]

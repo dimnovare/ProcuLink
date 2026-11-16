@@ -97,7 +97,7 @@ public sealed class InboxMoveTests(DocumentEngineTestFactory factory) : IClassFi
     public async Task Another_org_can_neither_move_in_nor_be_moved_into()
     {
         var theirs = await FlowAsync(OrgB, "Supplier invoices");
-        var mine = await DocAsync(OrgA, senderKey: "name:example cross org sender");
+        var mine = await DocAsync(OrgA, "cross_org_note", "name:example cross org sender");
 
         await ShouldRefuse(await Move(OrgA, mine.Id, theirs), HttpStatusCode.NotFound, "flow_not_found");
         var unchanged = Doc(mine.Id);
@@ -131,8 +131,11 @@ public sealed class InboxMoveTests(DocumentEngineTestFactory factory) : IClassFi
             new { fields = new[] { new { key = "invoice_number", value = "INV-2293" } } })).StatusCode.Should().Be(HttpStatusCode.OK);
         Doc(waiting.Id).StatusReason.Should().Be(DocumentSort.NewKind);
 
-        var sent = await DocAsync(OrgA, flowId: await FlowAsync(OrgA, "Sent flow"), status: DocumentStatus.Sent);
+        var sentFlow = await FlowAsync(OrgA, "Sent flow");
+        var sent = await DocAsync(OrgA, flowId: sentFlow, status: DocumentStatus.Sent);
         await ShouldRefuse(await Move(OrgA, sent.Id, f), HttpStatusCode.Conflict, "not_movable");
+        var partlySent = await DocAsync(OrgA, flowId: sentFlow, status: DocumentStatus.SendFailed);
+        await ShouldRefuse(await Move(OrgA, partlySent.Id, f), HttpStatusCode.Conflict, "not_movable");
 
         await SetAccountStatus("past_due");
         try

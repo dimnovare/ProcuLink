@@ -6,7 +6,7 @@ using ProcuLink.Infrastructure.Services.Ingress;
 
 namespace ProcuLink.Api.Services.Documents;
 
-/// <summary>Sorts a document out of the workspace inbox into the person flow it belongs to. Only SaveRememberedAsync saves.</summary>
+/// <summary>Sorts a document out of the workspace inbox into the person flow it belongs to. Only SaveRememberedAsync saves; ClaimAsync writes its claim at once.</summary>
 public static class DocumentSort
 {
     /// <summary>Waits in the inbox: no person flow holds this kind.</summary>
@@ -83,6 +83,23 @@ public static class DocumentSort
         doc.UpdatedAt = DateTime.UtcNow;
         DocumentAudit.Add(db, doc, action, new { fromFlowId, flowId, flow = flowName, certain, duplicateFile, newFlow }, userId);
         return !duplicateFile;
+    }
+
+    /// <summary>
+    /// Takes the document for one request, moving it to <paramref name="status"/>, only while it is still in the flow, status and
+    /// time this request read: a second request that read the same values finds zero rows and gets false. Sets the claimed values on
+    /// the tracked document, so the caller's later save keeps them.
+    /// </summary>
+    public static async Task<bool> ClaimAsync(ProcuLinkDbContext db, FlowDocument doc, string status, CancellationToken ct)
+    {
+        var (flowId, from, at, now) = (doc.FlowId, doc.Status, doc.UpdatedAt, DateTime.UtcNow);
+        var claimed = db.Database.IsRelational()
+            ? await db.FlowDocuments.Where(d => d.Id == doc.Id && d.OrgId == doc.OrgId && d.FlowId == flowId && d.Status == from && d.UpdatedAt == at)
+                .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, status).SetProperty(d => d.UpdatedAt, now), ct) == 1
+            // EF InMemory cannot translate ExecuteUpdateAsync (single-threaded there): the same check, written by the caller's save.
+            : await db.FlowDocuments.AsNoTracking().AnyAsync(d => d.Id == doc.Id && d.OrgId == doc.OrgId && d.FlowId == flowId && d.Status == from && d.UpdatedAt == at, ct);
+        if (claimed) (doc.Status, doc.UpdatedAt) = (status, now);
+        return claimed;
     }
 
     /// <summary>A person took the read as a file ("just this one"): the document is done, with nothing set up.</summary>

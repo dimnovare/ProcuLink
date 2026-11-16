@@ -100,8 +100,11 @@ public sealed class InboxController(
         if (doc is null) return NotFound(DocumentNotFound);
         var flow = await db.Flows.PersonFlows(orgId).FirstOrDefaultAsync(f => f.Id == request.FlowId, ct);
         if (flow is null) return NotFound(new { error = "flow_not_found" });
-        if (!DocumentStatus.IsEditable(doc.Status, doc.StatusReason)) return Conflict(new { error = "not_movable" });
+        // A partly sent document is never moved and sent again through another flow.
+        if (doc.Status == DocumentStatus.SendFailed || !DocumentStatus.IsEditable(doc.Status, doc.StatusReason)) return Conflict(new { error = "not_movable" });
         if (!await billing.CanProcessOrdersAsync(orgId, ct)) return Conflict(new { error = "processing_paused" });
+        // Received until the move is saved: a second move, a set-up or a download that read the same document is refused.
+        if (!await DocumentSort.ClaimAsync(db, doc, DocumentStatus.Received, ct)) return Conflict(new { error = "not_movable" });
 
         if (doc.FlowId == flow.Id)
         {
@@ -111,8 +114,7 @@ public sealed class InboxController(
             return Ok(DocumentSummaryDto.From(doc, flow.Name));
         }
         var mustRead = await DocumentSort.MoveToAsync(db, doc, flow.Id, flow.Name, true, "document.moved", tenant.ClerkUserId, ct);
-        await RememberAndResortAsync(doc, ct);
-        if (mustRead) ReadDocumentJob.Enqueue(jobs, doc.Id, orgId);
+        await RememberAndResortAsync(doc, ct, readIt: mustRead);
         return Ok(DocumentSummaryDto.From(doc, flow.Name));
     }
 
@@ -137,6 +139,10 @@ public sealed class InboxController(
         if (!FlowCreation.TryName(request?.Name ?? DocumentKind.FlowNameFor(read.KindLabel), out var name)) return BadRequest(new { error = "invalid_name" });
         var fields = ReadMerge.KeysOf(read);
         if (FlowCreation.InvalidFields(fields) is { } detail) return UnprocessableEntity(new { error = "invalid_fields", detail });
+        var taken = (await db.Flows.Where(f => f.OrgId == orgId).Select(f => f.Name).ToListAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        for (var (stem, n) = (name, 2); taken.Contains(name); n++) name = stem[..Math.Min(stem.Length, 120 - $" {n}".Length)] + $" {n}";
+        // Before the flow exists: of two set-ups that read the same document, one makes the flow and the other is refused.
+        if (!await DocumentSort.ClaimAsync(db, doc, DocumentStatus.Received, ct)) return Conflict(new { error = "not_in_inbox" });
 
         var flow = FlowCreation.New(orgId, name, fields, confirmed: true);
         db.Flows.Add(flow);
@@ -168,6 +174,8 @@ public sealed class InboxController(
         if (!render.Ok) return UnprocessableEntity(new { error = render.Error, detail = render.Detail });
         if (!downloaded)
         {
+            // A move that read the same document first wins: nothing is marked downloaded outside the inbox.
+            if (!await DocumentSort.ClaimAsync(db, doc, DocumentStatus.Sent, ct)) return Conflict(new { error = "not_in_inbox" });
             DocumentSort.MarkDownloaded(db, doc, request.Format, tenant.ClerkUserId);
             await db.SaveChangesAsync(ct);
         }
@@ -177,11 +185,15 @@ public sealed class InboxController(
             FileNameSanitiser.Sanitise(Path.GetFileNameWithoutExtension(doc.FileName)) + render.Result.FileExtension);
     }
 
-    /// <summary>Remembers the document's flow, saves, then sorts again the inbox documents of its kind and enqueues their reads.</summary>
-    private async Task RememberAndResortAsync(FlowDocument doc, CancellationToken ct)
+    /// <summary>
+    /// Remembers the document's flow and saves, enqueues its own read when <paramref name="readIt"/>, then sorts again the inbox
+    /// documents of its kind and enqueues their reads: a failing re-sort cannot leave the saved document unread.
+    /// </summary>
+    private async Task RememberAndResortAsync(FlowDocument doc, CancellationToken ct, bool readIt = false)
     {
         await DocumentSort.RememberAsync(db, doc, ct);
         await DocumentSort.SaveRememberedAsync(db, doc, ct);
+        if (readIt) ReadDocumentJob.Enqueue(jobs, doc.Id, doc.OrgId);
         if (doc.Kind is null) return;
         var moved = await DocumentSort.ResortWaitingAsync(db, doc.OrgId, doc.Kind, ct);
         await db.SaveChangesAsync(ct);
