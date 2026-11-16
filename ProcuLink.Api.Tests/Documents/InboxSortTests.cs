@@ -48,7 +48,7 @@ public sealed class InboxSortTests(DocumentEngineTestFactory factory) : IClassFi
         var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
         var pdf = TextPdf(pages);
         var storage = new Mock<IFileStorageService>();
-        storage.Setup(s => s.DownloadAsync("k", It.IsAny<CancellationToken>())).ReturnsAsync(() => new MemoryStream(pdf));
+        storage.Setup(s => s.DownloadAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(() => new MemoryStream(pdf));
         var reader = new Mock<IDocumentReader>();
         reader.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), org, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DocumentReadOutcome(true, result, null, new ReadUsage("test-model", 10, 5)));
@@ -168,6 +168,32 @@ public sealed class InboxSortTests(DocumentEngineTestFactory factory) : IClassFi
         var (_, c) = await InboxDocAsync(org);
         await ReadAsync(org, c, Result("Delivery note"));
         Doc(c).StatusReason.Should().Be("new_kind");
+    }
+
+    [Fact]
+    public async Task A_file_the_workspace_already_holds_is_held_at_the_inbox_door()
+    {
+        var org = Guid.NewGuid();
+        var f = await FlowAsync(org, "Supplier invoices", holdsInvoice: false);
+        await RememberAsync(org, f.Id);
+        var pdf = TextPdf(1);
+        async Task<Guid> UploadAsync()
+        {
+            using var scope = factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            var inbox = await InboxFlow.GetOrCreateAsync(db, org, CancellationToken.None);
+            return (await scope.ServiceProvider.GetRequiredService<DocumentIntakeService>().AcceptAsync(
+                org, inbox.Id, new MemoryStream(pdf), "invoice-2292.pdf", "application/pdf", "upload", null, null, CancellationToken.None)).Id;
+        }
+        var first = await UploadAsync();
+        await ReadAsync(org, first, Result("Invoice"));
+        Doc(first).FlowId.Should().Be(f.Id);
+        var reads = factory.Enqueued<ReadDocumentJob>();
+
+        var second = Doc(await UploadAsync());
+
+        (second.ReadAt, second.StatusReason).Should().Be(((DateTime?)null, "duplicate_file"));
+        factory.Enqueued<ReadDocumentJob>().Should().Be(reads);
     }
 
     [Fact]

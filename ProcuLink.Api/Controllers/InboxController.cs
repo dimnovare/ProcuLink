@@ -91,6 +91,7 @@ public sealed class InboxController(
 
     /// <summary>A person puts the document in a flow: certain, so it is read there and remembered; in its own flow, the sort is confirmed.</summary>
     [HttpPost("api/documents/{id:guid}/move")]
+    [EnableRateLimiting("ai")] // queues reads: its own and each document sorted again
     public async Task<IActionResult> Move(Guid id, MoveDocumentRequest request, CancellationToken ct)
     {
         if (Refuse() is { } refused) return refused;
@@ -120,6 +121,7 @@ public sealed class InboxController(
 
     /// <summary>"Do the same every time": a new flow from the document's read, with the document in it, already checked there.</summary>
     [HttpPost("api/documents/{id:guid}/set-up")]
+    [EnableRateLimiting("ai")] // queues the reads of each document sorted again
     public async Task<IActionResult> SetUp(Guid id, [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] SetUpDocumentRequest? request, CancellationToken ct)
     {
         if (Refuse() is { } refused) return refused;

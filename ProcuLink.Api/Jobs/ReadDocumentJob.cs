@@ -41,6 +41,7 @@ public class ReadDocumentJob(
 
         // One time budget for this run of the read: the download, every part and its second try. A call still running when it ends is cancelled.
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var runFlowId = doc.FlowId;
         try
         {
             doc.Status = DocumentStatus.Reading;
@@ -57,9 +58,7 @@ public class ReadDocumentJob(
         {
             // Out of time during a call: final, as when the time runs out between parts.
             logger.LogWarning("Read of document {DocumentId} stopped at the time limit after {Parts} part(s).", documentId, _partsRead);
-            db.ChangeTracker.Clear();
-            var failed = await db.FlowDocuments.FirstAsync(d => d.Id == documentId && d.OrgId == organisationId, ct);
-            await FailAsync(failed, "document_too_large", ct);
+            await FailIfStillReadingAsync(documentId, organisationId, runFlowId, "document_too_large", ct);
         }
         catch (Exception ex)
         {
@@ -67,12 +66,19 @@ public class ReadDocumentJob(
             if (context is null || context.GetJobParameter<int>("RetryCount") >= LastRetry)
             {
                 // Drop whatever the failed attempt tracked (ReadAt, ReadJson, the read audit row): an unread document is not billed.
-                db.ChangeTracker.Clear();
-                var failed = await db.FlowDocuments.FirstAsync(d => d.Id == documentId && d.OrgId == organisationId, ct);
-                await FailAsync(failed, "ai_error", ct);
+                await FailIfStillReadingAsync(documentId, organisationId, runFlowId, "ai_error", ct);
             }
             throw;
         }
+    }
+
+    /// <summary>Fails the reloaded document only while this run still owns it: a stale run never fails a document already moved on.</summary>
+    private async Task FailIfStillReadingAsync(Guid documentId, Guid organisationId, Guid runFlowId, string reason, CancellationToken ct)
+    {
+        db.ChangeTracker.Clear();
+        var failed = await db.FlowDocuments.FirstAsync(d => d.Id == documentId && d.OrgId == organisationId, ct);
+        if (failed.FlowId == runFlowId && failed.Status is DocumentStatus.Reading or DocumentStatus.Received)
+            await FailAsync(failed, reason, ct);
     }
 
     /// <param name="budget">Ends with the read's time budget; given to the download, OCR and the reader. Saves use <paramref name="ct"/>.</param>

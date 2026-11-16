@@ -158,8 +158,15 @@ public static class DocumentSort
             .Take(ResortBatch)
             .ToListAsync(ct);
         var moved = new List<Guid>();
+        // The duplicate-file guard queries the database and cannot see this batch's unsaved moves: a second copy keeps waiting.
+        var movedFiles = new HashSet<string>();
         foreach (var doc in waiting)
-            if (await SortAsync(db, doc, ct)) moved.Add(doc.Id);
+        {
+            if (doc.Sha256.Length > 0 && movedFiles.Contains(doc.Sha256)) continue;
+            if (!await SortAsync(db, doc, ct)) continue;
+            moved.Add(doc.Id);
+            if (doc.Sha256.Length > 0) movedFiles.Add(doc.Sha256);
+        }
         return moved;
     }
 }

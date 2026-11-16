@@ -126,6 +126,10 @@ public sealed class InboxMoveTests(DocumentEngineTestFactory factory) : IClassFi
         var waiting = await DocAsync(OrgA);
         var inbox = waiting.FlowId;
         await ShouldRefuse(await Move(OrgA, waiting.Id, inbox), HttpStatusCode.NotFound, "flow_not_found");
+        // Editing a waiting document rechecks it in the inbox, and it keeps waiting for its reason.
+        (await factory.ClientFor(OrgA).PatchAsJsonAsync($"/api/documents/{waiting.Id}/values",
+            new { fields = new[] { new { key = "invoice_number", value = "INV-2293" } } })).StatusCode.Should().Be(HttpStatusCode.OK);
+        Doc(waiting.Id).StatusReason.Should().Be(DocumentSort.NewKind);
 
         var sent = await DocAsync(OrgA, flowId: await FlowAsync(OrgA, "Sent flow"), status: DocumentStatus.Sent);
         await ShouldRefuse(await Move(OrgA, sent.Id, f), HttpStatusCode.Conflict, "not_movable");

@@ -78,7 +78,10 @@ public sealed class DocumentIntakeService(
             Source = source, SourceRef = sourceRef, Status = DocumentStatus.Received, CreatedAt = now, UpdatedAt = now,
         };
 
-        var duplicate = await db.FlowDocuments.AnyAsync(d => d.OrgId == orgId && d.FlowId == flowId && d.Sha256 == sha, ct);
+        // The inbox sorts documents on into flows, so a file the workspace already holds anywhere is held at the door.
+        var toInbox = await db.Flows.AnyAsync(f => f.OrgId == orgId && f.Id == flowId && f.IsInbox, ct);
+        var duplicate = await db.FlowDocuments.AnyAsync(
+            d => d.OrgId == orgId && d.Sha256 == sha && (d.FlowId == flowId || (toInbox && !d.IsSample)), ct);
         if (duplicate) HoldAsDuplicateFile(doc);
 
         db.FlowDocuments.Add(doc);

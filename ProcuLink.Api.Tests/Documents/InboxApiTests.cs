@@ -78,6 +78,8 @@ public class InboxApiTests(DocumentEngineTestFactory factory) : IClassFixture<Do
         Assert.Equal(b.FlowId, resolved.FlowId);
         Assert.Equal(OrgB, resolved.OrgId);
         Assert.Equal(a.Address, (await InboxOf(OrgA)).Address);
+        Assert.True(b.ScansOn); // OrgB has scans and formats on
+        Assert.True(b.FormatsOn);
 
         // The inbox reads the same file kinds the organisation's flows report.
         var http = factory.ClientFor(OrgA);
