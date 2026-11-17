@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Npgsql;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
@@ -89,6 +90,7 @@ public sealed class OrganisationEraserPostgresTests(PostgresContainerFixture pos
         await check.OverageBillingRecords.Where(r => r.OrgId == target).ExecuteDeleteAsync();
 
         var storage = new Mock<IFileStorageService>();
+        storage.Setup(x => x.ListKeysAsync($"{target}/documents/", It.IsAny<CancellationToken>())).ReturnsAsync(new List<string>());
         await using (var db = NewContext())
         {
             var receipt = await new OrganisationEraser(db, storage.Object, NullLogger<OrganisationEraser>.Instance)
@@ -112,7 +114,8 @@ public sealed class OrganisationEraserPostgresTests(PostgresContainerFixture pos
             .SubjectClerkOrgId.Should().Be($"org_a{target:N}", "the receipt survives, keyed so the workspace is not re-created");
         (await check.Users.AnyAsync(u => u.Id == targetUser)).Should().BeFalse("a member no organisation holds any more is erased");
         (await check.Users.AnyAsync(u => u.Id == otherUser)).Should().BeTrue("a member of another organisation stays");
-        storage.Invocations.Select(i => (string)i.Arguments[0]).Should().BeEquivalentTo(targetFiles,
+        storage.Invocations.Where(i => i.Method.Name == nameof(IFileStorageService.DeleteAsync))
+            .Select(i => (string)i.Arguments[0]).Should().BeEquivalentTo(targetFiles,
             "every stored file the target owns, children included, and nothing of the other org's");
     }
 
@@ -143,7 +146,9 @@ public sealed class OrganisationEraserPostgresTests(PostgresContainerFixture pos
         async Task<OrgEraseReceipt> Erase(Guid id)
         {
             await using var db = NewContext();
-            return await new OrganisationEraser(db, Mock.Of<IFileStorageService>(), NullLogger<OrganisationEraser>.Instance, billing.Object, remover.Object)
+            var storage = Mock.Of<IFileStorageService>(s =>
+                s.ListKeysAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()) == Task.FromResult<IReadOnlyList<string>>(new List<string>()));
+            return await new OrganisationEraser(db, storage, NullLogger<OrganisationEraser>.Instance, billing.Object, remover.Object)
                 .EraseOnRequestAsync(id, "test:request", "request", agreementEnded: true, CancellationToken.None);
         }
 
@@ -160,6 +165,52 @@ public sealed class OrganisationEraserPostgresTests(PostgresContainerFixture pos
         // A manual contract carries no Stripe ids: the operator's word is the authority, Stripe is not asked.
         (await Erase(manualId)).Outcome.Should().Be(OrgEraseOutcome.Erased);
         billing.Verify(b => b.HasRunningSubscriptionAsync(null, null, It.IsAny<CancellationToken>()), Times.Never());
+    }
+
+    [DockerRequiredFact]
+    public async Task Erase_AlsoDeletesStoredFilesNoRowNames()
+    {
+        async Task<(Guid Org, string Named, string Unnamed)> Seed()
+        {
+            await using var db = NewContext();
+            Guid org = Guid.NewGuid(), flow = Guid.NewGuid(), doc = Guid.NewGuid();
+            var now = DateTime.UtcNow;
+            db.Organisations.Add(new Organisation
+            {
+                Id = org, ClerkOrgId = $"org_test{org:N}", Name = "erase-listing", Slug = $"erase-listing-{org:N}", CreatedAt = now, TrialStartedAt = now,
+            });
+            db.Flows.Add(new Flow { Id = flow, OrgId = org, Name = "Orders", CreatedAt = now, UpdatedAt = now });
+            db.FlowDocuments.Add(new FlowDocument
+            {
+                Id = doc, OrgId = org, FlowId = flow, FileName = "synthetic.pdf", SourceFileKey = $"{org}/documents/{doc}/source.pdf",
+                Sha256 = Guid.NewGuid().ToString("N"), Status = DocumentStatus.Sent, CreatedAt = now, UpdatedAt = now,
+            });
+            await db.SaveChangesAsync();
+            return (org, $"{org}/documents/{doc}/source.pdf", $"{org}/documents/{doc}/outputs/old.pdf");
+        }
+        var (listed, named, old) = await Seed();
+        var (unlistable, _, _) = await Seed();
+        var deleted = new List<string>();
+        var storage = new Mock<IFileStorageService>();
+        storage.Setup(x => x.ListKeysAsync($"{listed}/documents/", It.IsAny<CancellationToken>())).ReturnsAsync(new List<string> { named, old });
+        storage.Setup(x => x.ListKeysAsync($"{unlistable}/documents/", It.IsAny<CancellationToken>())).ThrowsAsync(new NotSupportedException());
+        storage.Setup(x => x.DeleteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Callback<string, CancellationToken>((k, _) => deleted.Add(k)).Returns(Task.CompletedTask);
+        async Task<OrgEraseReceipt> Erase(Guid id)
+        {
+            await using var db = NewContext();
+            return await new OrganisationEraser(db, storage.Object, NullLogger<OrganisationEraser>.Instance)
+                .EraseAsync(id, "test", "listing", CancellationToken.None);
+        }
+
+        var first = await Erase(listed);
+        (first.Outcome, first.BlobsDeleted, first.FailedBlobKeys.Count).Should().Be((OrgEraseOutcome.Erased, 2, 0));
+        deleted.Where(k => k.StartsWith($"{listed}/")).Should().BeEquivalentTo([named, old], "each key once, listed or named");
+
+        // A folder that cannot be listed does not stop the erase: it is named as what may remain.
+        var second = await Erase(unlistable);
+        second.Outcome.Should().Be(OrgEraseOutcome.Erased);
+        second.FailedBlobKeys.Should().Equal($"{unlistable}/documents/");
     }
 
     private static Task<int> CountAsync(ProcuLinkDbContext db, IEntityType type, Guid orgId) =>

@@ -110,23 +110,33 @@ public sealed class OrganisationEraser(
         // rows. Until cleanup confirms each blob gone it lists every one as failed, so a crash between
         // commit and cleanup still leaves an honest record of what may remain in storage.
         var keys = blobKeys.Distinct().ToList();
+        var documents = $"{orgId}/documents/";
         var audit = new PlatformAuditEvent
         {
             Id = Guid.NewGuid(), Action = AuditAction, SubjectOrgId = orgId, SubjectClerkOrgId = org.ClerkOrgId,
             Actor = actor, Reason = reason, CreatedAt = DateTime.UtcNow,
         };
         void Record(OrgEraseReceipt r) => audit.Payload = JsonSerializer.Serialize(r, ReceiptJson);
-        Record(Receipt(OrgEraseOutcome.Erased, rows, 0, keys));
+        Record(Receipt(OrgEraseOutcome.Erased, rows, 0, [.. keys, documents]));
         db.PlatformAuditEvents.Add(audit);
         await db.SaveChangesAsync(none);
         await tx.CommitAsync(none);
 
         // Best-effort, like DataErasureService, and only after the commit: a storage failure never
-        // keeps the rows, and is named in the receipt.
+        // keeps the rows, and is named in the receipt. A re-sent document leaves older outputs no row
+        // names, so the documents folder is listed too; a folder that cannot be listed is named instead.
         var failed = new List<string>();
-        foreach (var key in keys)
+        var all = new HashSet<string>(keys);
+        try { all.UnionWith(await storage.ListKeysAsync(documents, none)); }
+        catch (Exception ex)
         {
-            try { await storage.DeleteAsync(key, none); }
+            failed.Add(documents);
+            logger.LogError(ex, "Erase org {OrgId}: could not list {Prefix}.", orgId, documents);
+        }
+        var blobs = 0;
+        foreach (var key in all)
+        {
+            try { await storage.DeleteAsync(key, none); blobs++; }
             catch (Exception ex)
             {
                 failed.Add(key);
@@ -147,7 +157,7 @@ public sealed class OrganisationEraser(
                 logger.LogError(ex, "Erase org {OrgId}: the sign-in step threw.", orgId);
             }
         }
-        var receipt = Receipt(OrgEraseOutcome.Erased, rows, keys.Count - failed.Count, failed);
+        var receipt = Receipt(OrgEraseOutcome.Erased, rows, blobs, failed);
         Record(receipt);
         await db.SaveChangesAsync(none);
 
