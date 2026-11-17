@@ -170,13 +170,44 @@ public class OpenAiDocumentReaderTests
         byte[] png = [0x89, 0x50, 0x4E, 0x47];
 
         var outcome = await reader.ReadAsync(
-            new DocumentReadInput("scan.pdf", "application/pdf", "", null, [png, png]), Org, CancellationToken.None);
+            new DocumentReadInput("scan.pdf", "application/pdf", "=== Page 1 ===\n", null, [png, png], Scanned: true), Org, CancellationToken.None);
 
         outcome.Success.Should().BeTrue();
         var parts = captured.OfType<UserChatMessage>().Single().Content;
         parts.Where(p => p.Kind == ChatMessageContentPartKind.Image).Should().HaveCount(2)
             .And.OnlyContain(p => p.ImageBytes!.ToArray().SequenceEqual(png) && p.ImageBytesMediaType == "image/png");
-        parts.Should().Contain(p => p.Text != null && p.Text.Contains("attached page images"));
+        parts.Should().Contain(p => p.Text != null && p.Text.Contains("The document is the attached page images, in page order."));
+    }
+
+    private static async Task<List<ChatMessage>> CaptureAsync(DocumentReadInput input)
+    {
+        var (reader, client) = Create();
+        var captured = new List<ChatMessage>();
+        client.Setup(c => c.CompleteChatAsync(
+                It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatCompletionOptions>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<ChatMessage>, ChatCompletionOptions, CancellationToken>((m, _, _) => captured.AddRange(m))
+            .ReturnsAsync(ClientResult.FromValue(
+                OpenAIChatModelFactory.ChatCompletion(content: new ChatMessageContent(CannedJson)), Mock.Of<PipelineResponse>()));
+        await reader.ReadAsync(input, Org, CancellationToken.None);
+        return captured;
+    }
+
+    [Fact]
+    public async Task System_prompt_lists_each_meaning_with_its_definition()
+    {
+        var system = (await CaptureAsync(Input())).OfType<SystemChatMessage>().Single().Content.Single().Text;
+
+        system.Should().Contain("- delivery_postcode: the postcode of the delivery or ship-to address.")
+            .And.Contain("- sender_name: the party that issued the document");
+    }
+
+    [Fact]
+    public async Task Text_pdf_with_page_images_is_told_the_images_are_the_same_pages()
+    {
+        var captured = await CaptureAsync(new DocumentReadInput("text.pdf", "application/pdf", "Invoice 1", null, [[0x89, 0x50, 0x4E, 0x47]]));
+
+        captured.OfType<UserChatMessage>().Single().Content
+            .Should().Contain(p => p.Text != null && p.Text.Contains("show the same pages as the document text"));
     }
 
     [Fact]

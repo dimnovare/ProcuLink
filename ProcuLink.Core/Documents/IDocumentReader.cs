@@ -1,9 +1,9 @@
 namespace ProcuLink.Core.Documents;
 
-/// <summary><c>Pages</c> holds PNG page images in page order, for documents with no text layer.
+/// <summary><c>Pages</c> holds PNG page images in page order: the scan's pages, or a text PDF's pages for layout. <c>Scanned</c> says the images are the document.
 /// <c>Part</c> of <c>Parts</c> says which part of a longer file this input is; 1 of 1 is the whole file.</summary>
 public sealed record DocumentReadInput(string FileName, string ContentType, string Text, FlowFieldList? Expected,
-    IReadOnlyList<byte[]>? Pages = null, IReadOnlyList<FieldHint>? Hints = null, int Part = 1, int Parts = 1);
+    IReadOnlyList<byte[]>? Pages = null, IReadOnlyList<FieldHint>? Hints = null, int Part = 1, int Parts = 1, bool Scanned = false);
 
 /// <summary>What one answered AI call used, as the provider reported it.</summary>
 public sealed record ReadUsage(string Model, int TokensIn, int TokensOut);

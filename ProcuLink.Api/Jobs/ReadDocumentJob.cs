@@ -146,6 +146,7 @@ public class ReadDocumentJob(
         // A scanned PDF's parts are rendered one window at a time in the loop below; any other file is one part.
         var scanPdf = isPdf && scan;
         var parts = new List<(string Text, IReadOnlyList<PageWord> Words, IReadOnlyList<byte[]>? Pages)>();
+        var textWindows = new List<(int From, int To)>();
         if (isPdf && !scan)
         {
             var last = Math.Min(pdfPages, ReadLimits.MaxPages);
@@ -153,7 +154,9 @@ public class ReadDocumentJob(
             {
                 var to = Math.Min(from + ReadLimits.PagesPerUnit - 1, last);
                 var partWords = words.Where(w => w.Page >= from && w.Page <= to).ToList();
-                if (partWords.Count > 0) parts.Add((PagesText(from, to), partWords, null));
+                if (partWords.Count == 0) continue;
+                parts.Add((PagesText(from, to), partWords, null));
+                textWindows.Add((from, to));
             }
         }
 
@@ -218,9 +221,15 @@ public class ReadDocumentJob(
                 parts.Add((PagesText(skip + 1, Math.Min(skip + ReadLimits.PagesPerUnit, pdfPages)), ocrWords, images));
             }
             var (partText, partWords, partPages) = parts[part - 1];
+            if (textWindows.Count > 0 && gate.PageImagesWithText)
+            {
+                // A text PDF's part also carries its own pages' images, rendered when its turn comes; none rendered → text alone.
+                var (from, to) = textWindows[part - 1];
+                partPages = rasterizer.RenderPagesPng(bytes, to - from + 1, from - 1) is { Count: > 0 } images ? images : null;
+            }
             var partExpected = expected ?? (results.Count == 0 ? null : ReadMerge.KeysOf(ReadMerge.Merge(results, null)));
             var input = new DocumentReadInput(doc.FileName, doc.ContentType, partText, partExpected, partPages,
-                hints.Count > 0 ? hints : null, part, partCount);
+                hints.Count > 0 ? hints : null, part, partCount, scan);
             DocumentReadOutcome outcome;
             var tries = 0;
             do

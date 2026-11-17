@@ -111,7 +111,7 @@ public sealed class ReadDocumentJobTests
         byte[] pdf, bool scans = false, string fileName = "invoice.pdf", IPdfRasterizer? rasterizer = null,
         IReadOnlyList<PageWord>? ocrWords = null, ReadField[]? readFields = null, bool fieldsConfirmed = true,
         Func<IReadOnlyList<byte[]>, IReadOnlyList<PageWord>>? ocrPages = null, Func<DateTime>? utcNow = null,
-        Hangfire.IBackgroundJobClient? jobs = null, TimeSpan? readBudget = null, ILogger<ReadDocumentJob>? logger = null)
+        Hangfire.IBackgroundJobClient? jobs = null, TimeSpan? readBudget = null, ILogger<ReadDocumentJob>? logger = null, bool pageImagesWithText = true)
     {
         var db = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase($"read-job-{Guid.NewGuid()}").Options);
@@ -145,7 +145,7 @@ public sealed class ReadDocumentJobTests
         var ocr = new Mock<IDocumentOcrService>();
         ocr.Setup(o => o.ReadWordsAsync(It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<byte[]> images, CancellationToken _) => ocrPages?.Invoke(images) ?? ocrWords ?? []);
-        var gate = new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions { EnabledForAll = true, ScansForAll = scans }));
+        var gate = new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions { EnabledForAll = true, ScansForAll = scans, PageImagesWithText = pageImagesWithText }));
         var job = new ReadDocumentJob(db, storage.Object, reader.Object, new DocumentRechecker(db, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), Moq.Mock.Of<ProcuLink.Core.Documents.IStandardValidator>()), jobs ?? Mock.Of<Hangfire.IBackgroundJobClient>(),
             rasterizer ?? Mock.Of<IPdfRasterizer>(), ocr.Object, gate, new ProcuLink.Transform.Tokenizing.SourceTokenizer(), logger ?? NullLogger<ReadDocumentJob>.Instance)
         {
@@ -338,10 +338,29 @@ public sealed class ReadDocumentJobTests
         jobs.Verify(j => j.Create(It.IsAny<Hangfire.Common.Job>(), It.IsAny<Hangfire.States.IState>()), Times.Never);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Text_pdf_part_is_read_with_its_page_images(bool pageImagesWithText)
+    {
+        var (job, _, reader, id) = Arrange(TextPdf(2), rasterizer: Rasterizer(2), pageImagesWithText: pageImagesWithText);
+        DocumentReadInput? seen = null;
+        reader.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()))
+            .Callback<DocumentReadInput, Guid, CancellationToken>((i, _, _) => seen = i)
+            .ReturnsAsync(Read());
+
+        await job.ExecuteAsync(id, Org, null, CancellationToken.None);
+
+        seen!.Text.Should().NotBeNullOrWhiteSpace();
+        if (pageImagesWithText) seen.Pages.Should().HaveCount(2);
+        else seen.Pages.Should().BeNull();
+    }
+
     [Fact]
     public async Task A_long_pdf_is_read_ten_pages_at_a_time_up_to_page_100_and_billed_for_the_parts_read()
     {
-        var (job, db, reader, id) = Arrange(TextPdf(105));
+        var rasterizer = Rasterizer(105);
+        var (job, db, reader, id) = Arrange(TextPdf(105), rasterizer: rasterizer);
         var seen = new List<DocumentReadInput>();
         reader.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()))
             .ReturnsAsync((DocumentReadInput i, Guid _, CancellationToken _) =>
@@ -357,6 +376,8 @@ public sealed class ReadDocumentJobTests
         seen.Select(i => (i.Part, i.Parts)).Should().Equal(Enumerable.Range(1, 10).Select(n => (n, 10)));
         seen[1].Text.Should().Contain("=== Page 11 ===").And.Contain("=== Page 20 ===")
             .And.NotContain("=== Page 10 ===").And.NotContain("=== Page 21 ===");
+        seen.Should().OnlyContain(i => i.Pages!.Count == 10 && !i.Scanned);
+        Mock.Get(rasterizer).Verify(r => r.RenderPagesPng(It.IsAny<byte[]>(), 10, 90), Times.Once);
         var doc = await db.FlowDocuments.SingleAsync(d => d.Id == id);
         doc.BillingUnits.Should().Be(10);
         doc.ReadAt.Should().NotBeNull();
