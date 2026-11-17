@@ -41,6 +41,8 @@ public class FlowDocument
 
     /// <summary>The flow version this document was processed under; null if the flow was never published.</summary>
     public int? FlowVersion { get; set; }
+    /// <summary>The document whose file this was split from; its own id for the first part. Set means: never split again.</summary>
+    public Guid? PartOfId { get; set; }
 
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

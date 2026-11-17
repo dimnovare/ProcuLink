@@ -1045,6 +1045,10 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("page_count");
 
+                    b.Property<Guid?>("PartOfId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("part_of_id");
+
                     b.Property<DateTime?>("ReadAt")
                         .HasColumnType("timestamptz")
                         .HasColumnName("read_at");
