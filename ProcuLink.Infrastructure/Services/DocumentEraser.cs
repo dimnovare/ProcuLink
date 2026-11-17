@@ -18,7 +18,7 @@ public sealed class DocumentEraser(
     ProcuLinkDbContext db, IFileStorageService storage, ILogger<DocumentEraser> logger) : IDocumentEraser
 {
     public const string AuditAction = "admin.documents_erased";
-    public const int MaxPerCall = 500;
+    public const int MaxPerCall = 100;
 
     public async Task<DocumentEraseReceipt> EraseAsync(Guid orgId, DocumentEraseFilter filter, string actor, CancellationToken ct)
     {
@@ -99,30 +99,28 @@ public sealed class DocumentEraser(
         await db.SaveChangesAsync(none);
         await tx.CommitAsync(none);
 
+        // A key carries the customer's file name, so no log line names one: the receipt lists them, the log counts them.
         var failed = new List<string>();
+        string? firstError = null;
         var keys = new HashSet<string>(knownKeys);
         foreach (var prefix in prefixes)
         {
             try { keys.UnionWith(await storage.ListKeysAsync(prefix, none)); }
-            catch (Exception ex)
-            {
-                failed.Add(prefix);
-                logger.LogError(ex, "Erase documents of {OrgId}: could not list {Prefix}.", orgId, prefix);
-            }
+            catch (Exception ex) { failed.Add(prefix); firstError ??= ex.GetType().Name; }
         }
         var blobs = 0;
         foreach (var key in keys)
         {
             try { await storage.DeleteAsync(key, none); blobs++; }
-            catch (Exception ex)
-            {
-                failed.Add(key);
-                logger.LogError(ex, "Erase documents of {OrgId}: failed to delete blob {Key}.", orgId, key);
-            }
+            catch (Exception ex) { failed.Add(key); firstError ??= ex.GetType().Name; }
         }
         var receipt = Receipt(rows["flow_documents"], skipped, more, rows, blobs, failed);
         Record(receipt);
         await db.SaveChangesAsync(none);
+
+        if (failed.Count > 0)
+            logger.LogError("Erase documents of {OrgId}: {Count} documents erased, {Failed} stored files or folders not removed (first error {Error}); they are listed in the receipt.",
+                orgId, receipt.DocumentsErased, failed.Count, firstError);
 
         logger.LogWarning("DOCUMENT ERASE: {Count} documents of {OrgId} erased by {Actor} — {Blobs} blobs, {Failed} failed, {Skipped} skipped, more {More}.",
             receipt.DocumentsErased, orgId, actor, blobs, failed.Count, skipped.Count, more);
