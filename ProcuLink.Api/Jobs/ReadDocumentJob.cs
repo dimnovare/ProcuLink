@@ -339,10 +339,6 @@ public class ReadDocumentJob(
         await FlowWebhook.EnqueueAsync(db, jobs, doc, FlowWebhookEvent.Read, logger, CancellationToken.None);
     }
 
-    /// <summary>
-    /// Documents 2..N go in through intake first, then the original keeps range 1 and is read again; a retry after a crash
-    /// in between re-creates no part (by name). The whole-file hash stays on the original, so the same file is still held at intake.
-    /// </summary>
     /// <summary>Every document's own PDF, cut before anything is written; null (read whole) when the file cannot be cut.</summary>
     private byte[][]? Cut(FlowDocument doc, byte[] bytes, IReadOnlyList<PageRange> ranges)
     {
@@ -354,6 +350,10 @@ public class ReadDocumentJob(
         }
     }
 
+    /// <summary>
+    /// Documents 2..N go in through intake first, then the original keeps range 1 and is read again; a retry after a crash
+    /// in between re-creates no part (by name). The whole-file hash stays on the original, so the same file is still held at intake.
+    /// </summary>
     private async Task SplitAsync(FlowDocument doc, byte[][] files, IReadOnlyList<PageRange> ranges, CancellationToken ct)
     {
         string Name(PageRange r) => ProcuLink.Api.Helpers.FileNameSanitiser.Sanitise(DocumentSplit.PartName(doc.FileName, r));
