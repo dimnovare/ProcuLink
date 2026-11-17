@@ -833,6 +833,33 @@ public sealed class AdminController : ControllerBase
         };
     }
 
+    // ── POST /api/admin/organisations/{orgId}/documents/erase ─────────────
+    /// <summary>
+    /// Hard-erases particular documents of one workspace on a written request, via
+    /// <see cref="IDocumentEraser"/>. Same slug guard as <see cref="EraseOrganisation"/>, and at least one
+    /// filter is required (400 <c>filter_required</c>). No <see cref="WriteAdminAuditAsync"/>: the eraser
+    /// keeps its own receipt in platform_audit_events.
+    /// </summary>
+    [HttpPost("organisations/{orgId:guid}/documents/erase")]
+    [ProducesResponseType(typeof(DocumentEraseReceipt), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> EraseDocuments(
+        Guid orgId, [FromBody] EraseDocumentsRequest request,
+        [FromServices] IDocumentEraser eraser, CancellationToken ct)
+    {
+        var slug = await _db.Organisations.Where(o => o.Id == orgId).Select(o => o.Slug).FirstOrDefaultAsync(ct);
+        if (slug is null) return NotFound(new { error = "Organisation not found." });
+        if (string.IsNullOrEmpty(request?.ConfirmSlug) || request.ConfirmSlug != slug)
+            return BadRequest(new { error = "confirmSlug must equal the organisation's slug exactly." });
+        if ((request.Ids is null || request.Ids.Count == 0) && request.ReceivedBefore is null)
+            return BadRequest(new { error = "filter_required" });
+
+        return Ok(await eraser.EraseAsync(
+            orgId, new DocumentEraseFilter(request.Ids, request.ReceivedBefore),
+            $"admin:{User.FindFirst("sub")?.Value}", ct));
+    }
+
     // ── Durable admin audit (GDPR Art.5(2) accountability) ────────────────────
 
     /// <summary>

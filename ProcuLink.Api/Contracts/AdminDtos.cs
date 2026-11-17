@@ -164,3 +164,9 @@ public sealed record OrgRetentionResponse(
 
 /// <summary>Body of <c>POST /api/admin/organisations/{orgId}/erase</c>: the org's exact slug, typed back.</summary>
 public sealed record EraseOrganisationRequest(string ConfirmSlug);
+
+/// <summary>
+/// Body of <c>POST /api/admin/organisations/{orgId}/documents/erase</c>: the org's exact slug, typed back,
+/// plus at least one filter (ids and/or a received-before date; both AND together).
+/// </summary>
+public sealed record EraseDocumentsRequest(string ConfirmSlug, IReadOnlyList<Guid>? Ids = null, DateTime? ReceivedBefore = null);
