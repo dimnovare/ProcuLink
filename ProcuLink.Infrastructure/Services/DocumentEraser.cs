@@ -41,9 +41,12 @@ public sealed class DocumentEraser(
         if (before is { } cutoff) matches = matches.Where(d => d.CreatedAt < cutoff);
         var sending = deliveries.Where(x => x.Status == FlowDeliveryStatus.Queued || x.Status == FlowDeliveryStatus.Delivering);
 
-        var skipped = await matches.Where(d => d.Status == DocumentStatus.Reading || sending.Any(x => x.DocumentId == d.Id))
+        // Sending: the sender sets it and uploads output files before it saves the delivery rows.
+        var skipped = await matches.Where(d => d.Status == DocumentStatus.Reading || d.Status == DocumentStatus.Sending
+                || sending.Any(x => x.DocumentId == d.Id))
             .OrderBy(d => d.CreatedAt).ThenBy(d => d.Id).Select(d => d.Id).ToListAsync(ct);
-        var docs = await matches.Where(d => d.Status != DocumentStatus.Reading && !sending.Any(x => x.DocumentId == d.Id))
+        var docs = await matches.Where(d => d.Status != DocumentStatus.Reading && d.Status != DocumentStatus.Sending
+                && !sending.Any(x => x.DocumentId == d.Id))
             .OrderBy(d => d.CreatedAt).ThenBy(d => d.Id).Take(MaxPerCall + 1)
             .Select(d => new { d.Id, d.SourceFileKey, d.ReadAt, d.IsSample, d.BillingUnits }).ToListAsync(ct);
         var more = docs.Count > MaxPerCall;

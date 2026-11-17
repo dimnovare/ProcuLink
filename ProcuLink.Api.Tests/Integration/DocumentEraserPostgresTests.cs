@@ -52,12 +52,24 @@ public sealed class DocumentEraserPostgresTests(PostgresContainerFixture postgre
             .Callback<string, CancellationToken>((k, _) => deletedKeys.Add(k)).Returns(Task.CompletedTask);
 
         await using var db = new ProcuLinkDbContext(_options!);
+        // Sending: output files may be uploaded before the delivery rows exist.
+        var a4 = Guid.NewGuid();
+        var flowId = await db.FlowDocuments.Where(d => d.Id == s.A3).Select(d => d.FlowId).SingleAsync();
+        db.FlowDocuments.Add(new FlowDocument
+        {
+            Id = a4, OrgId = s.A, FlowId = flowId,
+            FileName = "synthetic-a4.pdf", SourceFileKey = $"{s.A}/documents/{a4}/source.pdf", Sha256 = Guid.NewGuid().ToString("N"),
+            Status = DocumentStatus.Sending, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
         var r = await new DocumentEraser(db, storage.Object, NullLogger<DocumentEraser>.Instance)
-            .EraseAsync(s.A, new(Ids: [s.A1, s.A3, s.B1]), "test", ct);
+            .EraseAsync(s.A, new(Ids: [s.A1, s.A3, a4, s.B1]), "test", ct);
 
         r.DocumentsErased.Should().Be(1);
-        r.SkippedInFlight.Should().Equal(s.A3);
-        (await db.FlowDocuments.Where(d => d.OrgId == s.A).Select(d => d.Id).ToListAsync()).Should().BeEquivalentTo([s.A2, s.A3]);
+        r.SkippedInFlight.Should().BeEquivalentTo([s.A3, a4]);
+        (await db.FlowDocuments.Where(d => d.OrgId == s.A).Select(d => d.Id).ToListAsync()).Should().BeEquivalentTo([s.A2, s.A3, a4]);
         (await db.Set<FlowDelivery>().AnyAsync(d => d.DocumentId == s.A1)).Should().BeFalse();
         (await db.Set<FlowReadCall>().AnyAsync(c => c.DocumentId == s.A1)).Should().BeFalse();
         (await db.AuditEvents.AnyAsync(e => e.EntityId == s.A1)).Should().BeFalse();
