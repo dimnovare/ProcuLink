@@ -140,7 +140,7 @@ public sealed class R2StorageService : IFileStorageService, IAsyncDisposable
             response = await _client.ListObjectsV2Async(request, ct);
             keys.AddRange((response.S3Objects ?? []).Select(o => o.Key));
             request.ContinuationToken = response.NextContinuationToken;
-        } while (response.IsTruncated == true);
+        } while (response.IsTruncated == true && response.NextContinuationToken is not null);
         return keys;
     }
 
