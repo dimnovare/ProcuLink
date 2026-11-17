@@ -376,7 +376,7 @@ public sealed class StripeBillingService : IBillingService
         try
         {
             if (await GetLiveSubscriptionAsync(stripeSubscriptionId, ct) is not null) return true;
-            if (string.IsNullOrWhiteSpace(stripeCustomerId)) return false;
+            if (string.IsNullOrWhiteSpace(stripeCustomerId)) return null;
             var list = await Subscriptions().ListAsync(
                 new SubscriptionListOptions { Customer = stripeCustomerId, Status = "all", Limit = 100 },
                 cancellationToken: ct);

@@ -34,6 +34,8 @@ public class RunningSubscriptionLookupTests
         {
             Calls++;
             if (statuses is null) throw new StripeException(HttpStatusCode.InternalServerError, null, "test");
+            if (typeof(T) == typeof(Subscription))
+                return Task.FromResult((T)(IStripeEntity)new Subscription { Id = "sub_test", Status = statuses[0] });
             var list = new StripeList<Subscription>
             {
                 Data = statuses.Select(s => new Subscription { Id = "sub_test", Status = s }).ToList(),
@@ -66,6 +68,10 @@ public class RunningSubscriptionLookupTests
         var svc = Service(new ListingStripeClient(statuses), "sk_test_fake");
 
         (await svc.HasRunningSubscriptionAsync("cus_test", null)).Should().Be(expected);
+        // Subscription id only (the stub returns the first status): without a customer id the
+        // customer's other subscriptions cannot be seen, so a canceled one is unknown, never false.
+        (await svc.HasRunningSubscriptionAsync(null, "sub_test")).Should()
+            .Be(statuses is [var first, ..] && first != "canceled" ? true : null);
     }
 
     [Fact]

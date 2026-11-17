@@ -135,6 +135,8 @@ public interface IBillingService
 
     /// True when Stripe reports a running subscription for this customer or subscription id, false when it reports none,
     /// null when it could not be asked (not configured, no ids, an error, or more than one page of subscriptions).
+    /// A subscription id without a customer id answers true when that subscription runs, else null: the
+    /// customer's other subscriptions cannot be seen without the customer id.
     Task<bool?> HasRunningSubscriptionAsync(string? stripeCustomerId, string? stripeSubscriptionId, CancellationToken ct = default) =>
         Task.FromResult<bool?>(null);
 }
