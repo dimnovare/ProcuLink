@@ -23,6 +23,10 @@ public interface IFileStorageService
     /// </summary>
     Task<long?> TryGetSizeAsync(string key, CancellationToken ct) => Task.FromResult<long?>(null);
 
+    /// Every key that starts with prefix. A provider that cannot list throws; callers record the prefix as not cleaned.
+    Task<IReadOnlyList<string>> ListKeysAsync(string prefix, CancellationToken ct) =>
+        throw new NotSupportedException("This storage provider cannot list keys.");
+
     /// <summary>
     /// Does a REAL round trip to the storage backend and reports what came back.
     ///

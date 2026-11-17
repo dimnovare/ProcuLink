@@ -129,6 +129,21 @@ public sealed class R2StorageService : IFileStorageService, IAsyncDisposable
     }
 
     /// <inheritdoc/>
+    public async Task<IReadOnlyList<string>> ListKeysAsync(string prefix, CancellationToken ct)
+    {
+        var keys = new List<string>();
+        var request = new ListObjectsV2Request { BucketName = _bucketName, Prefix = prefix };
+        ListObjectsV2Response response;
+        do
+        {
+            response = await _client.ListObjectsV2Async(request, ct);
+            keys.AddRange((response.S3Objects ?? []).Select(o => o.Key));
+            request.ContinuationToken = response.NextContinuationToken;
+        } while (response.IsTruncated == true);
+        return keys;
+    }
+
+    /// <inheritdoc/>
     /// <remarks>
     /// A HEAD (GetObjectMetadata) against a key that is not expected to exist. This is the cheapest
     /// call that actually LEAVES THE PROCESS: it resolves <c>ServiceURL</c>, opens TLS, and gets the

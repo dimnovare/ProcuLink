@@ -70,6 +70,20 @@ public sealed class LocalFileStorageService : IFileStorageService
     }
 
     /// <inheritdoc/>
+    /// <remarks>Enumerates the prefix's directory (resolved by <see cref="GetFullPath"/>, so it cannot escape the root).</remarks>
+    public Task<IReadOnlyList<string>> ListKeysAsync(string prefix, CancellationToken ct)
+    {
+        var slash = prefix.LastIndexOf('/');
+        var dir = slash > 0 ? GetFullPath(prefix[..slash]) : BasePath;
+        IReadOnlyList<string> keys = !Directory.Exists(dir) ? [] : Directory
+            .EnumerateFiles(dir, "*", SearchOption.AllDirectories)
+            .Select(f => Path.GetRelativePath(BasePath, f).Replace(Path.DirectorySeparatorChar, '/'))
+            .Where(k => k.StartsWith(prefix, StringComparison.Ordinal))
+            .ToList();
+        return Task.FromResult(keys);
+    }
+
+    /// <inheritdoc/>
     /// <remarks>
     /// The local provider's "backend" is a directory, so the round trip is creating it and writing
     /// a byte. That is a genuine check of the only thing that can be wrong here (the temp root not
