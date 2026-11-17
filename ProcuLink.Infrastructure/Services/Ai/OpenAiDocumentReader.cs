@@ -74,7 +74,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
 
     public async Task<DocumentReadOutcome> ReadAsync(DocumentReadInput input, Guid organisationId, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(input.Text) && input.Pages is not { Count: > 0 }) return Fail("empty_document");
+        if (input.Scanned && input.Pages is not { Count: > 0 }) return Fail("empty_document");
         if (_client is null) return Fail("ai_unavailable");
 
         using var scope = _scopeFactory?.CreateScope();
@@ -170,7 +170,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
         var text = BuildUserMessage(input);
         if (input.Pages is not { Count: > 0 } pages) return [ChatMessageContentPart.CreateTextPart(text)];
         return pages.Select(png => ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(png), "image/png", ChatImageDetailLevel.High))
-            .Prepend(ChatMessageContentPart.CreateTextPart(text + (string.IsNullOrWhiteSpace(input.Text)
+            .Prepend(ChatMessageContentPart.CreateTextPart(text + (input.Scanned
                 ? "\nThe document is the attached page images, in page order."
                 : "\nThe attached page images show the same pages as the document text, in page order: use them to see the layout (logos, address blocks, columns, table rows).")));
     }

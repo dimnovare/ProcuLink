@@ -359,7 +359,8 @@ public sealed class ReadDocumentJobTests
     [Fact]
     public async Task A_long_pdf_is_read_ten_pages_at_a_time_up_to_page_100_and_billed_for_the_parts_read()
     {
-        var (job, db, reader, id) = Arrange(TextPdf(105));
+        var rasterizer = Rasterizer(105);
+        var (job, db, reader, id) = Arrange(TextPdf(105), rasterizer: rasterizer);
         var seen = new List<DocumentReadInput>();
         reader.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()))
             .ReturnsAsync((DocumentReadInput i, Guid _, CancellationToken _) =>
@@ -375,6 +376,8 @@ public sealed class ReadDocumentJobTests
         seen.Select(i => (i.Part, i.Parts)).Should().Equal(Enumerable.Range(1, 10).Select(n => (n, 10)));
         seen[1].Text.Should().Contain("=== Page 11 ===").And.Contain("=== Page 20 ===")
             .And.NotContain("=== Page 10 ===").And.NotContain("=== Page 21 ===");
+        seen.Should().OnlyContain(i => i.Pages!.Count == 10 && !i.Scanned);
+        Mock.Get(rasterizer).Verify(r => r.RenderPagesPng(It.IsAny<byte[]>(), 10, 90), Times.Once);
         var doc = await db.FlowDocuments.SingleAsync(d => d.Id == id);
         doc.BillingUnits.Should().Be(10);
         doc.ReadAt.Should().NotBeNull();

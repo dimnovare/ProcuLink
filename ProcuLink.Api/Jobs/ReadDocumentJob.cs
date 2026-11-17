@@ -229,7 +229,7 @@ public class ReadDocumentJob(
             }
             var partExpected = expected ?? (results.Count == 0 ? null : ReadMerge.KeysOf(ReadMerge.Merge(results, null)));
             var input = new DocumentReadInput(doc.FileName, doc.ContentType, partText, partExpected, partPages,
-                hints.Count > 0 ? hints : null, part, partCount);
+                hints.Count > 0 ? hints : null, part, partCount, scan);
             DocumentReadOutcome outcome;
             var tries = 0;
             do

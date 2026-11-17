@@ -84,4 +84,16 @@ public class PdfWordExtractorTests
         result.Words.Select(w => w.Text).Should().Equal("Acme", "Parts", "Total", "Sum");
         result.Text.Should().Contain("Acme Parts").And.Contain("Total Sum");
     }
+
+    [Fact]
+    public void Utf8_stored_as_windows_1252_is_repaired_in_both_text_and_words()
+    {
+        QuestPDF.Settings.License = LicenseType.Community;
+        var pdf = Document.Create(c => c.Page(p => { p.Size(PageSizes.A4); p.Margin(40); p.Content().Text("fÃ¼r"); })).GeneratePdf();
+
+        var result = PdfWordExtractor.Extract(pdf);
+
+        result.Words.Select(w => w.Text).Should().Equal("für");
+        result.Text.Should().Contain("für").And.NotContain("Ã");
+    }
 }

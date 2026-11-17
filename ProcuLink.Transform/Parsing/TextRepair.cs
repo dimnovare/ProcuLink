@@ -7,7 +7,7 @@ namespace ProcuLink.Transform.Parsing;
 public static class TextRepair
 {
     private static readonly Regex Suspect = new(
-        "[Â-ô][\u0080-¿ŒœŠšŸŽžƒˆ˜–—‘-„†-•…‰‹›€™]{1,3}",
+        "[\u00C2-\u00C5\u00E2][\u0080-\u00BF\u0152\u0153\u0160\u0161\u0178\u017D\u017E\u0192\u02C6\u02DC\u2013\u2014\u2018-\u201E\u2020-\u2022\u2026\u2030\u2039\u203A\u20AC\u2122]{1,3}",
         RegexOptions.Compiled);
 
     private static readonly Encoding Cp1252 =

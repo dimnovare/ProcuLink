@@ -170,13 +170,13 @@ public class OpenAiDocumentReaderTests
         byte[] png = [0x89, 0x50, 0x4E, 0x47];
 
         var outcome = await reader.ReadAsync(
-            new DocumentReadInput("scan.pdf", "application/pdf", "", null, [png, png]), Org, CancellationToken.None);
+            new DocumentReadInput("scan.pdf", "application/pdf", "=== Page 1 ===\n", null, [png, png], Scanned: true), Org, CancellationToken.None);
 
         outcome.Success.Should().BeTrue();
         var parts = captured.OfType<UserChatMessage>().Single().Content;
         parts.Where(p => p.Kind == ChatMessageContentPartKind.Image).Should().HaveCount(2)
             .And.OnlyContain(p => p.ImageBytes!.ToArray().SequenceEqual(png) && p.ImageBytesMediaType == "image/png");
-        parts.Should().Contain(p => p.Text != null && p.Text.Contains("attached page images"));
+        parts.Should().Contain(p => p.Text != null && p.Text.Contains("The document is the attached page images, in page order."));
     }
 
     private static async Task<List<ChatMessage>> CaptureAsync(DocumentReadInput input)

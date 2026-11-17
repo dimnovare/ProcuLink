@@ -31,7 +31,7 @@ public static class DocumentChecks
         {
             var field = read.Fields.FirstOrDefault(f => f.Key == flowField.Key);
             if (field is { NotOnPage: true })
-                Fail(NotOnPage, flowField.Key, $"{flowField.Label} is not on the page.");
+                Fail(NotOnPage, flowField.Key, $"{flowField.Label} isn't in the page's text. Check it against the page.");
             else if (field is null || string.IsNullOrWhiteSpace(field.Value))
                 Fail(RequiredMissing, flowField.Key, $"{flowField.Label} is required but was not found.");
             else if (field.Confidence < ReviewConfidence)
