@@ -27,10 +27,10 @@ public class OpenAiDocumentReaderTests
                    {"cells":[{"column":"desc","value":"Gadget","confidence":0.8}]}]}]}
         """;
 
-    private static (OpenAiDocumentReader Reader, Mock<ChatClient> Client) Create(IAiUsageTracker? tracker = null, string? model = null, Func<Guid, CancellationToken, Task<bool>>? noEgress = null)
+    private static (OpenAiDocumentReader Reader, Mock<ChatClient> Client) Create(IAiUsageTracker? tracker = null, string? model = null, Func<Guid, CancellationToken, Task<bool>>? noEgress = null, string json = CannedJson)
     {
         var client = new Mock<ChatClient>();
-        var completion = OpenAIChatModelFactory.ChatCompletion(content: new ChatMessageContent(CannedJson));
+        var completion = OpenAIChatModelFactory.ChatCompletion(content: new ChatMessageContent(json));
         client.Setup(c => c.CompleteChatAsync(
                 It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatCompletionOptions>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(ClientResult.FromValue(completion, Mock.Of<PipelineResponse>()));
@@ -313,8 +313,21 @@ public class OpenAiDocumentReaderTests
         await reader.ReadAsync(Input(), Org, CancellationToken.None);
         var whole = captured.OfType<UserChatMessage>().Single().Content[0].Text;
 
-        part.Should().StartWith("This is part 2 of 3 of one longer document. Read only what is in this part, and return a null value for an expected key that is not in this part.\n\n");
-        whole.Should().NotContain("of one longer document");
+        part.Should().StartWith("This is part 2 of 3 of one longer file. Read only what is in this part, and return a null value for an expected key that is not in this part.\n\n");
+        whole.Should().NotContain("of one longer file");
+    }
+
+    [Fact]
+    public async Task Reads_the_documents_in_the_file()
+    {
+        var (reader, _) = Create(json: """
+            {"kind_label":"Invoice","fields":[],"tables":[],
+             "documents":[{"first_page":1,"number":"INV-1001","is_copy":false},{"first_page":2,"number":"INV-1002","is_copy":false}]}
+            """);
+
+        var outcome = await reader.ReadAsync(Input(), Org, CancellationToken.None);
+
+        outcome.Documents.Should().Equal(new DocumentSpan(1, "INV-1001", false), new DocumentSpan(2, "INV-1002", false));
     }
 
     [Fact]
