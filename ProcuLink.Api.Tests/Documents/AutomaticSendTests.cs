@@ -149,6 +149,74 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
         jobs.Invocations.Should().ContainSingle(i => i.Method.Name == nameof(IBackgroundJobClient.Create));
     }
 
+    [Fact]
+    public void A_new_sender_is_not_sent_automatically()
+    {
+        var doc = new FlowDocument
+        {
+            Status = DocumentStatus.NeedsReview,
+            ChecksJson = DocumentJson.Serialize(new[] { new DocumentCheck(DocumentChecks.NewSender, false, null, "First document from this sender. Check it before sending.") }),
+        };
+        var jobs = new Mock<IBackgroundJobClient>();
+
+        SendDocumentJob.EnqueueIfAutomatic(jobs.Object, doc, new Flow { Automation = FlowAutomation.Auto });
+        jobs.Invocations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_first_document_from_an_email_address_waits_on_an_automatic_flow_only()
+    {
+        var now = DateTime.UtcNow;
+        Flow NewFlow(Guid org, string automation) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = org, Name = "Synthetic flow", FieldsConfirmed = true, Automation = automation, CreatedAt = now, UpdatedAt = now,
+            FieldsJson = DocumentJson.Serialize(FlowFieldList.Empty),
+        };
+        var (auto, manual, otherOrg) = (NewFlow(Org, FlowAutomation.Auto), NewFlow(Org, FlowAutomation.Review), NewFlow(DocumentEngineTestFactory.OrgB, FlowAutomation.Auto));
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        db.Flows.AddRange(auto, manual, otherOrg);
+        var rechecker = new DocumentRechecker(db, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), Mock.Of<IStandardValidator>());
+
+        async Task<FlowDocument> CheckAsync(Flow flow, string source, string? from, string status = DocumentStatus.Received)
+        {
+            var doc = new FlowDocument
+            {
+                Id = Guid.NewGuid(), OrgId = flow.OrgId, FlowId = flow.Id, FileName = "synthetic.csv", ContentType = "text/csv",
+                SourceFileKey = "k", Source = source, SourceRef = from, Status = status, CreatedAt = now, UpdatedAt = now,
+            };
+            db.FlowDocuments.Add(doc);
+            if (status == DocumentStatus.Received) await rechecker.ApplyAsync(doc, flow, new ReadResult("Invoice", []), CancellationToken.None);
+            await db.SaveChangesAsync();
+            return doc;
+        }
+        bool Held(FlowDocument doc) => DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).Any(c => c.Code == DocumentChecks.NewSender && !c.Passed);
+
+        var d1 = await CheckAsync(auto, IntakeKind.Email, "Bills@Example.test ");
+        Held(d1).Should().BeTrue();
+        d1.Status.Should().Be(DocumentStatus.NeedsReview);
+
+        d1.Status = DocumentStatus.Sent;
+        await db.SaveChangesAsync();
+        // Its own sent row never trusts it.
+        await rechecker.ApplyAsync(d1, auto, new ReadResult("Invoice", []), CancellationToken.None);
+        Held(d1).Should().BeTrue();
+        d1.Status = DocumentStatus.Sent;
+        await db.SaveChangesAsync();
+        Held(await CheckAsync(auto, IntakeKind.Email, " BILLS@example.test")).Should().BeFalse();
+        Held(await CheckAsync(manual, IntakeKind.Email, "stranger@example.test")).Should().BeFalse();
+        Held(await CheckAsync(auto, "upload", null)).Should().BeFalse();
+
+        // Another workspace's trust is not this one's.
+        await CheckAsync(otherOrg, IntakeKind.Email, "other@example.test", DocumentStatus.Sent);
+        Held(await CheckAsync(auto, IntakeKind.Email, "other@example.test")).Should().BeTrue();
+        Held(await CheckAsync(auto, IntakeKind.Imap, null)).Should().BeTrue();
+
+        // A file pickup named like an address trusts nobody.
+        await CheckAsync(auto, IntakeKind.Sftp, "pickup@example.test", DocumentStatus.Sent);
+        Held(await CheckAsync(auto, IntakeKind.Email, "pickup@example.test")).Should().BeTrue();
+    }
+
     /// <summary>
     /// An automatic flow with one output, holding one earlier document of a kind no other test uses (the class shares OrgA's data),
     /// and an inbox document of that kind from a new sender. Reads it twice: in the inbox, then in the flow it was sorted into.

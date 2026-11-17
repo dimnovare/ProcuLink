@@ -14,12 +14,13 @@ public static class DocumentChecks
     public const string LowConfidence = "low_confidence";
     public const string NotOnPage = "not_on_page";
     public const string Duplicate = "duplicate";
+    public const string NewSender = "new_sender";
     public const string TextTruncated = "text_truncated";
     public const string ArithmeticMismatch = "arithmetic_mismatch";
     public const string OutputRules = "output_rules";
 
     /// <summary>Failed checks only; an empty list means the document passed.</summary>
-    public static IReadOnlyList<DocumentCheck> Run(ReadResult read, FlowFieldList fields, bool fieldsConfirmed, bool duplicate)
+    public static IReadOnlyList<DocumentCheck> Run(ReadResult read, FlowFieldList fields, bool fieldsConfirmed, bool duplicate, bool newSender = false)
     {
         var failed = new List<DocumentCheck>();
         void Fail(string code, string? key, string message) => failed.Add(new DocumentCheck(code, false, key, message));
@@ -53,6 +54,7 @@ public static class DocumentChecks
         }
 
         if (duplicate) Fail(Duplicate, null, "A document with this number was already received.");
+        if (newSender) Fail(NewSender, null, "First document from this email address. Check it before sending.");
         if (read.Truncated) Fail(TextTruncated, null, "The document was too long to read in full.");
         return failed;
     }

@@ -84,6 +84,15 @@ public sealed class DocumentChecksTests
         DocumentChecks.DedupKeyOf(read).Should().BeNull();
     }
 
+    [Fact]
+    public void Run_fails_new_sender_only_when_asked()
+    {
+        var read = new ReadResult("Invoice", []);
+        DocumentChecks.Run(read, FlowFieldList.Empty, true, false, newSender: true).Should().ContainSingle()
+            .Which.Should().Be(new DocumentCheck("new_sender", false, null, "First document from this email address. Check it before sending."));
+        DocumentChecks.Run(read, FlowFieldList.Empty, true, false, newSender: false).Should().BeEmpty();
+    }
+
     private static ReadField M(string key, string value, string meaning) => F(key, key, value, FieldTypes.Money, meaning: meaning);
 
     private static ReadTable Lines(params (string Qty, string Price, string Amount)[] rows) => new("lines", "Lines",
