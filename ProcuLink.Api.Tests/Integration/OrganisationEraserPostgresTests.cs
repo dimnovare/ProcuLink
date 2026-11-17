@@ -117,6 +117,9 @@ public sealed class OrganisationEraserPostgresTests(PostgresContainerFixture pos
         storage.Invocations.Where(i => i.Method.Name == nameof(IFileStorageService.DeleteAsync))
             .Select(i => (string)i.Arguments[0]).Should().BeEquivalentTo(targetFiles,
             "every stored file the target owns, children included, and nothing of the other org's");
+        storage.Invocations.Where(i => i.Method.Name != nameof(IFileStorageService.DeleteAsync))
+            .Select(i => (i.Method.Name, (string)i.Arguments[0])).Should()
+            .Equal([(nameof(IFileStorageService.ListKeysAsync), $"{target}/documents/")], "the one other storage call is the documents listing");
     }
 
     [DockerRequiredFact]
