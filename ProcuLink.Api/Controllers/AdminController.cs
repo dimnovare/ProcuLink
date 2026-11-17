@@ -797,8 +797,9 @@ public sealed class AdminController : ControllerBase
     // ── POST /api/admin/organisations/{orgId}/erase ───────────────────────
     /// <summary>
     /// Hard-erases a whole workspace via <see cref="IOrganisationEraser"/>. The body must echo the
-    /// org's exact slug (400 otherwise) — the fat-finger guard. A live Stripe subscription or billed
-    /// overage refuses with 409. The receipt is returned and kept in platform_audit_events, because
+    /// org's exact slug (400 otherwise) — the fat-finger guard. A workspace that has paid goes only with
+    /// <c>agreementEnded</c>, once Stripe confirms live that nothing runs and no overage is unbilled; every
+    /// refusal is a 409. Its sign-in accounts are then removed at Clerk. The receipt is returned and kept in platform_audit_events, because
     /// the org's own audit_events are erased with it (so <see cref="WriteAdminAuditAsync"/> cannot hold it).
     /// </summary>
     [HttpPost("organisations/{orgId:guid}/erase")]
@@ -822,15 +823,45 @@ public sealed class AdminController : ControllerBase
         if (string.IsNullOrEmpty(request?.ConfirmSlug) || request.ConfirmSlug != slug)
             return BadRequest(new { error = "confirmSlug must equal the organisation's slug exactly." });
 
-        var receipt = await eraser.EraseAsync(
-            orgId, $"admin:{User.FindFirst("sub")?.Value}", "Erased from the admin customers table.", ct);
+        var receipt = await eraser.EraseOnRequestAsync(
+            orgId, $"admin:{User.FindFirst("sub")?.Value}", "Erased from the admin customers table.", request.AgreementEnded, ct);
         return receipt.Outcome switch
         {
             OrgEraseOutcome.Erased => Ok(receipt),
             OrgEraseOutcome.RefusedPaidSubscription => Conflict(new { error = "paid_subscription" }),
             OrgEraseOutcome.RefusedBillingEvidence => Conflict(new { error = "billing_evidence" }),
+            OrgEraseOutcome.RefusedRunningSubscription => Conflict(new { error = "subscription_running" }),
+            OrgEraseOutcome.RefusedSubscriptionUnknown => Conflict(new { error = "subscription_unknown" }),
+            OrgEraseOutcome.RefusedUnbilledOverage => Conflict(new { error = "unbilled_overage" }),
             _ => NotFound(new { error = "Organisation not found." }),
         };
+    }
+
+    // ── POST /api/admin/organisations/{orgId}/documents/erase ─────────────
+    /// <summary>
+    /// Hard-erases particular documents of one workspace on a written request, via
+    /// <see cref="IDocumentEraser"/>. Same slug guard as <see cref="EraseOrganisation"/>, and at least one
+    /// filter is required (400 <c>filter_required</c>). No <see cref="WriteAdminAuditAsync"/>: the eraser
+    /// keeps its own receipt in platform_audit_events.
+    /// </summary>
+    [HttpPost("organisations/{orgId:guid}/documents/erase")]
+    [ProducesResponseType(typeof(DocumentEraseReceipt), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> EraseDocuments(
+        Guid orgId, [FromBody] EraseDocumentsRequest request,
+        [FromServices] IDocumentEraser eraser, CancellationToken ct)
+    {
+        var slug = await _db.Organisations.Where(o => o.Id == orgId).Select(o => o.Slug).FirstOrDefaultAsync(ct);
+        if (slug is null) return NotFound(new { error = "Organisation not found." });
+        if (string.IsNullOrEmpty(request?.ConfirmSlug) || request.ConfirmSlug != slug)
+            return BadRequest(new { error = "confirmSlug must equal the organisation's slug exactly." });
+        if ((request.Ids is null || request.Ids.Count == 0) && request.ReceivedBefore is null)
+            return BadRequest(new { error = "filter_required" });
+
+        return Ok(await eraser.EraseAsync(
+            orgId, new DocumentEraseFilter(request.Ids, request.ReceivedBefore),
+            $"admin:{User.FindFirst("sub")?.Value}", ct));
     }
 
     // ── Durable admin audit (GDPR Art.5(2) accountability) ────────────────────

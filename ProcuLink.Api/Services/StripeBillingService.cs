@@ -357,9 +357,33 @@ public sealed class StripeBillingService : IBillingService
         try
         {
             var sub = await Subscriptions().GetAsync(subscriptionId, cancellationToken: ct);
-            return sub.Status is "canceled" or "incomplete_expired" ? null : sub;
+            return IsRunning(sub) ? sub : null;
         }
         catch (StripeException ex) when (ex.HttpStatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsRunning(Subscription sub) => sub.Status is not ("canceled" or "incomplete_expired");
+
+    public async Task<bool?> HasRunningSubscriptionAsync(
+        string? stripeCustomerId, string? stripeSubscriptionId, CancellationToken ct = default)
+    {
+        if (!IsStripeConfigured()
+            || (string.IsNullOrWhiteSpace(stripeCustomerId) && string.IsNullOrWhiteSpace(stripeSubscriptionId)))
+            return null;
+        try
+        {
+            if (await GetLiveSubscriptionAsync(stripeSubscriptionId, ct) is not null) return true;
+            if (string.IsNullOrWhiteSpace(stripeCustomerId)) return null;
+            var list = await Subscriptions().ListAsync(
+                new SubscriptionListOptions { Customer = stripeCustomerId, Status = "all", Limit = 100 },
+                cancellationToken: ct);
+            return list.HasMore ? null : list.Data.Any(IsRunning);
+        }
+        catch (Exception ex) when (ex is StripeException or HttpRequestException
+            || (ex is TaskCanceledException && !ct.IsCancellationRequested))
         {
             return null;
         }
@@ -955,11 +979,15 @@ public sealed class StripeBillingService : IBillingService
         return await ApplyMeterStatusFilter(monthOrders).CountAsync(ct) + await CountDocumentUnitsAsync(org.Id, monthStart, ct);
     }
 
-    /// <summary>Flow documents count their billing units once read (<c>ReadAt</c>); the delivered-only flag does not apply.</summary>
+    /// <summary>Flow documents count their billing units once read (<c>ReadAt</c>); the delivered-only flag does not apply.
+    /// Units of documents erased on request keep counting through <c>ErasedDocumentUnits</c>.</summary>
     private async Task<int> CountDocumentUnitsAsync(Guid orgId, DateTime since, CancellationToken ct, DateTime? until = null) =>
         await _db.FlowDocuments
             .Where(d => d.OrgId == orgId && !d.IsSample && d.ReadAt != null && d.ReadAt >= since && (until == null || d.ReadAt < until))
-            .SumAsync(d => d.BillingUnits, ct);
+            .SumAsync(d => d.BillingUnits, ct)
+        + await _db.ErasedDocumentUnits
+            .Where(u => u.OrgId == orgId && u.ReadAt >= since && (until == null || u.ReadAt < until))
+            .SumAsync(u => u.BillingUnits, ct);
 
     /// <summary>
     /// Applies the delivered-only status filter when <see cref="CountDeliveredOnlyFlagKey"/>

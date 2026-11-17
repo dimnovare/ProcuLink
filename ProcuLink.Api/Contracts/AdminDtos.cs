@@ -162,5 +162,14 @@ public sealed record OrgRetentionResponse(
     int? RetentionDays,
     bool RetentionEnabled);
 
-/// <summary>Body of <c>POST /api/admin/organisations/{orgId}/erase</c>: the org's exact slug, typed back.</summary>
-public sealed record EraseOrganisationRequest(string ConfirmSlug);
+/// <summary>
+/// Body of <c>POST /api/admin/organisations/{orgId}/erase</c>: the org's exact slug, typed back, and for a
+/// workspace that has paid, the operator's confirmation that its agreement has ended.
+/// </summary>
+public sealed record EraseOrganisationRequest(string ConfirmSlug, bool AgreementEnded = false);
+
+/// <summary>
+/// Body of <c>POST /api/admin/organisations/{orgId}/documents/erase</c>: the org's exact slug, typed back,
+/// plus at least one filter (ids and/or a received-before date; both AND together).
+/// </summary>
+public sealed record EraseDocumentsRequest(string ConfirmSlug, IReadOnlyList<Guid>? Ids = null, DateTime? ReceivedBefore = null);

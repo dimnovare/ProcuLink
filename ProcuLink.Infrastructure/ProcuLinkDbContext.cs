@@ -189,6 +189,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     // ── Document engine ──────────────────────────────────────────────────────
     public DbSet<Flow>                           Flows                         { get; set; } = null!;
     public DbSet<FlowDocument>                   FlowDocuments                 { get; set; } = null!;
+    public DbSet<ErasedDocumentUnit>             ErasedDocumentUnits           { get; set; } = null!;
     public DbSet<FlowIntake>                     FlowIntakes                   { get; set; } = null!;
     public DbSet<FlowIntakeItem>                 FlowIntakeItems               { get; set; } = null!;
     public DbSet<LinkedAccount>                  LinkedAccounts                { get; set; } = null!;
@@ -2326,6 +2327,18 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasIndex(c => c.DocumentId);
             b.HasOne<Organisation>().WithMany().HasForeignKey(c => c.OrgId).OnDelete(DeleteBehavior.Cascade);
             b.HasOne<FlowDocument>().WithMany().HasForeignKey(c => c.DocumentId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ErasedDocumentUnit>(b =>
+        {
+            b.ToTable("erased_document_units");
+            b.HasKey(u => u.Id);
+            b.Property(u => u.Id).HasColumnName("id");
+            b.Property(u => u.OrgId).HasColumnName("org_id");
+            b.Property(u => u.ReadAt).HasColumnName("read_at").HasColumnType("timestamptz");
+            b.Property(u => u.BillingUnits).HasColumnName("billing_units");
+            b.HasIndex(u => new { u.OrgId, u.ReadAt });
+            b.HasOne<Organisation>().WithMany().HasForeignKey(u => u.OrgId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<FlowSortMemory>(b =>

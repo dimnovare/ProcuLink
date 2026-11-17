@@ -770,6 +770,29 @@ public class AdminControllerTests
             .Should().NotBeNull("the account-status endpoint must exist on the gated controller");
     }
 
+    // ── document erase ─────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task EraseDocuments_RefusesAnEmptyFilterOrAWrongSlug_AndNeverCallsTheEraser()
+    {
+        var db = MakeDb();
+        var org = Org("docs erase test", PlanConstants.Growth, AccountStatusConstants.Active);
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+        var eraser = new Moq.Mock<ProcuLink.Core.Services.IDocumentEraser>();
+        var ctrl = Build(db);
+
+        var empty = await ctrl.EraseDocuments(org.Id, new("docs-erase-test"), eraser.Object, CancellationToken.None);
+        empty.Should().BeOfType<BadRequestObjectResult>().Subject.Value!.ToString().Should().Contain("filter_required");
+
+        var wrongSlug = await ctrl.EraseDocuments(
+            org.Id, new("docs-erase-tes", Ids: [Guid.NewGuid()]), eraser.Object, CancellationToken.None);
+        wrongSlug.Should().BeOfType<BadRequestObjectResult>();
+
+        eraser.Verify(e => e.EraseAsync(Moq.It.IsAny<Guid>(), Moq.It.IsAny<ProcuLink.Core.Services.DocumentEraseFilter>(),
+            Moq.It.IsAny<string>(), Moq.It.IsAny<CancellationToken>()), Moq.Times.Never());
+    }
+
     // ── bulk erase ─────────────────────────────────────────────────────────
 
     [Fact]
