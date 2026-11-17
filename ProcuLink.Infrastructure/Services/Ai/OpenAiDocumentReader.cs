@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
@@ -225,15 +226,25 @@ public sealed class OpenAiDocumentReader : IDocumentReader
                 columnKeys.TryAdd(c.Key, columnKey);
                 return new ReadColumn(columnKey, c.Label, Type(c.Type), Pinned(expected?.Tables.FirstOrDefault(x => x.Key == key)?.Columns.FirstOrDefault(x => x.Key == columnKey)?.Meaning, c.Meaning));
             }).ToList();
+            var figures = columns.Where(c => c.Meaning is FieldMeanings.LineQuantity or FieldMeanings.LineUnitPrice or FieldMeanings.LineAmount)
+                .Select(c => c.Key).ToHashSet();
             var rows = (t.Rows ?? []).Select(r => new ReadRow((r.Cells ?? [])
                 .GroupBy(c => columnKeys.GetValueOrDefault(c.Column) ?? FieldKey.Normalise(c.Column)).ToDictionary(
                     g => g.Key,
-                    g => new ReadCell(g.First().Value, Clamp(g.First().Confidence), null, false, false)))).ToList();
+                    g => new ReadCell(figures.Contains(g.Key) ? LeadingFigure(g.First().Value) : g.First().Value,
+                        Clamp(g.First().Confidence), null, false, false)))).ToList();
             return new ReadTable(key, t.Label, columns, rows, Listed: tableKeys?.Contains(key) ?? true);
         }).ToList();
 
         return new ReadResult(dto.KindLabel, fields, tables);
     }
+
+    // A figure followed by a unit, a currency or a price basis ("1 ST", "33,00/1JD", "2,43 EUR par 1 Pce") keeps the figure;
+    // a value that does not start with a figure, or holds nothing after it, is left as read.
+    private static readonly Regex FigureThenText = new(@"^\s*(-?\d(?:[\d.,' ]*\d)?)\s*[^\d\s.,'-].*$", RegexOptions.Singleline | RegexOptions.CultureInvariant);
+
+    internal static string? LeadingFigure(string? value) =>
+        value is not null && FigureThenText.Match(value) is { Success: true } m ? m.Groups[1].Value : value;
 
     private static BinaryData BuildSchema()
     {

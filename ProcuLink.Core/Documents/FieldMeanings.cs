@@ -116,7 +116,7 @@ public static class FieldMeanings
         [SenderVatId] = "the sender's VAT or tax registration number.",
         [ReceiverName] = "the party the document is addressed to: the supplier on an order, the customer on an invoice. Not the party at a delivery or ship-to address, unless no other party is named.",
         [Currency] = "the currency of the amounts, as printed (code or symbol), also when it is printed only next to the amounts.",
-        [TotalNet] = "the document's total before tax.",
+        [TotalNet] = "the document's total before tax, including charges such as shipping, handling or fees: the amount the tax is calculated on.",
         [TotalTax] = "the document's total tax.",
         [TotalGross] = "the document's total including tax: the amount to pay.",
         [Iban] = "the bank account (IBAN) to pay into.",
