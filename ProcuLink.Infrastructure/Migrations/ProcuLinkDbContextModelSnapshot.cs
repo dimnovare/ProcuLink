@@ -1092,6 +1092,10 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("text")
                         .HasColumnName("source_ref");
 
+                    b.Property<string>("SplitFileKey")
+                        .HasColumnType("text")
+                        .HasColumnName("split_file_key");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasColumnType("text")

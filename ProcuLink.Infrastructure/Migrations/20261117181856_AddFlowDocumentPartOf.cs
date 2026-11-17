@@ -16,6 +16,12 @@ namespace ProcuLink.Infrastructure.Migrations
                 table: "flow_documents",
                 type: "uuid",
                 nullable: true);
+
+            migrationBuilder.AddColumn<string>(
+                name: "split_file_key",
+                table: "flow_documents",
+                type: "text",
+                nullable: true);
         }
 
         /// <inheritdoc />
@@ -23,6 +29,10 @@ namespace ProcuLink.Infrastructure.Migrations
         {
             migrationBuilder.DropColumn(
                 name: "part_of_id",
+                table: "flow_documents");
+
+            migrationBuilder.DropColumn(
+                name: "split_file_key",
                 table: "flow_documents");
         }
     }

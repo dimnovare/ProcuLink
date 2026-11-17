@@ -208,6 +208,7 @@ public sealed class ReadDocumentJobTests
         var parts = docs.Where(d => d.Id != id).ToList();
         parts.Select(d => d.Sha256).Should().OnlyHaveUniqueItems();
         parts.Select(d => d.SourceFileKey).Should().OnlyHaveUniqueItems();
+        parts.Should().OnlyContain(d => d.SplitFileKey == "k");
         var original = docs.Single(d => d.Id == id);
         original.Status.Should().Be(DocumentStatus.Received);
         original.FileName.Should().Be("invoice (page 1).pdf");
@@ -242,6 +243,32 @@ public sealed class ReadDocumentJobTests
         doc.ReadAt.Should().NotBeNull();
         doc.Status.Should().BeOneOf(DocumentStatus.Ready, DocumentStatus.NeedsReview);
         (await db.AuditEvents.CountAsync(a => a.Action == "document.split")).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_document_read_before_is_not_split_on_a_later_read()
+    {
+        var (job, db, _, id) = Arrange(TextPdf(4), split: true,
+            documents: Enumerable.Range(1, 4).Select(n => new DocumentSpan(n, $"INV-100{n}", false)).ToList());
+        (await db.FlowDocuments.SingleAsync()).ReadAt = DateTime.UtcNow.AddDays(-1);
+        await db.SaveChangesAsync();
+
+        await job.ExecuteAsync(id, Org, null, CancellationToken.None);
+
+        (await db.FlowDocuments.CountAsync()).Should().Be(1);
+        (await db.AuditEvents.CountAsync(a => a.Action == "document.split")).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_long_file_name_still_splits_into_pdf_parts()
+    {
+        var (job, db, _, id) = Arrange(TextPdf(2), split: true, fileName: new string('a', 195) + ".pdf",
+            documents: [new DocumentSpan(1, "INV-1001", false), new DocumentSpan(2, "INV-1002", false)]);
+
+        await job.ExecuteAsync(id, Org, null, CancellationToken.None);
+
+        var names = await db.FlowDocuments.Select(d => d.FileName).ToListAsync();
+        names.Should().HaveCount(2).And.OnlyContain(n => n.EndsWith(".pdf"));
     }
 
     [Fact]

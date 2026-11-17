@@ -48,19 +48,19 @@ public sealed class DocumentIntakeService(
         }
     }
 
-    /// <summary>Whether a file already taken in, not yet read, may become <paramref name="documents"/> documents: the engine is on,
-    /// processing is allowed, and a trial's hard cap has room for every one of them, since none counts until it is read
+    /// <summary>Whether a file already taken in, not yet read, may become documents billing <paramref name="units"/> units in all:
+    /// the engine is on, processing is allowed, and a trial's hard cap has room for all of them, since none counts until it is read
     /// (paid plans never refuse on volume).</summary>
-    public async Task<bool> HasRoomForAsync(Guid orgId, int documents, CancellationToken ct)
+    public async Task<bool> HasRoomForAsync(Guid orgId, int units, CancellationToken ct)
     {
         if (!gate.IsEnabled(orgId)) return false;
         var status = await billing.GetStatusAsync(orgId, ct);
-        return status.CanProcessOrders && (status.Plan != PlanConstants.Pilot || status.OrdersThisMonth + documents <= status.OrderLimit);
+        return status.CanProcessOrders && (status.Plan != PlanConstants.Pilot || status.OrdersThisMonth + units <= status.OrderLimit);
     }
 
     public async Task<FlowDocument> AcceptAsync(
         Guid orgId, Guid flowId, Stream content, string fileName, string contentType,
-        string source, string? sourceRef, string? userId, CancellationToken ct, Guid? partOf = null)
+        string source, string? sourceRef, string? userId, CancellationToken ct, Guid? partOf = null, string? splitFileKey = null)
     {
         var safeName = FileNameSanitiser.Sanitise(fileName);
         var ext = FileNameSanitiser.GetExtension(fileName).TrimStart('.');
@@ -87,7 +87,7 @@ public sealed class DocumentIntakeService(
             Id = id, OrgId = orgId, FlowId = flowId, FileName = safeName, ContentType = contentType,
             SourceFileKey = key, Sha256 = sha, PageCount = pages, BillingUnits = units,
             Source = source, SourceRef = sourceRef, Status = DocumentStatus.Received, CreatedAt = now, UpdatedAt = now,
-            PartOfId = partOf,
+            PartOfId = partOf, SplitFileKey = splitFileKey,
         };
 
         // The inbox sorts documents on into flows, so a file the workspace already holds anywhere is held at the door.

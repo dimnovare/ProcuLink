@@ -329,6 +329,7 @@ public class AuditController : ControllerBase
         ["document.sorted"]          = "Put with a flow",
         ["document.moved"]           = "Moved to another flow",
         ["document.downloaded"]      = "Downloaded",
+        ["document.split"]           = "Split into documents",
     };
 
     private static string BuildMessage(string action, string? poNumber)

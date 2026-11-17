@@ -13,7 +13,7 @@ using ProcuLink.Infrastructure;
 namespace ProcuLink.Infrastructure.Migrations
 {
     [DbContext(typeof(ProcuLinkDbContext))]
-    [Migration("20261117174122_AddFlowDocumentPartOf")]
+    [Migration("20261117181856_AddFlowDocumentPartOf")]
     partial class AddFlowDocumentPartOf
     {
         /// <inheritdoc />
@@ -1094,6 +1094,10 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.Property<string>("SourceRef")
                         .HasColumnType("text")
                         .HasColumnName("source_ref");
+
+                    b.Property<string>("SplitFileKey")
+                        .HasColumnType("text")
+                        .HasColumnName("split_file_key");
 
                     b.Property<string>("Status")
                         .IsRequired()

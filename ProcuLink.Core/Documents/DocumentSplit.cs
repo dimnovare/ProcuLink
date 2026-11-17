@@ -23,7 +23,7 @@ public static class DocumentSplit
         for (var i = 0; i < valid.Count; i++)
         {
             var span = valid[i];
-            var number = span.Number is null ? null : DocumentChecks.NormalizeNumber(span.Number);
+            var number = string.IsNullOrWhiteSpace(span.Number) ? null : DocumentChecks.NormalizeNumber(span.Number);
             var copy = i > 0 && span.IsCopy && number is not null && kept.Contains(number);
             var continues = i > 0 && !copy && (number is not null
                 ? number == current
@@ -38,7 +38,12 @@ public static class DocumentSplit
         return ranges;
     }
 
-    /// <summary>The file name of one document cut out of a file: "{stem} (page a).pdf" or "{stem} (pages a-b).pdf".</summary>
-    public static string PartName(string fileName, PageRange r) =>
-        $"{Path.GetFileNameWithoutExtension(fileName)} ({(r.FirstPage == r.LastPage ? $"page {r.FirstPage}" : $"pages {r.FirstPage}-{r.LastPage}")}).pdf";
+    /// <summary>The file name of one document cut out of a file: "{stem} (page a).pdf" or "{stem} (pages a-b).pdf".
+    /// The stem is cut to 150 characters first, so the whole name stays inside a stored name's 200 and keeps its ".pdf".</summary>
+    public static string PartName(string fileName, PageRange r)
+    {
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        if (stem.Length > 150) stem = stem[..150];
+        return $"{stem} ({(r.FirstPage == r.LastPage ? $"page {r.FirstPage}" : $"pages {r.FirstPage}-{r.LastPage}")}).pdf";
+    }
 }

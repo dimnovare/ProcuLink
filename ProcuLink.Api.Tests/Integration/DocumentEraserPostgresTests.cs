@@ -137,6 +137,25 @@ public sealed class DocumentEraserPostgresTests(PostgresContainerFixture postgre
         }
     }
 
+    [DockerRequiredFact]
+    public async Task Erasing_a_part_of_a_split_file_deletes_the_whole_file_too()
+    {
+        var s = await SeedAsync();
+        var whole = $"{s.A}/documents/{s.A1}/synthetic-a1.pdf";
+        var deletedKeys = new List<string>();
+        var storage = new Mock<IFileStorageService>();
+        storage.Setup(x => x.ListKeysAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(new List<string>());
+        storage.Setup(x => x.DeleteAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Callback<string, CancellationToken>((k, _) => deletedKeys.Add(k)).Returns(Task.CompletedTask);
+        await using var db = new ProcuLinkDbContext(_options!);
+        await db.FlowDocuments.Where(d => d.Id == s.A2).ExecuteUpdateAsync(x => x.SetProperty(d => d.SplitFileKey, whole));
+
+        await new DocumentEraser(db, storage.Object, NullLogger<DocumentEraser>.Instance)
+            .EraseAsync(s.A, new(Ids: [s.A2]), "test", CancellationToken.None);
+
+        deletedKeys.Should().Contain(whole);
+    }
+
     private async Task<Seeded> SeedAsync()
     {
         await using var db = new ProcuLinkDbContext(_options!);

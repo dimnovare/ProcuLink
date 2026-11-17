@@ -293,13 +293,17 @@ public class ReadDocumentJob(
         // Another run may have finished this document meanwhile, or it was sorted into another flow: then this run writes nothing.
         var current = await db.FlowDocuments.AsNoTracking().Where(d => d.Id == doc.Id && d.OrgId == doc.OrgId).Select(d => new { d.Status, d.FlowId }).FirstAsync(ct);
         if (current.Status != DocumentStatus.Reading || current.FlowId != flow.Id) return;
-        // A file of several documents becomes one document each; a part is never split again, nor a file not read to its end.
-        if (isPdf && !doc.IsSample && doc.PartOfId is null && intake is not null && !read.Truncated)
+        // A file of several documents becomes one document each, on its first read only; a part is never split again,
+        // nor a file not read to its end (a text PDF's every window read).
+        if (isPdf && doc.ReadAt is null && !doc.IsSample && doc.PartOfId is null && intake is not null && !read.Truncated
+            && (scanPdf || textWindows.Count == ReadLimits.UnitsFor(pdfPages)))
         {
             var ranges = DocumentSplit.Ranges(starts, pdfPages);
-            if (!ranges.SequenceEqual([new PageRange(1, pdfPages)]) && await intake.HasRoomForAsync(doc.OrgId, ranges.Count, ct))
+            if (!ranges.SequenceEqual([new PageRange(1, pdfPages)])
+                && await intake.HasRoomForAsync(doc.OrgId, ranges.Sum(r => ReadLimits.UnitsFor(r.LastPage - r.FirstPage + 1)), ct)
+                && Cut(doc, bytes, ranges) is { } files)
             {
-                await SplitAsync(doc, bytes, ranges, ct);
+                await SplitAsync(doc, files, ranges, ct);
                 return;
             }
         }
@@ -339,21 +343,33 @@ public class ReadDocumentJob(
     /// Documents 2..N go in through intake first, then the original keeps range 1 and is read again; a retry after a crash
     /// in between re-creates no part (by name). The whole-file hash stays on the original, so the same file is still held at intake.
     /// </summary>
-    private async Task SplitAsync(FlowDocument doc, byte[] bytes, IReadOnlyList<PageRange> ranges, CancellationToken ct)
+    /// <summary>Every document's own PDF, cut before anything is written; null (read whole) when the file cannot be cut.</summary>
+    private byte[][]? Cut(FlowDocument doc, byte[] bytes, IReadOnlyList<PageRange> ranges)
+    {
+        try { return ranges.Select(r => PdfPages.Take(bytes, r.FirstPage, r.LastPage)).ToArray(); }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            logger.LogWarning(e, "Document {DocumentId} could not be cut into its documents; it is read as one.", doc.Id);
+            return null;
+        }
+    }
+
+    private async Task SplitAsync(FlowDocument doc, byte[][] files, IReadOnlyList<PageRange> ranges, CancellationToken ct)
     {
         string Name(PageRange r) => ProcuLink.Api.Helpers.FileNameSanitiser.Sanitise(DocumentSplit.PartName(doc.FileName, r));
         var done = await db.FlowDocuments.Where(d => d.OrgId == doc.OrgId && d.PartOfId == doc.Id).Select(d => d.FileName).ToListAsync(ct);
-        foreach (var r in ranges.Skip(1).Where(r => !done.Contains(Name(r))))
-            await intake!.AcceptAsync(doc.OrgId, doc.FlowId, new MemoryStream(PdfPages.Take(bytes, r.FirstPage, r.LastPage)), Name(r),
-                doc.ContentType, doc.Source, doc.SourceRef, null, ct, partOf: doc.Id);
+        for (var i = 1; i < ranges.Count; i++)
+            if (!done.Contains(Name(ranges[i])))
+                await intake!.AcceptAsync(doc.OrgId, doc.FlowId, new MemoryStream(files[i]), Name(ranges[i]),
+                    doc.ContentType, doc.Source, doc.SourceRef, null, ct, partOf: doc.Id, splitFileKey: doc.SourceFileKey);
 
-        var first = ranges[0];
+        var (first, file) = (ranges[0], doc.FileName);
         var key = $"{doc.OrgId}/documents/{doc.Id}/{Name(first)}";
-        await storage.UploadAsync(new MemoryStream(PdfPages.Take(bytes, first.FirstPage, first.LastPage)), key, doc.ContentType, ct);
+        await storage.UploadAsync(new MemoryStream(files[0]), key, doc.ContentType, ct);
         var pages = first.LastPage - first.FirstPage + 1;
         (doc.SourceFileKey, doc.FileName, doc.PageCount, doc.BillingUnits) = (key, Name(first), pages, ReadLimits.UnitsFor(pages));
         (doc.PartOfId, doc.Status, doc.UpdatedAt) = (doc.Id, DocumentStatus.Received, DateTime.UtcNow);
-        AddAudit(doc, "document.split", new { documents = ranges.Count });
+        AddAudit(doc, "document.split", new { documents = ranges.Count, file });
         await db.SaveChangesAsync(ct);
         Enqueue(jobs, doc.Id, doc.OrgId);
     }

@@ -43,6 +43,8 @@ public class FlowDocument
     public int? FlowVersion { get; set; }
     /// <summary>The document whose file this was split from; its own id for the first part. Set means: never split again.</summary>
     public Guid? PartOfId { get; set; }
+    /// <summary>On a document cut out of a file: the storage key of the whole file, erased with this document.</summary>
+    public string? SplitFileKey { get; set; }
 
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

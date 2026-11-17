@@ -51,7 +51,7 @@ public sealed class DocumentEraser(
             .OrderBy(d => d.CreatedAt).ThenBy(d => d.Id).Select(d => d.Id).ToListAsync(ct);
         var docs = await matches.Where(idle)
             .OrderBy(d => d.CreatedAt).ThenBy(d => d.Id).Take(MaxPerCall + 1)
-            .Select(d => new { d.Id, d.SourceFileKey, d.ReadAt, d.IsSample, d.BillingUnits }).ToListAsync(ct);
+            .Select(d => new { d.Id, d.SourceFileKey, d.SplitFileKey, d.ReadAt, d.IsSample, d.BillingUnits }).ToListAsync(ct);
         var more = docs.Count > MaxPerCall;
         if (more) docs.RemoveAt(MaxPerCall);
         if (docs.Count == 0) return Receipt(skipped: skipped, more: more);
@@ -59,7 +59,8 @@ public sealed class DocumentEraser(
         var docIds = docs.Select(d => d.Id).ToList();
         var linked = docIds.Select(id => (Guid?)id).ToList();
         var batchDeliveries = deliveries.Where(x => docIds.Contains(x.DocumentId));
-        var knownKeys = docs.Select(d => d.SourceFileKey)
+        // A part of a split file takes the whole file with it: its pages are in there too.
+        var knownKeys = docs.Select(d => d.SourceFileKey).Concat(docs.Select(d => d.SplitFileKey ?? ""))
             .Concat(await batchDeliveries.Where(x => x.ArtifactKey != null).Select(x => x.ArtifactKey!).ToListAsync(ct))
             .Where(k => k != "").Distinct().ToList();
         var prefixes = docIds.Select(id => $"{orgId}/documents/{id}/").ToList();
