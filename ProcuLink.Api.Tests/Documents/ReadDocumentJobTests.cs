@@ -111,7 +111,8 @@ public sealed class ReadDocumentJobTests
         byte[] pdf, bool scans = false, string fileName = "invoice.pdf", IPdfRasterizer? rasterizer = null,
         IReadOnlyList<PageWord>? ocrWords = null, ReadField[]? readFields = null, bool fieldsConfirmed = true,
         Func<IReadOnlyList<byte[]>, IReadOnlyList<PageWord>>? ocrPages = null, Func<DateTime>? utcNow = null,
-        Hangfire.IBackgroundJobClient? jobs = null, TimeSpan? readBudget = null, ILogger<ReadDocumentJob>? logger = null, bool pageImagesWithText = true)
+        Hangfire.IBackgroundJobClient? jobs = null, TimeSpan? readBudget = null, ILogger<ReadDocumentJob>? logger = null, bool pageImagesWithText = true,
+        bool split = false, IReadOnlyList<DocumentSpan>? documents = null)
     {
         var db = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase($"read-job-{Guid.NewGuid()}").Options);
@@ -140,20 +141,72 @@ public sealed class ReadDocumentJobTests
                 new ReadField("document_number", "Invoice number", "4471", FieldTypes.Text, null, 0.95, null, false, false, false),
                 new ReadField("total_gross", "Total", "2380.00", FieldTypes.Money, null, 0.95, null, false, false, false),
                 new ReadField("sender_name", "Sender", "Imaginary Supplier Oy", FieldTypes.Text, null, 0.95, null, false, false, false),
-            ]), null));
+            ]), null, Documents: documents));
 
         var ocr = new Mock<IDocumentOcrService>();
         ocr.Setup(o => o.ReadWordsAsync(It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<byte[]> images, CancellationToken _) => ocrPages?.Invoke(images) ?? ocrWords ?? []);
         var gate = new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions { EnabledForAll = true, ScansForAll = scans, PageImagesWithText = pageImagesWithText }));
-        var job = new ReadDocumentJob(db, storage.Object, reader.Object, new DocumentRechecker(db, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), Moq.Mock.Of<ProcuLink.Core.Documents.IStandardValidator>()), jobs ?? Mock.Of<Hangfire.IBackgroundJobClient>(),
-            rasterizer ?? Mock.Of<IPdfRasterizer>(), ocr.Object, gate, new ProcuLink.Transform.Tokenizing.SourceTokenizer(), logger ?? NullLogger<ReadDocumentJob>.Instance)
+        jobs ??= Mock.Of<Hangfire.IBackgroundJobClient>();
+        var job = new ReadDocumentJob(db, storage.Object, reader.Object, new DocumentRechecker(db, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), Moq.Mock.Of<ProcuLink.Core.Documents.IStandardValidator>()), jobs,
+            rasterizer ?? Mock.Of<IPdfRasterizer>(), ocr.Object, gate, new ProcuLink.Transform.Tokenizing.SourceTokenizer(), logger ?? NullLogger<ReadDocumentJob>.Instance,
+            split ? new DocumentIntakeService(db, storage.Object, jobs, gate, TestDoubles.PermissiveBilling.Mock().Object, NullLogger<DocumentIntakeService>.Instance) : null)
         {
             UtcNow = utcNow ?? (() => DateTime.UtcNow),
             ReadBudget = readBudget ?? TimeSpan.FromMinutes(20),
             RetryDelay = TimeSpan.Zero,
         };
         return (job, db, reader, doc.Id);
+    }
+
+    [Fact]
+    public async Task A_file_of_four_invoices_becomes_four_documents_each_on_its_own_pages()
+    {
+        var jobs = new Mock<Hangfire.IBackgroundJobClient>();
+        var (job, db, _, id) = Arrange(TextPdf(4), jobs: jobs.Object, split: true,
+            documents: Enumerable.Range(1, 4).Select(n => new DocumentSpan(n, $"INV-100{n}", false)).ToList());
+
+        await job.ExecuteAsync(id, Org, null, CancellationToken.None);
+
+        var docs = await db.FlowDocuments.AsNoTracking().ToListAsync();
+        docs.Should().HaveCount(4).And.OnlyContain(d => d.PartOfId == id && d.PageCount == 1 && d.BillingUnits == 1 && d.ReadAt == null);
+        var parts = docs.Where(d => d.Id != id).ToList();
+        parts.Select(d => d.Sha256).Should().OnlyHaveUniqueItems();
+        parts.Select(d => d.SourceFileKey).Should().OnlyHaveUniqueItems();
+        var original = docs.Single(d => d.Id == id);
+        original.Status.Should().Be(DocumentStatus.Received);
+        original.FileName.Should().Be("invoice (page 1).pdf");
+        (await db.AuditEvents.CountAsync(a => a.EntityId == id && a.Action == "document.split")).Should().Be(1);
+        jobs.Verify(j => j.Create(It.IsAny<Hangfire.Common.Job>(), It.IsAny<Hangfire.States.IState>()), Times.Exactly(4));
+    }
+
+    [Fact]
+    public async Task A_file_printed_three_times_is_one_document_read_on_its_first_copy()
+    {
+        var (job, db, _, id) = Arrange(TextPdf(3), split: true,
+            documents: [new DocumentSpan(1, "PO-77", false), new DocumentSpan(2, "PO-77", true), new DocumentSpan(3, "PO-77", true)]);
+
+        await job.ExecuteAsync(id, Org, null, CancellationToken.None);
+
+        var doc = await db.FlowDocuments.AsNoTracking().SingleAsync();
+        doc.PageCount.Should().Be(1);
+        doc.Status.Should().Be(DocumentStatus.Received);
+    }
+
+    [Fact]
+    public async Task A_part_of_a_split_file_is_never_split_again()
+    {
+        var (job, db, _, id) = Arrange(TextPdf(4), split: true,
+            documents: Enumerable.Range(1, 4).Select(n => new DocumentSpan(n, $"INV-100{n}", false)).ToList());
+        (await db.FlowDocuments.SingleAsync()).PartOfId = Guid.NewGuid();
+        await db.SaveChangesAsync();
+
+        await job.ExecuteAsync(id, Org, null, CancellationToken.None);
+
+        var doc = await db.FlowDocuments.AsNoTracking().SingleAsync();
+        doc.ReadAt.Should().NotBeNull();
+        doc.Status.Should().BeOneOf(DocumentStatus.Ready, DocumentStatus.NeedsReview);
+        (await db.AuditEvents.CountAsync(a => a.Action == "document.split")).Should().Be(0);
     }
 
     [Fact]

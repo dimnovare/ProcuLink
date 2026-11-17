@@ -18,7 +18,8 @@ namespace ProcuLink.Api.Jobs;
 public class ReadDocumentJob(
     ProcuLinkDbContext db, IFileStorageService storage, IDocumentReader reader,
     DocumentRechecker rechecker, IBackgroundJobClient jobs, IPdfRasterizer rasterizer, IDocumentOcrService ocr,
-    DocumentEngineGate gate, ProcuLink.Transform.Tokenizing.ISourceTokenizer tokenizer, ILogger<ReadDocumentJob> logger)
+    DocumentEngineGate gate, ProcuLink.Transform.Tokenizing.ISourceTokenizer tokenizer, ILogger<ReadDocumentJob> logger,
+    DocumentIntakeService? intake = null)
 {
     private const int MaxChars = 60_000;
     private const int MinWordsPerTextPage = 5;
@@ -191,6 +192,7 @@ public class ReadDocumentJob(
             : spans is not null ? ValueLocator.LocateInSpans(value, spans) : ValueLocator.LocateInCells(value, cells);
 
         var results = new List<ReadResult>();
+        var starts = new List<DocumentSpan>();
         var partCount = scanPdf ? ReadLimits.UnitsFor(pdfPages) : parts.Count;
         static string? Failure(DocumentReadOutcome o) => o.Success && o.Result is not null ? null : o.FailureReason ?? "ai_error";
         for (var part = 1; part <= partCount; part++)
@@ -260,6 +262,7 @@ public class ReadDocumentJob(
             }
 
             var r = outcome.Result!;
+            starts.AddRange(outcome.Documents ?? []);
             results.Add(new ReadResult(r.KindLabel,
                 r.Fields.Select(f => f with { Location = Find(f.Value, partWords) }).ToList(),
                 r.Tables.Select(t => t with
@@ -287,6 +290,16 @@ public class ReadDocumentJob(
         // Another run may have finished this document meanwhile, or it was sorted into another flow: then this run writes nothing.
         var current = await db.FlowDocuments.AsNoTracking().Where(d => d.Id == doc.Id && d.OrgId == doc.OrgId).Select(d => new { d.Status, d.FlowId }).FirstAsync(ct);
         if (current.Status != DocumentStatus.Reading || current.FlowId != flow.Id) return;
+        // A file of several documents becomes one document each; a part is never split again.
+        if (isPdf && !doc.IsSample && doc.PartOfId is null && intake is not null)
+        {
+            var ranges = DocumentSplit.Ranges(starts, pdfPages);
+            if (!ranges.SequenceEqual([new PageRange(1, pdfPages)]))
+            {
+                await SplitAsync(doc, bytes, ranges, ct);
+                return;
+            }
+        }
         await rechecker.ApplyAsync(doc, flow, read, ct, config);
         doc.ReadJson = DocumentJson.Serialize(read);
         // The first successful read is the billed one: a re-read after sorting keeps its time and units.
@@ -317,6 +330,29 @@ public class ReadDocumentJob(
         if (doc.SortUnconfirmed) return;
         // Committed: a shutdown must not skip the announcement or throw.
         await FlowWebhook.EnqueueAsync(db, jobs, doc, FlowWebhookEvent.Read, logger, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Documents 2..N go in through intake first, then the original keeps range 1 and is read again; a retry after a crash
+    /// in between re-creates no part (by name). The whole-file hash stays on the original, so the same file is still held at intake.
+    /// </summary>
+    private async Task SplitAsync(FlowDocument doc, byte[] bytes, IReadOnlyList<PageRange> ranges, CancellationToken ct)
+    {
+        string Name(PageRange r) => ProcuLink.Api.Helpers.FileNameSanitiser.Sanitise(DocumentSplit.PartName(doc.FileName, r));
+        var done = await db.FlowDocuments.Where(d => d.OrgId == doc.OrgId && d.PartOfId == doc.Id).Select(d => d.FileName).ToListAsync(ct);
+        foreach (var r in ranges.Skip(1).Where(r => !done.Contains(Name(r))))
+            await intake!.AcceptAsync(doc.OrgId, doc.FlowId, new MemoryStream(PdfPages.Take(bytes, r.FirstPage, r.LastPage)), Name(r),
+                doc.ContentType, doc.Source, doc.SourceRef, null, ct, partOf: doc.Id);
+
+        var first = ranges[0];
+        var key = $"{doc.OrgId}/documents/{doc.Id}/{Name(first)}";
+        await storage.UploadAsync(new MemoryStream(PdfPages.Take(bytes, first.FirstPage, first.LastPage)), key, doc.ContentType, ct);
+        var pages = first.LastPage - first.FirstPage + 1;
+        (doc.SourceFileKey, doc.FileName, doc.PageCount, doc.BillingUnits) = (key, Name(first), pages, ReadLimits.UnitsFor(pages));
+        (doc.PartOfId, doc.Status, doc.UpdatedAt) = (doc.Id, DocumentStatus.Received, DateTime.UtcNow);
+        AddAudit(doc, "document.split", new { documents = ranges.Count });
+        await db.SaveChangesAsync(ct);
+        Enqueue(jobs, doc.Id, doc.OrgId);
     }
 
     /// <summary>
