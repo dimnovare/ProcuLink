@@ -198,14 +198,23 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
 
         d1.Status = DocumentStatus.Sent;
         await db.SaveChangesAsync();
-        Held(await CheckAsync(auto, IntakeKind.Email, "bills@example.test")).Should().BeFalse();
+        // Its own sent row never trusts it.
+        await rechecker.ApplyAsync(d1, auto, new ReadResult("Invoice", []), CancellationToken.None);
+        Held(d1).Should().BeTrue();
+        d1.Status = DocumentStatus.Sent;
+        await db.SaveChangesAsync();
+        Held(await CheckAsync(auto, IntakeKind.Email, " BILLS@example.test")).Should().BeFalse();
         Held(await CheckAsync(manual, IntakeKind.Email, "stranger@example.test")).Should().BeFalse();
         Held(await CheckAsync(auto, "upload", null)).Should().BeFalse();
 
         // Another workspace's trust is not this one's.
         await CheckAsync(otherOrg, IntakeKind.Email, "other@example.test", DocumentStatus.Sent);
         Held(await CheckAsync(auto, IntakeKind.Email, "other@example.test")).Should().BeTrue();
-        Held(await CheckAsync(auto, IntakeKind.Email, null)).Should().BeTrue();
+        Held(await CheckAsync(auto, IntakeKind.Imap, null)).Should().BeTrue();
+
+        // A file pickup named like an address trusts nobody.
+        await CheckAsync(auto, IntakeKind.Sftp, "pickup@example.test", DocumentStatus.Sent);
+        Held(await CheckAsync(auto, IntakeKind.Email, "pickup@example.test")).Should().BeTrue();
     }
 
     /// <summary>

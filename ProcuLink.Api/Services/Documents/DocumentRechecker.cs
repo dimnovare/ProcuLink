@@ -48,7 +48,7 @@ public sealed class DocumentRechecker(ProcuLinkDbContext db, DocumentEngineGate 
         var newSender = flow.Automation == FlowAutomation.Auto && !doc.IsSample && doc.Source is IntakeKind.Email or IntakeKind.Imap
             && (doc.SourceRef?.Trim().ToLowerInvariant() is not { Length: > 0 } sender
                 || !await db.FlowDocuments.AnyAsync(d => d.OrgId == doc.OrgId && d.Id != doc.Id && !d.IsSample
-                    && d.Status == DocumentStatus.Sent && d.SourceRef != null && d.SourceRef.Trim().ToLower() == sender, ct));
+                    && (d.Source == IntakeKind.Email || d.Source == IntakeKind.Imap) && d.Status == DocumentStatus.Sent && d.SourceRef != null && d.SourceRef.Trim().ToLower() == sender, ct));
 
         config ??= await FlowConfigLoader.CurrentAsync(db, flow, ct);
         doc.FlowVersion = config.VersionNo;
