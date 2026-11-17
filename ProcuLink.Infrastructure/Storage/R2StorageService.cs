@@ -131,6 +131,7 @@ public sealed class R2StorageService : IFileStorageService, IAsyncDisposable
     /// <inheritdoc/>
     public async Task<IReadOnlyList<string>> ListKeysAsync(string prefix, CancellationToken ct)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(prefix);
         var keys = new List<string>();
         var request = new ListObjectsV2Request { BucketName = _bucketName, Prefix = prefix };
         ListObjectsV2Response response;

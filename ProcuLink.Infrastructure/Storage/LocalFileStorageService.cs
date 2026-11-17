@@ -73,6 +73,7 @@ public sealed class LocalFileStorageService : IFileStorageService
     /// <remarks>Enumerates the prefix's directory (resolved by <see cref="GetFullPath"/>, so it cannot escape the root).</remarks>
     public Task<IReadOnlyList<string>> ListKeysAsync(string prefix, CancellationToken ct)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(prefix);
         var slash = prefix.LastIndexOf('/');
         var dir = slash > 0 ? GetFullPath(prefix[..slash]) : BasePath;
         IReadOnlyList<string> keys = !Directory.Exists(dir) ? [] : Directory

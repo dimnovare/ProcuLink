@@ -21,6 +21,7 @@ public class LocalFileStorageListTests
             var listed = await storage.ListKeysAsync($"{root}/documents/d1/", default);
 
             listed.Should().BeEquivalentTo(keys[0], keys[1]);
+            await storage.Invoking(s => s.ListKeysAsync("", default)).Should().ThrowAsync<ArgumentException>();
         }
         finally
         {
