@@ -29,14 +29,14 @@ public static class PdfWordExtractor
                 var b = w.BoundingBox;
                 var x = Clamp(b.Left / page.Width);
                 var y = Clamp(1 - b.Top / page.Height);
-                words.Add(new PageWord(w.Text, page.Number, new Box(
+                words.Add(new PageWord(TextRepair.RepairMojibake(w.Text), page.Number, new Box(
                     x, y,
                     Math.Min(Clamp((b.Right - b.Left) / page.Width), 1 - x),
                     Math.Min(Clamp((b.Top - b.Bottom) / page.Height), 1 - y))));
             }
 
             var text = new StringBuilder().Append("=== Page ").Append(page.Number).Append(" ===\n");
-            foreach (var line in lines) text.Append(string.Join(" ", line.Select(w => w.Text))).Append('\n');
+            foreach (var line in lines) text.Append(string.Join(" ", line.Select(w => TextRepair.RepairMojibake(w.Text)))).Append('\n');
             pageTexts.Add(text.ToString());
         }
 
