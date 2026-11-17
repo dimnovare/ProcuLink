@@ -3,6 +3,7 @@ using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Helpers;
 using ProcuLink.Api.Jobs;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -45,6 +46,15 @@ public sealed class DocumentIntakeService(
         {
             return new(null, e.Code, null);
         }
+    }
+
+    /// <summary>Whether a file already taken in may become <paramref name="extra"/> more documents: the engine is on, processing
+    /// is allowed, and a trial's hard cap has room for them (paid plans never refuse on volume).</summary>
+    public async Task<bool> HasRoomForAsync(Guid orgId, int extra, CancellationToken ct)
+    {
+        if (!gate.IsEnabled(orgId)) return false;
+        var status = await billing.GetStatusAsync(orgId, ct);
+        return status.CanProcessOrders && (status.Plan != PlanConstants.Pilot || status.OrdersThisMonth + extra <= status.OrderLimit);
     }
 
     public async Task<FlowDocument> AcceptAsync(

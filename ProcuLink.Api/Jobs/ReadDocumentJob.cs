@@ -262,7 +262,10 @@ public class ReadDocumentJob(
             }
 
             var r = outcome.Result!;
-            starts.AddRange(outcome.Documents ?? []);
+            // A start counts only inside the pages this part holds, so the documents never outnumber the pages read.
+            var (winFrom, winTo) = textWindows.Count > 0 ? textWindows[part - 1]
+                : ((part - 1) * ReadLimits.PagesPerUnit + 1, Math.Min(part * ReadLimits.PagesPerUnit, pdfPages));
+            starts.AddRange((outcome.Documents ?? []).Where(s => s.FirstPage >= winFrom && s.FirstPage <= winTo));
             results.Add(new ReadResult(r.KindLabel,
                 r.Fields.Select(f => f with { Location = Find(f.Value, partWords) }).ToList(),
                 r.Tables.Select(t => t with
@@ -290,11 +293,11 @@ public class ReadDocumentJob(
         // Another run may have finished this document meanwhile, or it was sorted into another flow: then this run writes nothing.
         var current = await db.FlowDocuments.AsNoTracking().Where(d => d.Id == doc.Id && d.OrgId == doc.OrgId).Select(d => new { d.Status, d.FlowId }).FirstAsync(ct);
         if (current.Status != DocumentStatus.Reading || current.FlowId != flow.Id) return;
-        // A file of several documents becomes one document each; a part is never split again.
-        if (isPdf && !doc.IsSample && doc.PartOfId is null && intake is not null)
+        // A file of several documents becomes one document each; a part is never split again, nor a file not read to its end.
+        if (isPdf && !doc.IsSample && doc.PartOfId is null && intake is not null && !read.Truncated)
         {
             var ranges = DocumentSplit.Ranges(starts, pdfPages);
-            if (!ranges.SequenceEqual([new PageRange(1, pdfPages)]))
+            if (!ranges.SequenceEqual([new PageRange(1, pdfPages)]) && await intake.HasRoomForAsync(doc.OrgId, ranges.Count - 1, ct))
             {
                 await SplitAsync(doc, bytes, ranges, ct);
                 return;

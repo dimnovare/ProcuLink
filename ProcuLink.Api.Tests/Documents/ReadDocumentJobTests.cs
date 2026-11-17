@@ -112,7 +112,7 @@ public sealed class ReadDocumentJobTests
         IReadOnlyList<PageWord>? ocrWords = null, ReadField[]? readFields = null, bool fieldsConfirmed = true,
         Func<IReadOnlyList<byte[]>, IReadOnlyList<PageWord>>? ocrPages = null, Func<DateTime>? utcNow = null,
         Hangfire.IBackgroundJobClient? jobs = null, TimeSpan? readBudget = null, ILogger<ReadDocumentJob>? logger = null, bool pageImagesWithText = true,
-        bool split = false, IReadOnlyList<DocumentSpan>? documents = null)
+        bool split = false, IReadOnlyList<DocumentSpan>? documents = null, BillingStatus? billingStatus = null)
     {
         var db = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase($"read-job-{Guid.NewGuid()}").Options);
@@ -148,15 +148,50 @@ public sealed class ReadDocumentJobTests
             .ReturnsAsync((IReadOnlyList<byte[]> images, CancellationToken _) => ocrPages?.Invoke(images) ?? ocrWords ?? []);
         var gate = new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions { EnabledForAll = true, ScansForAll = scans, PageImagesWithText = pageImagesWithText }));
         jobs ??= Mock.Of<Hangfire.IBackgroundJobClient>();
+        var billing = TestDoubles.PermissiveBilling.Mock();
+        billing.Setup(b => b.GetStatusAsync(Org, It.IsAny<CancellationToken>())).ReturnsAsync(billingStatus ?? Status(ProcuLink.Core.Constants.PlanConstants.Operations, 0, 500));
         var job = new ReadDocumentJob(db, storage.Object, reader.Object, new DocumentRechecker(db, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), Moq.Mock.Of<ProcuLink.Core.Documents.IStandardValidator>()), jobs,
             rasterizer ?? Mock.Of<IPdfRasterizer>(), ocr.Object, gate, new ProcuLink.Transform.Tokenizing.SourceTokenizer(), logger ?? NullLogger<ReadDocumentJob>.Instance,
-            split ? new DocumentIntakeService(db, storage.Object, jobs, gate, TestDoubles.PermissiveBilling.Mock().Object, NullLogger<DocumentIntakeService>.Instance) : null)
+            split ? new DocumentIntakeService(db, storage.Object, jobs, gate, billing.Object, NullLogger<DocumentIntakeService>.Instance) : null)
         {
             UtcNow = utcNow ?? (() => DateTime.UtcNow),
             ReadBudget = readBudget ?? TimeSpan.FromMinutes(20),
             RetryDelay = TimeSpan.Zero,
         };
         return (job, db, reader, doc.Id);
+    }
+
+    private static BillingStatus Status(string plan, int used, int limit) =>
+        new(plan, "active", used, limit, 0, 1, null, null, false, used >= limit, false, true, true, null, null, 0, 0, false, false);
+
+    [Fact]
+    public async Task A_trial_at_its_limit_keeps_a_file_of_several_documents_whole()
+    {
+        var (job, db, _, id) = Arrange(TextPdf(4), split: true, billingStatus: Status(ProcuLink.Core.Constants.PlanConstants.Pilot, 18, 20),
+            documents: Enumerable.Range(1, 4).Select(n => new DocumentSpan(n, $"INV-100{n}", false)).ToList());
+
+        await job.ExecuteAsync(id, Org, null, CancellationToken.None);
+
+        var doc = await db.FlowDocuments.AsNoTracking().SingleAsync();
+        doc.ReadAt.Should().NotBeNull();
+        (await db.AuditEvents.CountAsync(a => a.Action == "document.split")).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_start_outside_its_part_is_ignored()
+    {
+        var (job, db, reader, id) = Arrange(TextPdf(11), split: true);
+        // Part 2 holds page 11 only, yet reports a start on page 5.
+        reader.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DocumentReadInput i, Guid _, CancellationToken _) => Read() with
+            {
+                Documents = i.Part == 1 ? [new DocumentSpan(1, "INV-1001", false)] : [new DocumentSpan(5, "INV-1002", false)],
+            });
+
+        await job.ExecuteAsync(id, Org, null, CancellationToken.None);
+
+        (await db.FlowDocuments.CountAsync()).Should().Be(1);
+        (await db.AuditEvents.CountAsync(a => a.Action == "document.split")).Should().Be(0);
     }
 
     [Fact]
