@@ -1045,6 +1045,10 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("page_count");
 
+                    b.Property<Guid?>("PartOfId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("part_of_id");
+
                     b.Property<DateTime?>("ReadAt")
                         .HasColumnType("timestamptz")
                         .HasColumnName("read_at");
@@ -1087,6 +1091,10 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.Property<string>("SourceRef")
                         .HasColumnType("text")
                         .HasColumnName("source_ref");
+
+                    b.Property<string>("SplitFileKey")
+                        .HasColumnType("text")
+                        .HasColumnName("split_file_key");
 
                     b.Property<string>("Status")
                         .IsRequired()

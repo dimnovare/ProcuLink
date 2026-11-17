@@ -9,8 +9,10 @@ public sealed record DocumentReadInput(string FileName, string ContentType, stri
 public sealed record ReadUsage(string Model, int TokensIn, int TokensOut);
 
 /// <summary>FailureReason is one of "usage_cap", "ai_unavailable", "ai_error", "empty_document", "no_egress",
-/// "document_too_large". Usage is set when the provider answered with a usage figure, whatever the outcome.</summary>
-public sealed record DocumentReadOutcome(bool Success, ReadResult? Result, string? FailureReason, ReadUsage? Usage = null);
+/// "document_too_large". Usage is set when the provider answered with a usage figure, whatever the outcome.
+/// Documents lists where separate documents start in the input, when the reader saw them.</summary>
+public sealed record DocumentReadOutcome(bool Success, ReadResult? Result, string? FailureReason, ReadUsage? Usage = null,
+    IReadOnlyList<DocumentSpan>? Documents = null);
 
 /// <summary>The engine's one AI call: reads every field and table out of a document's text.</summary>
 public interface IDocumentReader
