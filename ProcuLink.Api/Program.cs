@@ -675,6 +675,8 @@ builder.Services.AddScoped<IDeliveryDispatcher, DirectoDeliveryDispatcher>();
 builder.Services.AddScoped<IDataErasureService, ProcuLink.Infrastructure.Services.DataErasureService>();
 // Whole-organisation erase (admin endpoint + Worker DisposableOrgSweepJob); receipt in platform_audit_events.
 builder.Services.AddScoped<IOrganisationEraser, ProcuLink.Infrastructure.Services.OrganisationEraser>();
+// Particular documents of one workspace, on a written request; receipt in platform_audit_events.
+builder.Services.AddScoped<IDocumentEraser, ProcuLink.Infrastructure.Services.DocumentEraser>();
 
 // SourceMap engine tokenizer: extracts every addressable value from a source file (CSV + XML concrete;
 // other formats return an empty list). Singleton — stateless, reused across requests.
