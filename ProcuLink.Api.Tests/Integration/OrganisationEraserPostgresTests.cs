@@ -116,6 +116,52 @@ public sealed class OrganisationEraserPostgresTests(PostgresContainerFixture pos
             "every stored file the target owns, children included, and nothing of the other org's");
     }
 
+    [DockerRequiredFact]
+    public async Task EraseOnRequest_ErasesAnEndedPaidWorkspace_WithItsBilledOverage_ThenItsSignInAccounts()
+    {
+        Guid orgId = Guid.NewGuid(), manualId = Guid.NewGuid();
+        await using (var seed = NewContext())
+        {
+            Organisation Growth(Guid id, string? customer) => new()
+            {
+                Id = id, ClerkOrgId = $"org_test{id:N}", Name = "erase-on-request", Slug = $"erase-on-request-{id:N}", Plan = "growth",
+                CreatedAt = DateTime.UtcNow, TrialStartedAt = DateTime.UtcNow, StripeCustomerId = customer,
+            };
+            seed.Organisations.AddRange(Growth(orgId, "cus_test"), Growth(manualId, null));
+            seed.OverageBillingRecords.Add(new OverageBillingRecord
+            {
+                Id = Guid.NewGuid(), OrgId = orgId, BillingKey = "test", StripeInvoiceItemId = "ii_test", CreatedAt = DateTime.UtcNow,
+            });
+            await seed.SaveChangesAsync();
+        }
+        var billing = new Mock<IBillingService>();
+        billing.Setup(b => b.HasRunningSubscriptionAsync("cus_test", null, It.IsAny<CancellationToken>())).ReturnsAsync(false);
+        billing.Setup(b => b.HasRunningSubscriptionAsync(null, null, It.IsAny<CancellationToken>())).ReturnsAsync((bool?)null);
+        var remover = new Mock<ISignInAccountRemover>();
+        remover.Setup(r => r.RemoveAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(new SignInRemoval("done", 2, []));
+
+        async Task<OrgEraseReceipt> Erase(Guid id)
+        {
+            await using var db = NewContext();
+            return await new OrganisationEraser(db, Mock.Of<IFileStorageService>(), NullLogger<OrganisationEraser>.Instance, billing.Object, remover.Object)
+                .EraseOnRequestAsync(id, "test:request", "request", agreementEnded: true, CancellationToken.None);
+        }
+
+        (await Erase(orgId)).Outcome.Should().Be(OrgEraseOutcome.Erased);
+        await using var check = NewContext();
+        (await check.Organisations.AnyAsync(o => o.Id == orgId)).Should().BeFalse();
+        (await check.OverageBillingRecords.AnyAsync(r => r.OrgId == orgId)).Should().BeFalse();
+        remover.Verify(r => r.RemoveAsync($"org_test{orgId:N}", It.IsAny<CancellationToken>()), Times.Once());
+        var stored = JsonDocument.Parse((await check.PlatformAuditEvents
+            .SingleAsync(e => e.SubjectOrgId == orgId && e.Action == OrganisationEraser.AuditAction)).Payload!).RootElement;
+        stored.GetProperty("signIn").GetString().Should().Be("done");
+        stored.GetProperty("signInAccountsRemoved").GetInt32().Should().Be(2);
+
+        // A manual contract carries no Stripe ids: the operator's word is the authority, Stripe is not asked.
+        (await Erase(manualId)).Outcome.Should().Be(OrgEraseOutcome.Erased);
+        billing.Verify(b => b.HasRunningSubscriptionAsync(null, null, It.IsAny<CancellationToken>()), Times.Never());
+    }
+
     private static Task<int> CountAsync(ProcuLinkDbContext db, IEntityType type, Guid orgId) =>
         (Task<int>)typeof(OrganisationEraserPostgresTests)
             .GetMethod(nameof(CountOf), BindingFlags.NonPublic | BindingFlags.Static)!

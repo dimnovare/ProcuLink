@@ -49,6 +49,48 @@ public sealed class OrganisationEraseTests
         (await db.Organisations.AnyAsync(o => o.Id == org.Id)).Should().BeTrue();
     }
 
+    private static OrganisationEraser WithBilling(ProcuLinkDbContext db, bool? running)
+    {
+        var billing = new Mock<IBillingService>();
+        billing.Setup(b => b.HasRunningSubscriptionAsync(It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(running);
+        return new OrganisationEraser(db, Mock.Of<IFileStorageService>(), NullLogger<OrganisationEraser>.Instance, billing.Object);
+    }
+
+    [Theory]
+    [InlineData(false, false, "none", OrgEraseOutcome.RefusedPaidSubscription)]
+    [InlineData(true, true, "none", OrgEraseOutcome.RefusedRunningSubscription)]
+    [InlineData(true, null, "none", OrgEraseOutcome.RefusedSubscriptionUnknown)]
+    [InlineData(true, false, null, OrgEraseOutcome.RefusedUnbilledOverage)]
+    public async Task EraseOnRequest_RefusesUntilTheAgreementHasReallyEnded(
+        bool agreementEnded, bool? running, string? overageItemId, OrgEraseOutcome expected)
+    {
+        await using var db = NewDb();
+        var org = Org("erase-on-request-test", customer: "cus_test", plan: "growth");
+        db.Organisations.Add(org);
+        if (overageItemId != "none")
+            db.OverageBillingRecords.Add(new OverageBillingRecord { Id = Guid.NewGuid(), OrgId = org.Id, BillingKey = "test", StripeInvoiceItemId = overageItemId });
+        await db.SaveChangesAsync();
+
+        var receipt = await WithBilling(db, running).EraseOnRequestAsync(org.Id, "test", "refusal", agreementEnded, CancellationToken.None);
+
+        receipt.Outcome.Should().Be(expected);
+        (await db.Organisations.AnyAsync(o => o.Id == org.Id)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task EraseAsync_StillRefusesAPaidOrg_WhenStripeSaysNothingRuns()
+    {
+        await using var db = NewDb();
+        var org = Org("erase-sweep-strict-test", customer: "cus_test", plan: "growth");
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var receipt = await WithBilling(db, false).EraseAsync(org.Id, "test", "sweep", CancellationToken.None);
+
+        receipt.Outcome.Should().Be(OrgEraseOutcome.RefusedPaidSubscription);
+    }
+
     [Theory]
     [InlineData("proculink-ci-smoke-run1", 7, null, null, true)]
     [InlineData("proculink-ci-smoke-run1", 7, "membership", null, true)]   // signed into, never used

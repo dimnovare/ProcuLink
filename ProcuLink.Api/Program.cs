@@ -675,6 +675,10 @@ builder.Services.AddScoped<IDeliveryDispatcher, DirectoDeliveryDispatcher>();
 builder.Services.AddScoped<IDataErasureService, ProcuLink.Infrastructure.Services.DataErasureService>();
 // Whole-organisation erase (admin endpoint + Worker DisposableOrgSweepJob); receipt in platform_audit_events.
 builder.Services.AddScoped<IOrganisationEraser, ProcuLink.Infrastructure.Services.OrganisationEraser>();
+// An erase on request then removes the workspace's sign-in accounts at Clerk. The Worker registers no
+// remover: the sweep never asks for that step.
+builder.Services.AddHttpClient("clerk", c => { c.BaseAddress = new Uri("https://api.clerk.com/v1/"); c.Timeout = TimeSpan.FromSeconds(30); });
+builder.Services.AddScoped<ISignInAccountRemover, ProcuLink.Api.Services.ClerkAccountRemover>();
 // Particular documents of one workspace, on a written request; receipt in platform_audit_events.
 builder.Services.AddScoped<IDocumentEraser, ProcuLink.Infrastructure.Services.DocumentEraser>();
 

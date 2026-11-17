@@ -20,7 +20,8 @@ namespace ProcuLink.Infrastructure.Services;
 /// revision snapshots/test cases) go by their parent's <c>ON DELETE CASCADE</c>.</para>
 /// </summary>
 public sealed class OrganisationEraser(
-    ProcuLinkDbContext db, IFileStorageService storage, ILogger<OrganisationEraser> logger) : IOrganisationEraser
+    ProcuLinkDbContext db, IFileStorageService storage, ILogger<OrganisationEraser> logger,
+    IBillingService? billing = null, ISignInAccountRemover? signIn = null) : IOrganisationEraser
 {
     public const string AuditAction = "admin.organisation_erased";
 
@@ -35,7 +36,21 @@ public sealed class OrganisationEraser(
     public static bool IsPaying(Organisation o) =>
         o.StripeCustomerId is not null || o.StripeSubscriptionId is not null || o.Plan != PlanConstants.Pilot;
 
-    public async Task<OrgEraseReceipt> EraseAsync(Guid orgId, string actor, string reason, CancellationToken ct)
+    public Task<OrgEraseReceipt> EraseAsync(Guid orgId, string actor, string reason, CancellationToken ct) =>
+        EraseCoreAsync(orgId, actor, reason, onRequest: false, agreementEnded: false, ct);
+
+    public Task<OrgEraseReceipt> EraseOnRequestAsync(Guid orgId, string actor, string reason, bool agreementEnded, CancellationToken ct) =>
+        EraseCoreAsync(orgId, actor, reason, onRequest: true, agreementEnded, ct);
+
+    /// <summary>
+    /// The sweep (<paramref name="onRequest"/> false) refuses every paying workspace and skips the
+    /// sign-in step. On request a paying workspace goes only when the operator confirms the agreement
+    /// ended, Stripe answers live that nothing runs (asked only when the workspace has a Stripe id — a
+    /// manual contract has none, so the operator is the authority), and every overage row was invoiced.
+    /// Every refusal is decided before the transaction, so a refusal changes nothing.
+    /// </summary>
+    private async Task<OrgEraseReceipt> EraseCoreAsync(
+        Guid orgId, string actor, string reason, bool onRequest, bool agreementEnded, CancellationToken ct)
     {
         // The walk needs the org query filters inert (or armed to this org): a context scoped to
         // another tenant would see none of the target's rows and quietly erase nothing.
@@ -43,13 +58,31 @@ public sealed class OrganisationEraser(
             throw new InvalidOperationException($"OrganisationEraser needs an unscoped DbContext; this one is scoped to {scoped}.");
 
         var org = await db.Organisations.AsNoTracking().FirstOrDefaultAsync(o => o.Id == orgId, ct);
+        var signInResult = new SignInRemoval(SignInSteps.NotRequested, 0, []);
         OrgEraseReceipt Receipt(OrgEraseOutcome outcome, Dictionary<string, int>? rows = null, int blobs = 0, List<string>? failed = null) =>
-            new(outcome, orgId, org?.Slug, org?.ClerkOrgId, rows ?? [], blobs, failed ?? [], actor, reason, DateTime.UtcNow);
+            new(outcome, orgId, org?.Slug, org?.ClerkOrgId, rows ?? [], blobs, failed ?? [], actor, reason, DateTime.UtcNow,
+                signInResult.Step, signInResult.AccountsRemoved, signInResult.Failed);
 
         if (org is null) return Receipt(OrgEraseOutcome.NotFound);
-        if (IsPaying(org)) return Receipt(OrgEraseOutcome.RefusedPaidSubscription);
-        if (await db.OverageBillingRecords.AnyAsync(r => r.OrgId == orgId, ct))
+        if (IsPaying(org))
+        {
+            if (!onRequest || !agreementEnded) return Receipt(OrgEraseOutcome.RefusedPaidSubscription);
+            if (org.StripeCustomerId is not null || org.StripeSubscriptionId is not null)
+            {
+                var running = billing is null ? null
+                    : await billing.HasRunningSubscriptionAsync(org.StripeCustomerId, org.StripeSubscriptionId, ct);
+                if (running is null) return Receipt(OrgEraseOutcome.RefusedSubscriptionUnknown);
+                if (running.Value) return Receipt(OrgEraseOutcome.RefusedRunningSubscription);
+            }
+            // Billed rows go with the workspace; a row never put on an invoice is money still owed.
+            if (await db.OverageBillingRecords.AnyAsync(r => r.OrgId == orgId && (r.StripeInvoiceItemId == null || r.StripeInvoiceItemId == ""), ct))
+                return Receipt(OrgEraseOutcome.RefusedUnbilledOverage);
+        }
+        else if (await db.OverageBillingRecords.AnyAsync(r => r.OrgId == orgId, ct))
             return Receipt(OrgEraseOutcome.RefusedBillingEvidence);
+        // Like the blob keys, the receipt committed with the rows says the sign-in accounts are not
+        // confirmed gone until the step after cleanup reports what it did.
+        if (onRequest) signInResult = new SignInRemoval(SignInSteps.Failed, 0, ["members"]);
 
         // The last point a cancellation may stop this. From the transaction on every call runs to
         // completion: a cancelled request must never leave half an erase, or a commit without cleanup.
@@ -100,12 +133,26 @@ public sealed class OrganisationEraser(
                 logger.LogError(ex, "Erase org {OrgId}: failed to delete blob {Key}.", orgId, key);
             }
         }
+        // Sign-in accounts last, also best-effort: the workspace is gone whatever the provider answers.
+        if (onRequest)
+        {
+            try
+            {
+                signInResult = signIn is null ? new SignInRemoval(SignInSteps.SkippedNoKey, 0, [])
+                    : await signIn.RemoveAsync(org.ClerkOrgId, none);
+            }
+            catch (Exception ex)
+            {
+                signInResult = new SignInRemoval(SignInSteps.Failed, 0, ["members"]);
+                logger.LogError(ex, "Erase org {OrgId}: the sign-in step threw.", orgId);
+            }
+        }
         var receipt = Receipt(OrgEraseOutcome.Erased, rows, keys.Count - failed.Count, failed);
         Record(receipt);
         await db.SaveChangesAsync(none);
 
-        logger.LogWarning("ORG ERASE: {OrgId} ({Slug}) erased by {Actor} — {Rows} rows, {Blobs} blobs, {Failed} failed.",
-            orgId, org.Slug, actor, rows.Values.Sum(), receipt.BlobsDeleted, failed.Count);
+        logger.LogWarning("ORG ERASE: {OrgId} ({Slug}) erased by {Actor} — {Rows} rows, {Blobs} blobs, {Failed} failed, sign-in {SignIn}.",
+            orgId, org.Slug, actor, rows.Values.Sum(), receipt.BlobsDeleted, failed.Count, receipt.SignIn);
         return receipt;
     }
 

@@ -797,8 +797,9 @@ public sealed class AdminController : ControllerBase
     // ── POST /api/admin/organisations/{orgId}/erase ───────────────────────
     /// <summary>
     /// Hard-erases a whole workspace via <see cref="IOrganisationEraser"/>. The body must echo the
-    /// org's exact slug (400 otherwise) — the fat-finger guard. A live Stripe subscription or billed
-    /// overage refuses with 409. The receipt is returned and kept in platform_audit_events, because
+    /// org's exact slug (400 otherwise) — the fat-finger guard. A workspace that has paid goes only with
+    /// <c>agreementEnded</c>, once Stripe confirms live that nothing runs and no overage is unbilled; every
+    /// refusal is a 409. Its sign-in accounts are then removed at Clerk. The receipt is returned and kept in platform_audit_events, because
     /// the org's own audit_events are erased with it (so <see cref="WriteAdminAuditAsync"/> cannot hold it).
     /// </summary>
     [HttpPost("organisations/{orgId:guid}/erase")]
@@ -822,13 +823,16 @@ public sealed class AdminController : ControllerBase
         if (string.IsNullOrEmpty(request?.ConfirmSlug) || request.ConfirmSlug != slug)
             return BadRequest(new { error = "confirmSlug must equal the organisation's slug exactly." });
 
-        var receipt = await eraser.EraseAsync(
-            orgId, $"admin:{User.FindFirst("sub")?.Value}", "Erased from the admin customers table.", ct);
+        var receipt = await eraser.EraseOnRequestAsync(
+            orgId, $"admin:{User.FindFirst("sub")?.Value}", "Erased from the admin customers table.", request.AgreementEnded, ct);
         return receipt.Outcome switch
         {
             OrgEraseOutcome.Erased => Ok(receipt),
             OrgEraseOutcome.RefusedPaidSubscription => Conflict(new { error = "paid_subscription" }),
             OrgEraseOutcome.RefusedBillingEvidence => Conflict(new { error = "billing_evidence" }),
+            OrgEraseOutcome.RefusedRunningSubscription => Conflict(new { error = "subscription_running" }),
+            OrgEraseOutcome.RefusedSubscriptionUnknown => Conflict(new { error = "subscription_unknown" }),
+            OrgEraseOutcome.RefusedUnbilledOverage => Conflict(new { error = "unbilled_overage" }),
             _ => NotFound(new { error = "Organisation not found." }),
         };
     }
