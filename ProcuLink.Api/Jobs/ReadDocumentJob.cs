@@ -297,7 +297,7 @@ public class ReadDocumentJob(
         if (isPdf && !doc.IsSample && doc.PartOfId is null && intake is not null && !read.Truncated)
         {
             var ranges = DocumentSplit.Ranges(starts, pdfPages);
-            if (!ranges.SequenceEqual([new PageRange(1, pdfPages)]) && await intake.HasRoomForAsync(doc.OrgId, ranges.Count - 1, ct))
+            if (!ranges.SequenceEqual([new PageRange(1, pdfPages)]) && await intake.HasRoomForAsync(doc.OrgId, ranges.Count, ct))
             {
                 await SplitAsync(doc, bytes, ranges, ct);
                 return;

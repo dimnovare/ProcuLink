@@ -167,7 +167,7 @@ public sealed class ReadDocumentJobTests
     [Fact]
     public async Task A_trial_at_its_limit_keeps_a_file_of_several_documents_whole()
     {
-        var (job, db, _, id) = Arrange(TextPdf(4), split: true, billingStatus: Status(ProcuLink.Core.Constants.PlanConstants.Pilot, 18, 20),
+        var (job, db, _, id) = Arrange(TextPdf(4), split: true, billingStatus: Status(ProcuLink.Core.Constants.PlanConstants.Pilot, 17, 20),
             documents: Enumerable.Range(1, 4).Select(n => new DocumentSpan(n, $"INV-100{n}", false)).ToList());
 
         await job.ExecuteAsync(id, Org, null, CancellationToken.None);
