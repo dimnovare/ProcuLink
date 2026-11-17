@@ -82,6 +82,25 @@ public class OpenAiDocumentReaderTests
     }
 
     [Fact]
+    public void A_unit_or_price_basis_after_a_line_figure_is_dropped()
+    {
+        var dto = new OpenAiDocumentReader.ReadDto("Order", [],
+            [new("lines", "Lines",
+                [new("qty", "Qty", "number", FieldMeanings.LineQuantity), new("price", "Price", "money", FieldMeanings.LineUnitPrice),
+                 new("desc", "Item", "text", FieldMeanings.LineDescription)],
+                [new([new("qty", "1 ST", 1), new("price", "33,00/1JD", 1), new("desc", "2 x USB cable", 1)]),
+                 new([new("qty", "12", 1), new("price", "2,43 EUR par 1 Pce", 1)]),
+                 new([new("qty", "1.000", 1), new("price", "1,525.42", 1)]),
+                 new([new("qty", "-", 1), new("price", "120,00-", 1)])])]);
+
+        var rows = OpenAiDocumentReader.Map(dto, null).Tables.Single().Rows;
+
+        rows.Select(r => r.Cells["qty"].Value).Should().Equal("1", "12", "1.000", "-");
+        rows.Select(r => r.Cells["price"].Value).Should().Equal("33,00", "2,43", "1,525.42", "120,00-");
+        rows[0].Cells["desc"].Value.Should().Be("2 x USB cable");
+    }
+
+    [Fact]
     public void Absent_fields_are_dropped_unless_the_flow_lists_them()
     {
         var dto = new OpenAiDocumentReader.ReadDto("Invoice",
