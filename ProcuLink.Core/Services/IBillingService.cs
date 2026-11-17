@@ -132,6 +132,11 @@ public interface IBillingService
         decimal amountEur,
         string stripeInvoiceId,
         CancellationToken ct = default);
+
+    /// True when Stripe reports a running subscription for this customer or subscription id, false when it reports none,
+    /// null when it could not be asked (not configured, no ids, an error, or more than one page of subscriptions).
+    Task<bool?> HasRunningSubscriptionAsync(string? stripeCustomerId, string? stripeSubscriptionId, CancellationToken ct = default) =>
+        Task.FromResult<bool?>(null);
 }
 
 /// <summary>One billing window's overage: <see cref="Units"/> over the cap, at <see cref="RateEur"/> each.</summary>

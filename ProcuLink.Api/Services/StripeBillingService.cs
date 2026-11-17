@@ -357,9 +357,33 @@ public sealed class StripeBillingService : IBillingService
         try
         {
             var sub = await Subscriptions().GetAsync(subscriptionId, cancellationToken: ct);
-            return sub.Status is "canceled" or "incomplete_expired" ? null : sub;
+            return IsRunning(sub) ? sub : null;
         }
         catch (StripeException ex) when (ex.HttpStatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsRunning(Subscription sub) => sub.Status is not ("canceled" or "incomplete_expired");
+
+    public async Task<bool?> HasRunningSubscriptionAsync(
+        string? stripeCustomerId, string? stripeSubscriptionId, CancellationToken ct = default)
+    {
+        if (!IsStripeConfigured()
+            || (string.IsNullOrWhiteSpace(stripeCustomerId) && string.IsNullOrWhiteSpace(stripeSubscriptionId)))
+            return null;
+        try
+        {
+            if (await GetLiveSubscriptionAsync(stripeSubscriptionId, ct) is not null) return true;
+            if (string.IsNullOrWhiteSpace(stripeCustomerId)) return false;
+            var list = await Subscriptions().ListAsync(
+                new SubscriptionListOptions { Customer = stripeCustomerId, Status = "all", Limit = 100 },
+                cancellationToken: ct);
+            return list.HasMore ? null : list.Data.Any(IsRunning);
+        }
+        catch (Exception ex) when (ex is StripeException or HttpRequestException
+            || (ex is TaskCanceledException && !ct.IsCancellationRequested))
         {
             return null;
         }
