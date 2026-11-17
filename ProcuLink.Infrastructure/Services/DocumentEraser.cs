@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -40,13 +41,15 @@ public sealed class DocumentEraser(
         if (ids is not null) matches = matches.Where(d => ids.Contains(d.Id));
         if (before is { } cutoff) matches = matches.Where(d => d.CreatedAt < cutoff);
         var sending = deliveries.Where(x => x.Status == FlowDeliveryStatus.Queued || x.Status == FlowDeliveryStatus.Delivering);
+        // Repeated by the delete itself, so a document that starts being read or sent after this check is kept.
+        Expression<Func<FlowDocument, bool>> idle = d => d.Status != DocumentStatus.Reading && d.Status != DocumentStatus.Sending
+            && !sending.Any(x => x.DocumentId == d.Id);
 
         // Sending: the sender sets it and uploads output files before it saves the delivery rows.
         var skipped = await matches.Where(d => d.Status == DocumentStatus.Reading || d.Status == DocumentStatus.Sending
                 || sending.Any(x => x.DocumentId == d.Id))
             .OrderBy(d => d.CreatedAt).ThenBy(d => d.Id).Select(d => d.Id).ToListAsync(ct);
-        var docs = await matches.Where(d => d.Status != DocumentStatus.Reading && d.Status != DocumentStatus.Sending
-                && !sending.Any(x => x.DocumentId == d.Id))
+        var docs = await matches.Where(idle)
             .OrderBy(d => d.CreatedAt).ThenBy(d => d.Id).Take(MaxPerCall + 1)
             .Select(d => new { d.Id, d.SourceFileKey, d.ReadAt, d.IsSample, d.BillingUnits }).ToListAsync(ct);
         var more = docs.Count > MaxPerCall;
@@ -66,9 +69,6 @@ public sealed class DocumentEraser(
         var none = CancellationToken.None;
         await using var tx = await db.Database.BeginTransactionAsync(none);
 
-        // Billed units outlive the document, dated by when it was READ so the month it was billed in keeps them.
-        db.ErasedDocumentUnits.AddRange(docs.Where(d => d.ReadAt != null && !d.IsSample && d.BillingUnits > 0)
-            .Select(d => new ErasedDocumentUnit { Id = Guid.NewGuid(), OrgId = orgId, ReadAt = d.ReadAt!.Value, BillingUnits = d.BillingUnits }));
         var rows = new Dictionary<string, int>
         {
             ["audit_events"] = await db.AuditEvents.Where(e => e.OrgId == orgId && docIds.Contains(e.EntityId)).ExecuteDeleteAsync(none),
@@ -78,7 +78,14 @@ public sealed class DocumentEraser(
             ["flow_deliveries"] = await batchDeliveries.CountAsync(none),
             ["flow_read_calls"] = await db.Set<FlowReadCall>().CountAsync(c => c.OrgId == orgId && docIds.Contains(c.DocumentId), none),
         };
-        rows["flow_documents"] = await db.FlowDocuments.Where(d => d.OrgId == orgId && docIds.Contains(d.Id)).ExecuteDeleteAsync(none);
+        rows["flow_documents"] = await db.FlowDocuments.Where(d => d.OrgId == orgId && docIds.Contains(d.Id)).Where(idle).ExecuteDeleteAsync(none);
+        // Disposing the transaction uncommitted rolls back every row above; no file has been touched yet.
+        if (rows["flow_documents"] < docIds.Count)
+            throw new InvalidOperationException("Documents changed while they were being erased; nothing was erased. Run it again.");
+
+        // Billed units outlive the document, dated by when it was READ so the month it was billed in keeps them.
+        db.ErasedDocumentUnits.AddRange(docs.Where(d => d.ReadAt != null && !d.IsSample && d.BillingUnits > 0)
+            .Select(d => new ErasedDocumentUnit { Id = Guid.NewGuid(), OrgId = orgId, ReadAt = d.ReadAt!.Value, BillingUnits = d.BillingUnits }));
 
         // Until cleanup confirms them, every key and folder is listed as failed, so a crash after the commit
         // still leaves an honest record of what may remain in storage.

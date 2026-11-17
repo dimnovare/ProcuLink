@@ -1,5 +1,7 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Npgsql;
@@ -64,6 +66,20 @@ public sealed class DocumentEraserPostgresTests(PostgresContainerFixture postgre
         await db.SaveChangesAsync();
         db.ChangeTracker.Clear();
 
+        // A document that starts being read after the check stops the erase, and nothing of it is kept.
+        await using (var racing = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>(_options!)
+            .AddInterceptors(new StartReadingInsideTheErase(_options!, s.A1)).Options))
+        {
+            var race = () => new DocumentEraser(racing, storage.Object, NullLogger<DocumentEraser>.Instance)
+                .EraseAsync(s.A, new(Ids: [s.A1]), "test", ct);
+            await race.Should().ThrowAsync<InvalidOperationException>();
+        }
+        (await db.AuditEvents.AnyAsync(e => e.EntityId == s.A1)).Should().BeTrue();
+        (await db.FlowIntakeItems.AsNoTracking().SingleAsync(i => i.OrgId == s.A)).DocumentId.Should().Be(s.A1);
+        (await db.ErasedDocumentUnits.AnyAsync() || await db.PlatformAuditEvents.AnyAsync()).Should().BeFalse();
+        storage.Invocations.Should().BeEmpty();
+        await db.FlowDocuments.Where(d => d.Id == s.A1).ExecuteUpdateAsync(x => x.SetProperty(d => d.Status, DocumentStatus.Sent));
+
         var r = await new DocumentEraser(db, storage.Object, NullLogger<DocumentEraser>.Instance)
             .EraseAsync(s.A, new(Ids: [s.A1, s.A3, a4, s.B1]), "test", ct);
 
@@ -102,6 +118,23 @@ public sealed class DocumentEraserPostgresTests(PostgresContainerFixture postgre
         var cutoff = DateTime.SpecifyKind(DateTime.UtcNow.AddDays(-1), DateTimeKind.Unspecified);
         (await eraser.EraseAsync(s.A, new(ReceivedBefore: cutoff), "test", ct)).DocumentsErased.Should().Be(1);
         (await db.FlowDocuments.Where(d => d.OrgId == s.A).Select(d => d.Id).ToListAsync()).Should().BeEquivalentTo([s.A2, s.A3]);
+    }
+
+    /// <summary>Starts reading a document, on its own connection, at the erase's first statement.</summary>
+    private sealed class StartReadingInsideTheErase(DbContextOptions<ProcuLinkDbContext> options, Guid docId) : DbCommandInterceptor
+    {
+        private bool _done;
+
+        public override async ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(DbCommand command,
+            CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            if (_done || eventData.Context?.Database.CurrentTransaction is null) return result;
+            _done = true;
+            await using var other = new ProcuLinkDbContext(options);
+            await other.FlowDocuments.Where(d => d.Id == docId)
+                .ExecuteUpdateAsync(x => x.SetProperty(d => d.Status, DocumentStatus.Reading), cancellationToken);
+            return result;
+        }
     }
 
     private async Task<Seeded> SeedAsync()
