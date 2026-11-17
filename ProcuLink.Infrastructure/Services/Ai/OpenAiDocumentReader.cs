@@ -74,7 +74,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
 
     public async Task<DocumentReadOutcome> ReadAsync(DocumentReadInput input, Guid organisationId, CancellationToken ct)
     {
-        if (input.Scanned && input.Pages is not { Count: > 0 }) return Fail("empty_document");
+        if (input.Pages is not { Count: > 0 } && (input.Scanned || string.IsNullOrWhiteSpace(input.Text))) return Fail("empty_document");
         if (_client is null) return Fail("ai_unavailable");
 
         using var scope = _scopeFactory?.CreateScope();
