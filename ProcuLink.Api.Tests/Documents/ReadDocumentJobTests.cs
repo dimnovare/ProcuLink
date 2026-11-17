@@ -132,7 +132,7 @@ public sealed class ReadDocumentJobTests
         db.SaveChanges();
 
         var storage = new Mock<IFileStorageService>();
-        storage.Setup(s => s.DownloadAsync("k", It.IsAny<CancellationToken>())).ReturnsAsync(() => new MemoryStream(pdf));
+        storage.Setup(s => s.DownloadAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(() => new MemoryStream(pdf));
 
         var reader = new Mock<IDocumentReader>();
         reader.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()))
@@ -269,6 +269,23 @@ public sealed class ReadDocumentJobTests
 
         var names = await db.FlowDocuments.Select(d => d.FileName).ToListAsync();
         names.Should().HaveCount(2).And.OnlyContain(n => n.EndsWith(".pdf"));
+    }
+
+    [Fact]
+    public async Task A_file_named_like_its_first_part_keeps_the_whole_file_apart()
+    {
+        var fileName = new string('a', 150) + " (page 1).pdf";
+        var (job, db, _, id) = Arrange(TextPdf(2), split: true, fileName: fileName,
+            documents: [new DocumentSpan(1, "INV-1001", false), new DocumentSpan(2, "INV-1002", false)]);
+        var whole = $"{Org}/documents/{id}/{fileName}";
+        (await db.FlowDocuments.SingleAsync()).SourceFileKey = whole;
+        await db.SaveChangesAsync();
+
+        await job.ExecuteAsync(id, Org, null, CancellationToken.None);
+
+        var docs = await db.FlowDocuments.AsNoTracking().ToListAsync();
+        docs.Single(d => d.Id == id).SourceFileKey.Should().NotBe(whole);
+        docs.Single(d => d.Id != id).SplitFileKey.Should().Be(whole);
     }
 
     [Fact]

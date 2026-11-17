@@ -365,6 +365,8 @@ public class ReadDocumentJob(
 
         var (first, file) = (ranges[0], doc.FileName);
         var key = $"{doc.OrgId}/documents/{doc.Id}/{Name(first)}";
+        // A file already named like its first part keeps the whole file: the part goes under its own key.
+        if (key == doc.SourceFileKey) key = $"{doc.OrgId}/documents/{doc.Id}/1-{Name(first)}";
         await storage.UploadAsync(new MemoryStream(files[0]), key, doc.ContentType, ct);
         var pages = first.LastPage - first.FirstPage + 1;
         (doc.SourceFileKey, doc.FileName, doc.PageCount, doc.BillingUnits) = (key, Name(first), pages, ReadLimits.UnitsFor(pages));
