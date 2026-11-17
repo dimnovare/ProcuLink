@@ -54,7 +54,7 @@ public static class DocumentChecks
         }
 
         if (duplicate) Fail(Duplicate, null, "A document with this number was already received.");
-        if (newSender) Fail(NewSender, null, "First document from this sender. Check it before sending.");
+        if (newSender) Fail(NewSender, null, "First document from this email address. Check it before sending.");
         if (read.Truncated) Fail(TextTruncated, null, "The document was too long to read in full.");
         return failed;
     }

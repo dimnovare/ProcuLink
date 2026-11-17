@@ -10,7 +10,7 @@ namespace ProcuLink.Api.Jobs;
 /// <summary>
 /// Hangfire job: sends a freshly read document when its flow is set to <c>auto</c>. A failed check never blocks it, with two
 /// exceptions: a repeated document number waits for a person, because on an unattended flow it would be a second posting; and so
-/// does the first emailed document from a new sender, because anyone who knows the workspace's address can email it.
+/// does the first document from a new email address, because anyone who knows the workspace's address can email it.
 /// It loads the document itself so the sender's claim sees the row as it is now. Paused processing or any other refusal
 /// leaves the document as it was, for a person to send.
 /// </summary>

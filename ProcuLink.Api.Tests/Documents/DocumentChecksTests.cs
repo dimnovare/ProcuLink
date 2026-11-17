@@ -89,7 +89,7 @@ public sealed class DocumentChecksTests
     {
         var read = new ReadResult("Invoice", []);
         DocumentChecks.Run(read, FlowFieldList.Empty, true, false, newSender: true).Should().ContainSingle()
-            .Which.Should().Be(new DocumentCheck("new_sender", false, null, "First document from this sender. Check it before sending."));
+            .Which.Should().Be(new DocumentCheck("new_sender", false, null, "First document from this email address. Check it before sending."));
         DocumentChecks.Run(read, FlowFieldList.Empty, true, false, newSender: false).Should().BeEmpty();
     }
 
