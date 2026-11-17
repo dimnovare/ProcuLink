@@ -955,11 +955,15 @@ public sealed class StripeBillingService : IBillingService
         return await ApplyMeterStatusFilter(monthOrders).CountAsync(ct) + await CountDocumentUnitsAsync(org.Id, monthStart, ct);
     }
 
-    /// <summary>Flow documents count their billing units once read (<c>ReadAt</c>); the delivered-only flag does not apply.</summary>
+    /// <summary>Flow documents count their billing units once read (<c>ReadAt</c>); the delivered-only flag does not apply.
+    /// Units of documents erased on request keep counting through <c>ErasedDocumentUnits</c>.</summary>
     private async Task<int> CountDocumentUnitsAsync(Guid orgId, DateTime since, CancellationToken ct, DateTime? until = null) =>
         await _db.FlowDocuments
             .Where(d => d.OrgId == orgId && !d.IsSample && d.ReadAt != null && d.ReadAt >= since && (until == null || d.ReadAt < until))
-            .SumAsync(d => d.BillingUnits, ct);
+            .SumAsync(d => d.BillingUnits, ct)
+        + await _db.ErasedDocumentUnits
+            .Where(u => u.OrgId == orgId && u.ReadAt >= since && (until == null || u.ReadAt < until))
+            .SumAsync(u => u.BillingUnits, ct);
 
     /// <summary>
     /// Applies the delivered-only status filter when <see cref="CountDeliveredOnlyFlagKey"/>

@@ -31,7 +31,7 @@ public sealed class OrganisationEraserPostgresTests(PostgresContainerFixture pos
     /// older audit said 9, a later note 15 — both were partial). Raise as the schema grows; never
     /// lower it to make a red build green.
     /// </summary>
-    private const int OrgScopedTables = 48;
+    private const int OrgScopedTables = 49;
 
     /// <summary>Mapped types that are not tenant data and are never seeded.</summary>
     private static readonly Type[] NotTenantData =

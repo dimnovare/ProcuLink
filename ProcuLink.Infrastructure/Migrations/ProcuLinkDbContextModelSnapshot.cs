@@ -739,6 +739,32 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.ToTable("email_import_records", (string)null);
                 });
 
+            modelBuilder.Entity("ProcuLink.Core.Entities.ErasedDocumentUnit", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("BillingUnits")
+                        .HasColumnType("integer")
+                        .HasColumnName("billing_units");
+
+                    b.Property<Guid>("OrgId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("org_id");
+
+                    b.Property<DateTime>("ReadAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("read_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrgId", "ReadAt");
+
+                    b.ToTable("erased_document_units", (string)null);
+                });
+
             modelBuilder.Entity("ProcuLink.Core.Entities.Flow", b =>
                 {
                     b.Property<Guid>("Id")
@@ -4634,6 +4660,15 @@ namespace ProcuLink.Infrastructure.Migrations
                 });
 
             modelBuilder.Entity("ProcuLink.Core.Entities.EmailImportRecord", b =>
+                {
+                    b.HasOne("ProcuLink.Core.Entities.Organisation", null)
+                        .WithMany()
+                        .HasForeignKey("OrgId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ProcuLink.Core.Entities.ErasedDocumentUnit", b =>
                 {
                     b.HasOne("ProcuLink.Core.Entities.Organisation", null)
                         .WithMany()
