@@ -32,6 +32,11 @@ public static class FieldMeanings
     public const string SenderContactName = "sender_contact_name";
     public const string SenderContactPhone = "sender_contact_phone";
     public const string SenderContactEmail = "sender_contact_email";
+    public const string DeliveryName = "delivery_name";
+    public const string DeliveryStreet = "delivery_street";
+    public const string DeliveryCity = "delivery_city";
+    public const string DeliveryPostcode = "delivery_postcode";
+    public const string DeliveryCountry = "delivery_country";
 
     public const string LineDescription = "line_description";
     public const string LineQuantity = "line_quantity";
@@ -50,6 +55,7 @@ public static class FieldMeanings
         SenderEndpointId, ReceiverEndpointId,
         SenderStreet, SenderCity, SenderPostcode, ReceiverStreet, ReceiverCity, ReceiverPostcode,
         SenderContactName, SenderContactPhone, SenderContactEmail,
+        DeliveryName, DeliveryStreet, DeliveryCity, DeliveryPostcode, DeliveryCountry,
         LineDescription, LineQuantity, LineUnit, LineUnitPrice, LineAmount, LineTaxRate, LineItemCode, LineNumber,
     ];
 
@@ -73,7 +79,7 @@ public static class FieldMeanings
         [OrderReference] = ["orderreference", "orderref", "purchaseorder", "purchaseorderreference", "customerponumber"],
         [DeliveryDate] = ["deliverydate", "shipdate", "requesteddeliverydate", "lieferdatum", "tarnekuupaev"],
         [SenderCountry] = ["sendercountry", "sellercountry", "suppliercountry", "vendorcountry"],
-        [ReceiverCountry] = ["receivercountry", "buyercountry", "customercountry", "shiptocountry"],
+        [ReceiverCountry] = ["receivercountry", "buyercountry", "customercountry"],
         [SenderEndpointId] = ["senderpeppolid", "sellerpeppolid", "senderendpointid", "sellerendpointid", "senderelectronicaddress", "sellerelectronicaddress"],
         [ReceiverEndpointId] = ["receiverpeppolid", "buyerpeppolid", "receiverendpointid", "buyerendpointid", "receiverelectronicaddress", "buyerelectronicaddress"],
         [SenderStreet] = ["senderstreet", "sellerstreet", "supplierstreet", "vendorstreet", "senderaddress", "selleraddress"],
@@ -85,6 +91,11 @@ public static class FieldMeanings
         [SenderContactName] = ["sendercontactname", "sellercontactname", "suppliercontactname", "sendercontact", "sellercontact"],
         [SenderContactPhone] = ["sendercontactphone", "sellercontactphone", "suppliercontactphone", "sendertelephone", "sellertelephone"],
         [SenderContactEmail] = ["sendercontactemail", "sellercontactemail", "suppliercontactemail", "senderemail", "selleremail"],
+        [DeliveryName] = ["deliveryname", "shiptoname", "shipto", "consignee", "lieferanschrift"],
+        [DeliveryStreet] = ["deliverystreet", "deliveryaddress", "shiptostreet", "shiptoaddress", "lieferstrasse"],
+        [DeliveryCity] = ["deliverycity", "shiptocity", "consigneecity", "lieferort"],
+        [DeliveryPostcode] = ["deliverypostcode", "deliveryzip", "deliverypostalcode", "shiptopostcode", "shiptozip"],
+        [DeliveryCountry] = ["deliverycountry", "shiptocountry", "consigneecountry", "lieferland"],
         [LineDescription] = ["description", "itemdescription", "linedescription", "productname", "item", "artikelbezeichnung", "nimetus"],
         [LineQuantity] = ["quantity", "qty", "amountordered", "menge", "kogus"],
         [LineUnit] = ["unit", "uom", "unitofmeasure", "einheit", "uhik"],
@@ -93,6 +104,53 @@ public static class FieldMeanings
         [LineTaxRate] = ["taxrate", "vatrate", "vatpercent", "taxpercent", "mwstsatz"],
         [LineItemCode] = ["itemcode", "sku", "partnumber", "articlenumber", "productcode", "artikelnummer", "tootekood"],
         [LineNumber] = ["linenumber", "lineno", "position", "pos", "positionsnummer"],
+    };
+
+    /// <summary>What each meaning is, in one sentence. The reader's prompt lists these.</summary>
+    public static readonly IReadOnlyDictionary<string, string> Definitions = new Dictionary<string, string>
+    {
+        [DocumentNumber] = "the document's own number: the order number on an order, the invoice number on an invoice. Never the number of another document it refers to.",
+        [IssueDate] = "the date the document was issued: the order date on an order, the invoice date on an invoice.",
+        [DueDate] = "the date payment is due.",
+        [SenderName] = "the party that issued the document: the buyer on an order, the seller on an invoice. Often named only in the letterhead, the logo or the footer, next to its bank details and registration or VAT number.",
+        [SenderVatId] = "the sender's VAT or tax registration number.",
+        [ReceiverName] = "the party the document is addressed to: the supplier on an order, the customer on an invoice. Not the party at a delivery or ship-to address, unless no other party is named.",
+        [Currency] = "the currency of the amounts, as printed (code or symbol), also when it is printed only next to the amounts.",
+        [TotalNet] = "the document's total before tax.",
+        [TotalTax] = "the document's total tax.",
+        [TotalGross] = "the document's total including tax: the amount to pay.",
+        [Iban] = "the bank account (IBAN) to pay into.",
+        [PaymentReference] = "the reference to quote when paying.",
+        [ReceiverVatId] = "the receiver's VAT or tax registration number.",
+        [BuyerReference] = "a reference the buyer asks to be quoted, such as 'your reference', a cost centre or a routing id.",
+        [OrderReference] = "the number of the order this document refers to, when the document is not that order itself.",
+        [DeliveryDate] = "the requested or actual delivery date.",
+        [SenderCountry] = "the country of the sender's address.",
+        [ReceiverCountry] = "the country of the receiver's address.",
+        [SenderEndpointId] = "a Peppol participant id of the sender, scheme and id, such as 0088:0000000000000. Only in that shape.",
+        [ReceiverEndpointId] = "a Peppol participant id of the receiver, scheme and id. Only in that shape.",
+        [SenderStreet] = "the street line of the sender's address.",
+        [SenderCity] = "the city of the sender's address.",
+        [SenderPostcode] = "the postcode of the sender's address.",
+        [ReceiverStreet] = "the street line of the receiver's address.",
+        [ReceiverCity] = "the city of the receiver's address.",
+        [ReceiverPostcode] = "the postcode of the receiver's address.",
+        [SenderContactName] = "the sender's contact person.",
+        [SenderContactPhone] = "the sender's contact phone number.",
+        [SenderContactEmail] = "the sender's contact email address.",
+        [DeliveryName] = "the name at the delivery or ship-to address.",
+        [DeliveryStreet] = "the street line of the delivery or ship-to address.",
+        [DeliveryCity] = "the city of the delivery or ship-to address.",
+        [DeliveryPostcode] = "the postcode of the delivery or ship-to address.",
+        [DeliveryCountry] = "the country of the delivery or ship-to address.",
+        [LineDescription] = "a line's full description. A description continues on the printed lines below it until the next line starts: join the pieces.",
+        [LineQuantity] = "a line's quantity: one number, without its unit. When several quantities are printed (ordered, delivered, back-ordered), the one the line amount is charged for.",
+        [LineUnit] = "a line's unit of measure.",
+        [LineUnitPrice] = "a line's price per unit: one number, without a unit or price basis printed next to it. When a list price and a discounted price are both printed, the price the line amount is charged at.",
+        [LineAmount] = "a line's total amount: one number.",
+        [LineTaxRate] = "a line's tax rate.",
+        [LineItemCode] = "a line's item, article or part number.",
+        [LineNumber] = "a line's position number.",
     };
 
     /// <summary>
