@@ -19,6 +19,8 @@ public sealed class DocumentEngineOptions
     public bool PeppolForAll { get; set; }
     public string[] NativeConnectorOrgIds { get; set; } = [];
     public bool NativeConnectorsForAll { get; set; }
+    /// <summary>A text PDF is read with its page images too. A kill switch: on unless set false.</summary>
+    public bool PageImagesWithText { get; set; } = true;
 }
 
 /// <summary>Per-org switch for the document engine; off unless listed or enabled for all.</summary>
@@ -52,6 +54,8 @@ public sealed class DocumentEngineGate(IOptions<DocumentEngineOptions> options)
     /// <summary>Google Drive and Google Sheets destinations: the engine must be on, then the org is listed or all are on.</summary>
     public bool NativeConnectorsOn(Guid orgId) =>
         IsEnabled(orgId) && (options.Value.NativeConnectorsForAll || Listed(options.Value.NativeConnectorOrgIds, orgId));
+
+    public bool PageImagesWithText => options.Value.PageImagesWithText;
 
     public string[] AcceptedFormats(Guid orgId) => DocumentFormats.For(ScansOn(orgId), FormatsOn(orgId));
 }

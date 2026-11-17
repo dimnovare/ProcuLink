@@ -111,7 +111,7 @@ public sealed class ReadDocumentJobTests
         byte[] pdf, bool scans = false, string fileName = "invoice.pdf", IPdfRasterizer? rasterizer = null,
         IReadOnlyList<PageWord>? ocrWords = null, ReadField[]? readFields = null, bool fieldsConfirmed = true,
         Func<IReadOnlyList<byte[]>, IReadOnlyList<PageWord>>? ocrPages = null, Func<DateTime>? utcNow = null,
-        Hangfire.IBackgroundJobClient? jobs = null, TimeSpan? readBudget = null, ILogger<ReadDocumentJob>? logger = null)
+        Hangfire.IBackgroundJobClient? jobs = null, TimeSpan? readBudget = null, ILogger<ReadDocumentJob>? logger = null, bool pageImagesWithText = true)
     {
         var db = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>()
             .UseInMemoryDatabase($"read-job-{Guid.NewGuid()}").Options);
@@ -145,7 +145,7 @@ public sealed class ReadDocumentJobTests
         var ocr = new Mock<IDocumentOcrService>();
         ocr.Setup(o => o.ReadWordsAsync(It.IsAny<IReadOnlyList<byte[]>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyList<byte[]> images, CancellationToken _) => ocrPages?.Invoke(images) ?? ocrWords ?? []);
-        var gate = new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions { EnabledForAll = true, ScansForAll = scans }));
+        var gate = new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions { EnabledForAll = true, ScansForAll = scans, PageImagesWithText = pageImagesWithText }));
         var job = new ReadDocumentJob(db, storage.Object, reader.Object, new DocumentRechecker(db, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), Moq.Mock.Of<ProcuLink.Core.Documents.IStandardValidator>()), jobs ?? Mock.Of<Hangfire.IBackgroundJobClient>(),
             rasterizer ?? Mock.Of<IPdfRasterizer>(), ocr.Object, gate, new ProcuLink.Transform.Tokenizing.SourceTokenizer(), logger ?? NullLogger<ReadDocumentJob>.Instance)
         {
@@ -336,6 +336,24 @@ public sealed class ReadDocumentJobTests
         (await check.FlowDocuments.SingleAsync(d => d.Id == id)).Status.Should().Be(DocumentStatus.Sent);
         (await check.AuditEvents.CountAsync(a => a.EntityId == id)).Should().Be(0);
         jobs.Verify(j => j.Create(It.IsAny<Hangfire.Common.Job>(), It.IsAny<Hangfire.States.IState>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Text_pdf_part_is_read_with_its_page_images(bool pageImagesWithText)
+    {
+        var (job, _, reader, id) = Arrange(TextPdf(2), rasterizer: Rasterizer(2), pageImagesWithText: pageImagesWithText);
+        DocumentReadInput? seen = null;
+        reader.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()))
+            .Callback<DocumentReadInput, Guid, CancellationToken>((i, _, _) => seen = i)
+            .ReturnsAsync(Read());
+
+        await job.ExecuteAsync(id, Org, null, CancellationToken.None);
+
+        seen!.Text.Should().NotBeNullOrWhiteSpace();
+        if (pageImagesWithText) seen.Pages.Should().HaveCount(2);
+        else seen.Pages.Should().BeNull();
     }
 
     [Fact]
