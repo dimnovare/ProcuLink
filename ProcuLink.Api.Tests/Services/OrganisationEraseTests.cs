@@ -49,9 +49,9 @@ public sealed class OrganisationEraseTests
         (await db.Organisations.AnyAsync(o => o.Id == org.Id)).Should().BeTrue();
     }
 
-    private static OrganisationEraser WithBilling(ProcuLinkDbContext db, bool? running)
+    private static OrganisationEraser WithBilling(ProcuLinkDbContext db, bool? running, Mock<IBillingService>? billing = null)
     {
-        var billing = new Mock<IBillingService>();
+        billing ??= new Mock<IBillingService>();
         billing.Setup(b => b.HasRunningSubscriptionAsync(It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(running);
         return new OrganisationEraser(db, Mock.Of<IFileStorageService>(), NullLogger<OrganisationEraser>.Instance, billing.Object);
@@ -86,9 +86,11 @@ public sealed class OrganisationEraseTests
         db.Organisations.Add(org);
         await db.SaveChangesAsync();
 
-        var receipt = await WithBilling(db, false).EraseAsync(org.Id, "test", "sweep", CancellationToken.None);
+        var billing = new Mock<IBillingService>();
+        var receipt = await WithBilling(db, false, billing).EraseAsync(org.Id, "test", "sweep", CancellationToken.None);
 
         receipt.Outcome.Should().Be(OrgEraseOutcome.RefusedPaidSubscription);
+        billing.Verify(b => b.HasRunningSubscriptionAsync(It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never());
     }
 
     [Theory]

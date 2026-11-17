@@ -47,7 +47,7 @@ public sealed class OrganisationEraser(
     /// sign-in step. On request a paying workspace goes only when the operator confirms the agreement
     /// ended, Stripe answers live that nothing runs (asked only when the workspace has a Stripe id — a
     /// manual contract has none, so the operator is the authority), and every overage row was invoiced.
-    /// Every refusal is decided before the transaction, so a refusal changes nothing.
+    /// Every refusal is decided before anything is deleted, so a refusal changes nothing.
     /// </summary>
     private async Task<OrgEraseReceipt> EraseCoreAsync(
         Guid orgId, string actor, string reason, bool onRequest, bool agreementEnded, CancellationToken ct)
@@ -64,7 +64,16 @@ public sealed class OrganisationEraser(
                 signInResult.Step, signInResult.AccountsRemoved, signInResult.Failed);
 
         if (org is null) return Receipt(OrgEraseOutcome.NotFound);
-        if (IsPaying(org))
+        var paying = IsPaying(org);
+        // Asked before the transaction and again inside it, so an overage row the billing job writes in
+        // between is never deleted unchecked. Billed rows go with a paying workspace; a row never put on
+        // an invoice is money still owed. An unpaid workspace with any overage row is billing evidence.
+        async Task<OrgEraseOutcome?> OverageRefusal(CancellationToken token) => paying
+            ? await db.OverageBillingRecords.AnyAsync(r => r.OrgId == orgId && (r.StripeInvoiceItemId == null || r.StripeInvoiceItemId == ""), token)
+                ? OrgEraseOutcome.RefusedUnbilledOverage : null
+            : await db.OverageBillingRecords.AnyAsync(r => r.OrgId == orgId, token)
+                ? OrgEraseOutcome.RefusedBillingEvidence : null;
+        if (paying)
         {
             if (!onRequest || !agreementEnded) return Receipt(OrgEraseOutcome.RefusedPaidSubscription);
             if (org.StripeCustomerId is not null || org.StripeSubscriptionId is not null)
@@ -74,15 +83,8 @@ public sealed class OrganisationEraser(
                 if (running is null) return Receipt(OrgEraseOutcome.RefusedSubscriptionUnknown);
                 if (running.Value) return Receipt(OrgEraseOutcome.RefusedRunningSubscription);
             }
-            // Billed rows go with the workspace; a row never put on an invoice is money still owed.
-            if (await db.OverageBillingRecords.AnyAsync(r => r.OrgId == orgId && (r.StripeInvoiceItemId == null || r.StripeInvoiceItemId == ""), ct))
-                return Receipt(OrgEraseOutcome.RefusedUnbilledOverage);
         }
-        else if (await db.OverageBillingRecords.AnyAsync(r => r.OrgId == orgId, ct))
-            return Receipt(OrgEraseOutcome.RefusedBillingEvidence);
-        // Like the blob keys, the receipt committed with the rows says the sign-in accounts are not
-        // confirmed gone until the step after cleanup reports what it did.
-        if (onRequest) signInResult = new SignInRemoval(SignInSteps.Failed, 0, ["members"]);
+        if (await OverageRefusal(ct) is { } refused) return Receipt(refused);
 
         // The last point a cancellation may stop this. From the transaction on every call runs to
         // completion: a cancelled request must never leave half an erase, or a commit without cleanup.
@@ -90,6 +92,14 @@ public sealed class OrganisationEraser(
         var none = CancellationToken.None;
         var tables = Tables(db);
         await using var tx = await db.Database.BeginTransactionAsync(none);
+        if (await OverageRefusal(none) is { } late)
+        {
+            await tx.RollbackAsync(none);
+            return Receipt(late);
+        }
+        // Like the blob keys, the receipt committed with the rows says the sign-in accounts are not
+        // confirmed gone until the step after cleanup reports what it did.
+        if (onRequest) signInResult = new SignInRemoval(SignInSteps.Failed, 0, ["members"]);
 
         // Counted and keys collected BEFORE any delete: a cascade from one table can remove rows of
         // a later one, and those rows must still be reported and their blobs still found.

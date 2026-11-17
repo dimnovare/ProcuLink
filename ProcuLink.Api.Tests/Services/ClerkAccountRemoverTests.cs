@@ -25,16 +25,18 @@ public class ClerkAccountRemoverTests
         {
             Requests.Add(request);
             var path = request.RequestUri!.AbsolutePath.Replace("/v1/", "");
-            static string Memberships(int total) =>
-                $"{{\"data\":[{{\"object\":\"organization_membership\",\"organization\":{{\"object\":\"organization\",\"id\":\"{OrgId}\"}}}}],\"total_count\":{total}}}";
+            static string Memberships(int total, string orgId = OrgId) =>
+                $"{{\"data\":[{{\"object\":\"organization_membership\",\"organization\":{{\"object\":\"organization\",\"id\":\"{orgId}\"}}}}],\"total_count\":{total}}}";
             var (status, json) = (request.Method.Method, path) switch
             {
                 ("GET", $"organizations/{OrgId}/memberships") when !failMembers => (HttpStatusCode.OK,
-                    "{\"data\":[" + string.Join(",", new[] { "only", "shared", "staff" }.Select(u =>
-                        $"{{\"public_user_data\":{{\"user_id\":\"user_test_{u}\",\"identifier\":\"{u}@example.test\"}}}}")) + "],\"total_count\":3}"),
+                    "{\"data\":[" + string.Join(",", new[] { "only", "shared", "staff", "elsewhere" }.Select(u =>
+                        $"{{\"public_user_data\":{{\"user_id\":\"user_test_{u}\",\"identifier\":\"{u}@example.test\"}}}}")) + "],\"total_count\":4}"),
                 ("GET", "users/user_test_only/organization_memberships") => (HttpStatusCode.OK, Memberships(1)),
                 ("GET", "users/user_test_shared/organization_memberships") => (HttpStatusCode.OK, Memberships(2)),
                 ("GET", "users/user_test_staff/organization_memberships") => (HttpStatusCode.OK, Memberships(1)),
+                // One membership, but in another organisation: the user is kept.
+                ("GET", "users/user_test_elsewhere/organization_memberships") => (HttpStatusCode.OK, Memberships(1, "org_test_2")),
                 ("DELETE", "users/user_test_only") => (HttpStatusCode.NotFound, "{}"),
                 ("DELETE", $"organizations/{OrgId}") => (HttpStatusCode.OK, "{}"),
                 _ => (HttpStatusCode.InternalServerError, "{}"),
