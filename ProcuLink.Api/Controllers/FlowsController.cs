@@ -161,4 +161,18 @@ public sealed class FlowsController(
             var error => Conflict(new { error }),
         };
     }
+
+    [HttpDelete("{id:guid}")]
+    [RequireOrgAdmin]
+    public async Task<IActionResult> Delete(Guid id, [FromServices] IDocumentEraser eraser, CancellationToken ct)
+    {
+        if (Refuse() is { } refused) return refused;
+        var flow = await db.Flows.PersonFlows(tenant.OrganisationId).AsNoTracking().FirstOrDefaultAsync(f => f.Id == id, ct);
+        if (flow is null) return FlowNotFound();
+        return await FlowDeletion.DeleteAsync(db, eraser, flow, tenant.ClerkUserId, ct) switch
+        {
+            null => NoContent(),
+            var error => Conflict(new { error }),
+        };
+    }
 }
