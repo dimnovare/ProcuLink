@@ -23,7 +23,7 @@ namespace ProcuLink.Transform.Output;
 /// N1*BT*{billToName}~ N3*{street}~ N4*{city}**{postal}*{country}~              (bill-to, optional)
 /// N1*BY*{buyerName}~                                                            (buyer, name-only, optional)
 /// PER*BD*{contactName}*EM*{email}*TE*{phone}~                                   (order contact, optional)
-/// PO1*1*{qty}*{uom}*{price}*PE*BP*{buyerItemCode}*VP*{supplierItemCode}~
+/// PO1*1*{qty}*{uom}*{price}*PE[*BP*{buyerItemCode}][*VP*{supplierItemCode}]~
 /// PID*F****{description}~
 /// CTT*{lineCount}~
 /// SE*{segmentCount}*0001~
@@ -102,8 +102,7 @@ public sealed class X12TransformService : ITransformService
         var isaVersion   = DeriveIsaVersion(env?.Version);
         var usage        = Blank(env?.UsageIndicator,       DefaultUsageIndicator);
 
-        // Existing review guard + format-required-field checks (empty BP buyer code,
-        // missing / zero unit price). Throws TransformValidationException so the lines
+        // Existing review guard + format-required-field checks (missing / zero unit price). Throws TransformValidationException so the lines
         // surface in /operations/exceptions instead of an invalid / $0 850.
         OutputFieldValidator.ValidateEntity(order, format);
 
@@ -186,8 +185,10 @@ public sealed class X12TransformService : ITransformService
 
         foreach (var line in order.Lines.OrderBy(l => l.LineNumber))
         {
-            // PO1*{n}*{qty}*{uom}*{price}*PE[*BP*{buyer}]*VP*{supplier}: BP only when the order carries a buyer code.
+            // PO1*{n}*{qty}*{uom}*{price}*PE[*BP*{buyer}][*VP*{supplier}]: each pair only when its code is there,
+            // because a qualifier with no value breaks the pairing a receiver reads.
             string[] buyerCode = string.IsNullOrWhiteSpace(line.BuyerItemCode) ? [] : ["BP", Sanitize(line.BuyerItemCode)];
+            string[] supplierCode = string.IsNullOrWhiteSpace(line.SupplierItemCode) ? [] : ["VP", Sanitize(line.SupplierItemCode)];
             tx.Add(Segment(elementSep, "PO1",
                 [line.LineNumber.ToString(CultureInfo.InvariantCulture),
                 Num(line.Quantity),
@@ -195,7 +196,7 @@ public sealed class X12TransformService : ITransformService
                 StandardCodes.Price(line.UnitPrice),
                 "PE",
                 .. buyerCode,
-                "VP", Sanitize(line.SupplierItemCode ?? string.Empty)]));
+                .. supplierCode]));
 
             if (!string.IsNullOrWhiteSpace(line.Description))
                 tx.Add(Segment(elementSep, "PID", "F", "", "", "", Sanitize(line.Description)));
