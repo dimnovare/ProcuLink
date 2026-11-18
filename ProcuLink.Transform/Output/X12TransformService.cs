@@ -192,7 +192,7 @@ public sealed class X12TransformService : ITransformService
                 [line.LineNumber.ToString(CultureInfo.InvariantCulture),
                 Num(line.Quantity),
                 StandardCodes.X12Unit(line.Unit),
-                Num(line.UnitPrice),
+                StandardCodes.Price(line.UnitPrice),
                 "PE",
                 .. buyerCode,
                 "VP", Sanitize(line.SupplierItemCode ?? string.Empty)]));

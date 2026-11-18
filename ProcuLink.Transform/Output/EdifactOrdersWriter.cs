@@ -68,7 +68,7 @@ public static class EdifactOrdersWriter
             message.Add($"LIN+{line.LineNumber.ToString(CultureInfo.InvariantCulture)}++{Esc(line.SupplierItemCode)}:SA");
             if (!string.IsNullOrWhiteSpace(line.Description)) message.Add($"IMD+F++:::{Esc(line.Description)}");
             message.Add($"QTY+21:{Num(line.Quantity)}:{StandardCodes.Rec20Unit(line.Unit)}");
-            message.Add($"PRI+AAA:{Num(line.UnitPrice)}");
+            message.Add($"PRI+AAA:{StandardCodes.Price(line.UnitPrice)}");
         }
         message.Add("UNS+S");
         message.Add($"CNT+2:{lines.Count.ToString(CultureInfo.InvariantCulture)}");

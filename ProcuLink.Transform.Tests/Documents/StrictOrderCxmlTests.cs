@@ -30,6 +30,7 @@ public class StrictOrderCxmlTests
         var country = header.Element("ShipTo")!.Descendants("Country").Single();
         ((string)country.Attribute("isoCountryCode")!, country.Value).Should().Be(("DE", "Germany"));
         header.Element("Contact")!.Element("Name")!.Value.Should().Be("Example Buyer Ltd");
+        header.Descendants("Address").Elements("Email").Should().BeEmpty("Email is optional and no address email was read");
 
         var item = doc.Descendants("ItemOut").First();
         ((string)item.Attribute("requestedDeliveryDate")!).Should().Be("2026-12-15T00:00:00");
@@ -44,6 +45,13 @@ public class StrictOrderCxmlTests
         var text = await StrictOrderFixture.Render("cxml-1-2", StrictOrderFixture.Read(without: [FieldMeanings.DeliveryStreet]));
         var shipTo = XDocument.Parse(text).Descendants("ShipTo").Single().Element("Address")!;
         (shipTo.Element("Name")!.Value, shipTo.Element("PostalAddress")).Should().Be(("Example Buyer Ltd Warehouse", (XElement?)null));
+
+        var nameless = XDocument.Parse(await StrictOrderFixture.Render("cxml-1-2", StrictOrderFixture.Read(without: [FieldMeanings.DeliveryName])))
+            .Descendants("ShipTo").Single().Element("Address")!;
+        var postal = nameless.Element("PostalAddress")!;
+        (nameless.Element("Name")!.Value, postal.Element("Street")!.Value, postal.Element("City")!.Value, postal.Element("PostalCode")!.Value,
+            (string)postal.Element("Country")!.Attribute("isoCountryCode")!)
+            .Should().Be((StrictOrderFixture.BuyerName, "Warehouse Road 3", "Hamburg", "20095", "DE"));
 
         var refused = await StandardOutputs.RenderAsync("cxml-1-2", StrictOrderFixture.Read(without: [FieldMeanings.SenderName]),
             FlowFieldList.Empty, "lines", Guid.Empty, CancellationToken.None);

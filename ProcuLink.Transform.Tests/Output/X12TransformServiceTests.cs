@@ -383,7 +383,7 @@ public class X12TransformServiceTests
         var svc = new X12TransformService();
         var result = await svc.TransformAsync(BuildOrder(lines: lines), OutputFormat.X12, CancellationToken.None);
 
-        SplitSegments(await ReadContentAsString(result)).Should().Contain("PO1*1*1*EA*5*PE*VP*SUP-1");
+        SplitSegments(await ReadContentAsString(result)).Should().Contain("PO1*1*1*EA*5.00*PE*VP*SUP-1");
     }
 
     [Fact]

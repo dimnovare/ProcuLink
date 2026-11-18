@@ -125,7 +125,8 @@ public sealed class CxmlTransformService : ITransformService
         var timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
         var currency  = string.IsNullOrWhiteSpace(order.Currency) ? "EUR" : order.Currency;
 
-        var totalAmount = order.Lines.Sum(l => l.Quantity * l.UnitPrice)
+        // The sum of the line amounts each rounded to the cent, as UBL computes them, so both documents agree.
+        var totalAmount = order.Lines.Sum(l => Math.Round(l.Quantity * l.UnitPrice, 2, MidpointRounding.AwayFromZero))
                               .ToString("F2", CultureInfo.InvariantCulture);
 
         // ── Configurable DOCTYPE (T7) ─────────────────────────────────────────
@@ -342,20 +343,19 @@ public sealed class CxmlTransformService : ITransformService
     private static bool IsBlank(string? s) => string.IsNullOrWhiteSpace(s);
 
     /// <summary>
-    /// <c>&lt;ShipTo&gt;</c> wrapping the ship-to address, or null when there is no ship-to name
-    /// (→ no node → byte-identical output for orders without a ship-to address). A null returned
-    /// here is ignored by the parent <c>OrderRequestHeader</c> XElement (XLinq drops null content).
-    /// Gated on the NAME specifically: the cXML 1.2 DTD declares <c>Name+</c> (required) inside
-    /// <c>Address</c>, so a name-less address can never be a valid block — we drop it rather than
-    /// emit a DTD-invalid Name-less <c>&lt;Address&gt;</c>. (Realistic POs always carry a ship-to name.)
+    /// <c>&lt;ShipTo&gt;</c> wrapping the ship-to address, or null when neither a ship-to name nor any
+    /// ship-to address field is present (→ no node; XLinq drops null content). The cXML 1.2 DTD declares
+    /// <c>Name+</c> inside <c>Address</c>, so a nameless ship-to takes the buyer's name.
     /// </summary>
     private static XElement? BuildShipTo(PurchaseOrderEntity o)
     {
-        if (IsBlank(o.ShipToName))
+        if (IsBlank(o.ShipToName) && IsBlank(o.ShipToStreet) && IsBlank(o.ShipToCity)
+            && IsBlank(o.ShipToPostalCode) && IsBlank(o.ShipToCountry))
             return null;
 
+        // A delivery address read without an addressee line still ships there: Name+ is required, so the buyer's name fills it.
         return new XElement("ShipTo",
-            BuildAddress(o.ShipToName, o.ShipToDeliverTo, o.ShipToStreet, o.ShipToCity,
+            BuildAddress(IsBlank(o.ShipToName) ? OrderHeaderReader.ExtractBuyerName(o) : o.ShipToName, o.ShipToDeliverTo, o.ShipToStreet, o.ShipToCity,
                 o.ShipToPostalCode, o.ShipToCountry, o.ShipToEmail, o.ShipToPhone));
     }
 
@@ -378,9 +378,8 @@ public sealed class CxmlTransformService : ITransformService
     /// Builds the cXML <c>&lt;Address&gt;</c> sub-tree: a null-gated <c>&lt;Name xml:lang="en"&gt;</c>,
     /// a <c>&lt;PostalAddress&gt;</c> (DeliverTo*, Street+, City, PostalCode?, Country) only when street, city and
     /// an ISO country code are all present (the DTD requires them; a partial address keeps only its Name),
-    /// its <c>Country</c> carrying the required <c>isoCountryCode</c> with the read text as content, an
-    /// ALWAYS-emitted <c>&lt;Email&gt;</c> (empty when blank — matches the MapForce reference output's
-    /// <c>&lt;Email/&gt;</c>), and a null-gated <c>&lt;Phone&gt;&lt;TelephoneNumber&gt;&lt;Number&gt;</c>.
+    /// its <c>Country</c> carrying the required <c>isoCountryCode</c> with the read text as content, a
+    /// null-gated <c>&lt;Email&gt;</c> (<c>Email?</c> in the DTD), and a null-gated <c>&lt;Phone&gt;&lt;TelephoneNumber&gt;&lt;Number&gt;</c>.
     /// </summary>
     private static XElement BuildAddress(
         string? name, string? deliverTo, string? street, string? city,
@@ -397,7 +396,7 @@ public sealed class CxmlTransformService : ITransformService
                     new XElement("City",   city),
                     IsBlank(postal)    ? null : new XElement("PostalCode", postal),
                     new XElement("Country", new XAttribute("isoCountryCode", isoCountry), country)),
-            new XElement("Email", email ?? string.Empty),
+            IsBlank(email) ? null : new XElement("Email", email),
             IsBlank(phone) ? null
                 : new XElement("Phone",
                     new XElement("TelephoneNumber",
@@ -431,7 +430,7 @@ public sealed class CxmlTransformService : ITransformService
 
     private static XElement BuildItemOut(PurchaseOrderLineEntity line, string currency, DateOnly? requestedDeliveryDate)
     {
-        var unitPriceStr = line.UnitPrice.ToString("F2", CultureInfo.InvariantCulture);
+        var unitPriceStr = StandardCodes.Price(line.UnitPrice);
         var quantityStr  = line.Quantity.ToString(CultureInfo.InvariantCulture);
 
         return new XElement("ItemOut",

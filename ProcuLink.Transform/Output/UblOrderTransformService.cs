@@ -367,7 +367,7 @@ public sealed class UblOrderTransformService : ITransformService
     private static XElement BuildOrderLine(PurchaseOrderLineEntity line, string currency)
     {
         var quantityStr            = line.Quantity.ToString(CultureInfo.InvariantCulture);
-        var unitPriceStr           = line.UnitPrice.ToString("F2", CultureInfo.InvariantCulture);
+        var unitPriceStr           = StandardCodes.Price(line.UnitPrice);
         var lineExtensionAmountStr = LineAmount(line).ToString("F2", CultureInfo.InvariantCulture);
 
         var unitCode = StandardCodes.Rec20Unit(line.Unit);
