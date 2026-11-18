@@ -34,7 +34,7 @@ public static class EdifactOrdersWriter
         message.Add($"CUX+2:{Esc(currency)}:9");
         foreach (var line in lines)
         {
-            message.Add($"LIN+{line.LineNumber.ToString(CultureInfo.InvariantCulture)}++{Esc(line.BuyerItemCode)}:IN");
+            message.Add($"LIN+{line.LineNumber.ToString(CultureInfo.InvariantCulture)}++{Esc(line.SupplierItemCode)}:SA");
             if (!string.IsNullOrWhiteSpace(line.Description)) message.Add($"IMD+F++:::{Esc(line.Description)}");
             message.Add($"QTY+21:{Num(line.Quantity)}");
             message.Add($"PRI+AAA:{Num(line.UnitPrice)}");

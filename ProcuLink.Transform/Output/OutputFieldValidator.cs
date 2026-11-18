@@ -108,7 +108,9 @@ public static class OutputFieldValidator
     {
         OutputFormat.EdifactOrders => true, // LIN C212/7140 item number — mandatory
         OutputFormat.X12_850       => true, // PO1 BP qualifier + value
-        OutputFormat.X12           => true, // entity-based X12 PO1 BP qualifier + value
+        // The entity X12 writer carries the item on VP and writes BP only when a buyer code exists; the supplier
+        // item code is already required for every format.
+        OutputFormat.X12           => false,
         _ => false,
     };
 

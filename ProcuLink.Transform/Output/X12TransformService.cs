@@ -177,15 +177,16 @@ public sealed class X12TransformService : ITransformService
 
         foreach (var line in order.Lines.OrderBy(l => l.LineNumber))
         {
-            // PO1*{n}*{qty}*{uom}*{price}*PE*BP*{buyer}*VP*{supplier}
+            // PO1*{n}*{qty}*{uom}*{price}*PE[*BP*{buyer}]*VP*{supplier}: BP only when the order carries a buyer code.
+            string[] buyerCode = string.IsNullOrWhiteSpace(line.BuyerItemCode) ? [] : ["BP", Sanitize(line.BuyerItemCode)];
             tx.Add(Segment(elementSep, "PO1",
-                line.LineNumber.ToString(CultureInfo.InvariantCulture),
+                [line.LineNumber.ToString(CultureInfo.InvariantCulture),
                 Num(line.Quantity),
                 string.IsNullOrWhiteSpace(line.Unit) ? "EA" : Sanitize(line.Unit),
                 Num(line.UnitPrice),
                 "PE",
-                "BP", Sanitize(line.BuyerItemCode),
-                "VP", Sanitize(line.SupplierItemCode ?? string.Empty)));
+                .. buyerCode,
+                "VP", Sanitize(line.SupplierItemCode ?? string.Empty)]));
 
             if (!string.IsNullOrWhiteSpace(line.Description))
                 tx.Add(Segment(elementSep, "PID", "F", "", "", "", Sanitize(line.Description)));

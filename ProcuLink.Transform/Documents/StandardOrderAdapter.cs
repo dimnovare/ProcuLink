@@ -55,12 +55,10 @@ public static partial class StandardOrderAdapter
                     Vat = a.Text(FieldMeanings.ReceiverVatId),
                 }]
                 : [],
-            // One code fills both: X12 needs the buyer's (BP), every writer needs the supplier's.
             Lines = a.Rows.Select((r, i) => new PurchaseOrderLineEntity
             {
                 LineNumber = a.LineNumber(i),
                 SupplierItemCode = a.Cell(r, FieldMeanings.LineItemCode),
-                BuyerItemCode = a.Cell(r, FieldMeanings.LineItemCode) ?? "",
                 Description = a.Cell(r, FieldMeanings.LineDescription),
                 Quantity = a.Number(r, FieldMeanings.LineQuantity),
                 Unit = a.Cell(r, FieldMeanings.LineUnit),
