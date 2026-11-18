@@ -20,6 +20,22 @@ namespace ProcuLink.Transform.Output;
 /// </summary>
 internal static class OrderHeaderReader
 {
+    /// <summary>The order's supplier party: the first <see cref="OrderParty"/> whose role is <c>"supplier"</c>, or null.</summary>
+    public static OrderParty? SupplierParty(PurchaseOrderEntity order) => order.Parties.FirstOrDefault(p => p.Role == "supplier");
+
+    /// <summary>
+    /// The name to write the ship-to under: its own name, else the buyer's when a delivery address was read without an
+    /// addressee line (so the goods still go there, not to the billing address); null when there is no ship-to to write.
+    /// </summary>
+    public static string? ShipToName(PurchaseOrderEntity order)
+    {
+        if (!string.IsNullOrWhiteSpace(order.ShipToName)) return order.ShipToName;
+        var anyAddress = new[] { order.ShipToStreet, order.ShipToCity, order.ShipToPostalCode, order.ShipToCountry }
+            .Any(v => !string.IsNullOrWhiteSpace(v));
+        var buyer = ExtractBuyerName(order);
+        return anyAddress && !string.IsNullOrWhiteSpace(buyer) ? buyer : null;
+    }
+
     /// <summary>
     /// Resolve the buyer name: the denormalised <see cref="PurchaseOrderEntity.BuyerName"/> column
     /// first, then the <c>buyerName</c> / <c>BuyerName</c> property in <c>CanonicalJson</c>. Returns

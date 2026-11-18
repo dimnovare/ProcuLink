@@ -26,7 +26,7 @@ public static class StandardOutputs
         FieldMeanings.LineQuantity, FieldMeanings.LineUnitPrice, FieldMeanings.LineItemCode,
     ];
 
-    // cXML also needs a unit: its writer writes a blank one, which networks refuse. UBL also needs both parties: its writer otherwise names them with placeholders.
+    // cXML also needs a unit (networks refuse a guessed one) and the buyer's name (its DTD requires BillTo/Address/Name). UBL also needs both parties: its writer otherwise names them with placeholders.
     private static readonly IReadOnlyList<string> PeppolNeeds =
     [
         FieldMeanings.DocumentNumber, FieldMeanings.IssueDate, FieldMeanings.Currency,
@@ -50,7 +50,7 @@ public static class StandardOutputs
 
     public static readonly IReadOnlyList<StandardOutput> All =
     [
-        new("cxml-1-2", OutputFormat.CXml, FlowOutputFormats.Xml, [.. OrderNeeds, FieldMeanings.LineUnit]),
+        new("cxml-1-2", OutputFormat.CXml, FlowOutputFormats.Xml, [.. OrderNeeds, FieldMeanings.LineUnit, FieldMeanings.SenderName]),
         new("ubl-2-1-order", OutputFormat.Ubl, FlowOutputFormats.Xml, [.. OrderNeeds, FieldMeanings.SenderName, FieldMeanings.ReceiverName]),
         new("x12-850", OutputFormat.X12, FlowOutputFormats.Text, OrderNeeds),
         new("peppol-bis-billing-3", OutputFormat.Ubl, FlowOutputFormats.Xml, PeppolNeeds, "eu.peppol.bis3:invoice:2026.5", true),
@@ -96,7 +96,9 @@ public static class StandardOutputs
                 return new(TransformResult.For(OutputFormat.EdifactOrders,
                     new MemoryStream(System.Text.Encoding.UTF8.GetBytes(EdifactOrdersWriter.Write(order!, new EdifactEnvelope())), writable: false)), null, null);
             var writer = OutputTransformRegistry.All.First(w => w.CanTransform(standard.Writer));
-            return new(await writer.TransformAsync(order!, standard.Writer, ct), null, null);
+            // A flow's cXML declares its DTD (the legacy order path declares one only when configured).
+            var cxml = standard.Writer == OutputFormat.CXml ? CxmlTransformService.StandardOutputConfig : null;
+            return new(await writer.TransformAsync(order!, standard.Writer, ct, cxml), null, null);
         }
         catch (Exception ex) when (ex is TransformValidationException or ArgumentException or InvalidOperationException or XmlException or OverflowException)
         {

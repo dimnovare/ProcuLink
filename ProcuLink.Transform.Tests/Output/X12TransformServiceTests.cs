@@ -368,7 +368,7 @@ public class X12TransformServiceTests
     }
 
     [Fact]
-    public async Task TransformAsync_EmptyBuyerItemCode_IsRejected()
+    public async Task TransformAsync_EmptyBuyerItemCode_WritesTheItemOnVpOnly_BecauseTheSuppliersCodeIsTheItem()
     {
         var lines = new[]
         {
@@ -381,10 +381,9 @@ public class X12TransformServiceTests
         };
 
         var svc = new X12TransformService();
-        var act = async () => await svc.TransformAsync(BuildOrder(lines: lines), OutputFormat.X12, CancellationToken.None);
+        var result = await svc.TransformAsync(BuildOrder(lines: lines), OutputFormat.X12, CancellationToken.None);
 
-        var ex = await act.Should().ThrowAsync<TransformValidationException>();
-        ex.Which.Problems.Should().Contain(p => p.Kind == LineProblemKind.MissingItemCode);
+        SplitSegments(await ReadContentAsString(result)).Should().Contain("PO1*1*1*EA*5.00*PE*VP*SUP-1");
     }
 
     [Fact]

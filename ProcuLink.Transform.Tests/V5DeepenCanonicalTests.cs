@@ -156,7 +156,9 @@ public class V5DeepenCanonicalTests
     public async Task FixedTransform_V5FieldNamesAbsentInOutput(OutputFormat format)
     {
         var order = ResolvedEntity();
-        order.RequestedDeliveryDate = new DateOnly(2026, 12, 31);
+        // A different date from the lines' own: cXML writes the order's requested delivery date on ItemOut
+        // (plan 22), and the assertion below is about the line DeliveryDate value not bleeding through.
+        order.RequestedDeliveryDate = new DateOnly(2026, 12, 30);
         foreach (var l in order.Lines)
         {
             l.TaxRate      = 0.23m;
@@ -179,7 +181,7 @@ public class V5DeepenCanonicalTests
             $"Fixed {format} transform must not emit the V5 TaxRate field");
 
         // DeliveryDate: check only that the specific ISO value "2026-12-31" does not appear.
-        // Neither CxmlTransformService nor JsonTransformService write a delivery-date field.
+        // Neither CxmlTransformService nor JsonTransformService write a line delivery-date field.
         text.Should().NotContain("2026-12-31",
             $"Fixed {format} transform must not bleed the V5 DeliveryDate value into output");
     }

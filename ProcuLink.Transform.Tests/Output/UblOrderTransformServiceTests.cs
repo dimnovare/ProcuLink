@@ -265,7 +265,7 @@ public class UblOrderTransformServiceTests
         postal.Element(Cbc + "StreetName")!.Value.Should().Be("Place des Essais Nord");
         postal.Element(Cbc + "CityName")!.Value.Should().Be("VILLE-EXEMPLE");
         postal.Element(Cbc + "PostalZone")!.Value.Should().Be("99000");
-        postal.Element(Cac + "Country")!.Element(Cbc + "IdentificationCode")!.Value.Should().Be("FRANCE");
+        postal.Element(Cac + "Country")!.Element(Cbc + "IdentificationCode")!.Value.Should().Be("FR");
 
         // BuyerCustomerParty/Party/Contact fed from Contact*.
         var contact = buyerParty.Element(Cac + "Contact")!;
@@ -289,7 +289,7 @@ public class UblOrderTransformServiceTests
         address.Element(Cbc + "StreetName")!.Value.Should().Be("12 rue des Essais B12-3 (CTX_0000)");
         address.Element(Cbc + "CityName")!.Value.Should().Be("VILLE-EXEMPLE");
         address.Element(Cbc + "PostalZone")!.Value.Should().Be("99040");
-        address.Element(Cac + "Country")!.Element(Cbc + "IdentificationCode")!.Value.Should().Be("FRANCE");
+        address.Element(Cac + "Country")!.Element(Cbc + "IdentificationCode")!.Value.Should().Be("FR");
 
         // Delivery/DeliveryParty/PartyName/Name fed from ShipToName.
         delivery.Element(Cac + "DeliveryParty")!.Element(Cac + "PartyName")!.Element(Cbc + "Name")!

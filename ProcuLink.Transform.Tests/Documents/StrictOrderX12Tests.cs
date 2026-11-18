@@ -1,0 +1,46 @@
+using FluentAssertions;
+using ProcuLink.Core.Documents;
+using ProcuLink.Core.Services;
+using ProcuLink.Transform.Conformance;
+using Xunit;
+
+namespace ProcuLink.Transform.Tests.Documents;
+
+public class StrictOrderX12Tests
+{
+    [Fact]
+    public async Task The_850_carries_every_read_value_in_heading_order()
+    {
+        var text = await StrictOrderFixture.Render("x12-850");
+        new ConformanceService().Check(text, OutputFormat.X12).ErrorCount.Should().Be(0);
+        text.IndexOf('~').Should().Be(105, "ISA is fixed-width: 105 characters before its terminator");
+
+        var segs = text.Split('~', StringSplitOptions.RemoveEmptyEntries);
+        var tx = segs.SkipWhile(s => !s.StartsWith("ST*")).TakeWhile(s => !s.StartsWith("GE*")).ToArray();
+        tx.Should().Equal(
+            "ST*850*0001", "BEG*00*NE*PO-2026-0042**20261118", "CUR*BY*EUR", "DTM*002*20261215",
+            "N1*ST*Example Buyer Ltd Warehouse", "N3*Warehouse Road 3", "N4*Hamburg**20095*DE",
+            "N1*BT*Example Buyer Ltd", "N3*Example Street 1", "N4*Berlin**10115*DE",
+            "N1*BY*Example Buyer Ltd", "REF*VX*DE000000000", "PER*BD**EM*orders@example.com",
+            "N1*VN*Example Supplier OU", "N3*Example Road 2", "N4*Tallinn**10111*EE", "REF*VX*EE000000000",
+            "PO1*1*100*PC*0.25*PE*VP*A-100", "PID*F****Hex bolt M8",
+            "PO1*2*200*PC*0.05*PE*VP*B-200", "PID*F****Washer M8",
+            "PO1*3*20*PC*1.25*PE*VP*C-300", "PID*F****Compression spring",
+            "CTT*3", "SE*25*0001");
+    }
+
+    [Fact]
+    public async Task A_delivery_address_read_without_a_name_is_sent_under_the_buyers_name()
+    {
+        var segs = (await StrictOrderFixture.Render("x12-850", StrictOrderFixture.Read(without: [FieldMeanings.DeliveryName]))).Split('~');
+        segs.SkipWhile(s => !s.StartsWith("N1*ST")).Take(3).Should().Equal("N1*ST*Example Buyer Ltd", "N3*Warehouse Road 3", "N4*Hamburg**20095*DE");
+        segs.Should().Contain("SE*25*0001");
+    }
+
+    [Fact]
+    public async Task An_address_without_a_country_writes_no_trailing_separator()
+    {
+        var segs = (await StrictOrderFixture.Render("x12-850", StrictOrderFixture.Read(without: [FieldMeanings.DeliveryCountry]))).Split('~');
+        segs.Should().Contain("N4*Hamburg**20095").And.NotContain(s => s.EndsWith('*'));
+    }
+}

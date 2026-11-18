@@ -83,7 +83,7 @@ public class StandardOutputsTests
     ];
 
     // Two lines and no line tax rate: the header's 21 / 100 is the lines' rate. Endpoints are GLN-valid test ids.
-    private static ReadResult InvoiceRead(string senderEndpoint = "0088:0000000000000")
+    private static ReadResult InvoiceRead(string senderEndpoint = "0088:0000000000000", string unit = "C62")
     {
         ReadRow Row(params string[] values) => new(InvoiceColumns.Select((c, i) => (c, i))
             .ToDictionary(x => FieldKey.Normalise(x.c.Label), x => new ReadCell(values[x.i], 1, null, false, false)));
@@ -96,7 +96,7 @@ public class StandardOutputsTests
              Field("Seller VAT", "LV00000000000", FieldMeanings.SenderVatId), Field("Buyer reference", "BUYER-REF-1", FieldMeanings.BuyerReference),
              Field("Net", "100.00", FieldMeanings.TotalNet), Field("Tax", "21.00", FieldMeanings.TotalTax), Field("Gross", "121.00", FieldMeanings.TotalGross)],
             [new ReadTable("lines", "Lines", InvoiceColumns.Select(c => new ReadColumn(FieldKey.Normalise(c.Label), c.Label, "text", c.Meaning)).ToList(),
-                [Row("Bolt", "3", "C62", "20.00", "60.00"), Row("Nut", "2", "C62", "20.00", "40.00")], true)]);
+                [Row("Bolt", "3", unit, "20.00", "60.00"), Row("Nut", "2", unit, "20.00", "40.00")], true)]);
     }
 
     [Theory]
@@ -111,6 +111,13 @@ public class StandardOutputsTests
         var lineRates = doc.Descendants().Where(e => e.Name.LocalName == "ClassifiedTaxCategory").Select(e => e.Elements().Single(x => x.Name.LocalName == "Percent").Value);
         lineRates.Should().Equal("21.00", "21.00");
         doc.Descendants().Count(e => e.Name.LocalName == "Country" && e.Elements().Any(x => x.Name.LocalName == "IdentificationCode")).Should().Be(2);
+    }
+
+    [Fact]
+    public async Task An_invoice_line_unit_is_written_as_its_rec_20_code()
+    {
+        var doc = XDocument.Parse(Text(await Render("peppol-bis-billing-3", InvoiceRead(unit: "pcs"))));
+        doc.Descendants().Where(e => e.Name.LocalName == "InvoicedQuantity").Select(e => (string?)e.Attribute("unitCode")).Should().Equal("H87", "H87");
     }
 
     // The read printed negative: each listed meaning's value carries a minus sign.
