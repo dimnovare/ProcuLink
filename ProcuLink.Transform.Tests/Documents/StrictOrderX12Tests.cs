@@ -36,4 +36,11 @@ public class StrictOrderX12Tests
         segs.SkipWhile(s => !s.StartsWith("N1*ST")).Take(3).Should().Equal("N1*ST*Example Buyer Ltd", "N3*Warehouse Road 3", "N4*Hamburg**20095*DE");
         segs.Should().Contain("SE*25*0001");
     }
+
+    [Fact]
+    public async Task An_address_without_a_country_writes_no_trailing_separator()
+    {
+        var segs = (await StrictOrderFixture.Render("x12-850", StrictOrderFixture.Read(without: [FieldMeanings.DeliveryCountry]))).Split('~');
+        segs.Should().Contain("N4*Hamburg**20095").And.NotContain(s => s.EndsWith('*'));
+    }
 }
