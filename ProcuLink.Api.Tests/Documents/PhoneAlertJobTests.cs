@@ -47,7 +47,8 @@ public class PhoneAlertJobTests(DocumentEngineTestFactory factory) : IClassFixtu
     private static void Doc(ProcuLinkDbContext db, Guid org, string status, string? action, DateTime at, string checks = "[]", bool sample = false)
     {
         var flow = new Flow { Id = Guid.NewGuid(), OrgId = org, Name = "Invoices" };
-        var doc = new FlowDocument { Id = Guid.NewGuid(), OrgId = org, FlowId = flow.Id, Status = status, ChecksJson = checks, IsSample = sample, CreatedAt = at };
+        var doc = new FlowDocument { Id = Guid.NewGuid(), OrgId = org, FlowId = flow.Id, Status = status, ChecksJson = checks, IsSample = sample, CreatedAt = at,
+            FileName = "plan20-invoice.pdf", SourceRef = "billing@example.test" };
         db.AddRange(flow, doc);
         if (action is not null)
             db.Add(new AuditEvent { Id = Guid.NewGuid(), OrgId = org, EntityType = "FlowDocument", EntityId = doc.Id, Action = action, CreatedAt = at });
@@ -103,7 +104,7 @@ public class PhoneAlertJobTests(DocumentEngineTestFactory factory) : IClassFixtu
             alert.EnumerateObject().Select(p => p.Name).Should().BeEquivalentTo("tag", "title", "body", "path", "count");
             alert.GetProperty("title").GetString().Should().Be("ProcuLink");
             alert.GetProperty("path").GetString().Should().StartWith("/").And.NotStartWith("//");
-            json.Should().NotContain("Invoices").And.NotContain(OrgA.ToString()).And.NotContain("example.test");
+            json.Should().NotContain("Invoices").And.NotContain(OrgA.ToString()).And.NotContain("example.test").And.NotContain("plan20-invoice");
         }
         a1.Should().OnlyContain(s => Parse(s.Json).GetProperty("count").GetInt32() == 2);
         sender.Sent.Should().NotContain(s => s.Endpoint == Endpoint("a2"));
@@ -121,6 +122,7 @@ public class PhoneAlertJobTests(DocumentEngineTestFactory factory) : IClassFixtu
         await Seed(db =>
         {
             Doc(db, OrgA, DocumentStatus.NeedsReview, "document.read", now.AddMinutes(-10));
+            Doc(db, OrgA, DocumentStatus.SendFailed, "document.delivery_failed", now.AddMinutes(-10)); // a second alert for D1, never sent once it is gone
             Doc(db, OrgB, DocumentStatus.NeedsReview, "document.read", now.AddMinutes(-10));
             Doc(db, OrgB, DocumentStatus.NeedsReview, "document.read", now.AddMinutes(-10));
             db.AddRange(Device(OrgA, "d1", before), Device(OrgA, "d2", before), Device(OrgA, "d3", before),
@@ -140,6 +142,7 @@ public class PhoneAlertJobTests(DocumentEngineTestFactory factory) : IClassFixtu
 
         var devices = await Devices();
         devices.Should().NotContain(d => d.Endpoint == Endpoint("d1"));
+        sender.Sent.Should().ContainSingle(s => s.Endpoint == Endpoint("d1"));
         devices.Single(d => d.Endpoint == Endpoint("d2")).LastCheckedAt.Should().Be(now);
         sender.Sent.Should().Contain(s => s.Endpoint == Endpoint("d3"));
         devices.Should().ContainSingle(d => d.Endpoint == Endpoint("shared")).Which.OrgId.Should().Be(OrgB);

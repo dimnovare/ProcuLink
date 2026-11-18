@@ -31,8 +31,14 @@ public class PhoneAlertJob(ProcuLinkDbContext db, IPhoneAlertSender sender, Docu
 
         // A browser has one subscription per origin: the newest workspace to save it owns it.
         var all = await db.Set<PushDevice>().ToListAsync(ct);
-        db.RemoveRange(all.GroupBy(d => d.Endpoint).SelectMany(g => g.OrderByDescending(d => d.CreatedAt).Skip(1)));
-        await db.SaveChangesAsync(ct);
+        var dupes = all.GroupBy(d => d.Endpoint).SelectMany(g => g.OrderByDescending(d => d.CreatedAt).Skip(1)).ToList();
+        if (dupes.Count > 0)
+        {
+            db.RemoveRange(dupes);
+            // A row deleted meanwhile (sign-out, members sync) must not stop the run; the next run retries the dedupe.
+            try { await db.SaveChangesAsync(ct); }
+            catch (DbUpdateConcurrencyException) { db.ChangeTracker.Clear(); }
+        }
 
         foreach (var orgId in all.Select(d => d.OrgId).Distinct().Where(gate.IsEnabled).ToList())
         {
