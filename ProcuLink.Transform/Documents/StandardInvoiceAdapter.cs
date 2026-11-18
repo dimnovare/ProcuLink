@@ -38,7 +38,7 @@ public static class StandardInvoiceAdapter
                 LineNumber = a.LineNumber(i),
                 Description = a.Cell(r, FieldMeanings.LineDescription) ?? "",
                 Quantity = a.Number(r, FieldMeanings.LineQuantity),
-                UnitCode = a.Cell(r, FieldMeanings.LineUnit) ?? "EA",
+                UnitCode = StandardCodes.Rec20Unit(a.Cell(r, FieldMeanings.LineUnit)),
                 UnitPrice = a.Number(r, FieldMeanings.LineUnitPrice),
                 LineTotal = a.Number(r, FieldMeanings.LineAmount),
                 TaxRate = FieldValueParser.Number(a.Cell(r, FieldMeanings.LineTaxRate)) ?? headerRate,
