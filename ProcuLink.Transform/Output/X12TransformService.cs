@@ -151,7 +151,7 @@ public sealed class X12TransformService : ITransformService
         // escape mechanism so a delimiter must be space-substituted, never allowed into the structure.
         var n1LoopStart = tx.Count;
         AppendN1Address(tx, elementSep, "ST",
-            order.ShipToName, order.ShipToStreet, order.ShipToCity, order.ShipToPostalCode,
+            OrderHeaderReader.ShipToName(order), order.ShipToStreet, order.ShipToCity, order.ShipToPostalCode,
             order.ShipToCountry, order.ShipToDeliverTo, order.ShipToEmail, order.ShipToPhone);
         AppendN1Address(tx, elementSep, "BT",
             order.BillToName, order.BillToStreet, order.BillToCity, order.BillToPostalCode,
@@ -285,8 +285,12 @@ public sealed class X12TransformService : ITransformService
 
     private static string Segment(char elementSep, string tag, params string[] elements)
     {
+        // X12.6: trailing empty elements (and their separators) are not transmitted. ISA is fixed-width and keeps every slot.
+        var count = elements.Length;
+        if (tag != "ISA")
+            while (count > 0 && elements[count - 1].Length == 0) count--;
         var sb = new StringBuilder(tag);
-        foreach (var e in elements)
+        foreach (var e in elements.Take(count))
             sb.Append(elementSep).Append(e);
         return sb.ToString();
     }

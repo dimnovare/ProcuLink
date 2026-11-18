@@ -14,7 +14,8 @@ public static class EdifactOrdersWriter
 {
     private static string Esc(string? text) => string.Concat((text ?? "").Select(c => char.IsControl(c) ? " " : ":+?'".Contains(c) ? "?" + c : c.ToString()));
 
-    private static string Num(decimal d) => d.ToString("0.####", CultureInfo.InvariantCulture);
+    // Full read precision, as the X12 850 writes it.
+    private static string Num(decimal d) => d.ToString(CultureInfo.InvariantCulture);
 
     /// <summary><c>NAD+{q}+++{name}+{street}+{city}++{postcode}+{iso}</c>, trailing empty elements left out.</summary>
     private static string Nad(string qualifier, string name, string? street, string? city, string? postcode, string? country)
@@ -60,8 +61,8 @@ public static class EdifactOrdersWriter
             var supplierVat = string.IsNullOrWhiteSpace(order.SellerTaxId) ? supplier?.Vat : order.SellerTaxId;
             if (!string.IsNullOrWhiteSpace(supplierVat)) message.Add($"RFF+VA:{Esc(supplierVat)}");
         }
-        if (!string.IsNullOrWhiteSpace(order.ShipToName))
-            message.Add(Nad("ST", order.ShipToName, order.ShipToStreet, order.ShipToCity, order.ShipToPostalCode, order.ShipToCountry));
+        if (OrderHeaderReader.ShipToName(order) is { } shipTo)
+            message.Add(Nad("ST", shipTo, order.ShipToStreet, order.ShipToCity, order.ShipToPostalCode, order.ShipToCountry));
         message.Add($"CUX+2:{Esc(currency)}:9");
         foreach (var line in lines)
         {

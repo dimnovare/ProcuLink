@@ -1,5 +1,6 @@
 using System.Text;
 using FluentAssertions;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Services;
 using ProcuLink.Transform.Conformance;
 using ProcuLink.Transform.Parsing;
@@ -28,9 +29,17 @@ public class StrictOrderEdifactTests
             "UNS+S", "CNT+2:3", "UNT+27+1");
 
         var parsed = await new EdifactOrderParser().ParseAsync(new MemoryStream(Encoding.UTF8.GetBytes(text)), CancellationToken.None);
+        // The parser files any LIN item code under BuyerItemCode whatever its 7143 qualifier, so ":SA" reads back here.
         parsed.Lines.Select(l => (l.BuyerItemCode, l.Unit)).Should().Equal(("A-100", "H87"), ("B-200", "H87"), ("C-300", "H87"));
         parsed.RequestedDeliveryDate.Should().Be(new DateOnly(2026, 12, 15));
         parsed.Parties!.Single(p => p.Role == "shipTo").Should().Match<ParsedParty>(p =>
             p.Name == StrictOrderFixture.ShipToName && p.City == StrictOrderFixture.ShipToCity && p.Country == "DE");
+    }
+
+    [Fact]
+    public async Task A_delivery_address_read_without_a_name_is_sent_under_the_buyers_name()
+    {
+        var text = await StrictOrderFixture.Render("edifact-orders", StrictOrderFixture.Read(without: [FieldMeanings.DeliveryName]));
+        text.Should().Contain("'NAD+ST+++Example Buyer Ltd+Warehouse Road 3+Hamburg++20095+DE'");
     }
 }

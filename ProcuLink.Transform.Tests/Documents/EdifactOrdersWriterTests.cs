@@ -65,7 +65,27 @@ public class EdifactOrdersWriterTests
         var text = await Render("Bolt 5' + nut: M?");
 
         (await Parse(text)).Lines[0].Description.Should().Be("Bolt 5' + nut: M?");
-        // UNT counts UNH..UNT: the segment terminators not preceded by the release character.
+        AssertUntCounts(Segments(text));
+    }
+
+    [Fact]
+    public async Task Released_delimiters_in_the_new_party_values()
+    {
+        var read = StrictOrderFixture.Read();
+        read = new ReadResult(read.KindLabel,
+            [.. read.Fields.Select(f => f.Meaning == FieldMeanings.DeliveryStreet ? f with { Value = "Dock 5+6 'B': gate" } : f),
+             new ReadField("contact", "Contact", "O'Neil: Sales+Ops", "text", FieldMeanings.SenderContactName, 1, null, false, true, false)],
+            read.Tables);
+        var segments = Segments(await StrictOrderFixture.Render("edifact-orders", read));
+
+        segments.Should().Contain("NAD+ST+++Example Buyer Ltd Warehouse+Dock 5?+6 ?'B?'?: gate+Hamburg++20095+DE")
+            .And.Contain("CTA+OC+:O?'Neil?: Sales?+Ops");
+        AssertUntCounts(segments);
+    }
+
+    // The segments, split on terminators not preceded by the release character.
+    private static List<string> Segments(string text)
+    {
         var segments = new List<string>();
         var current = new System.Text.StringBuilder();
         for (var i = 0; i < text.Length; i++)
@@ -74,6 +94,12 @@ public class EdifactOrdersWriterTests
             if (text[i] == '\'') { segments.Add(current.ToString().Trim()); current.Clear(); continue; }
             current.Append(text[i]);
         }
+        return segments;
+    }
+
+    // UNT counts UNH..UNT.
+    private static void AssertUntCounts(List<string> segments)
+    {
         var unh = segments.FindIndex(s => s.StartsWith("UNH"));
         var unt = segments.FindIndex(s => s.StartsWith("UNT"));
         segments[unt].Should().Be($"UNT+{unt - unh + 1}+1");

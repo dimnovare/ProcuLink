@@ -15,7 +15,7 @@ public static partial class StandardCodes
     /// </summary>
     public const string DefaultUnit = "EA";
 
-    /// <summary>A unit price as written by every order writer: the read precision, never fewer than 2 decimals.</summary>
+    /// <summary>A unit price as written by every order writer: at least 2 and up to 6 decimals (a longer read price is rounded at the 6th).</summary>
     public static string Price(decimal price) => price.ToString("0.00####", CultureInfo.InvariantCulture);
 
     // Box and pack use the Rec 21 package codes in the X-prefixed form the combined Rec 20/21 list (and Peppol's code

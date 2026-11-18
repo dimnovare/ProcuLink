@@ -1,4 +1,5 @@
 using FluentAssertions;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Services;
 using ProcuLink.Transform.Conformance;
 using Xunit;
@@ -26,5 +27,13 @@ public class StrictOrderX12Tests
             "PO1*2*200*PC*0.05*PE*VP*B-200", "PID*F****Washer M8",
             "PO1*3*20*PC*1.25*PE*VP*C-300", "PID*F****Compression spring",
             "CTT*3", "SE*25*0001");
+    }
+
+    [Fact]
+    public async Task A_delivery_address_read_without_a_name_is_sent_under_the_buyers_name()
+    {
+        var segs = (await StrictOrderFixture.Render("x12-850", StrictOrderFixture.Read(without: [FieldMeanings.DeliveryName]))).Split('~');
+        segs.SkipWhile(s => !s.StartsWith("N1*ST")).Take(3).Should().Equal("N1*ST*Example Buyer Ltd", "N3*Warehouse Road 3", "N4*Hamburg**20095*DE");
+        segs.Should().Contain("SE*25*0001");
     }
 }

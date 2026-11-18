@@ -349,13 +349,13 @@ public sealed class CxmlTransformService : ITransformService
     /// </summary>
     private static XElement? BuildShipTo(PurchaseOrderEntity o)
     {
-        if (IsBlank(o.ShipToName) && IsBlank(o.ShipToStreet) && IsBlank(o.ShipToCity)
-            && IsBlank(o.ShipToPostalCode) && IsBlank(o.ShipToCountry))
+        // Name+ is required: a nameless delivery address takes the buyer's name, and with neither there is no ShipTo.
+        var name = OrderHeaderReader.ShipToName(o);
+        if (name is null)
             return null;
 
-        // A delivery address read without an addressee line still ships there: Name+ is required, so the buyer's name fills it.
         return new XElement("ShipTo",
-            BuildAddress(IsBlank(o.ShipToName) ? OrderHeaderReader.ExtractBuyerName(o) : o.ShipToName, o.ShipToDeliverTo, o.ShipToStreet, o.ShipToCity,
+            BuildAddress(name, o.ShipToDeliverTo, o.ShipToStreet, o.ShipToCity,
                 o.ShipToPostalCode, o.ShipToCountry, o.ShipToEmail, o.ShipToPhone));
     }
 
