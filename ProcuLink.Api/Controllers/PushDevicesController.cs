@@ -77,7 +77,7 @@ public sealed partial class PushDevicesController(ProcuLinkDbContext db, ICurren
         var id = await Mine(request.Endpoint).Select(d => (Guid?)d.Id).FirstOrDefaultAsync(ct);
         if (id is null) return NotFound(new { error = "push_device_not_found" });
         jobs.Enqueue<PhoneAlertJob>(j => j.SendTestAsync(id.Value, CancellationToken.None));
-        return Accepted();
+        return NoContent();
     }
 
     private IQueryable<PushDevice> Mine(string? endpoint) =>

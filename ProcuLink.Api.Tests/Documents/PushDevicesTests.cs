@@ -81,7 +81,7 @@ public class PushDevicesTests(DocumentEngineTestFactory factory) : IClassFixture
         var queued = factory.Enqueued<ProcuLink.Api.Jobs.PhoneAlertJob>();
         (await b.PostAsJsonAsync("/api/push-devices/test", new { endpoint })).StatusCode.Should().Be(HttpStatusCode.NotFound);
         factory.Enqueued<ProcuLink.Api.Jobs.PhoneAlertJob>().Should().Be(queued);
-        (await a.PostAsJsonAsync("/api/push-devices/test", new { endpoint })).StatusCode.Should().Be(HttpStatusCode.Accepted);
+        (await a.PostAsJsonAsync("/api/push-devices/test", new { endpoint })).StatusCode.Should().Be(HttpStatusCode.NoContent);
         factory.Enqueued<ProcuLink.Api.Jobs.PhoneAlertJob>().Should().Be(queued + 1);
     }
 
