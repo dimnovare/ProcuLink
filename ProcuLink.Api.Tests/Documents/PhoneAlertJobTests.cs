@@ -177,4 +177,34 @@ public class PhoneAlertJobTests(DocumentEngineTestFactory factory) : IClassFixtu
         await Run(sender, today.AddHours(16).AddMinutes(10));
         sender.Sent.Should().HaveCount(1);
     }
+
+    [Fact]
+    public async Task A_test_alert_reaches_its_device_without_a_count_and_a_refused_device_is_removed()
+    {
+        var now = DateTime.UtcNow;
+        PushDevice ok = Device(OrgA, "ta", now), gone = Device(OrgA, "tb", now);
+        await Seed(db => db.AddRange(ok, gone));
+        var sender = new CapturingAlertSender();
+        sender.Results[gone.Endpoint] = PushResult.Gone;
+
+        foreach (var id in new[] { ok.Id, gone.Id })
+        {
+            using var scope = factory.Services.CreateScope();
+            await new PhoneAlertJob(scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>(), sender,
+                scope.ServiceProvider.GetRequiredService<DocumentEngineGate>(), NullLogger<PhoneAlertJob>.Instance).SendTestAsync(id, CancellationToken.None);
+        }
+
+        sender.Sent.Select(s => s.Endpoint).Should().Equal(ok.Endpoint, gone.Endpoint);
+        var test = Parse(sender.Sent[0].Json);
+        sender.Sent[0].Topic.Should().Be("test");
+        test.GetProperty("body").GetString().Should().Be(PhoneAlertJob.TestBody);
+        test.GetProperty("path").GetString().Should().Be("/settings?tab=workspace");
+        test.TryGetProperty("count", out _).Should().BeFalse();
+        (await Devices()).Select(d => d.Id).Should().Equal(ok.Id);
+    }
+
+    [Fact]
+    public void A_refusal_reason_is_logged_on_one_line_without_any_address() =>
+        WebPushAlertSender.Reason("push subscription https://fcm.googleapis.com/fcm/send/abc:APA91b has\n unsubscribed " + new string('x', 200))
+            .Should().StartWith("push subscription [address] has unsubscribed x").And.HaveLength(120);
 }

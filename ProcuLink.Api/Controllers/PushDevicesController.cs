@@ -1,8 +1,10 @@
 using System.Text.RegularExpressions;
+using Hangfire;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Api.Jobs;
 using ProcuLink.Api.Services.PhoneAlerts;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -14,7 +16,7 @@ namespace ProcuLink.Api.Controllers;
 [Authorize]
 [ApiController]
 [Route("api/push-devices")]
-public sealed partial class PushDevicesController(ProcuLinkDbContext db, ICurrentTenantService tenant) : ControllerBase
+public sealed partial class PushDevicesController(ProcuLinkDbContext db, ICurrentTenantService tenant, IBackgroundJobClient jobs) : ControllerBase
 {
     public sealed record PushDeviceRequest(string Endpoint, string P256dh, string Auth);
     public sealed record PushDeviceRemoveRequest(string Endpoint);
@@ -58,10 +60,26 @@ public sealed partial class PushDevicesController(ProcuLinkDbContext db, ICurren
     [HttpDelete]
     public async Task<IActionResult> Remove([FromBody] PushDeviceRemoveRequest request, CancellationToken ct)
     {
-        db.RemoveRange(await db.Set<PushDevice>()
-            .Where(d => d.OrgId == tenant.OrganisationId && d.ClerkUserId == tenant.ClerkUserId && d.Endpoint == request.Endpoint)
-            .ToListAsync(ct));
+        db.RemoveRange(await Mine(request.Endpoint).ToListAsync(ct));
         await db.SaveChangesAsync(ct);
         return NoContent();
     }
+
+    /// <summary>Whether this device is still saved: a push service that refused it has had it removed, while the browser still thinks alerts are on.</summary>
+    [HttpPost("check")]
+    public async Task<IActionResult> Check([FromBody] PushDeviceRemoveRequest request, CancellationToken ct) =>
+        Ok(new { saved = await Mine(request.Endpoint).AnyAsync(ct) });
+
+    /// <summary>Queues one test alert to this device; the Worker, which holds the keys, sends it.</summary>
+    [HttpPost("test")]
+    public async Task<IActionResult> Test([FromBody] PushDeviceRemoveRequest request, CancellationToken ct)
+    {
+        var id = await Mine(request.Endpoint).Select(d => (Guid?)d.Id).FirstOrDefaultAsync(ct);
+        if (id is null) return NotFound(new { error = "push_device_not_found" });
+        jobs.Enqueue<PhoneAlertJob>(j => j.SendTestAsync(id.Value, CancellationToken.None));
+        return Accepted();
+    }
+
+    private IQueryable<PushDevice> Mine(string? endpoint) =>
+        db.Set<PushDevice>().Where(d => d.OrgId == tenant.OrganisationId && d.ClerkUserId == tenant.ClerkUserId && d.Endpoint == endpoint);
 }

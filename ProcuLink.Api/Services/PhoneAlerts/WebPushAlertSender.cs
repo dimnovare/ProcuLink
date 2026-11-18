@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.RegularExpressions;
 using Lib.Net.Http.WebPush;
 using Lib.Net.Http.WebPush.Authentication;
 using ProcuLink.Core.Entities;
@@ -40,14 +41,24 @@ public sealed class WebPushAlertSender(IHttpClientFactory http, IConfiguration c
         }
         catch (PushServiceClientException ex) when ((int)ex.StatusCode is >= 400 and < 500 && ex.StatusCode != HttpStatusCode.TooManyRequests)
         {
-            // A rotated or mismatched VAPID key removes every device at once: say so, by id only.
-            log.LogInformation("Phone alert device {DeviceId} removed: {Status}", device.Id, ex.StatusCode);
+            // A rotated or mismatched VAPID key removes every device at once: say so, by id only, with the push service's reason and the device's age.
+            log.LogInformation("Phone alert device {DeviceId} removed: {Status} \"{Reason}\", saved {Minutes} min before",
+                device.Id, ex.StatusCode, Reason(ex.Body), (int)(DateTime.UtcNow - device.CreatedAt).TotalMinutes);
             return PushResult.Gone;
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
-            log.LogWarning("Phone alert to device {DeviceId} failed: {Status}", device.Id, (ex as PushServiceClientException)?.StatusCode.ToString() ?? ex.GetType().Name);
+            var refusal = ex as PushServiceClientException;
+            log.LogWarning("Phone alert to device {DeviceId} failed: {Status} \"{Reason}\"", device.Id,
+                refusal?.StatusCode.ToString() ?? ex.GetType().Name, Reason(refusal?.Body));
             return PushResult.Failed;
         }
+    }
+
+    /// <summary>A push service's refusal text for the log: one line, at most 120 characters, any address replaced (the push address must never be logged).</summary>
+    public static string Reason(string? body)
+    {
+        var text = Regex.Replace(Regex.Replace(body ?? "", @"\S*://\S*", "[address]"), @"\s+", " ").Trim();
+        return text.Length > 120 ? text[..120] : text;
     }
 }
