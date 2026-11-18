@@ -206,6 +206,10 @@ builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowPickupDispatchJob>();
 builder.Services.AddScoped<ProcuLink.Api.Jobs.DocumentNotificationJob>();
 builder.Services.AddScoped<ProcuLink.Api.Jobs.NotificationMembersJob>();
 builder.Services.AddHttpClient("clerk", c => { c.BaseAddress = new Uri("https://api.clerk.com/v1/"); c.Timeout = TimeSpan.FromSeconds(30); });
+// Phone alerts (Web Push): off until WebPush__PublicKey and WebPush__PrivateKey are set.
+builder.Services.AddScoped<ProcuLink.Api.Jobs.PhoneAlertJob>();
+builder.Services.AddHttpClient(ProcuLink.Api.Services.PhoneAlerts.WebPushAlertSender.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddScoped<ProcuLink.Api.Services.PhoneAlerts.IPhoneAlertSender, ProcuLink.Api.Services.PhoneAlerts.WebPushAlertSender>();
 // Notification digest email: Postmark, else SMTP, else log-only (same choice as the API).
 if (!string.IsNullOrWhiteSpace(builder.Configuration["Email:Postmark:ServerToken"]))
     builder.Services.AddScoped<IEmailSender, PostmarkEmailSender>();
