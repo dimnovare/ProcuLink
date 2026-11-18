@@ -53,16 +53,31 @@ public sealed class FlowDeleteApiTests(PostgresContainerFixture postgres) : IAsy
         var destinationId = Guid.NewGuid();
         var lookupId = Guid.NewGuid();
         string sampleKey, realKey;
+        Guid emailIntakeId;
         await using (var db = Db())
         {
             db.Set<FlowDestination>().Add(new FlowDestination { Id = destinationId, OrgId = OrgA, Name = "Accounting server", Protocol = "http", CreatedAt = now, UpdatedAt = now });
             db.Set<FlowOutput>().Add(new FlowOutput { Id = Guid.NewGuid(), OrgId = OrgA, FlowId = flowId, Name = "Invoice CSV", Format = "csv", DestinationId = destinationId, Logo = [1, 2, 3], CreatedAt = now, UpdatedAt = now });
             db.Set<FlowSortMemory>().Add(new FlowSortMemory { Id = Guid.NewGuid(), OrgId = OrgA, FlowId = flowId, SenderKey = "name:test", Kind = "invoice", CreatedAt = now, UpdatedAt = now });
             db.FlowIntakeItems.Add(new FlowIntakeItem { Id = Guid.NewGuid(), OrgId = OrgA, ScopeId = flowId, ItemKey = "api:test", CreatedAt = now });
+            emailIntakeId = await db.FlowIntakes.Where(i => i.OrgId == OrgA && i.FlowId == flowId && i.Kind == IntakeKind.Email).Select(i => i.Id).SingleAsync();
+            db.FlowIntakeItems.Add(new FlowIntakeItem { Id = Guid.NewGuid(), OrgId = OrgA, ScopeId = emailIntakeId, ItemKey = "email:test", CreatedAt = now });
             db.Set<Lookup>().Add(new Lookup { Id = lookupId, OrgId = OrgA, Name = "Codes", CreatedAt = now, UpdatedAt = now });
             await db.SaveChangesAsync();
             sampleKey = await db.FlowDocuments.Where(d => d.FlowId == flowId && d.IsSample).Select(d => d.SourceFileKey).SingleAsync();
             realKey = await db.FlowDocuments.Where(d => d.Id == realId).Select(d => d.SourceFileKey).SingleAsync();
+        }
+
+        // A document still being read: refused before anything is erased.
+        await using (var db = Db())
+            await db.FlowDocuments.Where(d => d.FlowId == flowId && d.IsSample).ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, DocumentStatus.Reading));
+        var busy = await http.DeleteAsync($"/api/flows/{flowId}");
+        Assert.Equal(HttpStatusCode.Conflict, busy.StatusCode);
+        Assert.Contains("flow_busy", await busy.Content.ReadAsStringAsync());
+        await using (var db = Db())
+        {
+            Assert.Equal(2, await db.FlowDocuments.CountAsync(d => d.OrgId == OrgA && d.FlowId == flowId));
+            await db.FlowDocuments.Where(d => d.FlowId == flowId && d.IsSample).ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, DocumentStatus.Received));
         }
 
         var res = await http.DeleteAsync($"/api/flows/{flowId}");
@@ -76,6 +91,7 @@ public sealed class FlowDeleteApiTests(PostgresContainerFixture postgres) : IAsy
             Assert.False(await db.FlowIntakes.AnyAsync(i => i.OrgId == OrgA && i.FlowId == flowId));
             Assert.False(await db.OrgInboundAddresses.AnyAsync(a => a.OrganisationId == OrgA && a.FlowId == flowId));
             Assert.False(await db.FlowIntakeItems.AnyAsync(i => i.OrgId == OrgA && i.ScopeId == flowId));
+            Assert.False(await db.FlowIntakeItems.AnyAsync(i => i.OrgId == OrgA && i.ScopeId == emailIntakeId));
             Assert.False(await db.Set<FlowSortMemory>().AnyAsync(m => m.OrgId == OrgA && m.FlowId == flowId));
             Assert.True(await db.Set<FlowDestination>().AnyAsync(d => d.Id == destinationId));
             Assert.True(await db.Set<Lookup>().AnyAsync(l => l.Id == lookupId));
@@ -144,5 +160,6 @@ public sealed class FlowDeleteApiTests(PostgresContainerFixture postgres) : IAsy
         await using var db = Db();
         Assert.True(await db.FlowIntakes.AnyAsync(i => i.OrgId == OrgA && i.FlowId == flowOfA));
         Assert.True(await db.Flows.AnyAsync(f => f.OrgId == OrgA && f.Id == inboxId && f.IsInbox));
+        Assert.True(await db.OrgInboundAddresses.AnyAsync(a => a.OrganisationId == OrgA && a.FlowId == inboxId));
     }
 }

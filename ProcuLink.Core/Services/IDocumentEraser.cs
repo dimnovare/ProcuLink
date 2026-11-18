@@ -30,3 +30,7 @@ public sealed record DocumentEraseReceipt(
     IReadOnlyList<string> FailedBlobKeys,
     string Actor,
     DateTime At);
+
+/// <summary>A matched document started being read or sent during the erase; nothing was erased.</summary>
+public sealed class DocumentsChangedDuringEraseException()
+    : InvalidOperationException("Documents changed while they were being erased; nothing was erased. Run it again.");
