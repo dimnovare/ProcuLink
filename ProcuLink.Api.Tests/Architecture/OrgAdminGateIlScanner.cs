@@ -155,6 +155,11 @@ internal static class OrgAdminGateIlScanner
             "Makes a flow's changes the live version, which decides how every document from then on is read, "
           + "checked, rendered and where it is sent."),
 
+        new("FlowDeletion.DeleteAsync",
+            member => member is MethodBase { Name: "DeleteAsync" } m && m.DeclaringType == typeof(ProcuLink.Api.Services.Documents.FlowDeletion),
+            "Deletes a flow that was never put in use, with its documents and their stored files, its outputs, "
+          + "intakes and email address. It cannot be undone."),
+
         new("FlowVersions.RestoreAsync",
             member => member is MethodBase { Name: "RestoreAsync" } m && m.DeclaringType == typeof(ProcuLink.Api.Services.Documents.FlowVersions),
             "Overwrites a flow's fields and outputs, discarding the changes not yet published."),

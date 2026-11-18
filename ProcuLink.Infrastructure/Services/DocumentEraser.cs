@@ -20,6 +20,15 @@ public sealed class DocumentEraser(
     public const string AuditAction = "admin.documents_erased";
     public const int MaxPerCall = 100;
 
+    /// <summary>A document an erase skips: still being read, or being sent. Sending: the sender sets it and uploads
+    /// output files before it saves the delivery rows, so a queued or delivering row counts too.</summary>
+    public static Expression<Func<FlowDocument, bool>> InFlight(ProcuLinkDbContext db, Guid orgId)
+    {
+        var sending = db.Set<FlowDelivery>().Where(x => x.OrgId == orgId
+            && (x.Status == FlowDeliveryStatus.Queued || x.Status == FlowDeliveryStatus.Delivering));
+        return d => d.Status == DocumentStatus.Reading || d.Status == DocumentStatus.Sending || sending.Any(x => x.DocumentId == d.Id);
+    }
+
     public async Task<DocumentEraseReceipt> EraseAsync(Guid orgId, DocumentEraseFilter filter, string actor, CancellationToken ct)
     {
         if (db.ScopedOrganisationId is { } scoped && scoped != orgId)
@@ -40,14 +49,11 @@ public sealed class DocumentEraser(
         var matches = db.FlowDocuments.Where(d => d.OrgId == orgId);
         if (ids is not null) matches = matches.Where(d => ids.Contains(d.Id));
         if (before is { } cutoff) matches = matches.Where(d => d.CreatedAt < cutoff);
-        var sending = deliveries.Where(x => x.Status == FlowDeliveryStatus.Queued || x.Status == FlowDeliveryStatus.Delivering);
+        var busy = InFlight(db, orgId);
         // Repeated by the delete itself, so a document that starts being read or sent after this check is kept.
-        Expression<Func<FlowDocument, bool>> idle = d => d.Status != DocumentStatus.Reading && d.Status != DocumentStatus.Sending
-            && !sending.Any(x => x.DocumentId == d.Id);
+        var idle = Expression.Lambda<Func<FlowDocument, bool>>(Expression.Not(busy.Body), busy.Parameters);
 
-        // Sending: the sender sets it and uploads output files before it saves the delivery rows.
-        var skipped = await matches.Where(d => d.Status == DocumentStatus.Reading || d.Status == DocumentStatus.Sending
-                || sending.Any(x => x.DocumentId == d.Id))
+        var skipped = await matches.Where(busy)
             .OrderBy(d => d.CreatedAt).ThenBy(d => d.Id).Select(d => d.Id).ToListAsync(ct);
         var docs = await matches.Where(idle)
             .OrderBy(d => d.CreatedAt).ThenBy(d => d.Id).Take(MaxPerCall + 1)
@@ -82,7 +88,7 @@ public sealed class DocumentEraser(
         rows["flow_documents"] = await db.FlowDocuments.Where(d => d.OrgId == orgId && docIds.Contains(d.Id)).Where(idle).ExecuteDeleteAsync(none);
         // Disposing the transaction uncommitted rolls back every row above; no file has been touched yet.
         if (rows["flow_documents"] < docIds.Count)
-            throw new InvalidOperationException("Documents changed while they were being erased; nothing was erased. Run it again.");
+            throw new DocumentsChangedDuringEraseException();
 
         // Billed units outlive the document, dated by when it was READ so the month it was billed in keeps them.
         db.ErasedDocumentUnits.AddRange(docs.Where(d => d.ReadAt != null && !d.IsSample && d.BillingUnits > 0)

@@ -22,12 +22,13 @@ public sealed class FlowsController(
 
     private static IActionResult FlowNotFound() => new NotFoundObjectResult(new { error = "flow_not_found" });
 
-    private FlowDto ToDto(Flow f, int documentCount, bool hasChanges = false, int? streak = null, FlowSummaryDto? summary = null) =>
-        new(f.Id, f.Name, f.FieldsConfirmed, DocumentJson.Deserialize<FlowFieldList>(f.FieldsJson), documentCount, f.CreatedAt, f.Automation, gate.ScansOn(f.OrgId), gate.FormatsOn(f.OrgId), gate.DocsOutputsOn(f.OrgId), gate.PeppolOn(f.OrgId), f.PublishedVersionNo, hasChanges, streak, summary);
+    private FlowDto ToDto(Flow f, int documentCount, bool hasChanges = false, int? streak = null, FlowSummaryDto? summary = null, bool canDelete = false) =>
+        new(f.Id, f.Name, f.FieldsConfirmed, DocumentJson.Deserialize<FlowFieldList>(f.FieldsJson), documentCount, f.CreatedAt, f.Automation, gate.ScansOn(f.OrgId), gate.FormatsOn(f.OrgId), gate.DocsOutputsOn(f.OrgId), gate.PeppolOn(f.OrgId), f.PublishedVersionNo, hasChanges, streak, summary, canDelete);
 
     /// <summary>Every single-flow response: the web app caches each one whole, so none may drop a field.</summary>
     private async Task<FlowDto> SingleAsync(Flow flow, Guid orgId, CancellationToken ct) =>
-        ToDto(flow, await CountDocs(orgId, flow.Id, ct), await FlowVersions.HasChangesAsync(db, flow, ct), await FlowStreak.CountAsync(db, orgId, flow.Id, ct));
+        ToDto(flow, await CountDocs(orgId, flow.Id, ct), await FlowVersions.HasChangesAsync(db, flow, ct), await FlowStreak.CountAsync(db, orgId, flow.Id, ct),
+            canDelete: await FlowDeletion.CanDeleteAsync(db, flow, ct));
 
     private Task<int> CountDocs(Guid orgId, Guid flowId, CancellationToken ct) =>
         db.FlowDocuments.CountAsync(d => d.OrgId == orgId && d.FlowId == flowId, ct);
@@ -157,6 +158,20 @@ public sealed class FlowsController(
         {
             null => Ok(await SingleAsync(flow, orgId, ct)),
             "version_not_found" => NotFound(new { error = "version_not_found" }),
+            var error => Conflict(new { error }),
+        };
+    }
+
+    [HttpDelete("{id:guid}")]
+    [RequireOrgAdmin]
+    public async Task<IActionResult> Delete(Guid id, [FromServices] IDocumentEraser eraser, CancellationToken ct)
+    {
+        if (Refuse() is { } refused) return refused;
+        var flow = await db.Flows.PersonFlows(tenant.OrganisationId).AsNoTracking().FirstOrDefaultAsync(f => f.Id == id, ct);
+        if (flow is null) return FlowNotFound();
+        return await FlowDeletion.DeleteAsync(db, eraser, flow, tenant.ClerkUserId, ct) switch
+        {
+            null => NoContent(),
             var error => Conflict(new { error }),
         };
     }

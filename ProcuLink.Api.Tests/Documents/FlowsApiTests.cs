@@ -41,6 +41,22 @@ public class FlowsApiTests(DocumentEngineTestFactory factory) : IClassFixture<Do
     }
 
     [Fact]
+    public async Task Single_flow_says_whether_it_can_be_deleted()
+    {
+        var http = factory.ClientFor(DocumentEngineTestFactory.OrgA);
+        var created = await http.PostAsJsonAsync("/api/flows", new CreateFlowRequest("Standards test"));
+        var id = (await created.Content.ReadFromJsonAsync<FlowDto>(DocumentJson.Options))!.Id;
+        async Task<bool> CanDelete() => (await http.GetFromJsonAsync<FlowDto>($"/api/flows/{id}", DocumentJson.Options))!.CanDelete;
+
+        Assert.True(await CanDelete());
+        await http.PostAsync($"/api/flows/{id}/documents/sample", null);
+        Assert.True(await CanDelete());
+        await http.PutAsJsonAsync($"/api/flows/{id}/fields", Fields("total_gross"));
+        Assert.Equal(HttpStatusCode.OK, (await http.PostAsync($"/api/flows/{id}/publish", null)).StatusCode);
+        Assert.False(await CanDelete());
+    }
+
+    [Fact]
     public async Task Flow_reports_whether_scans_are_on()
     {
         foreach (var (org, expected) in new[] { (DocumentEngineTestFactory.OrgB, true), (DocumentEngineTestFactory.OrgA, false) })
