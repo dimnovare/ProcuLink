@@ -191,7 +191,7 @@ public class PhoneAlertJobTests(DocumentEngineTestFactory factory) : IClassFixtu
         {
             using var scope = factory.Services.CreateScope();
             await new PhoneAlertJob(scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>(), sender,
-                scope.ServiceProvider.GetRequiredService<DocumentEngineGate>(), NullLogger<PhoneAlertJob>.Instance).SendTestAsync(id, CancellationToken.None);
+                scope.ServiceProvider.GetRequiredService<DocumentEngineGate>(), NullLogger<PhoneAlertJob>.Instance).SendTestAsync(OrgA, id, CancellationToken.None);
         }
 
         sender.Sent.Select(s => s.Endpoint).Should().Equal(ok.Endpoint, gone.Endpoint);
@@ -204,7 +204,11 @@ public class PhoneAlertJobTests(DocumentEngineTestFactory factory) : IClassFixtu
     }
 
     [Fact]
-    public void A_refusal_reason_is_logged_on_one_line_without_any_address() =>
-        WebPushAlertSender.Reason("push subscription https://fcm.googleapis.com/fcm/send/abc:APA91b has\n unsubscribed " + new string('x', 200))
-            .Should().StartWith("push subscription [address] has unsubscribed x").And.HaveLength(120);
+    public void A_refusal_reason_is_logged_on_one_line_without_any_address()
+    {
+        WebPushAlertSender.Reason("push subscription https://fcm.googleapis.com/fcm/send/abc:APA91b has\n unsubscribed. " + string.Concat(Enumerable.Repeat("so it goes ", 20)))
+            .Should().StartWith("push subscription [address] has unsubscribed. so it goes").And.HaveLength(120);
+        WebPushAlertSender.Reason("token dHIoPlan20xyz:APA91bPlan20Token gone, fcm.googleapis.com/fcm/send/plan20 and https:\\/\\/x.test\\/a")
+            .Should().Be("token [address] gone, [address] and [address]");
+    }
 }

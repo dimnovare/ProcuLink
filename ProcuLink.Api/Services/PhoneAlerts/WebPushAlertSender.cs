@@ -55,10 +55,14 @@ public sealed class WebPushAlertSender(IHttpClientFactory http, IConfiguration c
         }
     }
 
-    /// <summary>A push service's refusal text for the log: one line, at most 120 characters, any address replaced (the push address must never be logged).</summary>
+    /// <summary>
+    /// A push service's refusal text for the log: one line, at most 120 characters, with any address (also a JSON-escaped one)
+    /// and any token-like run of 20+ characters replaced, so an echoed push address or bare token is never logged.
+    /// </summary>
     public static string Reason(string? body)
     {
-        var text = Regex.Replace(Regex.Replace(body ?? "", @"\S*://\S*", "[address]"), @"\s+", " ").Trim();
+        var masked = Regex.Replace(body ?? "", @"\S*:\\?/\\?/\S*|[A-Za-z0-9_:%.\-/]{20,}", "[address]");
+        var text = Regex.Replace(masked, @"\s+", " ").Trim();
         return text.Length > 120 ? text[..120] : text;
     }
 }
