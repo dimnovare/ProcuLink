@@ -95,6 +95,23 @@ public class PhoneAlertJob(ProcuLinkDbContext db, IPhoneAlertSender sender, Docu
         }
     }
 
+    public const string TestBody = "Phone alerts work on this device.";
+
+    /// <summary>One test alert, queued by the device's own person; a refused device is removed like any other. No count, so the icon badge stays as it is.</summary>
+    [AutomaticRetry(Attempts = 0)]
+    public async Task SendTestAsync(Guid orgId, Guid deviceId, CancellationToken ct)
+    {
+        if (!sender.CanSend) return;
+        var device = await db.Set<PushDevice>().FirstOrDefaultAsync(d => d.OrgId == orgId && d.Id == deviceId, ct);
+        if (device is null) return;
+        var json = DocumentJson.Serialize(new { tag = "test", title = "ProcuLink", body = TestBody, path = "/settings?tab=workspace" });
+        if (await sender.SendAsync(device, json, "test", ct) != PushResult.Gone) return;
+        db.Remove(device);
+        // The 5-minute run or a sign-out may have removed it meanwhile: gone either way.
+        try { await db.SaveChangesAsync(ct); }
+        catch (DbUpdateConcurrencyException) { }
+    }
+
     private static string Path(string tag) => tag switch
     {
         "needs-you" or "new-address" => "/documents?show=needs-you",

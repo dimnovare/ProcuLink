@@ -64,6 +64,27 @@ public class PushDevicesTests(DocumentEngineTestFactory factory) : IClassFixture
         (await Devices()).Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task Check_and_test_answer_only_for_the_callers_own_device()
+    {
+        await Clear();
+        const string endpoint = "https://fcm.googleapis.com/fcm/send/plan20-test";
+        var a = ClientAs("user_PD_A");
+        var b = ClientAs("user_PD_B");
+        (await a.PostAsJsonAsync("/api/push-devices", new { endpoint, p256dh = P256dh, auth = Auth })).StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        async Task<bool> Saved(HttpClient client) =>
+            (await (await client.PostAsJsonAsync("/api/push-devices/check", new { endpoint })).Content.ReadFromJsonAsync<JsonElement>()).GetProperty("saved").GetBoolean();
+        (await Saved(a)).Should().BeTrue();
+        (await Saved(b)).Should().BeFalse();
+
+        var queued = factory.Enqueued<ProcuLink.Api.Jobs.PhoneAlertJob>();
+        (await b.PostAsJsonAsync("/api/push-devices/test", new { endpoint })).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        factory.Enqueued<ProcuLink.Api.Jobs.PhoneAlertJob>().Should().Be(queued);
+        (await a.PostAsJsonAsync("/api/push-devices/test", new { endpoint })).StatusCode.Should().Be(HttpStatusCode.NoContent);
+        factory.Enqueued<ProcuLink.Api.Jobs.PhoneAlertJob>().Should().Be(queued + 1);
+    }
+
     [Theory]
     [InlineData("http://fcm.googleapis.com/x", false)]
     [InlineData("https://169.254.169.254/latest", false)]
