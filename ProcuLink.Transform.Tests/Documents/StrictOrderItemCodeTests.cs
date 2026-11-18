@@ -18,6 +18,7 @@ public class StrictOrderItemCodeTests
         edi.Should().Contain("LIN+1++A-100:SA'").And.NotContain(":IN'");
 
         XDocument.Parse(await StrictOrderFixture.Render("ubl-2-1-order")).Descendants()
-            .Where(e => e.Name.LocalName == "BuyersItemIdentification").Should().BeEmpty();
+            .Where(e => e.Name.LocalName == "ID" && e.Parent?.Name.LocalName == "SellersItemIdentification")
+            .Select(e => e.Value).Should().Contain("A-100");
     }
 }

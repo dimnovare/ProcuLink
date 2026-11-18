@@ -63,19 +63,28 @@ public static partial class StandardCodes
     {
         var units = new Dictionary<string, (string, string)>(StringComparer.OrdinalIgnoreCase);
         foreach (var (words, rec20, x12) in Table)
-            foreach (var key in words.Append(rec20)) units.TryAdd(key, (rec20, x12));
+            foreach (var key in words.Append(rec20).Append(x12)) units.TryAdd(key, (rec20, x12));
         return units;
     }
 
     private static Dictionary<string, string> BuildCountries()
     {
-        var countries = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["UK"] = "GB" };
+        // Names people write that the platform's region names may not carry (they differ by ICU version, and the
+        // Linux container's ICU is not the laptop's), so they are fixed here rather than left to RegionInfo.
+        var countries = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["UK"] = "GB", ["Great Britain"] = "GB", ["England"] = "GB", ["Scotland"] = "GB", ["Wales"] = "GB",
+            ["United States of America"] = "US", ["The Netherlands"] = "NL", ["Holland"] = "NL",
+            ["Czech Republic"] = "CZ", ["Czechia"] = "CZ", ["Turkey"] = "TR", ["Türkiye"] = "TR",
+            ["South Korea"] = "KR", ["Korea"] = "KR", ["Russia"] = "RU", ["Russian Federation"] = "RU",
+        };
         foreach (var culture in CultureInfo.GetCultures(CultureTypes.SpecificCultures))
         {
             RegionInfo region;
             try { region = new RegionInfo(culture.Name); } catch (ArgumentException) { continue; }
             var iso = region.TwoLetterISORegionName;
-            if (!Alpha2().IsMatch(iso)) continue;
+            // XK (Kosovo) is a user-assigned code, not ISO 3166: a receiver would reject it, so it stays unmapped.
+            if (!Alpha2().IsMatch(iso) || iso == "XK") continue;
             foreach (var key in new[] { iso, region.ThreeLetterISORegionName, region.EnglishName, region.NativeName })
                 if (!string.IsNullOrWhiteSpace(key)) countries.TryAdd(key, iso);
         }

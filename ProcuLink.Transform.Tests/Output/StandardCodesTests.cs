@@ -14,6 +14,7 @@ public class StandardCodesTests
     [InlineData("cm", "CMT", "CM")] [InlineData("mm", "MMT", "MM")] [InlineData("m2", "MTK", "SM")] [InlineData("box", "XBX", "BX")]
     [InlineData("pack", "XPK", "PK")] [InlineData("pair", "PR", "PR")] [InlineData("dozen", "DZN", "DZ")] [InlineData("hour", "HUR", "HR")]
     [InlineData("days", "DAY", "DA")]
+    [InlineData("BX", "XBX", "BX")] [InlineData("PK", "XPK", "PK")] [InlineData("LT", "LTR", "LT")] [InlineData("UN", "C62", "UN")] // X12 codes as written
     [InlineData("MTQ", "MTQ", "EA")]          // code-shaped, not in the table: Rec 20 passes it, X12 (2 chars) cannot
     [InlineData("CT", "CT", "CT")]            // code-shaped 2 chars: passes both
     [InlineData("bundle", "EA", "EA")] [InlineData("", "EA", "EA")] [InlineData(null, "EA", "EA")]
@@ -23,6 +24,9 @@ public class StandardCodesTests
     [Theory]
     [InlineData("Germany", "DE")] [InlineData("germany", "DE")] [InlineData("Deutschland", "DE")] [InlineData("DEU", "DE")]
     [InlineData("de", "DE")] [InlineData("Estonia", "EE")] [InlineData("UK", "GB")] [InlineData("United Kingdom", "GB")]
+    [InlineData("Turkey", "TR")] [InlineData("Czech Republic", "CZ")] [InlineData("The Netherlands", "NL")] [InlineData("Holland", "NL")]
+    [InlineData("South Korea", "KR")] [InlineData("United States of America", "US")] [InlineData("Great Britain", "GB")]
+    [InlineData("Kosovo", null)] [InlineData("XK", null)]
     [InlineData("Narnia", null)] [InlineData("XX", null)] [InlineData(" ", null)] [InlineData(null, null)]
     public void Countries_become_iso_alpha2(string? written, string? iso) => StandardCodes.Country(written).Should().Be(iso);
 }
