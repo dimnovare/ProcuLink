@@ -139,6 +139,10 @@ public sealed class X12TransformService : ITransformService
         // CUR*BY*{currency} — buying party currency.
         tx.Add(Segment(elementSep, "CUR", "BY", currency));
 
+        // DTM*002*{CCYYMMDD} — requested delivery date.
+        if (order.RequestedDeliveryDate is { } delivery)
+            tx.Add(Segment(elementSep, "DTM", "002", delivery.ToString("yyyyMMdd", CultureInfo.InvariantCulture)));
+
         // ── N1 loop (ship-to / bill-to / buyer) + order contact ────────────────
         // Inserted AFTER CUR and BEFORE the first PO1 (the X12 850 heading area). Every block is
         // gated on its source NAME (contact on any of its 3 fields), so an order with no address /
@@ -156,24 +160,29 @@ public sealed class X12TransformService : ITransformService
         // Buyer N1*BY is name-only (the canonical model carries no buyer postal address).
         var buyerName = OrderHeaderReader.ExtractBuyerName(order);
         if (!string.IsNullOrWhiteSpace(buyerName))
+        {
             tx.Add(Segment(elementSep, "N1", "BY", Sanitize(buyerName)));
+            if (!string.IsNullOrWhiteSpace(order.BuyerTaxId))
+                tx.Add(Segment(elementSep, "REF", "VX", Sanitize(order.BuyerTaxId)));
+        }
 
         // Order-level ordering contact: PER*BD. PER in the 850 heading is only valid INSIDE an N1
         // loop, so it's emitted only when at least one N1 (ship-to / bill-to / buyer) was actually
         // appended above — otherwise a contact-only order would emit an orphan heading PER that a
         // strict validator rejects. (Realistically the buyer name is always present, so the PER hangs
         // off the N1*BY loop, matching the reference output.)
-        var anyN1Emitted = tx.Count > n1LoopStart;
-        if (anyN1Emitted
-            && (!string.IsNullOrWhiteSpace(order.ContactName)
-                || !string.IsNullOrWhiteSpace(order.ContactEmail)
-                || !string.IsNullOrWhiteSpace(order.ContactPhone)))
-        {
-            tx.Add(Segment(elementSep, "PER", "BD",
-                Sanitize(order.ContactName ?? string.Empty),
-                "EM", Sanitize(order.ContactEmail ?? string.Empty),
-                "TE", Sanitize(order.ContactPhone ?? string.Empty)));
-        }
+        if (tx.Count > n1LoopStart
+            && Per(elementSep, "BD", order.ContactName, order.ContactEmail, order.ContactPhone) is { } orderContact)
+            tx.Add(orderContact);
+
+        // Vendor N1*VN loop after PER*BD, so the order contact stays inside the BY loop. The supplier's address and
+        // VAT ride on its "supplier" party; without one the loop is name-only.
+        var supplier = OrderHeaderReader.SupplierParty(order);
+        AppendN1Address(tx, elementSep, "VN",
+            string.IsNullOrWhiteSpace(order.SupplierName) ? supplier?.Name : order.SupplierName,
+            supplier?.Street, supplier?.City, supplier?.PostalCode, supplier?.Country,
+            supplier?.ContactName, supplier?.Email, supplier?.Phone,
+            string.IsNullOrWhiteSpace(order.SellerTaxId) ? supplier?.Vat : order.SellerTaxId);
 
         foreach (var line in order.Lines.OrderBy(l => l.LineNumber))
         {
@@ -182,7 +191,7 @@ public sealed class X12TransformService : ITransformService
             tx.Add(Segment(elementSep, "PO1",
                 [line.LineNumber.ToString(CultureInfo.InvariantCulture),
                 Num(line.Quantity),
-                string.IsNullOrWhiteSpace(line.Unit) ? "EA" : Sanitize(line.Unit),
+                StandardCodes.X12Unit(line.Unit),
                 Num(line.UnitPrice),
                 "PE",
                 .. buyerCode,
@@ -226,7 +235,7 @@ public sealed class X12TransformService : ITransformService
     private static void AppendN1Address(
         List<string> tx, char elementSep, string qualifier,
         string? name, string? street, string? city, string? postal, string? country,
-        string? deliverTo, string? email, string? phone)
+        string? deliverTo, string? email, string? phone, string? vatId = null)
     {
         if (string.IsNullOrWhiteSpace(name))
             return;
@@ -245,17 +254,25 @@ public sealed class X12TransformService : ITransformService
                 Sanitize(city ?? string.Empty),
                 string.Empty,
                 Sanitize(postal ?? string.Empty),
-                Sanitize(country ?? string.Empty)));
+                StandardCodes.Country(country) ?? string.Empty));
         }
 
-        if (!string.IsNullOrWhiteSpace(email) || !string.IsNullOrWhiteSpace(phone))
-        {
-            // PER*OC (order contact) — carries the per-party deliver-to contact + email + phone.
-            tx.Add(Segment(elementSep, "PER", "OC",
-                Sanitize(deliverTo ?? string.Empty),
-                "EM", Sanitize(email ?? string.Empty),
-                "TE", Sanitize(phone ?? string.Empty)));
-        }
+        if (!string.IsNullOrWhiteSpace(vatId))
+            tx.Add(Segment(elementSep, "REF", "VX", Sanitize(vatId)));
+
+        // PER*OC (order contact) — carries the per-party deliver-to contact + email + phone.
+        if (Per(elementSep, "OC", deliverTo, email, phone) is { } contact)
+            tx.Add(contact);
+    }
+
+    /// <summary><c>PER*{function}*{name}</c> plus only the <c>EM</c> / <c>TE</c> pairs that have a value; null when neither does.</summary>
+    private static string? Per(char sep, string function, string? name, string? email, string? phone)
+    {
+        if (string.IsNullOrWhiteSpace(email) && string.IsNullOrWhiteSpace(phone))
+            return null;
+        string[] em = string.IsNullOrWhiteSpace(email) ? [] : ["EM", Sanitize(email)];
+        string[] te = string.IsNullOrWhiteSpace(phone) ? [] : ["TE", Sanitize(phone)];
+        return Segment(sep, "PER", [function, Sanitize(name ?? string.Empty), .. em, .. te]);
     }
 
     // ── Segment builders ─────────────────────────────────────────────────────
