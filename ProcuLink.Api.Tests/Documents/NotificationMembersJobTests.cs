@@ -55,6 +55,9 @@ public class NotificationMembersJobTests(DocumentEngineTestFactory factory) : IC
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
         db.RemoveRange(db.Set<NotificationSetting>());
+        db.RemoveRange(db.Set<PushDevice>());
+        PushDevice D(string user) => new() { Id = Guid.NewGuid(), OrgId = DocumentEngineTestFactory.OrgA, ClerkUserId = user, Endpoint = $"https://fcm.googleapis.com/fcm/send/{user}" };
+        db.AddRange(D("u2"), D("u9"));
         NotificationSetting S(Guid org, string user, string? email, bool review) =>
             new() { Id = Guid.NewGuid(), OrgId = org, ClerkUserId = user, Email = email, OnReview = review };
         db.AddRange(S(DocumentEngineTestFactory.OrgA, "u2", "keep@example.test", true), S(DocumentEngineTestFactory.OrgA, "u9", null, false),
@@ -79,6 +82,8 @@ public class NotificationMembersJobTests(DocumentEngineTestFactory factory) : IC
         u2.Email.Should().Be("keep@example.test");
         u2.OnReview.Should().BeTrue();
         rows.Should().ContainSingle(r => r.OrgId == DocumentEngineTestFactory.OrgB && r.ClerkUserId == "u1");
+        using (var scope = factory.Services.CreateScope())
+            (await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<PushDevice>().Select(d => d.ClerkUserId).ToListAsync()).Should().Equal("u2");
 
         var first = handler.Requests.First(r => r.RequestUri!.AbsolutePath.Contains("org_DOC_a000"));
         first.Headers.Authorization!.ToString().Should().Be($"Bearer {Key}");

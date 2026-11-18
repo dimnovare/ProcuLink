@@ -29,6 +29,7 @@ public class NotificationMembersJob(IHttpClientFactory http, IConfiguration conf
 
                 var rows = await db.Set<NotificationSetting>().Where(s => s.OrgId == org.Id).ToListAsync(ct);
                 foreach (var row in rows.Where(r => !members.ContainsKey(r.ClerkUserId))) db.Remove(row);
+                db.RemoveRange((await db.Set<PushDevice>().Where(d => d.OrgId == org.Id).ToListAsync(ct)).Where(d => !members.ContainsKey(d.ClerkUserId)));
                 foreach (var (userId, email) in members)
                 {
                     var row = rows.FirstOrDefault(r => r.ClerkUserId == userId);
