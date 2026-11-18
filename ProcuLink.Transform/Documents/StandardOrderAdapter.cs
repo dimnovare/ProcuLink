@@ -25,6 +25,36 @@ public static partial class StandardOrderAdapter
             BuyerName = a.Text(FieldMeanings.SenderName),
             BuyerTaxId = a.Text(FieldMeanings.SenderVatId),
             SupplierName = a.Text(FieldMeanings.ReceiverName),
+            RequestedDeliveryDate = a.OptionalDate(FieldMeanings.DeliveryDate),
+            ShipToName = a.Text(FieldMeanings.DeliveryName),
+            ShipToStreet = a.Text(FieldMeanings.DeliveryStreet),
+            ShipToCity = a.Text(FieldMeanings.DeliveryCity),
+            ShipToPostalCode = a.Text(FieldMeanings.DeliveryPostcode),
+            ShipToCountry = a.Text(FieldMeanings.DeliveryCountry),
+            // The entity has no buyer address: it rides on BillTo, as the writers document.
+            BillToName = a.Text(FieldMeanings.SenderName),
+            BillToStreet = a.Text(FieldMeanings.SenderStreet),
+            BillToCity = a.Text(FieldMeanings.SenderCity),
+            BillToPostalCode = a.Text(FieldMeanings.SenderPostcode),
+            BillToCountry = a.Text(FieldMeanings.SenderCountry),
+            ContactName = a.Text(FieldMeanings.SenderContactName),
+            ContactPhone = a.Text(FieldMeanings.SenderContactPhone),
+            ContactEmail = a.Text(FieldMeanings.SenderContactEmail),
+            SellerTaxId = a.Text(FieldMeanings.ReceiverVatId),
+            SubTotal = a.OptionalNumber(FieldMeanings.TotalNet),
+            TaxTotal = a.OptionalNumber(FieldMeanings.TotalTax),
+            GrandTotal = a.OptionalNumber(FieldMeanings.TotalGross),
+            // The entity has no supplier address columns: it rides on the "supplier" party.
+            Parties = new[] { FieldMeanings.ReceiverStreet, FieldMeanings.ReceiverCity, FieldMeanings.ReceiverPostcode, FieldMeanings.ReceiverCountry, FieldMeanings.ReceiverVatId }
+                .Any(m => a.Text(m) is not null)
+                ? [new OrderParty
+                {
+                    OrgId = orgId, Role = "supplier", Name = a.Text(FieldMeanings.ReceiverName),
+                    Street = a.Text(FieldMeanings.ReceiverStreet), City = a.Text(FieldMeanings.ReceiverCity),
+                    PostalCode = a.Text(FieldMeanings.ReceiverPostcode), Country = a.Text(FieldMeanings.ReceiverCountry),
+                    Vat = a.Text(FieldMeanings.ReceiverVatId),
+                }]
+                : [],
             // One code fills both: X12 needs the buyer's (BP), every writer needs the supplier's.
             Lines = a.Rows.Select((r, i) => new PurchaseOrderLineEntity
             {
@@ -46,7 +76,8 @@ public static partial class StandardOrderAdapter
         public IReadOnlyList<ReadRow> Rows => rows;
         public string? Cell(ReadRow row, string meaning) => cell(row, meaning);
         public decimal Number(ReadRow row, string meaning) => FieldValueParser.Number(Cell(row, meaning)) ?? 0;
-        public decimal HeaderNumber(string meaning) => FieldValueParser.Number(Text(meaning)) ?? 0;
+        public decimal HeaderNumber(string meaning) => OptionalNumber(meaning) ?? 0;
+        public decimal? OptionalNumber(string meaning) => FieldValueParser.Number(Text(meaning));
         public DateOnly Date(string meaning) => FieldValueParser.TryDate(Text(meaning), out var d) ? d : default;
         public DateOnly? OptionalDate(string meaning) => FieldValueParser.TryDate(Text(meaning), out var d) ? d : null;
         // The document's own line numbers only when every row has a distinct positive whole one; else 1..n.

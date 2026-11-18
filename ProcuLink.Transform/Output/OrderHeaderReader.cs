@@ -20,6 +20,9 @@ namespace ProcuLink.Transform.Output;
 /// </summary>
 internal static class OrderHeaderReader
 {
+    /// <summary>The order's supplier party: the first <see cref="OrderParty"/> whose role is <c>"supplier"</c>, or null.</summary>
+    public static OrderParty? SupplierParty(PurchaseOrderEntity order) => order.Parties.FirstOrDefault(p => p.Role == "supplier");
+
     /// <summary>
     /// Resolve the buyer name: the denormalised <see cref="PurchaseOrderEntity.BuyerName"/> column
     /// first, then the <c>buyerName</c> / <c>BuyerName</c> property in <c>CanonicalJson</c>. Returns
