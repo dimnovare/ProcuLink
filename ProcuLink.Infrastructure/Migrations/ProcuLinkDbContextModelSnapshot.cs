@@ -3313,6 +3313,57 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.ToTable("purchase_order_lines", (string)null);
                 });
 
+            modelBuilder.Entity("ProcuLink.Core.Entities.PushDevice", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Auth")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("auth");
+
+                    b.Property<string>("ClerkUserId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("clerk_user_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Endpoint")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("endpoint");
+
+                    b.Property<DateTime>("LastCheckedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("last_checked_at");
+
+                    b.Property<Guid>("OrgId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("org_id");
+
+                    b.Property<string>("P256dh")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("p256dh");
+
+                    b.Property<DateOnly?>("SummaryOn")
+                        .HasColumnType("date")
+                        .HasColumnName("summary_on");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrgId", "Endpoint")
+                        .IsUnique();
+
+                    b.ToTable("push_devices", (string)null);
+                });
+
             modelBuilder.Entity("ProcuLink.Core.Entities.RetentionAuditLog", b =>
                 {
                     b.Property<Guid>("Id")
@@ -5166,6 +5217,15 @@ namespace ProcuLink.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("Order");
+                });
+
+            modelBuilder.Entity("ProcuLink.Core.Entities.PushDevice", b =>
+                {
+                    b.HasOne("ProcuLink.Core.Entities.Organisation", null)
+                        .WithMany()
+                        .HasForeignKey("OrgId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("ProcuLink.Core.Entities.RetentionAuditLog", b =>

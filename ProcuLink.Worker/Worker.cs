@@ -37,6 +37,11 @@ public class Worker : BackgroundService
             job => job.RunAsync(CancellationToken.None),
             "*/15 * * * *");
 
+        _recurringJobs.AddOrUpdate<ProcuLink.Api.Jobs.PhoneAlertJob>(
+            "phone-alerts",
+            job => job.RunAsync(CancellationToken.None),
+            "*/5 * * * *");
+
         _recurringJobs.AddOrUpdate<ProcuLink.Api.Jobs.NotificationMembersJob>(
             "notification-members",
             job => job.RunAsync(CancellationToken.None),
@@ -99,7 +104,7 @@ public class Worker : BackgroundService
             job => job.ExecuteAsync(CancellationToken.None),
             "*/5 * * * *");
 
-        _logger.LogInformation("Registered recurring jobs: document-delivery-sweep (every 5 min), worker-heartbeat (every 2 min), flow-pickup (every 5 min), worker-health-alert (every 5 min), billing-reconciliation (daily 02:00 UTC), data-retention-sweep (daily 03:30 UTC), blob-retention-sweep (daily 04:15 UTC), disposable-org-sweep (daily 05:00 UTC).");
+        _logger.LogInformation("Registered recurring jobs: document-delivery-sweep (every 5 min), phone-alerts (every 5 min), worker-heartbeat (every 2 min), flow-pickup (every 5 min), worker-health-alert (every 5 min), billing-reconciliation (daily 02:00 UTC), data-retention-sweep (daily 03:30 UTC), blob-retention-sweep (daily 04:15 UTC), disposable-org-sweep (daily 05:00 UTC).");
         return base.StartAsync(cancellationToken);
     }
 

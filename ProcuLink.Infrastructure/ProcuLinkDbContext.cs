@@ -2172,6 +2172,23 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasOne<Organisation>().WithMany().HasForeignKey(n => n.OrgId).OnDelete(DeleteBehavior.Cascade);
         });
 
+        modelBuilder.Entity<PushDevice>(b =>
+        {
+            b.ToTable("push_devices");
+            b.HasKey(p => p.Id);
+            b.Property(p => p.Id).HasColumnName("id");
+            b.Property(p => p.OrgId).HasColumnName("org_id");
+            b.Property(p => p.ClerkUserId).HasColumnName("clerk_user_id").IsRequired();
+            b.Property(p => p.Endpoint).HasColumnName("endpoint").IsRequired();
+            b.Property(p => p.P256dh).HasColumnName("p256dh").IsRequired();
+            b.Property(p => p.Auth).HasColumnName("auth").IsRequired();
+            b.Property(p => p.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+            b.Property(p => p.LastCheckedAt).HasColumnName("last_checked_at").HasColumnType("timestamptz");
+            b.Property(p => p.SummaryOn).HasColumnName("summary_on").HasColumnType("date");
+            b.HasIndex(p => new { p.OrgId, p.Endpoint }).IsUnique();
+            b.HasOne<Organisation>().WithMany().HasForeignKey(p => p.OrgId).OnDelete(DeleteBehavior.Cascade);
+        });
+
         modelBuilder.Entity<FlowDocument>(b =>
         {
             b.ToTable("flow_documents");
