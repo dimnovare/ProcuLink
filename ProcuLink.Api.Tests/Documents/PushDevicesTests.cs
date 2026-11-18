@@ -71,7 +71,7 @@ public class PushDevicesTests(DocumentEngineTestFactory factory) : IClassFixture
     [InlineData("https://localhost/x", false)]
     [InlineData("https://fcm.googleapis.com:8443/x", false)]
     [InlineData("https://evil.example.test\uFF0F.push.apple.com/x", false)]
-    [InlineData("https://anything@fcm.googleapis.com/x", false)]
+    [InlineData("https://a:!@fcm.googleapis.com/x", false)]
     [InlineData("https://web.push.apple.com/plan20", true)]
     [InlineData("https://updates.push.services.mozilla.com/wpush/v2/plan20", true)]
     [InlineData("https://wns2-par02p.notify.windows.com/w/?token=plan20", true)]
