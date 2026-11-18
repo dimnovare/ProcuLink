@@ -73,8 +73,9 @@ namespace ProcuLink.Transform.Output;
 /// emits a <c>cac:PostalAddress</c> + <c>cac:Contact</c> inside <c>BuyerCustomerParty/Party</c> (fed
 /// from the canonical BillTo* + Contact* fields) and a <c>cac:Delivery</c> (fed from ShipTo*). Each
 /// block is null-gated on its source NAME (Contact on any of its 3 fields), so an order with no
-/// address data emits NONE of them and stays byte-identical to the pre-feature output. Country codes
-/// are emitted verbatim (free-text — no ISO fabrication). The canonical model carries no buyer postal
+/// address data emits NONE of them and stays byte-identical to the pre-feature output. Countries are
+/// written as ISO 3166 alpha-2 codes (<see cref="StandardCodes.Country"/>; an unmappable one is left out),
+/// units as UN/ECE Rec 20 codes (<see cref="StandardCodes.Rec20Unit"/>). The canonical model carries no buyer postal
 /// address, so the buyer's real address rides on BillTo (and the delivery address on ShipTo).</para>
 ///
 /// Validation mirrors <see cref="CxmlTransformService"/>: throws
@@ -122,6 +123,9 @@ public sealed class UblOrderTransformService : ITransformService
             order.SupplierId is null ? null : order.Supplier?.Name,
             (order.SupplierId ?? Guid.Empty).ToString());
 
+        // The supplier's address rides on its "supplier" party (the entity has no supplier address columns).
+        var supplierParty = OrderHeaderReader.SupplierParty(order);
+
         var root = new XElement(UblOrder + "Order",
             new XAttribute(XNamespace.Xmlns + "cac", Cac.NamespaceName),
             new XAttribute(XNamespace.Xmlns + "cbc", Cbc.NamespaceName),
@@ -143,6 +147,7 @@ public sealed class UblOrderTransformService : ITransformService
                         new XElement(Cbc + "Name", buyerName)),
                     BuildPostalAddress(order.BillToStreet, order.BillToCity,
                         order.BillToPostalCode, order.BillToCountry),
+                    BuildPartyTaxScheme(order.BuyerTaxId),
                     BuildContact(order))),
 
             // ── SellerSupplierParty ──────────────────────────────────────────
@@ -153,17 +158,18 @@ public sealed class UblOrderTransformService : ITransformService
                 new XElement(Cac + "Party",
                     BuildEndpointId(order.SupplierId is null ? null : order.Supplier?.EdiCode),
                     new XElement(Cac + "PartyName",
-                        new XElement(Cbc + "Name", supplierName))))
+                        new XElement(Cbc + "Name", supplierName)),
+                    BuildPostalAddress(supplierParty?.Street, supplierParty?.City, supplierParty?.PostalCode, supplierParty?.Country),
+                    BuildPartyTaxScheme(FirstNonBlank(order.SellerTaxId, supplierParty?.Vat))))
         );
 
-        // ── Delivery (ship-to) — null-gated on ShipToName. Sits after the parties,
-        // before the OrderLine loop (UBL 2.1 sequence: parties → Delivery → OrderLine). ──
-        var delivery = BuildDelivery(order);
-        if (delivery is not null)
-            root.Add(delivery);
+        // UBL 2.1 Order sequence after the parties: Delivery → TaxTotal → AnticipatedMonetaryTotal → OrderLine+.
+        // Each block is null-gated, so an order without the data emits none of them.
+        var lines = order.Lines.OrderBy(l => l.LineNumber).ToList();
+        root.Add(BuildDelivery(order), BuildTotals(order, lines, currency));
 
         // One OrderLine per purchase-order line, sorted deterministically.
-        foreach (var line in order.Lines.OrderBy(l => l.LineNumber))
+        foreach (var line in lines)
             root.Add(BuildOrderLine(line, currency));
 
         var doc = new XDocument(
@@ -183,20 +189,52 @@ public sealed class UblOrderTransformService : ITransformService
     /// <summary>
     /// Builds a <c>cac:PostalAddress</c> (StreetName / CityName / PostalZone / Country) with per-leaf
     /// null-drop, or null when ALL FOUR fields are blank (→ dropped by the parent → byte-identical for
-    /// orders with no postal address). Country code is emitted verbatim (free text, no ISO fabrication).
+    /// orders with no postal address). The country is written as its ISO 3166 alpha-2 code
+    /// (<see cref="StandardCodes.Country"/>); one that maps to no code drops <c>cac:Country</c> rather than
+    /// writing free text into a code-list slot.
     /// </summary>
     private static XElement? BuildPostalAddress(string? street, string? city, string? postal, string? country)
     {
-        if (IsBlank(street) && IsBlank(city) && IsBlank(postal) && IsBlank(country))
+        var code = StandardCodes.Country(country);
+        if (IsBlank(street) && IsBlank(city) && IsBlank(postal) && code is null)
             return null;
 
         return new XElement(Cac + "PostalAddress",
             IsBlank(street)  ? null : new XElement(Cbc + "StreetName", street),
             IsBlank(city)    ? null : new XElement(Cbc + "CityName",   city),
             IsBlank(postal)  ? null : new XElement(Cbc + "PostalZone", postal),
-            IsBlank(country) ? null : new XElement(Cac + "Country",
-                                          new XElement(Cbc + "IdentificationCode", country)));
+            code is null     ? null : new XElement(Cac + "Country",
+                                          new XElement(Cbc + "IdentificationCode", code)));
     }
+
+    /// <summary>A party's VAT id as <c>cac:PartyTaxScheme</c> (CompanyID + TaxScheme/ID = VAT), or null when blank.</summary>
+    private static XElement? BuildPartyTaxScheme(string? vatId) => IsBlank(vatId) ? null
+        : new XElement(Cac + "PartyTaxScheme",
+            new XElement(Cbc + "CompanyID", vatId),
+            new XElement(Cac + "TaxScheme", new XElement(Cbc + "ID", "VAT")));
+
+    /// <summary>
+    /// <c>cac:TaxTotal</c> when a VAT total was read, and <c>cac:AnticipatedMonetaryTotal</c> when a grand total was
+    /// read (its one required child, <c>PayableAmount</c>, is the read total). LineExtensionAmount is the sum of the
+    /// amounts the lines print; TaxExclusiveAmount only when a net total was read.
+    /// </summary>
+    private static IEnumerable<XElement> BuildTotals(PurchaseOrderEntity o, IReadOnlyList<PurchaseOrderLineEntity> lines, string currency)
+    {
+        XElement Amount(string name, decimal value) => new(Cbc + name,
+            new XAttribute("currencyID", currency), value.ToString("F2", CultureInfo.InvariantCulture));
+
+        if (o.TaxTotal is { } tax)
+            yield return new XElement(Cac + "TaxTotal", Amount("TaxAmount", tax));
+
+        if (o.GrandTotal is { } gross)
+            yield return new XElement(Cac + "AnticipatedMonetaryTotal",
+                Amount("LineExtensionAmount", lines.Sum(LineAmount)),
+                o.SubTotal is { } net ? Amount("TaxExclusiveAmount", net) : null,
+                Amount("TaxInclusiveAmount", gross),
+                Amount("PayableAmount", gross));
+    }
+
+    private static decimal LineAmount(PurchaseOrderLineEntity l) => Math.Round(l.Quantity * l.UnitPrice, 2, MidpointRounding.AwayFromZero);
 
     /// <summary>
     /// Builds a <c>cac:Contact</c> (Name / Telephone / ElectronicMail) from the order's ordering
@@ -214,26 +252,32 @@ public sealed class UblOrderTransformService : ITransformService
     }
 
     /// <summary>
-    /// Builds <c>cac:Delivery</c> from the ship-to address, or null when there is no ship-to name
-    /// (→ no node → byte-identical for orders without a ship-to). Emits a
-    /// <c>cac:DeliveryLocation/cac:Address</c> (from ShipTo street/city/postal/country) and a
-    /// <c>cac:DeliveryParty/cac:PartyName/cbc:Name</c> (from ShipToName). Gated on the NAME because
-    /// the DeliveryParty name is the only always-meaningful ship-to field.
+    /// Builds <c>cac:Delivery</c> (XSD order: DeliveryLocation, RequestedDeliveryPeriod, DeliveryParty), or null
+    /// when there is no ship-to name, no ship-to address and no requested delivery date (→ no node →
+    /// byte-identical for orders without them). <c>cac:DeliveryLocation/cac:Address</c> from ShipTo
+    /// street/city/postal/country; <c>cac:RequestedDeliveryPeriod</c> with StartDate = EndDate = the date;
+    /// <c>cac:DeliveryParty/cac:PartyName/cbc:Name</c> only with a ship-to name.
     /// </summary>
     private static XElement? BuildDelivery(PurchaseOrderEntity o)
     {
-        if (IsBlank(o.ShipToName))
+        var address = BuildPostalAddress(o.ShipToStreet, o.ShipToCity, o.ShipToPostalCode, o.ShipToCountry);
+        if (IsBlank(o.ShipToName) && address is null && o.RequestedDeliveryDate is null)
             return null;
 
-        var address = BuildPostalAddress(o.ShipToStreet, o.ShipToCity, o.ShipToPostalCode, o.ShipToCountry);
+        var date = o.RequestedDeliveryDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
         return new XElement(Cac + "Delivery",
             address is null ? null
                 : new XElement(Cac + "DeliveryLocation",
                     new XElement(Cac + "Address", address.Elements())),
-            new XElement(Cac + "DeliveryParty",
-                new XElement(Cac + "PartyName",
-                    new XElement(Cbc + "Name", o.ShipToName))));
+            date is null ? null
+                : new XElement(Cac + "RequestedDeliveryPeriod",
+                    new XElement(Cbc + "StartDate", date),
+                    new XElement(Cbc + "EndDate", date)),
+            IsBlank(o.ShipToName) ? null
+                : new XElement(Cac + "DeliveryParty",
+                    new XElement(Cac + "PartyName",
+                        new XElement(Cbc + "Name", o.ShipToName))));
     }
 
     // ── Party electronic address (cbc:EndpointID) ─────────────────────────────
@@ -324,10 +368,9 @@ public sealed class UblOrderTransformService : ITransformService
     {
         var quantityStr            = line.Quantity.ToString(CultureInfo.InvariantCulture);
         var unitPriceStr           = line.UnitPrice.ToString("F2", CultureInfo.InvariantCulture);
-        var lineExtensionAmountStr = (line.Quantity * line.UnitPrice)
-                                     .ToString("F2", CultureInfo.InvariantCulture);
+        var lineExtensionAmountStr = LineAmount(line).ToString("F2", CultureInfo.InvariantCulture);
 
-        var unitCode = string.IsNullOrWhiteSpace(line.Unit) ? "EA" : line.Unit;
+        var unitCode = StandardCodes.Rec20Unit(line.Unit);
 
         return new XElement(Cac + "OrderLine",
             new XElement(Cac + "LineItem",
