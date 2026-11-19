@@ -88,6 +88,17 @@ public class StrictOrderEdifactTests
     }
 
     [Fact]
+    public async Task A_unoc_file_sent_as_utf_8_still_reads_right()
+    {
+        var render = await StandardOutputs.RenderAsync("edifact-orders", StrictOrderFixture.With(FieldMeanings.SenderName, "Example OÜ"),
+            FlowFieldList.Empty, "lines", Guid.Empty, CancellationToken.None);
+        var latin1 = new MemoryStream();
+        await render.Result!.Content.CopyToAsync(latin1);
+        var utf8 = Encoding.UTF8.GetBytes(Encoding.Latin1.GetString(latin1.ToArray()));
+        (await new EdifactOrderParser().ParseAsync(new MemoryStream(utf8), CancellationToken.None)).BuyerName.Should().Be("Example OÜ");
+    }
+
+    [Fact]
     public async Task An_identifier_with_a_letter_outside_latin_1_is_refused_never_folded()
     {
         var render = await StandardOutputs.RenderAsync("edifact-orders", StrictOrderFixture.With(FieldMeanings.DocumentNumber, "PO-文-1"),
