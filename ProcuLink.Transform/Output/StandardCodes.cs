@@ -28,26 +28,32 @@ public static partial class StandardCodes
 
     // Box and pack use the Rec 21 package codes in the X-prefixed form the combined Rec 20/21 list (and Peppol's code
     // list) carries: plain BX / PK were removed from Rec 20. Piece words map to H87 ("piece"), which is what "pcs" says.
+    // Words in English, Estonian, German, Finnish, Latvian, Lithuanian and Russian. The piece row comes first, so its
+    // "st" wins over the set row's X12 code ST.
     private static readonly (string[] Words, string Rec20, string X12)[] Table =
     [
-        (["pcs", "pc", "piece", "pieces"], "H87", "PC"),
+        // "st" is the German St. (Stück); Latvian st. (hour) is left out.
+        (["pcs", "pc", "piece", "pieces", "st", "stk", "stück", "tk", "tükk", "kpl", "gab", "vnt", "шт"], "H87", "PC"),
         (["ea", "each"], "EA", "EA"),
         (["unit", "units"], "C62", "UN"),
-        (["kg", "kgs", "kilogram", "kilograms"], "KGM", "KG"),
-        (["g", "gram", "grams"], "GRM", "GR"),
+        (["kg", "kgs", "kilogram", "kilograms", "kilo", "кг"], "KGM", "KG"),
+        (["g", "gram", "grams", "г"], "GRM", "GR"),
         (["lb", "lbs", "pound", "pounds"], "LBR", "LB"),
-        (["l", "litre", "liter", "litres", "liters"], "LTR", "LT"),
-        (["ml"], "MLT", "ML"),
-        (["m", "metre", "meter", "metres", "meters"], "MTR", "MR"),
-        (["cm"], "CMT", "CM"),
-        (["mm"], "MMT", "MM"),
-        (["m2", "sqm"], "MTK", "SM"),
-        (["box", "boxes"], "XBX", "BX"),
-        (["pack", "packs"], "XPK", "PK"),
-        (["pair", "pairs"], "PR", "PR"),
+        (["l", "litre", "liter", "litres", "liters", "ltr", "liiter", "litra", "litrs", "litras", "л"], "LTR", "LT"),
+        (["ml", "мл"], "MLT", "ML"),
+        (["m", "metre", "meter", "metres", "meters", "jm", "lfm", "meeter", "metri", "metrs", "metras", "м"], "MTR", "MR"),
+        (["cm", "см"], "CMT", "CM"),
+        (["mm", "мм"], "MMT", "MM"),
+        (["m2", "sqm", "m²", "qm", "м2", "м²"], "MTK", "SM"),
+        (["m3", "m³", "cbm", "м3", "м³"], "MTQ", "CR"),
+        (["box", "boxes", "karp", "kast", "laatikko", "kaste", "dėžė", "кор", "коробка"], "XBX", "BX"),
+        (["pack", "packs", "pakk", "pak", "pck", "packung", "pkt", "paketti", "iepak", "уп", "упак"], "XPK", "PK"),
+        (["pair", "pairs", "paar", "pari", "pāris", "pora", "пар", "пара"], "PR", "PR"),
         (["dozen"], "DZN", "DZ"),
-        (["h", "hr", "hour", "hours"], "HUR", "HR"),
-        (["day", "days"], "DAY", "DA"),
+        (["h", "hr", "hour", "hours", "tund", "std", "stunde", "tunti", "stunda", "val", "ч", "час"], "HUR", "HR"),
+        (["day", "days", "päev", "tag", "tage", "pv", "päivä", "diena", "день", "дн"], "DAY", "DA"),
+        (["set", "sets", "kmpl", "kompl", "komplekt", "satz", "sarja", "komplekts", "komplektas", "компл", "комплект"], "SET", "ST"),
+        (["roll", "rolls", "rull", "rolle", "rulla", "rullis", "ritinys", "рул", "рулон"], "XRO", "RL"),
     ];
 
     private static readonly Dictionary<string, (string Rec20, string X12)> Units = BuildUnits();
