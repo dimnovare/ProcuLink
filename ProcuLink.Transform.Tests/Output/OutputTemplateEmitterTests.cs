@@ -83,6 +83,25 @@ public class OutputTemplateEmitterTests
         Assert.Equal("2", lines[1].Element("Qty")!.Value);
     }
 
+    [Fact]
+    public void Xml_MakesColumnLabelsValidNames_AndLeavesValidNamesAlone()
+    {
+        var template = new OutputNodeTemplate
+        {
+            Format = OutputFormat.Xml,
+            Root = OutputNode.Obj("Order",
+                OutputNode.Attr("2nd ref", Canon("PoNumber")),
+                OutputNode.FieldOf("Invoice Number", Canon("PoNumber")),
+                OutputNode.FieldOf("Currency", Canon("Currency"))),
+        };
+
+        var text = EmitterRows.Emit(template).Text();
+
+        Assert.Contains("<Order _2ndRef=\"PO-1\">", text);
+        Assert.Contains("<InvoiceNumber>PO-1</InvoiceNumber>", text);
+        Assert.Contains("<Currency>EUR</Currency>", text);
+    }
+
     // ── Conditional fields (OutputNode.IncludeWhen) ────────────────────────────────
 
     [Fact]

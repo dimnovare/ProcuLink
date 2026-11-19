@@ -43,13 +43,13 @@ public static class DocumentOutputRenderer
             };
             return new(new TransformResult(new MemoryStream(bytes, writable: false), contentType, extension), null, null, lookups.Misses);
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or TransformValidationException or XmlException)
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or TransformValidationException)
         {
             return new(null, "output_invalid", ex.Message);
         }
-        catch (Exception ex) when (ex is DocumentLayoutException or DocumentComposeException)
+        catch (Exception ex) when (ex is XmlException or DocumentLayoutException or DocumentComposeException)
         {
-            // QuestPDF's message is not approved copy, so no detail.
+            // The XML writer's and QuestPDF's messages are not approved copy, so no detail.
             return new(null, "output_invalid", null);
         }
     }

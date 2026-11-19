@@ -269,14 +269,14 @@ public sealed class OutputTemplateEmitter
     private static void StartElement(XmlWriter w, OutputNode node)
     {
         if (node.Prefix is { Length: > 0 } p && node.Namespace is { Length: > 0 } pns)
-            w.WriteStartElement(p, node.Name, pns);        // bound prefix; writer reuses the root-hoisted xmlns
+            w.WriteStartElement(p, XmlSafeName.For(node.Name), pns);        // bound prefix; writer reuses the root-hoisted xmlns
         else if (node.Namespace is { Length: > 0 } dns)
-            w.WriteStartElement(null, node.Name, dns);     // default namespace (no prefix)
+            w.WriteStartElement(null, XmlSafeName.For(node.Name), dns);     // default namespace (no prefix)
         else
             // Explicit empty namespace so a no-namespace node NEVER silently inherits an ancestor's
             // default xmlns. XmlWriter omits a redundant xmlns="" when no default is in scope, so this
             // stays byte-identical to the legacy single-arg call for non-namespaced trees.
-            w.WriteStartElement(null, node.Name, string.Empty);
+            w.WriteStartElement(null, XmlSafeName.For(node.Name), string.Empty);
     }
 
     /// <summary>A Prefix with no Namespace URI is an unrenderable half-state (the prefix would be silently dropped). Fail loud.</summary>
@@ -355,9 +355,9 @@ public sealed class OutputTemplateEmitter
     {
         var value = MappedTransformService.ResolveRule(attr.Rule ?? Empty, row, lineScope) ?? string.Empty;
         if (attr.Prefix is { Length: > 0 } p && attr.Namespace is { Length: > 0 } ns)
-            w.WriteAttributeString(p, attr.Name, ns, value);   // qualified attribute (e.g. xml:lang)
+            w.WriteAttributeString(p, XmlSafeName.For(attr.Name), ns, value);   // qualified attribute (e.g. xml:lang)
         else
-            w.WriteAttributeString(attr.Name, value);          // LEGACY unqualified → byte-identical
+            w.WriteAttributeString(XmlSafeName.For(attr.Name), value);        // LEGACY unqualified → byte-identical
     }
 
     // ── CSV (delimited) ────────────────────────────────────────────────────────────
