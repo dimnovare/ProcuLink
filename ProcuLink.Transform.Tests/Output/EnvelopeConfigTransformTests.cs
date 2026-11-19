@@ -215,6 +215,25 @@ public class EnvelopeConfigTransformTests
         return string.Join('~', segs);
     }
 
+    [Fact]
+    public async Task Writers_write_the_given_control_number_everywhere_the_envelope_carries_it()
+    {
+        var segs = SplitSegments(await ReadAsString(
+            await new X12TransformService().TransformAsync(BuildOrder(), OutputFormat.X12, CancellationToken.None, envelope: null, controlNumber: 42)));
+        segs[0].Split('*')[13].Should().Be("000000042");                    // ISA13
+        segs[1].Split('*')[6].Should().Be("42");                            // GS06
+        segs[^2].Should().Be("GE*1*42");                                    // GE02
+        segs[^1].Should().Be("IEA*1*000000042");                            // IEA02
+
+        var edifact = EdifactOrdersWriter.Write(BuildOrder(), null, 42).TrimEnd().Split('\'', StringSplitOptions.RemoveEmptyEntries);
+        edifact.Single(s => s.StartsWith("UNB+")).Split('+')[^1].Should().Be("000000042");
+        edifact[^1].Should().Be("UNZ+1+000000042");
+
+        InterchangeControl.Wrap(999_999_999).Should().Be(999_999_999);
+        InterchangeControl.Wrap(1_000_000_000).Should().Be(1);
+        InterchangeControl.Wrap(1).Should().Be(1);
+    }
+
     private static (string? Domain, string? Identity) ReadCredential(string xml, string wrapper)
     {
         var block = XDocument.Parse(xml).Descendants(wrapper).Single();

@@ -58,10 +58,8 @@ public sealed class X12TransformService : ITransformService
     private const string DefaultGsVersion         = "004010";   // GS08
     private const string DefaultUsageIndicator    = "P";        // ISA15 (P = production)
 
-    // Control numbers — single interchange / group / transaction set per document.
-    internal const string InterchangeControl = "000000001"; // ISA13 / IEA02 (9 digits)
-    private const string GroupControl       = "1";          // GS06 / GE02
-    private const string StControl          = "0001";       // ST02 / SE02
+    // Control numbers: ISA13/IEA02 and GS06/GE02 come from InterchangeControl (null → the legacy 000000001 / 1).
+    private const string StControl         = "0001";       // ST02 / SE02
 
     public bool CanTransform(OutputFormat format) => format == OutputFormat.X12;
 
@@ -85,7 +83,8 @@ public sealed class X12TransformService : ITransformService
         PurchaseOrderEntity order,
         OutputFormat format,
         CancellationToken ct,
-        EnvelopeConfig? envelope)
+        EnvelopeConfig? envelope,
+        long? controlNumber = null)
     {
         var env = envelope?.X12;
 
@@ -117,14 +116,14 @@ public sealed class X12TransformService : ITransformService
 
         // ── ISA — fixed-width interchange control header ───────────────────────
         sb.Append(BuildIsa(now, elementSep, componentSep,
-                senderQual, senderId, receiverQual, receiverId, isaVersion, usage))
+                senderQual, senderId, receiverQual, receiverId, isaVersion, usage, InterchangeControl.Padded(controlNumber)))
           .Append(segmentSep);
 
         // ── GS — functional group header (PO = purchase order) ─────────────────
         AppendSegment(sb, segmentSep, elementSep, "GS", "PO", senderId, receiverId,
             now.ToString("yyyyMMdd", CultureInfo.InvariantCulture),
             now.ToString("HHmm", CultureInfo.InvariantCulture),
-            GroupControl, "X", gsVersion);
+            InterchangeControl.Group(controlNumber), "X", gsVersion);
 
         // ── Transaction set (ST … SE). Built into a list so SE/CTT can count. ──
         var tx = new List<string>();
@@ -223,8 +222,8 @@ public sealed class X12TransformService : ITransformService
             sb.Append(seg).Append(segmentSep);
 
         // ── Trailers ───────────────────────────────────────────────────────────
-        AppendSegment(sb, segmentSep, elementSep, "GE", "1", GroupControl);
-        AppendSegment(sb, segmentSep, elementSep, "IEA", "1", InterchangeControl);
+        AppendSegment(sb, segmentSep, elementSep, "GE", "1", InterchangeControl.Group(controlNumber));
+        AppendSegment(sb, segmentSep, elementSep, "IEA", "1", InterchangeControl.Padded(controlNumber));
 
         var bytes  = Encoding.UTF8.GetBytes(sb.ToString());
         var stream = new MemoryStream(bytes);
@@ -321,7 +320,7 @@ public sealed class X12TransformService : ITransformService
     private static string BuildIsa(
         DateTime now, char elementSep, char componentSep,
         string senderQual, string senderId, string receiverQual, string receiverId,
-        string isaVersion, string usage)
+        string isaVersion, string usage, string interchangeControl)
     {
         var isa = Segment(elementSep, "ISA",
             "00",                                  // ISA01 authorization info qualifier
@@ -336,7 +335,7 @@ public sealed class X12TransformService : ITransformService
             now.ToString("HHmm", CultureInfo.InvariantCulture),   // ISA10 time
             "U",                                   // ISA11 repetition/standards id (00401 → U)
             isaVersion.PadRight(5).Substring(0, 5),// ISA12 control version number
-            InterchangeControl,                    // ISA13 interchange control number
+            interchangeControl,                    // ISA13 interchange control number
             "0",                                   // ISA14 acknowledgment requested
             usage.PadRight(1).Substring(0, 1),     // ISA15 usage indicator (P = production / T = test)
             componentSep.ToString());              // ISA16 component element separator

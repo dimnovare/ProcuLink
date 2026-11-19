@@ -50,7 +50,7 @@ public static class EdifactOrdersWriter
     private static string Party(string? id, string? qualifier, string fallback) =>
         Text(string.IsNullOrWhiteSpace(id) ? fallback : id.Trim(), 35) + (string.IsNullOrWhiteSpace(qualifier) ? "" : ":" + Text(qualifier.Trim(), 4));
 
-    public static string Write(PurchaseOrderEntity order, EdifactEnvelope? envelope = null)
+    public static string Write(PurchaseOrderEntity order, EdifactEnvelope? envelope = null, long? controlNumber = null)
     {
         var now = DateTime.UtcNow;
         var currency = string.IsNullOrWhiteSpace(order.Currency) ? "EUR" : order.Currency.ToUpperInvariant();
@@ -110,10 +110,10 @@ public static class EdifactOrdersWriter
 
         var segments = new List<string>
         {
-            $"UNB+UNOC:3+{Party(envelope?.SenderId, envelope?.SenderQualifier, X12TransformService.DefaultSenderId)}+{Party(envelope?.RecipientId, envelope?.RecipientQualifier, X12TransformService.DefaultReceiverId)}+{now:yyMMdd}:{now:HHmm}+{X12TransformService.InterchangeControl}",
+            $"UNB+UNOC:3+{Party(envelope?.SenderId, envelope?.SenderQualifier, X12TransformService.DefaultSenderId)}+{Party(envelope?.RecipientId, envelope?.RecipientQualifier, X12TransformService.DefaultReceiverId)}+{now:yyMMdd}:{now:HHmm}+{InterchangeControl.Padded(controlNumber)}",
         };
         segments.AddRange(message);
-        segments.Add($"UNZ+1+{X12TransformService.InterchangeControl}");
+        segments.Add($"UNZ+1+{InterchangeControl.Padded(controlNumber)}");
         return "UNA:+.? '" + string.Concat(segments.Select(s => s + "'")) + Environment.NewLine;
     }
 }
