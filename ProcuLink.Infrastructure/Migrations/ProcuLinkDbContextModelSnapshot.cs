@@ -1603,6 +1603,25 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.ToTable("integration_subscriptions", (string)null);
                 });
 
+            modelBuilder.Entity("ProcuLink.Core.Entities.InterchangeNumber", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+                    NpgsqlPropertyBuilderExtensions.HasIdentityOptions(b.Property<long>("Id"), 2L, null, null, null, null, null);
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("created_at");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("interchange_numbers", (string)null);
+                });
+
             modelBuilder.Entity("ProcuLink.Core.Entities.InvoiceEntity", b =>
                 {
                     b.Property<Guid>("Id")

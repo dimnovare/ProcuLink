@@ -99,6 +99,11 @@ public static class OrgQueryFilters
                 "Platform accountability records that must outlive the organisation they are " +
                 "about (the organisation-erase receipt). An org column with an FK would erase " +
                 "the receipt with the org; SubjectOrgId is deliberately not an org column.",
+
+            [typeof(InterchangeNumber)] =
+                "A deployment-wide counter for X12 / EDIFACT interchange control numbers. Rows hold no " +
+                "tenant data and are never read back; the counter is global because orgs without partner " +
+                "IDs share one sender ID, so per-org numbers would repeat under it.",
         };
 
     /// <summary>

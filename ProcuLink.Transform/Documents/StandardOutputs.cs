@@ -13,7 +13,11 @@ namespace ProcuLink.Transform.Documents;
 /// unused) and names the official rule set it is checked against; <see cref="Flagged"/> standards sit behind the Peppol flag.
 /// </summary>
 public sealed record StandardOutput(string Id, OutputFormat Writer, string Format, IReadOnlyList<string> Needs,
-    string? Vesid = null, bool Flagged = false, bool CreditNote = false, InvoiceSyntax Syntax = InvoiceSyntax.Ubl, string RuleSet = "Peppol", string? Customization = null);
+    string? Vesid = null, bool Flagged = false, bool CreditNote = false, InvoiceSyntax Syntax = InvoiceSyntax.Ubl, string RuleSet = "Peppol", string? Customization = null)
+{
+    /// <summary>The envelope has an interchange control number a receiver checks for duplicates, so every real send needs a fresh one.</summary>
+    public bool NeedsControlNumber => Writer is OutputFormat.X12 or OutputFormat.EdifactOrders;
+}
 
 /// <summary>The XML syntax an invoice-model standard is written in.</summary>
 public enum InvoiceSyntax { Ubl, Cii }
@@ -71,8 +75,8 @@ public static class StandardOutputs
     public static System.Text.Encoding TextEncoding(string? id) => id == "edifact-orders" ? System.Text.Encoding.Latin1 : System.Text.Encoding.UTF8;
 
     /// <summary>A standard output's file, with the sender and receiver IDs stored on it (sending and Preview both call this).</summary>
-    public static Task<DocumentRender> RenderAsync(FlowOutput output, ReadResult read, FlowFieldList fields, Guid orgId, CancellationToken ct)
-        => RenderAsync(output.Standard!, read, fields, output.TableKey, orgId, ct, DocumentJson.Deserialize<OutputNodeTemplate>(output.TemplateJson).Envelope);
+    public static Task<DocumentRender> RenderAsync(FlowOutput output, ReadResult read, FlowFieldList fields, Guid orgId, CancellationToken ct, long? controlNumber = null)
+        => RenderAsync(output.Standard!, read, fields, output.TableKey, orgId, ct, DocumentJson.Deserialize<OutputNodeTemplate>(output.TemplateJson).Envelope, controlNumber);
 
     /// <summary>
     /// The standard file, or <c>output_invalid</c>: with the needs sentence when the read lacks a need, with the
@@ -80,7 +84,7 @@ public static class StandardOutputs
     /// for an unknown id or anything a writer still refuses, an amount too large for its arithmetic included (its messages are not approved copy). Never throws for either.
     /// The order standards write the sender and receiver IDs in <paramref name="envelope"/>, the placeholders without it.
     /// </summary>
-    public static async Task<DocumentRender> RenderAsync(string id, ReadResult read, FlowFieldList fields, string? tableKey, Guid orgId, CancellationToken ct, EnvelopeConfig? envelope = null)
+    public static async Task<DocumentRender> RenderAsync(string id, ReadResult read, FlowFieldList fields, string? tableKey, Guid orgId, CancellationToken ct, EnvelopeConfig? envelope = null, long? controlNumber = null)
     {
         if (Find(id) is not { } standard) return new(null, "output_invalid", null);
         try
@@ -104,9 +108,9 @@ public static class StandardOutputs
             // Not in OutputTransformRegistry: registering it would surface EDIFACT in the legacy order screens.
             if (standard.Writer == OutputFormat.EdifactOrders)
                 return new(TransformResult.For(OutputFormat.EdifactOrders,
-                    new MemoryStream(TextEncoding(id).GetBytes(EdifactOrdersWriter.Write(order!, envelope?.Edifact)), writable: false)), null, null);
+                    new MemoryStream(TextEncoding(id).GetBytes(EdifactOrdersWriter.Write(order!, envelope?.Edifact, controlNumber)), writable: false)), null, null);
             if (standard.Writer == OutputFormat.X12)
-                return new(await new X12TransformService().TransformAsync(order!, OutputFormat.X12, ct, envelope), null, null);
+                return new(await new X12TransformService().TransformAsync(order!, OutputFormat.X12, ct, envelope, controlNumber), null, null);
             var writer = OutputTransformRegistry.All.First(w => w.CanTransform(standard.Writer));
             // A flow's cXML declares its DTD (the legacy order path declares one only when configured).
             var cxml = standard.Writer == OutputFormat.CXml ? CxmlTransformService.StandardConfig(envelope?.Cxml) : null;

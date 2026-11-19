@@ -70,4 +70,63 @@ public sealed class DocumentSenderClaimPostgresTests(PostgresContainerFixture po
             .Should().BeOneOf(DocumentStatus.Sending, DocumentStatus.Sent);
         (await check.FlowDocuments.Where(d => d.Id == stale.Id).Select(d => d.Status).SingleAsync()).Should().Be(DocumentStatus.Ready);
     }
+
+    [DockerRequiredFact]
+    public async Task Two_sends_carry_different_interchange_control_numbers_in_x12_and_edifact()
+    {
+        var cs = await postgres.CreateDatabaseAsync("proculink_sendcontrol");
+        ProcuLinkDbContext NewDb() => new(new DbContextOptionsBuilder<ProcuLinkDbContext>().UseNpgsql(cs, n => n.CommandTimeout(180)).Options);
+        var now = DateTime.UtcNow;
+        var org = Guid.NewGuid();
+        (string Key, string Meaning, string Value)[] header = [("po", FieldMeanings.DocumentNumber, "PO-1"), ("date", FieldMeanings.IssueDate, "2026-11-13"), ("cur", FieldMeanings.Currency, "EUR")];
+        (string Key, string Meaning, string Value)[] line = [("code", FieldMeanings.LineItemCode, "A-1"), ("qty", FieldMeanings.LineQuantity, "3"), ("price", FieldMeanings.LineUnitPrice, "9.99")];
+        var flow = new Flow
+        {
+            Id = Guid.NewGuid(), OrgId = org, Name = "Orders", FieldsConfirmed = true, CreatedAt = now, UpdatedAt = now,
+            FieldsJson = DocumentJson.Serialize(new FlowFieldList(
+                header.Select(f => new FlowField(f.Key, f.Key, FieldTypes.Text, f.Meaning, false)).ToList(),
+                [new FlowTable("lines", "Lines", line.Select(f => new FlowField(f.Key, f.Key, FieldTypes.Text, f.Meaning, false)).ToList())])),
+        };
+        var read = DocumentJson.Serialize(new ReadResult("Purchase order",
+            header.Select(f => new ReadField(f.Key, f.Key, f.Value, FieldTypes.Text, null, 1, null, false, true, false)).ToList(),
+            [new ReadTable("lines", "Lines", line.Select(f => new ReadColumn(f.Key, f.Key, FieldTypes.Text, null)).ToList(),
+                [new ReadRow(line.ToDictionary(f => f.Key, f => new ReadCell(f.Value, 1, null, false, false)))], true)]));
+        FlowDocument Doc() => new()
+        {
+            Id = Guid.NewGuid(), OrgId = org, FlowId = flow.Id, FileName = "a.pdf", ContentType = "application/pdf", SourceFileKey = "k",
+            Sha256 = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"), Status = DocumentStatus.Ready, CreatedAt = now, UpdatedAt = now, ReadJson = read,
+        };
+        var docs = new[] { Doc(), Doc() };
+        await using (var seed = NewDb())
+        {
+            seed.Organisations.Add(new Organisation { Id = org, Name = "Test Org A", Slug = "acme-" + org.ToString("N") });
+            seed.Flows.Add(flow);
+            seed.FlowDocuments.AddRange(docs);
+            seed.Set<FlowOutput>().AddRange(new[] { "x12-850", "edifact-orders" }.Select(standard => new FlowOutput
+            {
+                Id = Guid.NewGuid(), OrgId = org, FlowId = flow.Id, Name = standard, Format = FlowOutputFormats.Text, Standard = standard,
+                TableKey = "lines", TemplateJson = "{}", CreatedAt = now, UpdatedAt = now,
+            }));
+            await seed.SaveChangesAsync();
+        }
+
+        var billing = new Mock<IBillingService>();
+        billing.Setup(b => b.CanProcessOrdersAsync(org, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        // ISA13 for X12, UNB's last element for EDIFACT.
+        var controls = new List<string>();
+        var storage = new Mock<IFileStorageService>();
+        storage.Setup(s => s.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Callback<Stream, string, string, CancellationToken>((body, _, _, _) =>
+            {
+                var text = new StreamReader(body).ReadToEnd();
+                controls.Add(text.StartsWith("ISA") ? text.Split('~')[0].Split('*')[13] : text.Split('\'').Single(s => s.StartsWith("UNB+")).Split('+')[^1]);
+            });
+
+        await using var db = NewDb();
+        var sender = new DocumentSender(db, billing.Object, storage.Object, Mock.Of<IBackgroundJobClient>(), Microsoft.Extensions.Logging.Abstractions.NullLogger<DocumentSender>.Instance, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())));
+        foreach (var d in docs)
+            (await sender.SendAsync(await db.FlowDocuments.SingleAsync(x => x.Id == d.Id), SendMode.Person, null, CancellationToken.None)).Ok.Should().BeTrue();
+
+        controls.Should().HaveCount(4).And.OnlyHaveUniqueItems().And.NotContain("000000001");
+    }
 }

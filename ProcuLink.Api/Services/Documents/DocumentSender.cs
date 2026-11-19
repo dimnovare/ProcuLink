@@ -68,10 +68,13 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
         foreach (var (o, template) in outputs.Zip(templates))
         {
             // A flagged standard whose flag has since gone off is refused like an unknown one, never rendered.
-            var render = o.Standard is { } standard
-                ? StandardOutputs.Find(standard) is { Flagged: true } && !gate.PeppolOn(doc.OrgId)
+            // An X12 / EDIFACT file gets a fresh interchange number; nothing is modified yet, so allocating it saves nothing else.
+            var known = StandardOutputs.Find(o.Standard);
+            var render = o.Standard is not null
+                ? known is { Flagged: true } && !gate.PeppolOn(doc.OrgId)
                     ? new DocumentRender(null, "output_invalid", null)
-                    : await StandardOutputs.RenderAsync(o, read, config.Fields, doc.OrgId, ct)
+                    : await StandardOutputs.RenderAsync(o, read, config.Fields, doc.OrgId, ct,
+                        known?.NeedsControlNumber == true ? await InterchangeNumbers.NextAsync(db, ct) : null)
                 : DocumentOutputRenderer.Render(o.Format, template, read, o.TableKey, lookups,
                     o.LayoutJson is null ? null : DocumentJson.Deserialize<OutputLayout>(o.LayoutJson), o.Logo);
             if (!render.Ok)
