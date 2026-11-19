@@ -285,7 +285,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         }
         else
         {
-            using var reader = new StreamReader(render.Result.Content, Encoding.UTF8);
+            using var reader = new StreamReader(render.Result.Content, StandardOutputs.TextEncoding(output.Standard));
             shownBody["content"] = await reader.ReadToEndAsync(ct);
         }
         shownBody["lookupMisses"] = shown;

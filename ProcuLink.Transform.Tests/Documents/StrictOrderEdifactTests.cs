@@ -3,6 +3,7 @@ using FluentAssertions;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Services;
 using ProcuLink.Transform.Conformance;
+using ProcuLink.Transform.Documents;
 using ProcuLink.Transform.Parsing;
 using Xunit;
 
@@ -52,5 +53,17 @@ public class StrictOrderEdifactTests
         var segs = (await StrictOrderFixture.Render("edifact-orders", read)).Split('\'');
         segs.Should().Contain($"NAD+BY+++{n[..35]}:{n[35..70]}:{n[70..]}+Example Street 1+Berlin++10115+DE")
             .And.Contain($"IMD+F++:::{d[..35]}:{d[35..70]}");
+    }
+
+    [Fact]
+    public async Task Text_outside_latin_1_is_folded_and_written_as_latin_1()
+    {
+        var read = StrictOrderFixture.With(StrictOrderFixture.With(FieldMeanings.SenderName, "Example Šokolaad OÜ"), FieldMeanings.ReceiverName, "ООО Пример");
+        var render = await StandardOutputs.RenderAsync("edifact-orders", read, FlowFieldList.Empty, "lines", Guid.Empty, CancellationToken.None);
+        var bytes = new MemoryStream();
+        await render.Result!.Content.CopyToAsync(bytes);
+        bytes.ToArray().Should().Contain(0xDC).And.NotContain(0xC3);
+        var text = Encoding.Latin1.GetString(bytes.ToArray());
+        text.Should().StartWith("UNA:+.? 'UNB+UNOC:3+").And.Contain("'NAD+BY+++Example Sokolaad OÜ+").And.Contain("'NAD+SU+++OOO Primer+");
     }
 }

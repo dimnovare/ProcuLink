@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Mapping;
 
@@ -9,11 +10,28 @@ public static class EdifactOrdersWriter
 {
     private static string Esc(string? text) => string.Concat((text ?? "").Select(c => char.IsControl(c) ? " " : ":+?'".Contains(c) ? "?" + c : c.ToString()));
 
-    /// <summary>Free text split over its <paramref name="repeats"/> components of <paramref name="max"/> (counted before release), the rest cut.</summary>
-    private static string Text(string? text, int max, int repeats = 1) => string.Join(":", StandardCodes.Cut(text, max, repeats).Select(Esc));
+    private const string Cyrillic = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя";
+    private static readonly string[] CyrillicLatin =
+        ["a", "b", "v", "g", "d", "e", "e", "zh", "z", "i", "i", "k", "l", "m", "n", "o", "p", "r", "s", "t", "u", "f", "kh", "ts", "ch", "sh", "shch", "", "y", "", "e", "iu", "ia"];
 
-    /// <summary>An identifier, refused when longer than <paramref name="max"/> (counted before release), never cut.</summary>
-    private static string Id(string? value, int max, string what) => Esc(StandardCodes.Id(value, max, what));
+    /// <summary>
+    /// UNOC is ISO 8859-1: a Latin-1 character is kept, Cyrillic is written in Latin letters (ICAO 9303), any other letter
+    /// loses its diacritic when its base is Latin-1, and anything else becomes <c>?</c>. A control character becomes a space.
+    /// </summary>
+    private static string Fold(string? text) => string.Concat((text ?? "").Select(c =>
+        char.IsControl(c) ? " "
+        : c <= 'ÿ' ? c.ToString()
+        : char.IsLowSurrogate(c) ? ""
+        : char.IsHighSurrogate(c) ? "?"
+        : Cyrillic.IndexOf(char.ToLowerInvariant(c)) is var i and >= 0
+            ? char.IsUpper(c) && CyrillicLatin[i].Length > 0 ? char.ToUpperInvariant(CyrillicLatin[i][0]) + CyrillicLatin[i][1..] : CyrillicLatin[i]
+        : c.ToString().Normalize(NormalizationForm.FormD)[0] is var b and <= 'ÿ' ? b.ToString() : "?"));
+
+    /// <summary>Free text folded, split over its <paramref name="repeats"/> components of <paramref name="max"/> (counted before release), the rest cut.</summary>
+    private static string Text(string? text, int max, int repeats = 1) => string.Join(":", StandardCodes.Cut(Fold(text), max, repeats).Select(Esc));
+
+    /// <summary>An identifier folded, refused when longer than <paramref name="max"/> (counted before release), never cut.</summary>
+    private static string Id(string? value, int max, string what) => Esc(StandardCodes.Id(Fold(value), max, what));
 
     // Full read precision, as the X12 850 writes it.
     private static string Num(decimal d) => d.ToString(CultureInfo.InvariantCulture);
