@@ -25,7 +25,7 @@ public sealed record SendOutcome(string? Error, object? Detail, IReadOnlyList<Fl
 /// Renders a read document through every output of its flow, stores the artifacts, and writes one delivery per output:
 /// <c>stored</c> for download-only outputs, <c>queued</c> for those with a destination (delivered by <see cref="DeliverDocumentJob"/>).
 /// </summary>
-public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billing, IFileStorageService storage, IBackgroundJobClient jobs, ILogger<DocumentSender> logger, DocumentEngineGate gate)
+public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billing, IFileStorageService storage, IBackgroundJobClient jobs, ILogger<DocumentSender> logger, DocumentEngineGate gate, IAnalyticsService analytics)
 {
     private sealed record Rendered(FlowOutput Output, byte[] Bytes, string ContentType, string Extension);
 
@@ -106,6 +106,9 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
         foreach (var d in queued) DeliverDocumentJob.Enqueue(jobs, d.Id, d.OrgId);
         // Sent here only when nothing is left to deliver; otherwise DeliverDocumentJob announces the end, so a send is announced once.
         if (doc.Status == DocumentStatus.Sent) await FlowWebhook.EnqueueAsync(db, jobs, doc, FlowWebhookEvent.Sent, logger, CancellationToken.None);
+        // Every committed send, not only the first (a funnel takes the first). Mode only: never content, names or addresses.
+        await analytics.CaptureAsync(doc.OrgId, userId, "document_sent",
+            new Dictionary<string, object?> { ["mode"] = mode.ToString().ToLowerInvariant() }, CancellationToken.None);
         return outcome;
     }
 
