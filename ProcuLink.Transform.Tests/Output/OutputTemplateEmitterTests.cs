@@ -95,10 +95,11 @@ public class OutputTemplateEmitterTests
                 OutputNode.FieldOf("Currency", Canon("Currency"))),
         };
 
-        var text = EmitterRows.Emit(template).Text();
+        // A form feed from a PDF's text is a character XML cannot carry: it is dropped, not a failed file.
+        var text = EmitterRows.Emit(template, EmitterRows.Header("INV\f-1042"), EmitterRows.TwoLines()).Text();
 
-        Assert.Contains("<Order _2ndRef=\"PO-1\">", text);
-        Assert.Contains("<InvoiceNumber>PO-1</InvoiceNumber>", text);
+        Assert.Contains("<Order _2ndRef=\"INV-1042\">", text);
+        Assert.Contains("<InvoiceNumber>INV-1042</InvoiceNumber>", text);
         Assert.Contains("<Currency>EUR</Currency>", text);
     }
 

@@ -345,7 +345,7 @@ public sealed class OutputTemplateEmitter
 
             default: // Field → <Name>value</Name>  (Attribute is handled by the parent Object)
                 StartElement(w, node);
-                w.WriteString(MappedTransformService.ResolveRule(node.Rule ?? Empty, row, lineScope) ?? string.Empty);
+                w.WriteString(XmlSafeName.Text(MappedTransformService.ResolveRule(node.Rule ?? Empty, row, lineScope) ?? string.Empty));
                 w.WriteEndElement();
                 break;
         }
@@ -353,7 +353,7 @@ public sealed class OutputTemplateEmitter
 
     private static void WriteXmlAttribute(XmlWriter w, OutputNode attr, IReadOnlyDictionary<string, string> row, bool lineScope)
     {
-        var value = MappedTransformService.ResolveRule(attr.Rule ?? Empty, row, lineScope) ?? string.Empty;
+        var value = XmlSafeName.Text(MappedTransformService.ResolveRule(attr.Rule ?? Empty, row, lineScope) ?? string.Empty);
         if (attr.Prefix is { Length: > 0 } p && attr.Namespace is { Length: > 0 } ns)
             w.WriteAttributeString(p, XmlSafeName.For(attr.Name), ns, value);   // qualified attribute (e.g. xml:lang)
         else

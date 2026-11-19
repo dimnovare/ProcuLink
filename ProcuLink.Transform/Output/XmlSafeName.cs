@@ -29,6 +29,28 @@ internal static class XmlSafeName
         return sb.ToString();
     }
 
+    /// <summary>
+    /// <paramref name="value"/> without the characters XML 1.0 cannot carry (a form feed or another control
+    /// character from a PDF's text, a lone surrogate). Valid surrogate pairs stay; a clean value is returned unchanged.
+    /// </summary>
+    internal static string Text(string value)
+    {
+        StringBuilder? sb = null;
+        for (var i = 0; i < value.Length; i++)
+        {
+            var c = value[i];
+            var pair = i + 1 < value.Length && XmlConvert.IsXmlSurrogatePair(value[i + 1], c);
+            if (pair || XmlConvert.IsXmlChar(c))
+            {
+                sb?.Append(c);
+                if (pair) { sb?.Append(value[++i]); }
+                continue;
+            }
+            sb ??= new StringBuilder(value, 0, i, value.Length);
+        }
+        return sb?.ToString() ?? value;
+    }
+
     private static bool IsValid(string? name) =>
         name is { Length: > 0 } && XmlConvert.IsStartNCNameChar(name[0]) && name.All(XmlConvert.IsNCNameChar);
 }
