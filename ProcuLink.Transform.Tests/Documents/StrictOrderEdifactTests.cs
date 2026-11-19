@@ -19,15 +19,15 @@ public class StrictOrderEdifactTests
 
         var segs = text.TrimEnd().Split('\'', StringSplitOptions.RemoveEmptyEntries);   // fixture has no release characters
         segs.SkipWhile(s => !s.StartsWith("UNH")).TakeWhile(s => !s.StartsWith("UNZ")).Should().Equal(
-            "UNH+1+ORDERS:D:96A:UN", "BGM+220+PO-2026-0042+9", "DTM+137:20261118:102", "DTM+2:20261215:102",
+            "UNH+1+ORDERS:D:96A:UN", "BGM+220+PO-2026-0042+9", "DTM+137:20261118:102", "DTM+2:20261215:102", "FTX+AAB+++30 days net",
             "NAD+BY+++Example Buyer Ltd+Example Street 1+Berlin++10115+DE", "RFF+VA:DE000000000", "CTA+OC", "COM+orders@example.com:EM",
             "NAD+SU+++Example Supplier OU+Example Road 2+Tallinn++10111+EE", "RFF+VA:EE000000000",
             "NAD+ST+++Example Buyer Ltd Warehouse+Warehouse Road 3+Hamburg++20095+DE",
             "CUX+2:EUR:9",
-            "LIN+1++A-100:SA", "IMD+F++:::Hex bolt M8", "QTY+21:100:H87", "PRI+AAA:0.25",
-            "LIN+2++B-200:SA", "IMD+F++:::Washer M8", "QTY+21:200:H87", "PRI+AAA:0.05",
-            "LIN+3++C-300:SA", "IMD+F++:::Compression spring", "QTY+21:20:H87", "PRI+AAA:1.25",
-            "UNS+S", "MOA+125:60.00", "MOA+124:11.40", "MOA+86:71.40", "CNT+2:3", "UNT+30+1");
+            "LIN+1++A-100:SA", "IMD+F++:::Hex bolt M8", "QTY+21:100:H87", "MOA+203:25.00", "PRI+AAA:0.25",
+            "LIN+2++B-200:SA", "IMD+F++:::Washer M8", "QTY+21:200:H87", "MOA+203:10.00", "PRI+AAA:0.05",
+            "LIN+3++C-300:SA", "IMD+F++:::Compression spring", "QTY+21:20:H87", "MOA+203:25.00", "PRI+AAA:1.25",
+            "UNS+S", "MOA+125:60.00", "MOA+124:11.40", "MOA+86:71.40", "CNT+2:3", "UNT+34+1");
 
         var parsed = await new EdifactOrderParser().ParseAsync(new MemoryStream(Encoding.UTF8.GetBytes(text)), CancellationToken.None);
         // The parser files any LIN item code under BuyerItemCode whatever its 7143 qualifier, so ":SA" reads back here.
@@ -35,6 +35,20 @@ public class StrictOrderEdifactTests
         parsed.RequestedDeliveryDate.Should().Be(new DateOnly(2026, 12, 15));
         parsed.Parties!.Single(p => p.Role == "shipTo").Should().Match<ParsedParty>(p =>
             p.Name == StrictOrderFixture.ShipToName && p.City == StrictOrderFixture.ShipToCity && p.Country == "DE");
+    }
+
+    [Fact]
+    public async Task Order_reference_buyer_codes_tax_and_ids_have_their_homes()
+    {
+        var text = await StrictOrderFixture.Render("edifact-orders", StrictOrderFixture.WithEveryValue());
+        var segs = text.TrimEnd().Split('\'', StringSplitOptions.RemoveEmptyEntries).ToList();
+
+        segs.SkipWhile(s => !s.StartsWith("FTX")).Take(3).Should().Equal(
+            "FTX+AAB+++30 days net", "RFF+ON:FRAME-2026-01", "NAD+BY+++Example Buyer Ltd+Example Street 1+Berlin++10115+DE");
+        segs.Should().Contain("NAD+SU+0000000000000::9++Example Supplier OU+Example Road 2+Tallinn++10111+EE");
+        segs.SkipWhile(s => s != "LIN+1++A-100:SA").Take(7).Should().Equal(
+            "LIN+1++A-100:SA", "PIA+1+BUY-1:BP", "IMD+F++:::Hex bolt M8", "QTY+21:100:H87", "MOA+203:25.00", "PRI+AAA:0.25", "TAX+7+VAT+++:::19");
+        new ConformanceService().Check(text, OutputFormat.EdifactOrders).ErrorCount.Should().Be(0);
     }
 
     [Fact]

@@ -36,10 +36,10 @@ public static class EdifactOrdersWriter
     // Full read precision, as the X12 850 writes it.
     private static string Num(decimal d) => d.ToString(CultureInfo.InvariantCulture);
 
-    /// <summary><c>NAD+{q}+++{name}+{street}+{city}++{postcode}+{iso}</c>, trailing empty elements left out.</summary>
-    private static string Nad(string qualifier, string name, string? street, string? city, string? postcode, string? country)
+    /// <summary><c>NAD+{q}+[{gln}::9]++{name}+{street}+{city}++{postcode}+{iso}</c>, trailing empty elements left out. 9 = GS1, the one Peppol scheme EDIFACT has an agency code for.</summary>
+    private static string Nad(string qualifier, string? gln, string name, string? street, string? city, string? postcode, string? country)
     {
-        string[] elements = [qualifier, "", "", Text(name, 35, 5), Text(street, 35, 3), Text(city, 35), "", Text(postcode, 9), StandardCodes.Country(country) ?? ""];
+        string[] elements = [qualifier, gln is null ? "" : Id(gln, 35, "Peppol ID") + "::9", "", Text(name, 35, 5), Text(street, 35, 3), Text(city, 35), "", Text(postcode, 9), StandardCodes.Country(country) ?? ""];
         var count = elements.Length;
         while (elements[count - 1].Length == 0) count--;
         return "NAD+" + string.Join("+", elements.Take(count));
@@ -63,11 +63,14 @@ public static class EdifactOrdersWriter
             $"DTM+137:{order.OrderDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}:102",
         };
         if (order.RequestedDeliveryDate is { } delivery) message.Add($"DTM+2:{delivery.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}:102");
+        if (!string.IsNullOrWhiteSpace(order.PaymentTerms)) message.Add($"FTX+AAB+++{Text(order.PaymentTerms, 70, 5)}");
+        // SG1 RFF: the order this one refers to.
+        if (!string.IsNullOrWhiteSpace(order.BuyerOrderRef)) message.Add($"RFF+ON:{Id(order.BuyerOrderRef, 35, "order reference")}");
 
         // SG2 NAD → SG3 RFF → SG5 CTA/COM, each party's references and contact right after its NAD, all before CUX.
         if (OrderHeaderReader.ExtractBuyerName(order) is { } buyer && !string.IsNullOrWhiteSpace(buyer))
         {
-            message.Add(Nad("BY", buyer, order.BillToStreet, order.BillToCity, order.BillToPostalCode, order.BillToCountry));
+            message.Add(Nad("BY", StandardCodes.Gln(OrderHeaderReader.BuyerParty(order)?.EdiCode), buyer, order.BillToStreet, order.BillToCity, order.BillToPostalCode, order.BillToCountry));
             if (!string.IsNullOrWhiteSpace(order.BuyerTaxId)) message.Add($"RFF+VA:{Id(order.BuyerTaxId, 35, "VAT number")}");
             if (!string.IsNullOrWhiteSpace(order.ContactName) || !string.IsNullOrWhiteSpace(order.ContactEmail) || !string.IsNullOrWhiteSpace(order.ContactPhone))
             {
@@ -80,19 +83,22 @@ public static class EdifactOrdersWriter
         var supplierName = string.IsNullOrWhiteSpace(order.SupplierName) ? supplier?.Name : order.SupplierName;
         if (!string.IsNullOrWhiteSpace(supplierName))
         {
-            message.Add(Nad("SU", supplierName, supplier?.Street, supplier?.City, supplier?.PostalCode, supplier?.Country));
+            message.Add(Nad("SU", StandardCodes.Gln(supplier?.EdiCode), supplierName, supplier?.Street, supplier?.City, supplier?.PostalCode, supplier?.Country));
             var supplierVat = string.IsNullOrWhiteSpace(order.SellerTaxId) ? supplier?.Vat : order.SellerTaxId;
             if (!string.IsNullOrWhiteSpace(supplierVat)) message.Add($"RFF+VA:{Id(supplierVat, 35, "VAT number")}");
         }
         if (OrderHeaderReader.ShipToName(order) is { } shipTo)
-            message.Add(Nad("ST", shipTo, order.ShipToStreet, order.ShipToCity, order.ShipToPostalCode, order.ShipToCountry));
+            message.Add(Nad("ST", null, shipTo, order.ShipToStreet, order.ShipToCity, order.ShipToPostalCode, order.ShipToCountry));
         message.Add($"CUX+2:{Esc(currency)}:9");
         foreach (var line in lines)
         {
             message.Add($"LIN+{line.LineNumber.ToString(CultureInfo.InvariantCulture)}++{Id(line.SupplierItemCode, 35, "item code")}:SA");
+            if (!string.IsNullOrWhiteSpace(line.BuyerItemCode)) message.Add($"PIA+1+{Id(line.BuyerItemCode, 35, "buyer's item code")}:BP");
             if (!string.IsNullOrWhiteSpace(line.Description)) message.Add($"IMD+F++:::{Text(line.Description, 35, 2)}");
             message.Add($"QTY+21:{Num(line.Quantity)}:{StandardCodes.Rec20Unit(line.Unit)}");
+            if (line.LineAmount is { } amount) message.Add($"MOA+203:{amount.ToString("F2", CultureInfo.InvariantCulture)}");
             message.Add($"PRI+AAA:{StandardCodes.Price(line.UnitPrice)}");
+            if (line.TaxRate is { } rate) message.Add($"TAX+7+VAT+++:::{rate.ToString("0.##", CultureInfo.InvariantCulture)}");
         }
         message.Add("UNS+S");
         // Summary MOA, each only when read: 125 taxable amount (total_net), 124 tax amount, 86 message total.

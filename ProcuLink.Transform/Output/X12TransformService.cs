@@ -138,6 +138,12 @@ public sealed class X12TransformService : ITransformService
         // CUR*BY*{currency} — buying party currency.
         tx.Add(Segment(elementSep, "CUR", "BY", currency));
 
+        // REF*PO*{ref} — the order this one refers to; ITD with only ITD12, the terms as read (heading order: REF, ITD, DTM).
+        if (!string.IsNullOrWhiteSpace(order.BuyerOrderRef))
+            tx.Add(Segment(elementSep, "REF", "PO", StandardCodes.Id(Sanitize(order.BuyerOrderRef), 30, "order reference")));
+        if (!string.IsNullOrWhiteSpace(order.PaymentTerms))
+            tx.Add(Segment(elementSep, "ITD", [.. Enumerable.Repeat("", 11), Text(order.PaymentTerms, 80)]));
+
         // DTM*002*{CCYYMMDD} — requested delivery date.
         if (order.RequestedDeliveryDate is { } delivery)
             tx.Add(Segment(elementSep, "DTM", "002", delivery.ToString("yyyyMMdd", CultureInfo.InvariantCulture)));
@@ -160,7 +166,7 @@ public sealed class X12TransformService : ITransformService
         var buyerName = OrderHeaderReader.ExtractBuyerName(order);
         if (!string.IsNullOrWhiteSpace(buyerName))
         {
-            tx.Add(Segment(elementSep, "N1", "BY", Text(buyerName, 60)));
+            tx.Add(N1(elementSep, "BY", buyerName, StandardCodes.Gln(OrderHeaderReader.BuyerParty(order)?.EdiCode)));
             if (!string.IsNullOrWhiteSpace(order.BuyerTaxId))
                 tx.Add(Segment(elementSep, "REF", "VX", StandardCodes.Id(Sanitize(order.BuyerTaxId), 30, "VAT number")));
         }
@@ -181,7 +187,8 @@ public sealed class X12TransformService : ITransformService
             string.IsNullOrWhiteSpace(order.SupplierName) ? supplier?.Name : order.SupplierName,
             supplier?.Street, supplier?.City, supplier?.PostalCode, supplier?.Country,
             supplier?.ContactName, supplier?.Email, supplier?.Phone,
-            string.IsNullOrWhiteSpace(order.SellerTaxId) ? supplier?.Vat : order.SellerTaxId);
+            string.IsNullOrWhiteSpace(order.SellerTaxId) ? supplier?.Vat : order.SellerTaxId,
+            StandardCodes.Gln(supplier?.EdiCode));
 
         foreach (var line in order.Lines.OrderBy(l => l.LineNumber))
         {
@@ -239,12 +246,12 @@ public sealed class X12TransformService : ITransformService
     private static void AppendN1Address(
         List<string> tx, char elementSep, string qualifier,
         string? name, string? street, string? city, string? postal, string? country,
-        string? deliverTo, string? email, string? phone, string? vatId = null)
+        string? deliverTo, string? email, string? phone, string? vatId = null, string? gln = null)
     {
         if (string.IsNullOrWhiteSpace(name))
             return;
 
-        tx.Add(Segment(elementSep, "N1", qualifier, Text(name, 60)));
+        tx.Add(N1(elementSep, qualifier, name, gln));
 
         if (!string.IsNullOrWhiteSpace(street))
             tx.Add(Segment(elementSep, "N3", StandardCodes.Cut(Sanitize(street), 55, 2)));
@@ -268,6 +275,11 @@ public sealed class X12TransformService : ITransformService
         if (Per(elementSep, "OC", deliverTo, email, phone) is { } contact)
             tx.Add(contact);
     }
+
+    /// <summary><c>N1*{qual}*{name}</c>, plus <c>*UL*{gln}</c> (UL = GS1 location number) when a GLN was read.</summary>
+    private static string N1(char sep, string qualifier, string name, string? gln) => gln is null
+        ? Segment(sep, "N1", qualifier, Text(name, 60))
+        : Segment(sep, "N1", qualifier, Text(name, 60), "UL", StandardCodes.Id(Sanitize(gln), 80, "Peppol ID"));
 
     /// <summary><c>PER*{function}*{name}</c> plus only the <c>EM</c> / <c>TE</c> pairs that have a value; null when neither does.</summary>
     private static string? Per(char sep, string function, string? name, string? email, string? phone)
