@@ -42,12 +42,15 @@ public class StrictOrderCxmlTests
     [Fact]
     public async Task Buyer_codes_and_line_tax_have_their_homes()
     {
-        var read = StrictOrderFixture.With(StrictOrderFixture.With(FieldMeanings.LineBuyerItemCode, "BUY-1", "BUY-2", "BUY-3"), FieldMeanings.LineTaxRate, "19");
-        var item = XDocument.Parse(await StrictOrderFixture.Render("cxml-1-2", read)).Descendants("ItemOut").First();
+        var read = StrictOrderFixture.With(StrictOrderFixture.With(StrictOrderFixture.With(FieldMeanings.LineBuyerItemCode, "BUY-1", "BUY-2", "BUY-3"),
+            FieldMeanings.LineTaxRate, "19"), FieldMeanings.LineAmount, "24.50", "10.00", "25.00");
+        var doc = XDocument.Parse(await StrictOrderFixture.Render("cxml-1-2", read));
+        var item = doc.Descendants("ItemOut").First();
 
         item.Element("ItemID")!.Elements().Select(e => e.Name.LocalName).Should().Equal("SupplierPartID", "BuyerPartID");
         item.Element("ItemID")!.Element("BuyerPartID")!.Value.Should().Be("BUY-1");
-        (item.Element("Tax")!.Element("Money")!.Value, item.Element("Tax")!.Element("Description")!.Value).Should().Be(("4.75", "VAT 19%"));
+        (item.Element("Tax")!.Element("Money")!.Value, item.Element("Tax")!.Element("Description")!.Value).Should().Be(("4.66", "VAT 19%"));
+        doc.Descendants("OrderRequestHeader").Single().Element("Total")!.Element("Money")!.Value.Should().Be("59.50");
     }
 
     [Fact]

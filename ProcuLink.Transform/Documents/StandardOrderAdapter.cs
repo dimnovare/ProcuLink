@@ -73,7 +73,7 @@ public static partial class StandardOrderAdapter
                 UnitPrice = a.Number(r, FieldMeanings.LineUnitPrice),
                 BuyerItemCode = a.Cell(r, FieldMeanings.LineBuyerItemCode) ?? "",
                 LineAmount = FieldValueParser.Number(a.Cell(r, FieldMeanings.LineAmount)),
-                TaxRate = FieldValueParser.Number(a.Cell(r, FieldMeanings.LineTaxRate)),
+                TaxRate = FieldValueParser.Percent(a.Cell(r, FieldMeanings.LineTaxRate)),
             }).ToList(),
         });
 

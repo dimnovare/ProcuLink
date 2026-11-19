@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace ProcuLink.Transform.Parsing;
 
@@ -107,8 +108,15 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
 
     public async Task<ParsedOrder> ParseAsync(Stream fileStream, CancellationToken ct)
     {
+        // UNOA, UNOB and UNOC are one byte per character (UNOC is ISO 8859-1), so they read as Latin-1; any other
+        // syntax, or none, as UTF-8. A byte-order mark still wins.
+        using var bytes = new MemoryStream();
+        await fileStream.CopyToAsync(bytes, ct);
+        bytes.Position = 0;
+        var head = Encoding.ASCII.GetString(bytes.GetBuffer(), 0, (int)Math.Min(bytes.Length, 512));
+        var encoding = Regex.IsMatch(head, @"UNB.UNO[ABC]\b") ? Encoding.Latin1 : Encoding.UTF8;
         string raw;
-        using (var reader = new StreamReader(fileStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 4096, leaveOpen: true))
+        using (var reader = new StreamReader(bytes, encoding, detectEncodingFromByteOrderMarks: true, bufferSize: 4096, leaveOpen: true))
         {
             raw = await reader.ReadToEndAsync(ct);
         }

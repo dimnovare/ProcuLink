@@ -84,5 +84,14 @@ public class StrictOrderEdifactTests
         bytes.ToArray().Should().Contain(0xDC).And.NotContain(0xC3);
         var text = Encoding.Latin1.GetString(bytes.ToArray());
         text.Should().StartWith("UNA:+.? 'UNB+UNOC:3+").And.Contain("'NAD+BY+++Example Sokolaad OÜ+").And.Contain("'NAD+SU+++OOO Primer+");
+        (await new EdifactOrderParser().ParseAsync(new MemoryStream(bytes.ToArray()), CancellationToken.None)).BuyerName.Should().Be("Example Sokolaad OÜ");
+    }
+
+    [Fact]
+    public async Task An_identifier_with_a_letter_outside_latin_1_is_refused_never_folded()
+    {
+        var render = await StandardOutputs.RenderAsync("edifact-orders", StrictOrderFixture.With(FieldMeanings.DocumentNumber, "PO-文-1"),
+            FlowFieldList.Empty, "lines", Guid.Empty, CancellationToken.None);
+        (render.Ok, render.Detail).Should().Be((false, "The order number has a character this standard can't carry."));
     }
 }

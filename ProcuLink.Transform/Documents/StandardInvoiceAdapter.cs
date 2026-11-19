@@ -41,7 +41,7 @@ public static class StandardInvoiceAdapter
                 UnitCode = StandardCodes.Rec20Unit(a.Cell(r, FieldMeanings.LineUnit)),
                 UnitPrice = a.Number(r, FieldMeanings.LineUnitPrice),
                 LineTotal = a.Number(r, FieldMeanings.LineAmount),
-                TaxRate = FieldValueParser.Number(a.Cell(r, FieldMeanings.LineTaxRate)) ?? headerRate,
+                TaxRate = FieldValueParser.Percent(a.Cell(r, FieldMeanings.LineTaxRate)) ?? headerRate,
                 SupplierItemCode = a.Cell(r, FieldMeanings.LineItemCode),
             }).ToList();
             var (sellerScheme, sellerId) = Endpoint(a.Text(FieldMeanings.SenderEndpointId));

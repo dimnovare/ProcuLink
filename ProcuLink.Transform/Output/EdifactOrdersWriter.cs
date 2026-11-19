@@ -30,8 +30,9 @@ public static class EdifactOrdersWriter
     /// <summary>Free text folded, split over its <paramref name="repeats"/> components of <paramref name="max"/> (counted before release), the rest cut.</summary>
     private static string Text(string? text, int max, int repeats = 1) => string.Join(":", StandardCodes.Cut(Fold(text), max, repeats).Select(Esc));
 
-    /// <summary>An identifier folded, refused when longer than <paramref name="max"/> (counted before release), never cut.</summary>
-    private static string Id(string? value, int max, string what) => Esc(StandardCodes.Id(Fold(value), max, what));
+    /// <summary>An identifier as read, refused when longer than <paramref name="max"/> (counted before release) or when UNOC can't carry it: never cut, never folded.</summary>
+    private static string Id(string? value, int max, string what) =>
+        Fold(value) == (value ?? "") ? Esc(StandardCodes.Id(value, max, what)) : throw ValueTooLongException.NotCarried(what);
 
     // Full read precision, as the X12 850 writes it.
     private static string Num(decimal d) => d.ToString(CultureInfo.InvariantCulture);

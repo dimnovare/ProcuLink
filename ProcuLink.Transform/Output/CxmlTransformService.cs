@@ -136,8 +136,8 @@ public sealed class CxmlTransformService : ITransformService
         var timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
         var currency  = string.IsNullOrWhiteSpace(order.Currency) ? "EUR" : order.Currency;
 
-        // The sum of the line amounts each rounded to the cent, as UBL computes them, so both documents agree.
-        var totalAmount = order.Lines.Sum(l => Math.Round(l.Quantity * l.UnitPrice, 2, MidpointRounding.AwayFromZero))
+        // The sum of the line amounts as UBL computes them (the read amount, else q × p rounded to the cent), so both documents agree.
+        var totalAmount = order.Lines.Sum(l => l.LineAmount ?? Math.Round(l.Quantity * l.UnitPrice, 2, MidpointRounding.AwayFromZero))
                               .ToString("F2", CultureInfo.InvariantCulture);
 
         // ── Configurable DOCTYPE (T7) ─────────────────────────────────────────

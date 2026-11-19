@@ -76,13 +76,17 @@ public static class X12Sanitizer
     }
 
     /// <summary>
-    /// Throws <see cref="TransformValidationException"/> if any line's supplier item
-    /// code, buyer item code, or unit-of-measure contains an X12 delimiter. No-op for
-    /// the entity model when every code is clean.
+    /// Throws <see cref="TransformValidationException"/> if the order number, the order reference, or any line's
+    /// supplier item code, buyer item code, or unit-of-measure contains an X12 delimiter (a header value as line 0).
+    /// No-op for the entity model when every code is clean.
     /// </summary>
     public static void GuardCodeFields(PurchaseOrderEntity order)
     {
         var problems = new List<LineProblem>();
+        if (ContainsDelimiter(order.PoNumber))
+            problems.Add(ContaminationProblem(0, "order number", order.PoNumber));
+        if (ContainsDelimiter(order.BuyerOrderRef))
+            problems.Add(ContaminationProblem(0, "order reference", order.BuyerOrderRef!));
 
         foreach (var line in order.Lines)
         {
@@ -101,7 +105,7 @@ public static class X12Sanitizer
 
     private static LineProblem ContaminationProblem(int lineNumber, string field, string value) =>
         new(lineNumber, LineProblemKind.Sanitized,
-            $"Line {lineNumber}: {field} \"{value}\" contains an X12 delimiter (* > ~); " +
+            $"{(lineNumber > 0 ? $"Line {lineNumber}: " : "")}{field} \"{value}\" contains an X12 delimiter (* > ~); " +
             "X12 has no escape for these, so the value would be silently corrupted. Held for review.");
 
     private static void Throw(IReadOnlyList<LineProblem> problems)

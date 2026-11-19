@@ -412,13 +412,13 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
     public async Task A_standard_output_keeps_only_its_sender_and_receiver_ids()
     {
         var http = factory.ClientFor(Org);
-        var (flowId, _) = await Seed(confirmed: true);
+        var (flowId, docId) = await Seed(confirmed: true);
         var created = await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "Orders", format = "", standard = "x12-850" });
         var id = (await created.Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!.Id;
-        Task<HttpResponseMessage> Put(X12Envelope x12) => http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{id}", new
+        Task<HttpResponseMessage> Put(EnvelopeConfig envelope) => http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{id}", new
         {
             name = "Orders", format = "csv", standard = "x12-850",
-            template = new OutputNodeTemplate { Format = OutputFormat.Csv, Root = new() { Children = [new() { Name = "x" }] }, Envelope = new() { X12 = x12 } },
+            template = new OutputNodeTemplate { Format = OutputFormat.Csv, Root = new() { Children = [new() { Name = "x" }] }, Envelope = envelope },
         });
         async Task<string> Stored()
         {
@@ -426,27 +426,42 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
             return (await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowOutput>().AsNoTracking().SingleAsync(o => o.Id == id)).TemplateJson;
         }
 
-        (await Put(new() { IsaSenderId = "TESTBUYER" })).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await Put(new() { X12 = new() { IsaSenderId = "TESTBUYER" } })).StatusCode.Should().Be(HttpStatusCode.OK);
         var stored = DocumentJson.Deserialize<OutputNodeTemplate>(await Stored());
         (stored.Envelope!.X12!.IsaSenderId, stored.Root.Children.Count).Should().Be(("TESTBUYER", 0));
 
-        foreach (var bad in new X12Envelope[] { new() { IsaSenderId = new string('A', 16) }, new() { ElementSeparator = '|' } })
+        // Too long, a delimiter setting, a one-letter type, a type without its ID, a letter outside ASCII (X12) or Latin-1 (EDIFACT), a control character.
+        foreach (var bad in new EnvelopeConfig[]
+        {
+            new() { X12 = new() { IsaSenderId = new string('A', 16) } }, new() { X12 = new() { ElementSeparator = '|' } },
+            new() { X12 = new() { IsaSenderId = "TESTBUYER", IsaSenderQualifier = "Z" } }, new() { X12 = new() { IsaReceiverQualifier = "ZZ" } },
+            new() { X12 = new() { IsaSenderId = "TESTBÜYER" } }, new() { Edifact = new() { SenderId = "ТЕСТ" } },
+            new() { Edifact = new() { RecipientQualifier = "14" } }, new() { Cxml = new() { FromDomain = "NetworkId\u0007" } },
+        })
         {
             var refused = await Put(bad);
             refused.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
             (await refused.Content.ReadAsStringAsync()).Should().Contain("partner_ids");
         }
 
-        (await Put(new() { IsaSenderId = " " })).StatusCode.Should().Be(HttpStatusCode.OK);
+        // A test send refuses them the same way, before any destination is looked up.
+        var test = await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/test", new
+        {
+            format = "csv", tableKey = (string?)null, destinationId = Guid.NewGuid(), standard = "x12-850",
+            template = new OutputNodeTemplate { Envelope = new() { X12 = new() { IsaSenderId = new string('A', 16) } } },
+        });
+        test.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await test.Content.ReadAsStringAsync()).Should().Contain("partner_ids");
+
+        (await Put(new() { X12 = new() { IsaSenderId = " " } })).StatusCode.Should().Be(HttpStatusCode.OK);
         (await Stored()).Should().Be("{}");
     }
 
-    [Fact]
-    public async Task Sending_through_a_standard_output_stores_the_standard_file()
+    /// <summary>A flow and a read purchase order whose fields carry the order meanings (plus <paramref name="extra"/> header fields); the read has none of its own.</summary>
+    private async Task<(Flow Flow, FlowDocument Doc)> SeedOrder(params (string Key, string Meaning, string Value)[] extra)
     {
-        var http = factory.ClientFor(Org);
         (string Key, string Meaning, string Value)[] header =
-            [("po", FieldMeanings.DocumentNumber, "PO-1"), ("date", FieldMeanings.IssueDate, "13.11.2026"), ("cur", FieldMeanings.Currency, "eur")];
+            [("po", FieldMeanings.DocumentNumber, "PO-1"), ("date", FieldMeanings.IssueDate, "13.11.2026"), ("cur", FieldMeanings.Currency, "eur"), .. extra];
         (string Key, string Meaning, string Value)[] line =
             [("code", FieldMeanings.LineItemCode, "A-1"), ("qty", FieldMeanings.LineQuantity, "3"), ("price", FieldMeanings.LineUnitPrice, "9,99")];
         var flow = new Flow
@@ -475,6 +490,28 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
             db.FlowDocuments.Add(doc);
             await db.SaveChangesAsync();
         }
+        return (flow, doc);
+    }
+
+    [Fact]
+    public async Task An_edifact_preview_shows_latin_1_letters_and_unsaved_partner_ids()
+    {
+        var http = factory.ClientFor(Org);
+        var (flow, doc) = await SeedOrder(("buyer", FieldMeanings.SenderName, "Example OÜ"));
+        var output = (await (await http.PostAsJsonAsync($"/api/flows/{flow.Id}/outputs", new { name = "Orders", format = "", standard = "edifact-orders", tableKey = "lines" }))
+            .Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+
+        var res = await http.PostAsJsonAsync($"/api/documents/{doc.Id}/outputs/{output.Id}/preview",
+            new { template = new OutputNodeTemplate { Envelope = new() { Edifact = new() { SenderId = "TESTBUYER" } } } });
+        res.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("content").GetString().Should().Contain("UNB+UNOC:3+TESTBUYER+").And.Contain("NAD+BY+++Example OÜ");
+    }
+
+    [Fact]
+    public async Task Sending_through_a_standard_output_stores_the_standard_file()
+    {
+        var http = factory.ClientFor(Org);
+        var (flow, doc) = await SeedOrder();
 
         // X12 is stored as txt, the one standard format a layout would otherwise apply to.
         var created = await http.PostAsJsonAsync($"/api/flows/{flow.Id}/outputs", new { name = "X12", format = "", standard = "x12-850", tableKey = "lines", layout = new { title = "x" } });

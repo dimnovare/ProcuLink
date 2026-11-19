@@ -121,6 +121,11 @@ public static partial class StandardCodes
     [GeneratedRegex("^[A-Z]{2}$")] private static partial Regex Alpha2();
 }
 
-/// <summary>An identifier too long for its standard; the message is approved copy, shown after "The file … couldn't be made: ".</summary>
-public sealed class ValueTooLongException(string what, int max)
-    : Exception($"The {what} is longer than this standard allows ({max} characters).");
+/// <summary>An identifier too long for its standard, or with a character it can't carry; the message is approved copy, shown after "The file … couldn't be made: ".</summary>
+public sealed class ValueTooLongException(string message) : Exception(message)
+{
+    public ValueTooLongException(string what, int max) : this($"The {what} is longer than this standard allows ({max} characters).") { }
+
+    /// <summary>An identifier with a character the standard can't carry: it is refused, never changed.</summary>
+    public static ValueTooLongException NotCarried(string what) => new($"The {what} has a character this standard can't carry.");
+}
