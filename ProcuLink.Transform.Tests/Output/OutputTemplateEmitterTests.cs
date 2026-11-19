@@ -83,6 +83,26 @@ public class OutputTemplateEmitterTests
         Assert.Equal("2", lines[1].Element("Qty")!.Value);
     }
 
+    [Fact]
+    public void Xml_MakesColumnLabelsValidNames_AndLeavesValidNamesAlone()
+    {
+        var template = new OutputNodeTemplate
+        {
+            Format = OutputFormat.Xml,
+            Root = OutputNode.Obj("Order",
+                OutputNode.Attr("2nd ref", Canon("PoNumber")),
+                OutputNode.FieldOf("Invoice Number", Canon("PoNumber")),
+                OutputNode.FieldOf("Currency", Canon("Currency"))),
+        };
+
+        // A form feed from a PDF's text is a character XML cannot carry: it is dropped, not a failed file.
+        var text = EmitterRows.Emit(template, EmitterRows.Header("INV\f-1042"), EmitterRows.TwoLines()).Text();
+
+        Assert.Contains("<Order _2ndRef=\"INV-1042\">", text);
+        Assert.Contains("<InvoiceNumber>INV-1042</InvoiceNumber>", text);
+        Assert.Contains("<Currency>EUR</Currency>", text);
+    }
+
     // ── Conditional fields (OutputNode.IncludeWhen) ────────────────────────────────
 
     [Fact]
