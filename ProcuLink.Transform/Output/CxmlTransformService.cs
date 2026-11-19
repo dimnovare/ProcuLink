@@ -364,8 +364,12 @@ public sealed class CxmlTransformService : ITransformService
 
         return new XElement("ShipTo",
             BuildAddress(name, o.ShipToDeliverTo, o.ShipToStreet, o.ShipToCity,
-                o.ShipToPostalCode, o.ShipToCountry, o.ShipToEmail, o.ShipToPhone));
+                o.ShipToPostalCode, CountryOr(o.ShipToCountry, o.BillToCountry), o.ShipToEmail, o.ShipToPhone));
     }
+
+    // A ship-to read without a country takes the buyer's (delivery is almost always in the buyer's country) and the
+    // buyer address the ship-to's, so PostalAddress, which needs a Country, keeps the street the goods go to.
+    private static string? CountryOr(string? own, string? other) => StandardCodes.Country(own) is not null ? own : other;
 
     /// <summary>
     /// <c>&lt;BillTo&gt;</c> wrapping the bill-to address, or null when there is no bill-to name
@@ -379,7 +383,7 @@ public sealed class CxmlTransformService : ITransformService
 
         return new XElement("BillTo",
             BuildAddress(o.BillToName, o.BillToDeliverTo, o.BillToStreet, o.BillToCity,
-                o.BillToPostalCode, o.BillToCountry, o.BillToEmail, o.BillToPhone));
+                o.BillToPostalCode, CountryOr(o.BillToCountry, o.ShipToCountry), o.BillToEmail, o.BillToPhone));
     }
 
     /// <summary>

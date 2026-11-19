@@ -51,6 +51,17 @@ public class StrictOrderCxmlTests
     }
 
     [Fact]
+    public async Task A_ship_to_without_a_country_takes_the_buyers()
+    {
+        async Task<XElement> ShipTo(params string[] without) =>
+            XDocument.Parse(await StrictOrderFixture.Render("cxml-1-2", StrictOrderFixture.Read(without))).Descendants("ShipTo").Single().Element("Address")!;
+
+        var country = (await ShipTo(FieldMeanings.DeliveryCountry)).Element("PostalAddress")!.Element("Country")!;
+        ((string)country.Attribute("isoCountryCode")!, country.Value).Should().Be(("DE", "Germany"));
+        (await ShipTo(FieldMeanings.DeliveryCountry, FieldMeanings.SenderCountry)).Element("PostalAddress").Should().BeNull();
+    }
+
+    [Fact]
     public async Task An_incomplete_address_drops_only_its_postal_part_and_no_buyer_is_refused()
     {
         var text = await StrictOrderFixture.Render("cxml-1-2", StrictOrderFixture.Read(without: [FieldMeanings.DeliveryStreet]));
