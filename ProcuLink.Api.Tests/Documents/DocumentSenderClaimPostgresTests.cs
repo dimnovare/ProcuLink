@@ -72,7 +72,7 @@ public sealed class DocumentSenderClaimPostgresTests(PostgresContainerFixture po
     }
 
     [DockerRequiredFact]
-    public async Task Two_sends_of_an_x12_output_carry_different_interchange_control_numbers()
+    public async Task Two_sends_carry_different_interchange_control_numbers_in_x12_and_edifact()
     {
         var cs = await postgres.CreateDatabaseAsync("proculink_sendcontrol");
         ProcuLinkDbContext NewDb() => new(new DbContextOptionsBuilder<ProcuLinkDbContext>().UseNpgsql(cs, n => n.CommandTimeout(180)).Options);
@@ -102,26 +102,31 @@ public sealed class DocumentSenderClaimPostgresTests(PostgresContainerFixture po
             seed.Organisations.Add(new Organisation { Id = org, Name = "Test Org A", Slug = "acme-" + org.ToString("N") });
             seed.Flows.Add(flow);
             seed.FlowDocuments.AddRange(docs);
-            seed.Set<FlowOutput>().Add(new FlowOutput
+            seed.Set<FlowOutput>().AddRange(new[] { "x12-850", "edifact-orders" }.Select(standard => new FlowOutput
             {
-                Id = Guid.NewGuid(), OrgId = org, FlowId = flow.Id, Name = "X12", Format = FlowOutputFormats.Text, Standard = "x12-850",
+                Id = Guid.NewGuid(), OrgId = org, FlowId = flow.Id, Name = standard, Format = FlowOutputFormats.Text, Standard = standard,
                 TableKey = "lines", TemplateJson = "{}", CreatedAt = now, UpdatedAt = now,
-            });
+            }));
             await seed.SaveChangesAsync();
         }
 
         var billing = new Mock<IBillingService>();
         billing.Setup(b => b.CanProcessOrdersAsync(org, It.IsAny<CancellationToken>())).ReturnsAsync(true);
-        var isa13 = new List<string>();
+        // ISA13 for X12, UNB's last element for EDIFACT.
+        var controls = new List<string>();
         var storage = new Mock<IFileStorageService>();
         storage.Setup(s => s.UploadAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .Callback<Stream, string, string, CancellationToken>((body, _, _, _) => isa13.Add(new StreamReader(body).ReadToEnd().Split('~')[0].Split('*')[13]));
+            .Callback<Stream, string, string, CancellationToken>((body, _, _, _) =>
+            {
+                var text = new StreamReader(body).ReadToEnd();
+                controls.Add(text.StartsWith("ISA") ? text.Split('~')[0].Split('*')[13] : text.Split('\'').Single(s => s.StartsWith("UNB+")).Split('+')[^1]);
+            });
 
         await using var db = NewDb();
         var sender = new DocumentSender(db, billing.Object, storage.Object, Mock.Of<IBackgroundJobClient>(), Microsoft.Extensions.Logging.Abstractions.NullLogger<DocumentSender>.Instance, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())));
         foreach (var d in docs)
             (await sender.SendAsync(await db.FlowDocuments.SingleAsync(x => x.Id == d.Id), SendMode.Person, null, CancellationToken.None)).Ok.Should().BeTrue();
 
-        isa13.Should().HaveCount(2).And.OnlyHaveUniqueItems().And.NotContain("000000001");
+        controls.Should().HaveCount(4).And.OnlyHaveUniqueItems().And.NotContain("000000001");
     }
 }
