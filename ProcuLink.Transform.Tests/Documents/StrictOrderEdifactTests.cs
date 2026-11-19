@@ -27,7 +27,7 @@ public class StrictOrderEdifactTests
             "LIN+1++A-100:SA", "IMD+F++:::Hex bolt M8", "QTY+21:100:H87", "PRI+AAA:0.25",
             "LIN+2++B-200:SA", "IMD+F++:::Washer M8", "QTY+21:200:H87", "PRI+AAA:0.05",
             "LIN+3++C-300:SA", "IMD+F++:::Compression spring", "QTY+21:20:H87", "PRI+AAA:1.25",
-            "UNS+S", "CNT+2:3", "UNT+27+1");
+            "UNS+S", "MOA+125:60.00", "MOA+124:11.40", "MOA+86:71.40", "CNT+2:3", "UNT+30+1");
 
         var parsed = await new EdifactOrderParser().ParseAsync(new MemoryStream(Encoding.UTF8.GetBytes(text)), CancellationToken.None);
         // The parser files any LIN item code under BuyerItemCode whatever its 7143 qualifier, so ":SA" reads back here.
@@ -43,6 +43,11 @@ public class StrictOrderEdifactTests
         var text = await StrictOrderFixture.Render("edifact-orders", StrictOrderFixture.Read(without: [FieldMeanings.DeliveryName]));
         text.Should().Contain("'NAD+ST+++Example Buyer Ltd+Warehouse Road 3+Hamburg++20095+DE'");
     }
+
+    [Fact]
+    public async Task No_totals_read_means_no_total_segments() =>
+        (await StrictOrderFixture.Render("edifact-orders", StrictOrderFixture.Read(without: [FieldMeanings.TotalNet, FieldMeanings.TotalTax, FieldMeanings.TotalGross])))
+            .Should().NotContainAny("MOA+125", "MOA+124", "MOA+86");
 
     [Fact]
     public async Task Over_long_text_is_split_over_its_repeats_then_cut()

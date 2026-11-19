@@ -27,7 +27,7 @@ public class StrictOrderX12Tests
             "PO1*1*100*PC*0.25*PE*VP*A-100", "PID*F****Hex bolt M8",
             "PO1*2*200*PC*0.05*PE*VP*B-200", "PID*F****Washer M8",
             "PO1*3*20*PC*1.25*PE*VP*C-300", "PID*F****Compression spring",
-            "CTT*3", "SE*25*0001");
+            "CTT*3", "AMT*TT*71.40", "SE*26*0001");
     }
 
     [Fact]
@@ -35,7 +35,7 @@ public class StrictOrderX12Tests
     {
         var segs = (await StrictOrderFixture.Render("x12-850", StrictOrderFixture.Read(without: [FieldMeanings.DeliveryName]))).Split('~');
         segs.SkipWhile(s => !s.StartsWith("N1*ST")).Take(3).Should().Equal("N1*ST*Example Buyer Ltd", "N3*Warehouse Road 3", "N4*Hamburg**20095*DE");
-        segs.Should().Contain("SE*25*0001");
+        segs.Should().Contain("SE*26*0001");
     }
 
     [Fact]
@@ -44,6 +44,11 @@ public class StrictOrderX12Tests
         var segs = (await StrictOrderFixture.Render("x12-850", StrictOrderFixture.Read(without: [FieldMeanings.DeliveryCountry]))).Split('~');
         segs.Should().Contain("N4*Hamburg**20095").And.NotContain(s => s.EndsWith('*'));
     }
+
+    [Fact]
+    public async Task No_totals_read_means_no_total_segments() =>
+        (await StrictOrderFixture.Render("x12-850", StrictOrderFixture.Read(without: [FieldMeanings.TotalNet, FieldMeanings.TotalTax, FieldMeanings.TotalGross])))
+            .Should().NotContain("AMT*TT");
 
     [Fact]
     public async Task Over_long_street_is_split_over_N301_and_N302()

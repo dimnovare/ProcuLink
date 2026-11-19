@@ -204,6 +204,9 @@ public sealed class X12TransformService : ITransformService
 
         // CTT*{lineCount} — transaction totals (number of PO1 line items).
         tx.Add(Segment(elementSep, "CTT", order.Lines.Count.ToString(CultureInfo.InvariantCulture)));
+        // AMT*TT*{gross} in the CTT loop, only when a gross total was read.
+        if (order.GrandTotal is { } gross)
+            tx.Add(Segment(elementSep, "AMT", "TT", gross.ToString("F2", CultureInfo.InvariantCulture)));
 
         // SE*{segmentCount}*{control} — count includes ST … SE inclusive.
         var segmentCount = tx.Count + 1; // + SE itself

@@ -95,6 +95,9 @@ public static class EdifactOrdersWriter
             message.Add($"PRI+AAA:{StandardCodes.Price(line.UnitPrice)}");
         }
         message.Add("UNS+S");
+        // Summary MOA, each only when read: 125 taxable amount (total_net), 124 tax amount, 86 message total.
+        foreach (var (qualifier, amount) in new[] { ("125", order.SubTotal), ("124", order.TaxTotal), ("86", order.GrandTotal) })
+            if (amount is { } a) message.Add($"MOA+{qualifier}:{a.ToString("F2", CultureInfo.InvariantCulture)}");
         message.Add($"CNT+2:{lines.Count.ToString(CultureInfo.InvariantCulture)}");
         message.Add($"UNT+{message.Count + 1}+1");
 
