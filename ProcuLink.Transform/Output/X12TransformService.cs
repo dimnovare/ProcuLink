@@ -132,11 +132,17 @@ public sealed class X12TransformService : ITransformService
         tx.Add(Segment(elementSep, "ST", "850", StControl));
 
         // BEG*00*NE*{po}**{date} — 00 original, NE new order.
-        tx.Add(Segment(elementSep, "BEG", "00", "NE", Sanitize(order.PoNumber), "",
+        tx.Add(Segment(elementSep, "BEG", "00", "NE", StandardCodes.Id(Sanitize(order.PoNumber), 22, "order number"), "",
             order.OrderDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture)));
 
         // CUR*BY*{currency} — buying party currency.
         tx.Add(Segment(elementSep, "CUR", "BY", currency));
+
+        // REF*PO*{ref} — the order this one refers to; ITD with only ITD12, the terms as read (heading order: REF, ITD, DTM).
+        if (!string.IsNullOrWhiteSpace(order.BuyerOrderRef))
+            tx.Add(Segment(elementSep, "REF", "PO", StandardCodes.Id(Sanitize(order.BuyerOrderRef), 30, "order reference")));
+        if (!string.IsNullOrWhiteSpace(order.PaymentTerms))
+            tx.Add(Segment(elementSep, "ITD", [.. Enumerable.Repeat("", 11), Text(order.PaymentTerms, 80)]));
 
         // DTM*002*{CCYYMMDD} — requested delivery date.
         if (order.RequestedDeliveryDate is { } delivery)
@@ -160,9 +166,9 @@ public sealed class X12TransformService : ITransformService
         var buyerName = OrderHeaderReader.ExtractBuyerName(order);
         if (!string.IsNullOrWhiteSpace(buyerName))
         {
-            tx.Add(Segment(elementSep, "N1", "BY", Sanitize(buyerName)));
+            tx.Add(N1(elementSep, "BY", buyerName, StandardCodes.Gln(OrderHeaderReader.BuyerParty(order)?.EdiCode)));
             if (!string.IsNullOrWhiteSpace(order.BuyerTaxId))
-                tx.Add(Segment(elementSep, "REF", "VX", Sanitize(order.BuyerTaxId)));
+                tx.Add(Segment(elementSep, "REF", "VX", StandardCodes.Id(Sanitize(order.BuyerTaxId), 30, "VAT number")));
         }
 
         // Order-level ordering contact: PER*BD. PER in the 850 heading is only valid INSIDE an N1
@@ -181,14 +187,15 @@ public sealed class X12TransformService : ITransformService
             string.IsNullOrWhiteSpace(order.SupplierName) ? supplier?.Name : order.SupplierName,
             supplier?.Street, supplier?.City, supplier?.PostalCode, supplier?.Country,
             supplier?.ContactName, supplier?.Email, supplier?.Phone,
-            string.IsNullOrWhiteSpace(order.SellerTaxId) ? supplier?.Vat : order.SellerTaxId);
+            string.IsNullOrWhiteSpace(order.SellerTaxId) ? supplier?.Vat : order.SellerTaxId,
+            StandardCodes.Gln(supplier?.EdiCode));
 
         foreach (var line in order.Lines.OrderBy(l => l.LineNumber))
         {
             // PO1*{n}*{qty}*{uom}*{price}*PE[*BP*{buyer}][*VP*{supplier}]: each pair only when its code is there,
             // because a qualifier with no value breaks the pairing a receiver reads.
-            string[] buyerCode = string.IsNullOrWhiteSpace(line.BuyerItemCode) ? [] : ["BP", Sanitize(line.BuyerItemCode)];
-            string[] supplierCode = string.IsNullOrWhiteSpace(line.SupplierItemCode) ? [] : ["VP", Sanitize(line.SupplierItemCode)];
+            string[] buyerCode = string.IsNullOrWhiteSpace(line.BuyerItemCode) ? [] : ["BP", StandardCodes.Id(Sanitize(line.BuyerItemCode), 48, "buyer's item code")];
+            string[] supplierCode = string.IsNullOrWhiteSpace(line.SupplierItemCode) ? [] : ["VP", StandardCodes.Id(Sanitize(line.SupplierItemCode), 48, "item code")];
             tx.Add(Segment(elementSep, "PO1",
                 [line.LineNumber.ToString(CultureInfo.InvariantCulture),
                 Num(line.Quantity),
@@ -199,11 +206,14 @@ public sealed class X12TransformService : ITransformService
                 .. supplierCode]));
 
             if (!string.IsNullOrWhiteSpace(line.Description))
-                tx.Add(Segment(elementSep, "PID", "F", "", "", "", Sanitize(line.Description)));
+                tx.Add(Segment(elementSep, "PID", "F", "", "", "", Text(line.Description, 80)));
         }
 
         // CTT*{lineCount} — transaction totals (number of PO1 line items).
         tx.Add(Segment(elementSep, "CTT", order.Lines.Count.ToString(CultureInfo.InvariantCulture)));
+        // AMT*TT*{gross} in the CTT loop, only when a gross total was read.
+        if (order.GrandTotal is { } gross)
+            tx.Add(Segment(elementSep, "AMT", "TT", gross.ToString("F2", CultureInfo.InvariantCulture)));
 
         // SE*{segmentCount}*{control} — count includes ST … SE inclusive.
         var segmentCount = tx.Count + 1; // + SE itself
@@ -236,15 +246,15 @@ public sealed class X12TransformService : ITransformService
     private static void AppendN1Address(
         List<string> tx, char elementSep, string qualifier,
         string? name, string? street, string? city, string? postal, string? country,
-        string? deliverTo, string? email, string? phone, string? vatId = null)
+        string? deliverTo, string? email, string? phone, string? vatId = null, string? gln = null)
     {
         if (string.IsNullOrWhiteSpace(name))
             return;
 
-        tx.Add(Segment(elementSep, "N1", qualifier, Sanitize(name)));
+        tx.Add(N1(elementSep, qualifier, name, gln));
 
         if (!string.IsNullOrWhiteSpace(street))
-            tx.Add(Segment(elementSep, "N3", Sanitize(street)));
+            tx.Add(Segment(elementSep, "N3", StandardCodes.Cut(Sanitize(street), 55, 2)));
 
         if (!string.IsNullOrWhiteSpace(city)
             || !string.IsNullOrWhiteSpace(postal)
@@ -252,28 +262,33 @@ public sealed class X12TransformService : ITransformService
         {
             // N4*{city}*{state}*{postal}*{country} — state (N402) intentionally left empty.
             tx.Add(Segment(elementSep, "N4",
-                Sanitize(city ?? string.Empty),
+                Text(city, 30),
                 string.Empty,
-                Sanitize(postal ?? string.Empty),
+                Text(postal, 15),
                 StandardCodes.Country(country) ?? string.Empty));
         }
 
         if (!string.IsNullOrWhiteSpace(vatId))
-            tx.Add(Segment(elementSep, "REF", "VX", Sanitize(vatId)));
+            tx.Add(Segment(elementSep, "REF", "VX", StandardCodes.Id(Sanitize(vatId), 30, "VAT number")));
 
         // PER*OC (order contact) — carries the per-party deliver-to contact + email + phone.
         if (Per(elementSep, "OC", deliverTo, email, phone) is { } contact)
             tx.Add(contact);
     }
 
+    /// <summary><c>N1*{qual}*{name}</c>, plus <c>*UL*{gln}</c> (UL = GS1 location number) when a GLN was read.</summary>
+    private static string N1(char sep, string qualifier, string name, string? gln) => gln is null
+        ? Segment(sep, "N1", qualifier, Text(name, 60))
+        : Segment(sep, "N1", qualifier, Text(name, 60), "UL", StandardCodes.Id(Sanitize(gln), 80, "Peppol ID"));
+
     /// <summary><c>PER*{function}*{name}</c> plus only the <c>EM</c> / <c>TE</c> pairs that have a value; null when neither does.</summary>
     private static string? Per(char sep, string function, string? name, string? email, string? phone)
     {
         if (string.IsNullOrWhiteSpace(email) && string.IsNullOrWhiteSpace(phone))
             return null;
-        string[] em = string.IsNullOrWhiteSpace(email) ? [] : ["EM", Sanitize(email)];
-        string[] te = string.IsNullOrWhiteSpace(phone) ? [] : ["TE", Sanitize(phone)];
-        return Segment(sep, "PER", [function, Sanitize(name ?? string.Empty), .. em, .. te]);
+        string[] em = string.IsNullOrWhiteSpace(email) ? [] : ["EM", Text(email, 80)];
+        string[] te = string.IsNullOrWhiteSpace(phone) ? [] : ["TE", Text(phone, 80)];
+        return Segment(sep, "PER", [function, Text(name, 60), .. em, .. te]);
     }
 
     // ── Segment builders ─────────────────────────────────────────────────────
@@ -360,4 +375,7 @@ public sealed class X12TransformService : ITransformService
     /// ever runs the substitution on free text in practice.
     /// </summary>
     private static string Sanitize(string value) => X12Sanitizer.SanitizeFreeText(value);
+
+    /// <summary>Sanitized free text, cut to its element's maximum length.</summary>
+    private static string Text(string? s, int max) => StandardCodes.Cut(Sanitize(s ?? ""), max).FirstOrDefault() ?? "";
 }

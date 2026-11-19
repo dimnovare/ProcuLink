@@ -40,6 +40,31 @@ public class StrictOrderCxmlTests
     }
 
     [Fact]
+    public async Task Buyer_codes_and_line_tax_have_their_homes()
+    {
+        var read = StrictOrderFixture.With(StrictOrderFixture.With(StrictOrderFixture.With(FieldMeanings.LineBuyerItemCode, "BUY-1", "BUY-2", "BUY-3"),
+            FieldMeanings.LineTaxRate, "19"), FieldMeanings.LineAmount, "24.50", "10.00", "25.00");
+        var doc = XDocument.Parse(await StrictOrderFixture.Render("cxml-1-2", read));
+        var item = doc.Descendants("ItemOut").First();
+
+        item.Element("ItemID")!.Elements().Select(e => e.Name.LocalName).Should().Equal("SupplierPartID", "BuyerPartID");
+        item.Element("ItemID")!.Element("BuyerPartID")!.Value.Should().Be("BUY-1");
+        (item.Element("Tax")!.Element("Money")!.Value, item.Element("Tax")!.Element("Description")!.Value).Should().Be(("4.66", "VAT 19%"));
+        doc.Descendants("OrderRequestHeader").Single().Element("Total")!.Element("Money")!.Value.Should().Be("59.50");
+    }
+
+    [Fact]
+    public async Task A_ship_to_without_a_country_takes_the_buyers()
+    {
+        async Task<XElement> ShipTo(params string[] without) =>
+            XDocument.Parse(await StrictOrderFixture.Render("cxml-1-2", StrictOrderFixture.Read(without))).Descendants("ShipTo").Single().Element("Address")!;
+
+        var country = (await ShipTo(FieldMeanings.DeliveryCountry)).Element("PostalAddress")!.Element("Country")!;
+        ((string)country.Attribute("isoCountryCode")!, country.Value).Should().Be(("DE", "Germany"));
+        (await ShipTo(FieldMeanings.DeliveryCountry, FieldMeanings.SenderCountry)).Element("PostalAddress").Should().BeNull();
+    }
+
+    [Fact]
     public async Task An_incomplete_address_drops_only_its_postal_part_and_no_buyer_is_refused()
     {
         var text = await StrictOrderFixture.Render("cxml-1-2", StrictOrderFixture.Read(without: [FieldMeanings.DeliveryStreet]));

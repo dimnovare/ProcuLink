@@ -71,7 +71,7 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
             var render = o.Standard is { } standard
                 ? StandardOutputs.Find(standard) is { Flagged: true } && !gate.PeppolOn(doc.OrgId)
                     ? new DocumentRender(null, "output_invalid", null)
-                    : await StandardOutputs.RenderAsync(standard, read, config.Fields, o.TableKey, doc.OrgId, ct)
+                    : await StandardOutputs.RenderAsync(o, read, config.Fields, doc.OrgId, ct)
                 : DocumentOutputRenderer.Render(o.Format, template, read, o.TableKey, lookups,
                     o.LayoutJson is null ? null : DocumentJson.Deserialize<OutputLayout>(o.LayoutJson), o.Logo);
             if (!render.Ok)

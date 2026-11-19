@@ -65,6 +65,17 @@ public sealed class CxmlTransformService : ITransformService
     public static readonly CxmlCredentialConfig StandardOutputConfig =
         new(null, null, null, null, null, null, null) { DtdSystemId = StandardDtdSystemId };
 
+    /// <summary>
+    /// <see cref="StandardOutputConfig"/> with the From and To the person entered on the output. The Sender is theirs when
+    /// they entered one, else the From (the buyer is usually who authenticates); null or blank identities keep the order's.
+    /// </summary>
+    public static CxmlCredentialConfig StandardConfig(CxmlEnvelope? e) => StandardOutputConfig with
+    {
+        FromDomain = e?.FromDomain, FromIdentity = e?.FromIdentity, ToDomain = e?.ToDomain, ToIdentity = e?.ToIdentity,
+        SenderDomain = IsBlank(e?.SenderIdentity) ? e?.FromDomain : e?.SenderDomain,
+        SenderIdentity = IsBlank(e?.SenderIdentity) ? e?.FromIdentity : e?.SenderIdentity,
+    };
+
     public bool CanTransform(OutputFormat format) => format == OutputFormat.CXml;
 
     /// <summary>
@@ -125,8 +136,8 @@ public sealed class CxmlTransformService : ITransformService
         var timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
         var currency  = string.IsNullOrWhiteSpace(order.Currency) ? "EUR" : order.Currency;
 
-        // The sum of the line amounts each rounded to the cent, as UBL computes them, so both documents agree.
-        var totalAmount = order.Lines.Sum(l => Math.Round(l.Quantity * l.UnitPrice, 2, MidpointRounding.AwayFromZero))
+        // The sum of the line amounts as UBL computes them (the read amount, else q × p rounded to the cent), so both documents agree.
+        var totalAmount = order.Lines.Sum(l => l.LineAmount ?? Math.Round(l.Quantity * l.UnitPrice, 2, MidpointRounding.AwayFromZero))
                               .ToString("F2", CultureInfo.InvariantCulture);
 
         // ── Configurable DOCTYPE (T7) ─────────────────────────────────────────
@@ -256,18 +267,15 @@ public sealed class CxmlTransformService : ITransformService
     // ── Header credential helpers ─────────────────────────────────────────────
 
     /// <summary>
-    /// Builds the <c>&lt;From&gt;</c> credential. The cXML <c>From/Identity</c> is the BUYER's
-    /// identity, so when the order carries a <see cref="PurchaseOrderEntity.BuyerTaxId"/> it becomes
-    /// the From identity — KEEPING the configured From domain (or defaulting to
-    /// <see cref="DefaultConfiguredDomain"/> when none is configured). This stops a PO from one buyer
-    /// inheriting the supplier connection's configured From VatNr (the inherited-From-VatNr bug). When
-    /// there is NO buyer tax id the result is byte-identical to the pre-feature output: the configured
-    /// From credential when set, else the legacy <c>OrgId</c>/orgId GUID identity.
+    /// Builds the <c>&lt;From&gt;</c> credential, the BUYER's identity: a configured From identity first (only the
+    /// person's own entry on a flow's output builds one now; the per-supplier connection that once leaked a wrong
+    /// buyer's VatNr left with the order pipeline), else the order's <see cref="PurchaseOrderEntity.BuyerTaxId"/>
+    /// under the configured domain or <see cref="DefaultConfiguredDomain"/>, else the legacy <c>OrgId</c>/orgId GUID identity.
     /// </summary>
     private static XElement BuildFrom(PurchaseOrderEntity order, CxmlCredentialConfig? cfg)
     {
         var buyerTaxId = order.BuyerTaxId?.Trim();
-        if (string.IsNullOrWhiteSpace(buyerTaxId))
+        if (string.IsNullOrWhiteSpace(buyerTaxId) || !IsBlank(cfg?.FromIdentity))
         {
             // Unchanged legacy/configured path — byte-identical to before.
             return BuildCredentialBlock("From",
@@ -356,8 +364,12 @@ public sealed class CxmlTransformService : ITransformService
 
         return new XElement("ShipTo",
             BuildAddress(name, o.ShipToDeliverTo, o.ShipToStreet, o.ShipToCity,
-                o.ShipToPostalCode, o.ShipToCountry, o.ShipToEmail, o.ShipToPhone));
+                o.ShipToPostalCode, CountryOr(o.ShipToCountry, o.BillToCountry), o.ShipToEmail, o.ShipToPhone));
     }
+
+    // A ship-to read without a country takes the buyer's (delivery is almost always in the buyer's country) and the
+    // buyer address the ship-to's, so PostalAddress, which needs a Country, keeps the street the goods go to.
+    private static string? CountryOr(string? own, string? other) => StandardCodes.Country(own) is not null ? own : other;
 
     /// <summary>
     /// <c>&lt;BillTo&gt;</c> wrapping the bill-to address, or null when there is no bill-to name
@@ -371,7 +383,7 @@ public sealed class CxmlTransformService : ITransformService
 
         return new XElement("BillTo",
             BuildAddress(o.BillToName, o.BillToDeliverTo, o.BillToStreet, o.BillToCity,
-                o.BillToPostalCode, o.BillToCountry, o.BillToEmail, o.BillToPhone));
+                o.BillToPostalCode, CountryOr(o.BillToCountry, o.ShipToCountry), o.BillToEmail, o.BillToPhone));
     }
 
     /// <summary>
@@ -442,7 +454,8 @@ public sealed class CxmlTransformService : ITransformService
                 : null,
 
             new XElement("ItemID",
-                new XElement("SupplierPartID", line.SupplierItemCode ?? string.Empty)),
+                new XElement("SupplierPartID", line.SupplierItemCode ?? string.Empty),
+                string.IsNullOrWhiteSpace(line.BuyerItemCode) ? null : new XElement("BuyerPartID", line.BuyerItemCode)),
 
             new XElement("ItemDetail",
                 new XElement("UnitPrice",
@@ -472,7 +485,11 @@ public sealed class CxmlTransformService : ITransformService
     /// </summary>
     private static XElement? BuildLineTax(PurchaseOrderLineEntity line, string currency)
     {
-        if (line.TaxAmount is not { } taxAmount)
+        // No captured amount but a read rate: the amount is the rate of the line amount (q × p when none was read).
+        var derived = line.TaxRate is { } rate
+            ? Math.Round((line.LineAmount ?? line.Quantity * line.UnitPrice) * rate / 100m, 2, MidpointRounding.AwayFromZero)
+            : (decimal?)null;
+        if ((line.TaxAmount ?? derived) is not { } taxAmount)
             return null;
 
         // Prefer the captured rate; treat 0/absent as "not stated" (the strict-mode convention) and

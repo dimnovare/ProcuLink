@@ -41,7 +41,7 @@ internal static class StrictOrderFixture
     [
         ("PO number", PoNumber, FieldMeanings.DocumentNumber), ("Order date", OrderDate, FieldMeanings.IssueDate),
         ("Delivery date", DeliveryDate, FieldMeanings.DeliveryDate), ("Currency", Currency, FieldMeanings.Currency),
-        ("Payment terms", PaymentTerms, null),
+        ("Payment terms", PaymentTerms, FieldMeanings.PaymentTerms),
         ("Buyer", BuyerName, FieldMeanings.SenderName), ("Buyer street", BuyerStreet, FieldMeanings.SenderStreet),
         ("Buyer postcode", BuyerPostcode, FieldMeanings.SenderPostcode), ("Buyer city", BuyerCity, FieldMeanings.SenderCity),
         ("Buyer country", BuyerCountry, FieldMeanings.SenderCountry), ("Buyer VAT", BuyerVat, FieldMeanings.SenderVatId),
@@ -79,6 +79,34 @@ internal static class StrictOrderFixture
             [new ReadTable("lines", "Lines", [.. Columns.Select(c => new ReadColumn(FieldKey.Normalise(c.Label), c.Label, "text", c.Meaning))],
                 [.. Lines.Select(Row)], true)]);
     }
+
+    /// <summary>
+    /// <paramref name="read"/> with one meaning's value replaced, or added keyed by the meaning. A <c>line_</c> meaning
+    /// takes one value per row (a single value fills every row).
+    /// </summary>
+    public static ReadResult With(ReadResult read, string meaning, params string[] values)
+    {
+        if (!meaning.StartsWith("line_"))
+            return new(read.KindLabel, read.Fields.Any(f => f.Meaning == meaning)
+                ? [.. read.Fields.Select(f => f.Meaning == meaning ? f with { Value = values[0] } : f)]
+                : [.. read.Fields, new ReadField(meaning, meaning, values[0], "text", meaning, 1, null, false, true, false)], read.Tables, read.Truncated);
+        var table = read.Tables[0];
+        var key = table.Columns.FirstOrDefault(c => c.Meaning == meaning)?.Key ?? meaning;
+        var lines = table with
+        {
+            Columns = table.Columns.Any(c => c.Key == key) ? table.Columns : [.. table.Columns, new ReadColumn(key, meaning, "text", meaning)],
+            Rows = [.. table.Rows.Select((r, i) => new ReadRow(new Dictionary<string, ReadCell>(r.Cells) { [key] = new(values[values.Length == 1 ? 0 : i], 1, null, false, false) }))],
+        };
+        return new(read.KindLabel, read.Fields, [lines, .. read.Tables.Skip(1)], read.Truncated);
+    }
+
+    public static ReadResult With(string meaning, params string[] values) => With(Read(), meaning, values);
+
+    /// <summary>The fixture plus the values the writers once dropped: order reference, buyer item codes, tax rate and Peppol IDs.</summary>
+    public static ReadResult WithEveryValue() =>
+        With(With(With(With(With(Read(), FieldMeanings.OrderReference, "FRAME-2026-01"),
+            FieldMeanings.LineBuyerItemCode, "BUY-1", "BUY-2", "BUY-3"), FieldMeanings.LineTaxRate, "19"),
+            FieldMeanings.SenderEndpointId, "0191:12345678"), FieldMeanings.ReceiverEndpointId, "0088:0000000000000");
 
     /// <summary>The standard's file for <paramref name="read"/> (default: the full fixture); asserts it was written.</summary>
     public static async Task<string> Render(string standardId, ReadResult? read = null)

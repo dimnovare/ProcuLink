@@ -207,6 +207,16 @@ public record EnvelopeConfig
 {
     public X12Envelope? X12 { get; init; }
     public CxmlEnvelope? Cxml { get; init; }
+    public EdifactEnvelope? Edifact { get; init; }
+}
+
+/// <summary>UNB sender/recipient (0004/0010 with their 0007 qualifier). Null or blank fields fall back to the placeholders.</summary>
+public record EdifactEnvelope
+{
+    public string? SenderId { get; init; }
+    public string? SenderQualifier { get; init; }
+    public string? RecipientId { get; init; }
+    public string? RecipientQualifier { get; init; }
 }
 
 /// <summary>X12 ISA/GS envelope identity + delimiters. Null fields fall back to the legacy defaults.</summary>

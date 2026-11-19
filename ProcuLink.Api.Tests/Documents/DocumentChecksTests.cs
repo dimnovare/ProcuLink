@@ -26,6 +26,7 @@ public sealed class DocumentChecksTests
         FieldValueParser.TryNumber("12abc", out _).Should().BeFalse();
         FieldValueParser.NumberCandidates("1,500").Should().Equal(1.5m, 1500m);
         FieldValueParser.NumberCandidates("1.234,56").Should().Equal(1234.56m);
+        new[] { "19%", "19 %", "19" }.Select(FieldValueParser.Percent).Should().Equal(19m, 19m, 19m);
 
         foreach (var text in new[] { "03/04/2026", "03.04.2026", "2026-04-03", "3.4.26", "3/4/26", "3-4-2026", "3-4-26", "2026/4/3", "3. April 2026" })
         {

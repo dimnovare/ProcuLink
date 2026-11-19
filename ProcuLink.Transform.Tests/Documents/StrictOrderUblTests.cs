@@ -44,6 +44,30 @@ public class StrictOrderUblTests
     }
 
     [Fact]
+    public async Task Order_reference_terms_buyer_codes_amounts_tax_and_ids_have_their_homes()
+    {
+        var text = await StrictOrderFixture.Render("ubl-2-1-order",
+            StrictOrderFixture.With(StrictOrderFixture.WithEveryValue(), FieldMeanings.LineAmount, "24.50", "10.00", "25.00"));
+        UblSchemaValidator.Validate(text).Valid.Should().BeTrue(string.Join("; ", UblSchemaValidator.Validate(text).Findings));
+        var root = XDocument.Parse(text).Root!;
+
+        (V(root, "OrderDocumentReference", "ID"), V(root, "PaymentTerms", "Note")).Should().Be(("FRAME-2026-01", "30 days net"));
+        (string, string) Endpoint(string party)
+        {
+            var id = root.Element(Cac + party)!.Element(Cac + "Party")!.Elements().First();
+            id.Name.Should().Be(Cbc + "EndpointID");
+            return ((string)id.Attribute("schemeID")!, id.Value);
+        }
+        Endpoint("BuyerCustomerParty").Should().Be(("0191", "12345678"));
+        Endpoint("SellerSupplierParty").Should().Be(("0088", "0000000000000"));
+
+        var line = root.Element(Cac + "OrderLine")!.Element(Cac + "LineItem")!;
+        (V(line, "LineExtensionAmount"), V(line, "Item", "BuyersItemIdentification", "ID"), V(line, "Item", "ClassifiedTaxCategory", "Percent"))
+            .Should().Be(("24.50", "BUY-1", "19"));
+        V(root, "AnticipatedMonetaryTotal", "LineExtensionAmount").Should().Be("59.50");
+    }
+
+    [Fact]
     public async Task A_delivery_date_alone_still_makes_a_delivery_and_no_totals_means_no_total_blocks()
     {
         var read = StrictOrderFixture.Read(without: [FieldMeanings.DeliveryName, FieldMeanings.DeliveryStreet, FieldMeanings.DeliveryCity,

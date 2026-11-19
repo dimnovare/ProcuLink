@@ -21,7 +21,7 @@ public class MeaningBindingTests
     [Fact]
     public void Every_meaning_has_a_definition()
     {
-        FieldMeanings.All.Should().HaveCount(42);
+        FieldMeanings.All.Should().HaveCount(44);
         FieldMeanings.Definitions.Keys.Should().BeEquivalentTo(FieldMeanings.All);
         FieldMeanings.Definitions.Values.Should().OnlyContain(d => d.Length > 1 && d.EndsWith('.'));
         FieldMeanings.Aliases[FieldMeanings.ReceiverCountry].Should().NotContain("shiptocountry");

@@ -43,6 +43,9 @@ public static class FieldValueParser
     /// <summary>The number when it has exactly one reading; null when it has none or is ambiguous ("1.000": one or a thousand).</summary>
     public static decimal? Number(string? s) => NumberCandidates(s) is [var only] ? only : null;
 
+    /// <summary>A rate as printed, with or without its percent sign ("19%", "19 %").</summary>
+    public static decimal? Percent(string? s) => Number(s?.Trim().TrimEnd('%'));
+
     public static bool TryNumber(string? s, out decimal value)
     {
         value = 0;

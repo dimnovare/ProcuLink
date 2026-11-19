@@ -61,9 +61,9 @@ public class CxmlTransformServiceBuyerTaxAndLineTaxTests
     // ── Dynamic From identity ──────────────────────────────────────────────────
 
     [Fact]
-    public async Task BuyerTaxId_Present_BecomesFromIdentity_KeepingConfiguredFromDomain()
+    public async Task ConfiguredFromIdentity_WinsOverTheBuyerTaxId()
     {
-        // Supplier connection configured with Exemple's From identity (the wrong-buyer scenario).
+        // The person entered the From identity on this output: it is what the receiver expects, whatever VAT number was read.
         var creds = new CxmlCredentialConfig(
             FromDomain: "NetworkId", FromIdentity: "FR99000000000",
             ToDomain: "NetworkId", ToIdentity: "TESTSUPPLIER_SE",
@@ -71,14 +71,11 @@ public class CxmlTransformServiceBuyerTaxAndLineTaxTests
             SenderSharedSecret: null);
 
         var order = BuildOrder();
-        order.BuyerTaxId = "NO999000000"; // a DIFFERENT buyer (Exemplar Forsikring org number).
+        order.BuyerTaxId = "NO999000000";
 
         var xml = await RenderAsync(order, creds);
 
-        var from = ReadFrom(xml);
-        from.Identity.Should().Be("NO999000000", "the From identity is the order's buyer tax id");
-        from.Domain.Should().Be("NetworkId", "the configured From domain is preserved");
-        xml.Should().NotContain("FR99000000000", "the configured From VatNr must not leak for a different buyer");
+        ReadFrom(xml).Should().Be(("NetworkId", "FR99000000000"));
         // To / Sender are unaffected.
         XDocument.Parse(xml).Descendants("To").Single().Descendants("Identity").Single().Value.Should().Be("TESTSUPPLIER_SE");
     }
@@ -171,13 +168,15 @@ public class CxmlTransformServiceBuyerTaxAndLineTaxTests
     }
 
     [Fact]
-    public async Task LineTaxAmount_Absent_NoTaxBlock_ByteIdentical()
+    public async Task LineTaxAmount_Absent_RateAlone_TaxIsTheRateOfTheLine()
     {
         var order = BuildOrder();          // no TaxAmount on the line
-        order.Lines[0].TaxRate = 25m;      // rate alone (no amount) → still no <Tax> (amount is what we emit)
-
         var xml = await RenderAsync(order);
-        xml.Should().NotContain("<Tax>", "with no captured tax AMOUNT the ItemDetail is byte-identical to today");
+        xml.Should().NotContain("<Tax>", "with neither a tax amount nor a rate there is no Tax block");
+
+        order.Lines[0].TaxRate = 25m;      // rate alone: the amount is 25% of 1 × 3337.08
+        xml = await RenderAsync(order);
+        xml.Should().Contain("834.27").And.Contain("VAT 25%");
     }
 
     [Fact]

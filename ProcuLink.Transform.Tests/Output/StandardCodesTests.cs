@@ -15,7 +15,14 @@ public class StandardCodesTests
     [InlineData("pack", "XPK", "PK")] [InlineData("pair", "PR", "PR")] [InlineData("dozen", "DZN", "DZ")] [InlineData("hour", "HUR", "HR")]
     [InlineData("days", "DAY", "DA")]
     [InlineData("BX", "XBX", "BX")] [InlineData("PK", "XPK", "PK")] [InlineData("LT", "LTR", "LT")] [InlineData("UN", "C62", "UN")] // X12 codes as written
-    [InlineData("MTQ", "MTQ", "EA")]          // code-shaped, not in the table: Rec 20 passes it, X12 (2 chars) cannot
+    [InlineData("tk", "H87", "PC")] [InlineData("Stk.", "H87", "PC")] [InlineData("St.", "H87", "PC")] [InlineData("kpl", "H87", "PC")]
+    [InlineData("gab.", "H87", "PC")] [InlineData("vnt.", "H87", "PC")] [InlineData("шт.", "H87", "PC")]
+    [InlineData("кг", "KGM", "KG")] [InlineData("л", "LTR", "LT")] [InlineData("jm", "MTR", "MR")] [InlineData("m3", "MTQ", "CR")]
+    [InlineData("kmpl", "SET", "ST")] [InlineData("rull", "XRO", "RL")]
+    [InlineData("karp", "XBX", "BX")] [InlineData("pakk", "XPK", "PK")] [InlineData("paar", "PR", "PR")] [InlineData("tund", "HUR", "HR")]
+    [InlineData("päev", "DAY", "DA")]
+    [InlineData("MTQ", "MTQ", "CR")]
+    [InlineData("KWH", "KWH", "EA")]          // code-shaped, not in the table: Rec 20 passes it, X12 (2 chars) cannot
     [InlineData("CT", "CT", "CT")]            // code-shaped 2 chars: passes both
     [InlineData("bundle", "EA", "EA")] [InlineData("", "EA", "EA")] [InlineData(null, "EA", "EA")]
     public void Units_map_to_rec20_and_x12(string? written, string rec20, string x12) =>

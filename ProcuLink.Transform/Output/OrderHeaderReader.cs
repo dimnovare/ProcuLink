@@ -23,6 +23,9 @@ internal static class OrderHeaderReader
     /// <summary>The order's supplier party: the first <see cref="OrderParty"/> whose role is <c>"supplier"</c>, or null.</summary>
     public static OrderParty? SupplierParty(PurchaseOrderEntity order) => order.Parties.FirstOrDefault(p => p.Role == "supplier");
 
+    /// <summary>The order's buyer party (from a read Peppol ID): the first whose role is <c>"buyer"</c>, or null.</summary>
+    public static OrderParty? BuyerParty(PurchaseOrderEntity order) => order.Parties.FirstOrDefault(p => p.Role == "buyer");
+
     /// <summary>
     /// The name to write the ship-to under: its own name, else the buyer's when a delivery address was read without an
     /// addressee line (so the goods still go there, not to the billing address); null when there is no ship-to to write.

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace ProcuLink.Transform.Parsing;
 
@@ -105,10 +106,25 @@ public sealed class EdifactOrderParser : IPurchaseOrderParser
         string.Equals(contentType, "application/edifact",  StringComparison.OrdinalIgnoreCase)
         || string.Equals(contentType, "application/edi-x12", StringComparison.OrdinalIgnoreCase);
 
+    private static readonly UTF8Encoding StrictUtf8 = new(false, throwOnInvalidBytes: true);
+
+    private static bool IsUtf8(MemoryStream bytes)
+    {
+        try { StrictUtf8.GetCharCount(bytes.GetBuffer(), 0, (int)bytes.Length); return true; }
+        catch (DecoderFallbackException) { return false; }
+    }
+
     public async Task<ParsedOrder> ParseAsync(Stream fileStream, CancellationToken ct)
     {
+        // UNOA, UNOB and UNOC are one byte per character (UNOC is ISO 8859-1), so they read as Latin-1 unless the bytes
+        // are valid UTF-8, which some senders write under UNOC; any other syntax, or none, as UTF-8. A byte-order mark still wins.
+        using var bytes = new MemoryStream();
+        await fileStream.CopyToAsync(bytes, ct);
+        bytes.Position = 0;
+        var head = Encoding.ASCII.GetString(bytes.GetBuffer(), 0, (int)Math.Min(bytes.Length, 512));
+        var encoding = Regex.IsMatch(head, @"UNB.UNO[ABC]\b") && !IsUtf8(bytes) ? Encoding.Latin1 : Encoding.UTF8;
         string raw;
-        using (var reader = new StreamReader(fileStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, bufferSize: 4096, leaveOpen: true))
+        using (var reader = new StreamReader(bytes, encoding, detectEncodingFromByteOrderMarks: true, bufferSize: 4096, leaveOpen: true))
         {
             raw = await reader.ReadToEndAsync(ct);
         }

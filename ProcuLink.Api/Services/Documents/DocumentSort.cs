@@ -31,15 +31,17 @@ public static class DocumentSort
     public static async Task<(SortTarget? Target, string? WaitReason)> DecideAsync(ProcuLinkDbContext db, FlowDocument doc, CancellationToken ct)
     {
         if (doc.Kind is null) return (null, NewKind);
+        // A never-published flow whose fields were never confirmed is an abandoned draft: it never takes inbox documents.
+        var flows = db.Flows.PersonFlows(doc.OrgId).Where(f => f.PublishedVersionNo != null || f.FieldsConfirmed);
         if (doc.SenderKey is not null)
         {
             var remembered = await db.Set<FlowSortMemory>()
                 .Where(m => m.OrgId == doc.OrgId && m.SenderKey == doc.SenderKey && m.Kind == doc.Kind)
-                .Join(db.Flows.PersonFlows(doc.OrgId), m => m.FlowId, f => f.Id, (m, f) => new { f.Id, f.Name })
+                .Join(flows, m => m.FlowId, f => f.Id, (m, f) => new { f.Id, f.Name })
                 .FirstOrDefaultAsync(ct);
             if (remembered is not null) return (new SortTarget(remembered.Id, remembered.Name, true), null);
         }
-        var holding = await db.Flows.PersonFlows(doc.OrgId)
+        var holding = await flows
             .Where(f => db.FlowDocuments.Any(d => d.OrgId == doc.OrgId && d.FlowId == f.Id && d.Kind == doc.Kind && !d.IsSample))
             .Select(f => new { f.Id, f.Name })
             .Take(2)

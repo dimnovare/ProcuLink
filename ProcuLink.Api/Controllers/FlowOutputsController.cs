@@ -256,9 +256,14 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
 
         var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
         DocumentRender render;
-        // A standard is filled by meaning: no template (a draft one included), no lookups.
-        if (output.Standard is { } standard)
-            render = await StandardOutputs.RenderAsync(standard, read, config.Fields, output.TableKey, orgId, ct);
+        // A standard is filled by meaning: no template, no lookups. A draft's sender and receiver IDs are previewed unsaved.
+        if (output.Standard is not null)
+        {
+            if (body?.Template?.Envelope is { } draft && !PartnerIdsFit(draft)) return Invalid("partner_ids");
+            render = body?.Template?.Envelope is { } envelope
+                ? await StandardOutputs.RenderAsync(output.Standard, read, config.Fields, output.TableKey, orgId, ct, envelope)
+                : await StandardOutputs.RenderAsync(output, read, config.Fields, orgId, ct);
+        }
         else
         {
             var template = body?.Template ?? DocumentJson.Deserialize<OutputNodeTemplate>(output.TemplateJson);
@@ -285,7 +290,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         }
         else
         {
-            using var reader = new StreamReader(render.Result.Content, Encoding.UTF8);
+            using var reader = new StreamReader(render.Result.Content, StandardOutputs.TextEncoding(output.Standard));
             shownBody["content"] = await reader.ReadToEndAsync(ct);
         }
         shownBody["lookupMisses"] = shown;
@@ -314,7 +319,8 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
             if (StandardOutputs.Find(standard) is { Flagged: true } && !gate.PeppolOn(orgId)) return StatusCode(403, new { error = "peppol_off" });
             var flow = await db.Flows.AsNoTracking().FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == doc.FlowId, ct);
             if (flow is null) return FlowNotFound();
-            render = await StandardOutputs.RenderAsync(standard, read, (await FlowConfigLoader.LiveAsync(db, flow, ct)).Fields, request.TableKey, orgId, ct);
+            if (request.Template?.Envelope is { } e && !PartnerIdsFit(e)) return Invalid("partner_ids");
+            render = await StandardOutputs.RenderAsync(standard, read, (await FlowConfigLoader.LiveAsync(db, flow, ct)).Fields, request.TableKey, orgId, ct, request.Template?.Envelope);
         }
         else
         {
@@ -370,6 +376,13 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
             if (await CheckTemplate(template, format, ct) is { } badTemplate) return badTemplate;
             templateJson = DocumentJson.Serialize(template);
         }
+        // A standard keeps only the sender and receiver IDs its partner asked for; none entered keeps "{}".
+        else if (request.Template?.Envelope is { } e)
+        {
+            if (!PartnerIdsFit(e)) return Invalid("partner_ids");
+            if (PartnerIds(e).Any(s => !string.IsNullOrWhiteSpace(s)))
+                templateJson = DocumentJson.Serialize(new OutputNodeTemplate { Envelope = e });
+        }
 
         OutputLayout? layout = null;
         if (standard is null && format is FlowOutputFormats.Pdf or FlowOutputFormats.Text && request.Layout is { } l)
@@ -388,6 +401,39 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         output.LayoutJson = layout is null ? null : DocumentJson.Serialize(layout);
         output.UpdatedAt = DateTime.UtcNow;
         return null;
+    }
+
+    private static string?[] PartnerIds(EnvelopeConfig e) =>
+    [
+        e.X12?.IsaSenderQualifier, e.X12?.IsaSenderId, e.X12?.IsaReceiverQualifier, e.X12?.IsaReceiverId,
+        e.Edifact?.SenderId, e.Edifact?.SenderQualifier, e.Edifact?.RecipientId, e.Edifact?.RecipientQualifier,
+        e.Cxml?.FromDomain, e.Cxml?.FromIdentity, e.Cxml?.ToDomain, e.Cxml?.ToIdentity, e.Cxml?.SenderDomain, e.Cxml?.SenderIdentity,
+    ];
+
+    /// <summary>
+    /// Only the IDs and their types, each within its standard's length and characters (X12 printable ASCII without its
+    /// delimiters, EDIFACT Latin-1, none a control character), a type only with its ID; every other envelope setting stays the writer's.
+    /// </summary>
+    private static bool PartnerIdsFit(EnvelopeConfig e)
+    {
+        static bool Fit(int max, params string?[] values) => values.All(v => (v?.Length ?? 0) <= max);
+        static bool Chars(Func<char, bool> ok, params string?[] values) => values.All(v => (v ?? "").All(ch => !char.IsControl(ch) && ok(ch)));
+        static bool Blank(string? v) => string.IsNullOrWhiteSpace(v);
+        static bool Paired(string? id, string? type) => Blank(type) || !Blank(id);
+        var (x, f, c) = (e.X12, e.Edifact, e.Cxml);
+        return (x is null || (Fit(15, x.IsaSenderId, x.IsaReceiverId)
+                && Chars(ch => ch is >= ' ' and <= '~', x.IsaSenderId, x.IsaReceiverId, x.IsaSenderQualifier, x.IsaReceiverQualifier)
+                && !new[] { x.IsaSenderId, x.IsaReceiverId, x.IsaSenderQualifier, x.IsaReceiverQualifier }.Any(X12Sanitizer.ContainsDelimiter)
+                && new[] { x.IsaSenderQualifier, x.IsaReceiverQualifier }.All(q => Blank(q) || q!.Length == 2)
+                && new[] { x.IsaSenderId, x.IsaReceiverId }.All(i => Blank(i) || i!.Trim().Length >= 2)
+                && Paired(x.IsaSenderId, x.IsaSenderQualifier) && Paired(x.IsaReceiverId, x.IsaReceiverQualifier)
+                && x is { Version: null, UsageIndicator: null, ElementSeparator: null, SegmentSeparator: null, ComponentSeparator: null }))
+            && (f is null || (Fit(35, f.SenderId, f.RecipientId) && Fit(4, f.SenderQualifier, f.RecipientQualifier)
+                && Chars(ch => ch <= '\u00FF', f.SenderId, f.RecipientId, f.SenderQualifier, f.RecipientQualifier)
+                && Paired(f.SenderId, f.SenderQualifier) && Paired(f.RecipientId, f.RecipientQualifier)))
+            && (c is null || (Fit(200, c.FromIdentity, c.ToIdentity, c.SenderIdentity) && Fit(100, c.FromDomain, c.ToDomain, c.SenderDomain)
+                && Chars(_ => true, c.FromIdentity, c.ToIdentity, c.SenderIdentity, c.FromDomain, c.ToDomain, c.SenderDomain)
+                && c is { DtdSystemId: null, DtdPublicId: null }));
     }
 
     /// <summary>The checks a template must pass for <paramref name="format"/>; returns the refusal, or null.</summary>

@@ -182,13 +182,10 @@ public class UblOrderTransformServiceTests
 
         parsed.PoNumber.Should().Be("PO-ROUNDTRIP-7");
 
-        // First line: BuyerItemCode resolution falls back to seller's item id when
-        // no BuyersItemIdentification element is present, so the parser surfaces
-        // the supplier item code we emitted.
+        // First line: the buyer's item code is written as BuyersItemIdentification, so it round-trips.
         parsed.Lines.Should().HaveCount(2);
         var firstParsedLine = parsed.Lines.OrderBy(l => l.LineNumber).First();
-        firstParsedLine.BuyerItemCode.Should().Be("S-ROUND-001",
-            "the round-trip exposes the SellersItemIdentification ID as the only available identifier");
+        firstParsedLine.BuyerItemCode.Should().Be("B-001");
         firstParsedLine.Quantity.Should().Be(4m);
         firstParsedLine.UnitPrice.Should().Be(50.00m);
         firstParsedLine.Description.Should().Be("Round-trip widget");
