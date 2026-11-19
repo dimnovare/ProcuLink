@@ -1,13 +1,8 @@
 using System.Globalization;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services.Mapping;
 
 namespace ProcuLink.Transform.Output;
-
-/// <summary>Interchange identity. The defaults are the same placeholders the X12 850 uses, a known limit shared with it.</summary>
-public sealed record EdifactEnvelope(
-    string Sender = X12TransformService.DefaultSenderId,
-    string Recipient = X12TransformService.DefaultReceiverId,
-    string Reference = X12TransformService.InterchangeControl);
 
 /// <summary>Writes an EDIFACT ORDERS D.96A message (UNOC, default delimiters) from an order. Free text is released with <c>?</c>.</summary>
 public static class EdifactOrdersWriter
@@ -26,7 +21,11 @@ public static class EdifactOrdersWriter
         return "NAD+" + string.Join("+", elements.Take(count));
     }
 
-    public static string Write(PurchaseOrderEntity order, EdifactEnvelope envelope)
+    /// <summary>A UNB party: the ID (blank → the X12 placeholder, a known limit shared with it), then <c>:qualifier</c> only when one is given.</summary>
+    private static string Party(string? id, string? qualifier, string fallback) =>
+        Esc(string.IsNullOrWhiteSpace(id) ? fallback : id.Trim()) + (string.IsNullOrWhiteSpace(qualifier) ? "" : ":" + Esc(qualifier.Trim()));
+
+    public static string Write(PurchaseOrderEntity order, EdifactEnvelope? envelope = null)
     {
         var now = DateTime.UtcNow;
         var currency = string.IsNullOrWhiteSpace(order.Currency) ? "EUR" : order.Currency.ToUpperInvariant();
@@ -77,10 +76,10 @@ public static class EdifactOrdersWriter
 
         var segments = new List<string>
         {
-            $"UNB+UNOC:3+{Esc(envelope.Sender)}+{Esc(envelope.Recipient)}+{now:yyMMdd}:{now:HHmm}+{Esc(envelope.Reference)}",
+            $"UNB+UNOC:3+{Party(envelope?.SenderId, envelope?.SenderQualifier, X12TransformService.DefaultSenderId)}+{Party(envelope?.RecipientId, envelope?.RecipientQualifier, X12TransformService.DefaultReceiverId)}+{now:yyMMdd}:{now:HHmm}+{X12TransformService.InterchangeControl}",
         };
         segments.AddRange(message);
-        segments.Add($"UNZ+1+{Esc(envelope.Reference)}");
+        segments.Add($"UNZ+1+{X12TransformService.InterchangeControl}");
         return "UNA:+.? '" + string.Concat(segments.Select(s => s + "'")) + Environment.NewLine;
     }
 }

@@ -2,6 +2,7 @@ using System.Xml;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Transform.Output;
 
 namespace ProcuLink.Transform.Documents;
@@ -66,11 +67,16 @@ public static class StandardOutputs
 
     public static StandardOutput? Find(string? id) => All.FirstOrDefault(s => s.Id == id);
 
+    /// <summary>A standard output's file, with the sender and receiver IDs stored on it (sending and Preview both call this).</summary>
+    public static Task<DocumentRender> RenderAsync(FlowOutput output, ReadResult read, FlowFieldList fields, Guid orgId, CancellationToken ct)
+        => RenderAsync(output.Standard!, read, fields, output.TableKey, orgId, ct, DocumentJson.Deserialize<OutputNodeTemplate>(output.TemplateJson).Envelope);
+
     /// <summary>
     /// The standard file, or <c>output_invalid</c>: with the needs sentence when the read lacks a need, without a detail
     /// for an unknown id or anything a writer still refuses, an amount too large for its arithmetic included (its messages are not approved copy). Never throws for either.
+    /// The order standards write the sender and receiver IDs in <paramref name="envelope"/>, the placeholders without it.
     /// </summary>
-    public static async Task<DocumentRender> RenderAsync(string id, ReadResult read, FlowFieldList fields, string? tableKey, Guid orgId, CancellationToken ct)
+    public static async Task<DocumentRender> RenderAsync(string id, ReadResult read, FlowFieldList fields, string? tableKey, Guid orgId, CancellationToken ct, EnvelopeConfig? envelope = null)
     {
         if (Find(id) is not { } standard) return new(null, "output_invalid", null);
         try
@@ -94,10 +100,12 @@ public static class StandardOutputs
             // Not in OutputTransformRegistry: registering it would surface EDIFACT in the legacy order screens.
             if (standard.Writer == OutputFormat.EdifactOrders)
                 return new(TransformResult.For(OutputFormat.EdifactOrders,
-                    new MemoryStream(System.Text.Encoding.UTF8.GetBytes(EdifactOrdersWriter.Write(order!, new EdifactEnvelope())), writable: false)), null, null);
+                    new MemoryStream(System.Text.Encoding.UTF8.GetBytes(EdifactOrdersWriter.Write(order!, envelope?.Edifact)), writable: false)), null, null);
+            if (standard.Writer == OutputFormat.X12)
+                return new(await new X12TransformService().TransformAsync(order!, OutputFormat.X12, ct, envelope), null, null);
             var writer = OutputTransformRegistry.All.First(w => w.CanTransform(standard.Writer));
             // A flow's cXML declares its DTD (the legacy order path declares one only when configured).
-            var cxml = standard.Writer == OutputFormat.CXml ? CxmlTransformService.StandardOutputConfig : null;
+            var cxml = standard.Writer == OutputFormat.CXml ? CxmlTransformService.StandardConfig(envelope?.Cxml) : null;
             return new(await writer.TransformAsync(order!, standard.Writer, ct, cxml), null, null);
         }
         catch (Exception ex) when (ex is TransformValidationException or ArgumentException or InvalidOperationException or XmlException or OverflowException)

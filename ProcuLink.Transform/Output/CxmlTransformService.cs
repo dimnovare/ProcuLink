@@ -65,6 +65,17 @@ public sealed class CxmlTransformService : ITransformService
     public static readonly CxmlCredentialConfig StandardOutputConfig =
         new(null, null, null, null, null, null, null) { DtdSystemId = StandardDtdSystemId };
 
+    /// <summary>
+    /// <see cref="StandardOutputConfig"/> with the From and To the person entered on the output. The Sender is theirs when
+    /// they entered one, else the From (the buyer is usually who authenticates); null or blank identities keep the order's.
+    /// </summary>
+    public static CxmlCredentialConfig StandardConfig(CxmlEnvelope? e) => StandardOutputConfig with
+    {
+        FromDomain = e?.FromDomain, FromIdentity = e?.FromIdentity, ToDomain = e?.ToDomain, ToIdentity = e?.ToIdentity,
+        SenderDomain = IsBlank(e?.SenderIdentity) ? e?.FromDomain : e?.SenderDomain,
+        SenderIdentity = IsBlank(e?.SenderIdentity) ? e?.FromIdentity : e?.SenderIdentity,
+    };
+
     public bool CanTransform(OutputFormat format) => format == OutputFormat.CXml;
 
     /// <summary>
@@ -256,18 +267,15 @@ public sealed class CxmlTransformService : ITransformService
     // ── Header credential helpers ─────────────────────────────────────────────
 
     /// <summary>
-    /// Builds the <c>&lt;From&gt;</c> credential. The cXML <c>From/Identity</c> is the BUYER's
-    /// identity, so when the order carries a <see cref="PurchaseOrderEntity.BuyerTaxId"/> it becomes
-    /// the From identity — KEEPING the configured From domain (or defaulting to
-    /// <see cref="DefaultConfiguredDomain"/> when none is configured). This stops a PO from one buyer
-    /// inheriting the supplier connection's configured From VatNr (the inherited-From-VatNr bug). When
-    /// there is NO buyer tax id the result is byte-identical to the pre-feature output: the configured
-    /// From credential when set, else the legacy <c>OrgId</c>/orgId GUID identity.
+    /// Builds the <c>&lt;From&gt;</c> credential, the BUYER's identity: a configured From identity first (only the
+    /// person's own entry on a flow's output builds one now; the per-supplier connection that once leaked a wrong
+    /// buyer's VatNr left with the order pipeline), else the order's <see cref="PurchaseOrderEntity.BuyerTaxId"/>
+    /// under the configured domain or <see cref="DefaultConfiguredDomain"/>, else the legacy <c>OrgId</c>/orgId GUID identity.
     /// </summary>
     private static XElement BuildFrom(PurchaseOrderEntity order, CxmlCredentialConfig? cfg)
     {
         var buyerTaxId = order.BuyerTaxId?.Trim();
-        if (string.IsNullOrWhiteSpace(buyerTaxId))
+        if (string.IsNullOrWhiteSpace(buyerTaxId) || !IsBlank(cfg?.FromIdentity))
         {
             // Unchanged legacy/configured path — byte-identical to before.
             return BuildCredentialBlock("From",

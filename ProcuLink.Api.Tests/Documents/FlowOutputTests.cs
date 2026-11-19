@@ -409,6 +409,39 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
     }
 
     [Fact]
+    public async Task A_standard_output_keeps_only_its_sender_and_receiver_ids()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, _) = await Seed(confirmed: true);
+        var created = await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "Orders", format = "", standard = "x12-850" });
+        var id = (await created.Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!.Id;
+        Task<HttpResponseMessage> Put(X12Envelope x12) => http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{id}", new
+        {
+            name = "Orders", format = "csv", standard = "x12-850",
+            template = new OutputNodeTemplate { Format = OutputFormat.Csv, Root = new() { Children = [new() { Name = "x" }] }, Envelope = new() { X12 = x12 } },
+        });
+        async Task<string> Stored()
+        {
+            using var scope = factory.Services.CreateScope();
+            return (await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowOutput>().AsNoTracking().SingleAsync(o => o.Id == id)).TemplateJson;
+        }
+
+        (await Put(new() { IsaSenderId = "TESTBUYER" })).StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = DocumentJson.Deserialize<OutputNodeTemplate>(await Stored());
+        (stored.Envelope!.X12!.IsaSenderId, stored.Root.Children.Count).Should().Be(("TESTBUYER", 0));
+
+        foreach (var bad in new X12Envelope[] { new() { IsaSenderId = new string('A', 16) }, new() { ElementSeparator = '|' } })
+        {
+            var refused = await Put(bad);
+            refused.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+            (await refused.Content.ReadAsStringAsync()).Should().Contain("partner_ids");
+        }
+
+        (await Put(new() { IsaSenderId = " " })).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await Stored()).Should().Be("{}");
+    }
+
+    [Fact]
     public async Task Sending_through_a_standard_output_stores_the_standard_file()
     {
         var http = factory.ClientFor(Org);
