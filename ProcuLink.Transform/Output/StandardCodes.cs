@@ -18,6 +18,14 @@ public static partial class StandardCodes
     /// <summary>A unit price as written by every order writer: at least 2 and up to 6 decimals (a longer read price is rounded at the 6th).</summary>
     public static string Price(decimal price) => price.ToString("0.00####", CultureInfo.InvariantCulture);
 
+    /// <summary>Free text split over the <paramref name="repeats"/> components a standard gives it, each up to <paramref name="max"/>, the rest cut.</summary>
+    public static string[] Cut(string? text, int max, int repeats = 1) =>
+        [.. (text ?? "").Chunk(max).Take(repeats).Select(c => new string(c))];
+
+    /// <summary>An identifier as read, or refused when longer than <paramref name="max"/>: a cut identifier would send a wrong number.</summary>
+    public static string Id(string? value, int max, string what) =>
+        (value ?? "").Length <= max ? value ?? "" : throw new ValueTooLongException(what, max);
+
     // Box and pack use the Rec 21 package codes in the X-prefixed form the combined Rec 20/21 list (and Peppol's code
     // list) carries: plain BX / PK were removed from Rec 20. Piece words map to H87 ("piece"), which is what "pcs" says.
     private static readonly (string[] Words, string Rec20, string X12)[] Table =
@@ -98,3 +106,7 @@ public static partial class StandardCodes
     [GeneratedRegex("^[A-Z0-9]{2}$")] private static partial Regex X12Shape();
     [GeneratedRegex("^[A-Z]{2}$")] private static partial Regex Alpha2();
 }
+
+/// <summary>An identifier too long for its standard; the message is approved copy, shown after "The file … couldn't be made: ".</summary>
+public sealed class ValueTooLongException(string what, int max)
+    : Exception($"The {what} is longer than this standard allows ({max} characters).");

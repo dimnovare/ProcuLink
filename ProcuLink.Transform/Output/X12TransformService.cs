@@ -132,7 +132,7 @@ public sealed class X12TransformService : ITransformService
         tx.Add(Segment(elementSep, "ST", "850", StControl));
 
         // BEG*00*NE*{po}**{date} — 00 original, NE new order.
-        tx.Add(Segment(elementSep, "BEG", "00", "NE", Sanitize(order.PoNumber), "",
+        tx.Add(Segment(elementSep, "BEG", "00", "NE", StandardCodes.Id(Sanitize(order.PoNumber), 22, "order number"), "",
             order.OrderDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture)));
 
         // CUR*BY*{currency} — buying party currency.
@@ -160,9 +160,9 @@ public sealed class X12TransformService : ITransformService
         var buyerName = OrderHeaderReader.ExtractBuyerName(order);
         if (!string.IsNullOrWhiteSpace(buyerName))
         {
-            tx.Add(Segment(elementSep, "N1", "BY", Sanitize(buyerName)));
+            tx.Add(Segment(elementSep, "N1", "BY", Text(buyerName, 60)));
             if (!string.IsNullOrWhiteSpace(order.BuyerTaxId))
-                tx.Add(Segment(elementSep, "REF", "VX", Sanitize(order.BuyerTaxId)));
+                tx.Add(Segment(elementSep, "REF", "VX", StandardCodes.Id(Sanitize(order.BuyerTaxId), 30, "VAT number")));
         }
 
         // Order-level ordering contact: PER*BD. PER in the 850 heading is only valid INSIDE an N1
@@ -187,8 +187,8 @@ public sealed class X12TransformService : ITransformService
         {
             // PO1*{n}*{qty}*{uom}*{price}*PE[*BP*{buyer}][*VP*{supplier}]: each pair only when its code is there,
             // because a qualifier with no value breaks the pairing a receiver reads.
-            string[] buyerCode = string.IsNullOrWhiteSpace(line.BuyerItemCode) ? [] : ["BP", Sanitize(line.BuyerItemCode)];
-            string[] supplierCode = string.IsNullOrWhiteSpace(line.SupplierItemCode) ? [] : ["VP", Sanitize(line.SupplierItemCode)];
+            string[] buyerCode = string.IsNullOrWhiteSpace(line.BuyerItemCode) ? [] : ["BP", StandardCodes.Id(Sanitize(line.BuyerItemCode), 48, "buyer's item code")];
+            string[] supplierCode = string.IsNullOrWhiteSpace(line.SupplierItemCode) ? [] : ["VP", StandardCodes.Id(Sanitize(line.SupplierItemCode), 48, "item code")];
             tx.Add(Segment(elementSep, "PO1",
                 [line.LineNumber.ToString(CultureInfo.InvariantCulture),
                 Num(line.Quantity),
@@ -199,7 +199,7 @@ public sealed class X12TransformService : ITransformService
                 .. supplierCode]));
 
             if (!string.IsNullOrWhiteSpace(line.Description))
-                tx.Add(Segment(elementSep, "PID", "F", "", "", "", Sanitize(line.Description)));
+                tx.Add(Segment(elementSep, "PID", "F", "", "", "", Text(line.Description, 80)));
         }
 
         // CTT*{lineCount} — transaction totals (number of PO1 line items).
@@ -241,10 +241,10 @@ public sealed class X12TransformService : ITransformService
         if (string.IsNullOrWhiteSpace(name))
             return;
 
-        tx.Add(Segment(elementSep, "N1", qualifier, Sanitize(name)));
+        tx.Add(Segment(elementSep, "N1", qualifier, Text(name, 60)));
 
         if (!string.IsNullOrWhiteSpace(street))
-            tx.Add(Segment(elementSep, "N3", Sanitize(street)));
+            tx.Add(Segment(elementSep, "N3", StandardCodes.Cut(Sanitize(street), 55, 2)));
 
         if (!string.IsNullOrWhiteSpace(city)
             || !string.IsNullOrWhiteSpace(postal)
@@ -252,14 +252,14 @@ public sealed class X12TransformService : ITransformService
         {
             // N4*{city}*{state}*{postal}*{country} — state (N402) intentionally left empty.
             tx.Add(Segment(elementSep, "N4",
-                Sanitize(city ?? string.Empty),
+                Text(city, 30),
                 string.Empty,
-                Sanitize(postal ?? string.Empty),
+                Text(postal, 15),
                 StandardCodes.Country(country) ?? string.Empty));
         }
 
         if (!string.IsNullOrWhiteSpace(vatId))
-            tx.Add(Segment(elementSep, "REF", "VX", Sanitize(vatId)));
+            tx.Add(Segment(elementSep, "REF", "VX", StandardCodes.Id(Sanitize(vatId), 30, "VAT number")));
 
         // PER*OC (order contact) — carries the per-party deliver-to contact + email + phone.
         if (Per(elementSep, "OC", deliverTo, email, phone) is { } contact)
@@ -271,9 +271,9 @@ public sealed class X12TransformService : ITransformService
     {
         if (string.IsNullOrWhiteSpace(email) && string.IsNullOrWhiteSpace(phone))
             return null;
-        string[] em = string.IsNullOrWhiteSpace(email) ? [] : ["EM", Sanitize(email)];
-        string[] te = string.IsNullOrWhiteSpace(phone) ? [] : ["TE", Sanitize(phone)];
-        return Segment(sep, "PER", [function, Sanitize(name ?? string.Empty), .. em, .. te]);
+        string[] em = string.IsNullOrWhiteSpace(email) ? [] : ["EM", Text(email, 80)];
+        string[] te = string.IsNullOrWhiteSpace(phone) ? [] : ["TE", Text(phone, 80)];
+        return Segment(sep, "PER", [function, Text(name, 60), .. em, .. te]);
     }
 
     // ── Segment builders ─────────────────────────────────────────────────────
@@ -360,4 +360,7 @@ public sealed class X12TransformService : ITransformService
     /// ever runs the substitution on free text in practice.
     /// </summary>
     private static string Sanitize(string value) => X12Sanitizer.SanitizeFreeText(value);
+
+    /// <summary>Sanitized free text, cut to its element's maximum length.</summary>
+    private static string Text(string? s, int max) => StandardCodes.Cut(Sanitize(s ?? ""), max).FirstOrDefault() ?? "";
 }

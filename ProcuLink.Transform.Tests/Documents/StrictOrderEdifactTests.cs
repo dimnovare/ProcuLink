@@ -42,4 +42,15 @@ public class StrictOrderEdifactTests
         var text = await StrictOrderFixture.Render("edifact-orders", StrictOrderFixture.Read(without: [FieldMeanings.DeliveryName]));
         text.Should().Contain("'NAD+ST+++Example Buyer Ltd+Warehouse Road 3+Hamburg++20095+DE'");
     }
+
+    [Fact]
+    public async Task Over_long_text_is_split_over_its_repeats_then_cut()
+    {
+        var n = string.Concat(Enumerable.Repeat("Example Buyer ", 6)).Trim();
+        var d = string.Concat(Enumerable.Repeat("Hex bolt ", 10)).Trim();
+        var read = StrictOrderFixture.With(StrictOrderFixture.With(FieldMeanings.SenderName, n), FieldMeanings.LineDescription, d);
+        var segs = (await StrictOrderFixture.Render("edifact-orders", read)).Split('\'');
+        segs.Should().Contain($"NAD+BY+++{n[..35]}:{n[35..70]}:{n[70..]}+Example Street 1+Berlin++10115+DE")
+            .And.Contain($"IMD+F++:::{d[..35]}:{d[35..70]}");
+    }
 }

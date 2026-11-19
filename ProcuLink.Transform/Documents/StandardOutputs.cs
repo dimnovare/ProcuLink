@@ -72,7 +72,8 @@ public static class StandardOutputs
         => RenderAsync(output.Standard!, read, fields, output.TableKey, orgId, ct, DocumentJson.Deserialize<OutputNodeTemplate>(output.TemplateJson).Envelope);
 
     /// <summary>
-    /// The standard file, or <c>output_invalid</c>: with the needs sentence when the read lacks a need, without a detail
+    /// The standard file, or <c>output_invalid</c>: with the needs sentence when the read lacks a need, with the
+    /// <see cref="ValueTooLongException"/> sentence when an identifier is too long for the standard, without a detail
     /// for an unknown id or anything a writer still refuses, an amount too large for its arithmetic included (its messages are not approved copy). Never throws for either.
     /// The order standards write the sender and receiver IDs in <paramref name="envelope"/>, the placeholders without it.
     /// </summary>
@@ -107,6 +108,10 @@ public static class StandardOutputs
             // A flow's cXML declares its DTD (the legacy order path declares one only when configured).
             var cxml = standard.Writer == OutputFormat.CXml ? CxmlTransformService.StandardConfig(envelope?.Cxml) : null;
             return new(await writer.TransformAsync(order!, standard.Writer, ct, cxml), null, null);
+        }
+        catch (ValueTooLongException ex)
+        {
+            return new(null, "output_invalid", ex.Message);
         }
         catch (Exception ex) when (ex is TransformValidationException or ArgumentException or InvalidOperationException or XmlException or OverflowException)
         {

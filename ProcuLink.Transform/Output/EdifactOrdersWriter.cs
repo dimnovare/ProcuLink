@@ -9,13 +9,19 @@ public static class EdifactOrdersWriter
 {
     private static string Esc(string? text) => string.Concat((text ?? "").Select(c => char.IsControl(c) ? " " : ":+?'".Contains(c) ? "?" + c : c.ToString()));
 
+    /// <summary>Free text split over its <paramref name="repeats"/> components of <paramref name="max"/> (counted before release), the rest cut.</summary>
+    private static string Text(string? text, int max, int repeats = 1) => string.Join(":", StandardCodes.Cut(text, max, repeats).Select(Esc));
+
+    /// <summary>An identifier, refused when longer than <paramref name="max"/> (counted before release), never cut.</summary>
+    private static string Id(string? value, int max, string what) => Esc(StandardCodes.Id(value, max, what));
+
     // Full read precision, as the X12 850 writes it.
     private static string Num(decimal d) => d.ToString(CultureInfo.InvariantCulture);
 
     /// <summary><c>NAD+{q}+++{name}+{street}+{city}++{postcode}+{iso}</c>, trailing empty elements left out.</summary>
     private static string Nad(string qualifier, string name, string? street, string? city, string? postcode, string? country)
     {
-        string[] elements = [qualifier, "", "", Esc(name), Esc(street), Esc(city), "", Esc(postcode), StandardCodes.Country(country) ?? ""];
+        string[] elements = [qualifier, "", "", Text(name, 35, 5), Text(street, 35, 3), Text(city, 35), "", Text(postcode, 9), StandardCodes.Country(country) ?? ""];
         var count = elements.Length;
         while (elements[count - 1].Length == 0) count--;
         return "NAD+" + string.Join("+", elements.Take(count));
@@ -23,7 +29,7 @@ public static class EdifactOrdersWriter
 
     /// <summary>A UNB party: the ID (blank → the X12 placeholder, a known limit shared with it), then <c>:qualifier</c> only when one is given.</summary>
     private static string Party(string? id, string? qualifier, string fallback) =>
-        Esc(string.IsNullOrWhiteSpace(id) ? fallback : id.Trim()) + (string.IsNullOrWhiteSpace(qualifier) ? "" : ":" + Esc(qualifier.Trim()));
+        Text(string.IsNullOrWhiteSpace(id) ? fallback : id.Trim(), 35) + (string.IsNullOrWhiteSpace(qualifier) ? "" : ":" + Text(qualifier.Trim(), 4));
 
     public static string Write(PurchaseOrderEntity order, EdifactEnvelope? envelope = null)
     {
@@ -35,7 +41,7 @@ public static class EdifactOrdersWriter
         var message = new List<string>
         {
             "UNH+1+ORDERS:D:96A:UN",
-            $"BGM+220+{Esc(order.PoNumber)}+9",
+            $"BGM+220+{Id(order.PoNumber, 35, "order number")}+9",
             $"DTM+137:{order.OrderDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}:102",
         };
         if (order.RequestedDeliveryDate is { } delivery) message.Add($"DTM+2:{delivery.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}:102");
@@ -44,12 +50,12 @@ public static class EdifactOrdersWriter
         if (OrderHeaderReader.ExtractBuyerName(order) is { } buyer && !string.IsNullOrWhiteSpace(buyer))
         {
             message.Add(Nad("BY", buyer, order.BillToStreet, order.BillToCity, order.BillToPostalCode, order.BillToCountry));
-            if (!string.IsNullOrWhiteSpace(order.BuyerTaxId)) message.Add($"RFF+VA:{Esc(order.BuyerTaxId)}");
+            if (!string.IsNullOrWhiteSpace(order.BuyerTaxId)) message.Add($"RFF+VA:{Id(order.BuyerTaxId, 35, "VAT number")}");
             if (!string.IsNullOrWhiteSpace(order.ContactName) || !string.IsNullOrWhiteSpace(order.ContactEmail) || !string.IsNullOrWhiteSpace(order.ContactPhone))
             {
-                message.Add(string.IsNullOrWhiteSpace(order.ContactName) ? "CTA+OC" : $"CTA+OC+:{Esc(order.ContactName)}");
-                if (!string.IsNullOrWhiteSpace(order.ContactEmail)) message.Add($"COM+{Esc(order.ContactEmail)}:EM");
-                if (!string.IsNullOrWhiteSpace(order.ContactPhone)) message.Add($"COM+{Esc(order.ContactPhone)}:TE");
+                message.Add(string.IsNullOrWhiteSpace(order.ContactName) ? "CTA+OC" : $"CTA+OC+:{Text(order.ContactName, 35)}");
+                if (!string.IsNullOrWhiteSpace(order.ContactEmail)) message.Add($"COM+{Text(order.ContactEmail, 512)}:EM");
+                if (!string.IsNullOrWhiteSpace(order.ContactPhone)) message.Add($"COM+{Text(order.ContactPhone, 512)}:TE");
             }
         }
         var supplier = OrderHeaderReader.SupplierParty(order);
@@ -58,15 +64,15 @@ public static class EdifactOrdersWriter
         {
             message.Add(Nad("SU", supplierName, supplier?.Street, supplier?.City, supplier?.PostalCode, supplier?.Country));
             var supplierVat = string.IsNullOrWhiteSpace(order.SellerTaxId) ? supplier?.Vat : order.SellerTaxId;
-            if (!string.IsNullOrWhiteSpace(supplierVat)) message.Add($"RFF+VA:{Esc(supplierVat)}");
+            if (!string.IsNullOrWhiteSpace(supplierVat)) message.Add($"RFF+VA:{Id(supplierVat, 35, "VAT number")}");
         }
         if (OrderHeaderReader.ShipToName(order) is { } shipTo)
             message.Add(Nad("ST", shipTo, order.ShipToStreet, order.ShipToCity, order.ShipToPostalCode, order.ShipToCountry));
         message.Add($"CUX+2:{Esc(currency)}:9");
         foreach (var line in lines)
         {
-            message.Add($"LIN+{line.LineNumber.ToString(CultureInfo.InvariantCulture)}++{Esc(line.SupplierItemCode)}:SA");
-            if (!string.IsNullOrWhiteSpace(line.Description)) message.Add($"IMD+F++:::{Esc(line.Description)}");
+            message.Add($"LIN+{line.LineNumber.ToString(CultureInfo.InvariantCulture)}++{Id(line.SupplierItemCode, 35, "item code")}:SA");
+            if (!string.IsNullOrWhiteSpace(line.Description)) message.Add($"IMD+F++:::{Text(line.Description, 35, 2)}");
             message.Add($"QTY+21:{Num(line.Quantity)}:{StandardCodes.Rec20Unit(line.Unit)}");
             message.Add($"PRI+AAA:{StandardCodes.Price(line.UnitPrice)}");
         }

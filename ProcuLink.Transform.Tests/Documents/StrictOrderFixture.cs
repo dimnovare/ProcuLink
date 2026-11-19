@@ -80,6 +80,28 @@ internal static class StrictOrderFixture
                 [.. Lines.Select(Row)], true)]);
     }
 
+    /// <summary>
+    /// <paramref name="read"/> with one meaning's value replaced, or added keyed by the meaning. A <c>line_</c> meaning
+    /// takes one value per row (a single value fills every row).
+    /// </summary>
+    public static ReadResult With(ReadResult read, string meaning, params string[] values)
+    {
+        if (!meaning.StartsWith("line_"))
+            return new(read.KindLabel, read.Fields.Any(f => f.Meaning == meaning)
+                ? [.. read.Fields.Select(f => f.Meaning == meaning ? f with { Value = values[0] } : f)]
+                : [.. read.Fields, new ReadField(meaning, meaning, values[0], "text", meaning, 1, null, false, true, false)], read.Tables, read.Truncated);
+        var table = read.Tables[0];
+        var key = table.Columns.FirstOrDefault(c => c.Meaning == meaning)?.Key ?? meaning;
+        var lines = table with
+        {
+            Columns = table.Columns.Any(c => c.Key == key) ? table.Columns : [.. table.Columns, new ReadColumn(key, meaning, "text", meaning)],
+            Rows = [.. table.Rows.Select((r, i) => new ReadRow(new Dictionary<string, ReadCell>(r.Cells) { [key] = new(values[values.Length == 1 ? 0 : i], 1, null, false, false) }))],
+        };
+        return new(read.KindLabel, read.Fields, [lines, .. read.Tables.Skip(1)], read.Truncated);
+    }
+
+    public static ReadResult With(string meaning, params string[] values) => With(Read(), meaning, values);
+
     /// <summary>The standard's file for <paramref name="read"/> (default: the full fixture); asserts it was written.</summary>
     public static async Task<string> Render(string standardId, ReadResult? read = null)
     {

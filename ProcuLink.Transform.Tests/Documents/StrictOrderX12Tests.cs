@@ -2,6 +2,7 @@ using FluentAssertions;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Services;
 using ProcuLink.Transform.Conformance;
+using ProcuLink.Transform.Documents;
 using Xunit;
 
 namespace ProcuLink.Transform.Tests.Documents;
@@ -42,5 +43,23 @@ public class StrictOrderX12Tests
     {
         var segs = (await StrictOrderFixture.Render("x12-850", StrictOrderFixture.Read(without: [FieldMeanings.DeliveryCountry]))).Split('~');
         segs.Should().Contain("N4*Hamburg**20095").And.NotContain(s => s.EndsWith('*'));
+    }
+
+    [Fact]
+    public async Task Over_long_street_is_split_over_N301_and_N302()
+    {
+        var s = string.Concat(Enumerable.Repeat("Example Street ", 5)).Trim();
+        var segs = (await StrictOrderFixture.Render("x12-850", StrictOrderFixture.With(FieldMeanings.SenderStreet, s))).Split('~');
+        segs.SkipWhile(x => x != "N1*BT*Example Buyer Ltd").ElementAt(1).Should().Be($"N3*{s[..55]}*{s[55..]}");
+    }
+
+    [Fact]
+    public async Task An_over_long_order_number_is_refused_never_cut()
+    {
+        var po = "PO-2026-0042-" + new string('0', 10);
+        var read = StrictOrderFixture.With(FieldMeanings.DocumentNumber, po);
+        var x12 = await StandardOutputs.RenderAsync("x12-850", read, FlowFieldList.Empty, "lines", Guid.Empty, CancellationToken.None);
+        (x12.Ok, x12.Error, x12.Detail).Should().Be((false, "output_invalid", "The order number is longer than this standard allows (22 characters)."));
+        (await StrictOrderFixture.Render("edifact-orders", read)).Should().Contain($"BGM+220+{po}+9");
     }
 }
