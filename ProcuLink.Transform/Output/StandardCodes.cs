@@ -26,6 +26,13 @@ public static partial class StandardCodes
     public static string Id(string? value, int max, string what) =>
         (value ?? "").Length <= max ? value ?? "" : throw new ValueTooLongException(what, max);
 
+    /// <summary>A read Peppol ID split into its scheme and id, or null when it is not in that shape.</summary>
+    public static (string Scheme, string Id)? Endpoint(string? value) =>
+        PeppolId().Match(value?.Trim() ?? "") is { Success: true } m ? (m.Groups[1].Value, m.Groups[2].Value) : null;
+
+    /// <summary>The GLN in a read Peppol ID (scheme 0088), or null: the one scheme EDIFACT and X12 have a code for.</summary>
+    public static string? Gln(string? value) => Endpoint(value) is ("0088", var id) ? id : null;
+
     // Box and pack use the Rec 21 package codes in the X-prefixed form the combined Rec 20/21 list (and Peppol's code
     // list) carries: plain BX / PK were removed from Rec 20. Piece words map to H87 ("piece"), which is what "pcs" says.
     // Words in English, Estonian, German, Finnish, Latvian, Lithuanian and Russian. The piece row comes first, so its
@@ -110,6 +117,7 @@ public static partial class StandardCodes
 
     [GeneratedRegex("^[A-Z0-9]{2,3}$")] private static partial Regex Rec20Shape();
     [GeneratedRegex("^[A-Z0-9]{2}$")] private static partial Regex X12Shape();
+    [GeneratedRegex(@"^(\d{4}):(\S+)$")] private static partial Regex PeppolId();
     [GeneratedRegex("^[A-Z]{2}$")] private static partial Regex Alpha2();
 }
 

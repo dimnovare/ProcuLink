@@ -137,12 +137,15 @@ public sealed class UblOrderTransformService : ITransformService
             new XElement(Cbc + "ID",                  order.PoNumber),
             new XElement(Cbc + "IssueDate",           order.OrderDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
             new XElement(Cbc + "DocumentCurrencyCode", currency),
+            IsBlank(order.BuyerOrderRef) ? null
+                : new XElement(Cac + "OrderDocumentReference", new XElement(Cbc + "ID", order.BuyerOrderRef)),
 
             // ── BuyerCustomerParty ────────────────────────────────────────────
             // PartyName + a null-gated PostalAddress (from BillTo*) + null-gated Contact (from
             // Contact*). Null helpers are dropped by the Party XElement → byte-identical when absent.
             new XElement(Cac + "BuyerCustomerParty",
                 new XElement(Cac + "Party",
+                    BuildEndpointId(OrderHeaderReader.BuyerParty(order)?.EdiCode),
                     new XElement(Cac + "PartyName",
                         new XElement(Cbc + "Name", buyerName)),
                     BuildPostalAddress(order.BillToStreet, order.BillToCity,
@@ -156,17 +159,20 @@ public sealed class UblOrderTransformService : ITransformService
             // supplier's EdiCode is provably a GLN; otherwise the element is absent entirely.
             new XElement(Cac + "SellerSupplierParty",
                 new XElement(Cac + "Party",
-                    BuildEndpointId(order.SupplierId is null ? null : order.Supplier?.EdiCode),
+                    BuildEndpointId(supplierParty?.EdiCode)
+                        ?? BuildGlnEndpointId(order.SupplierId is null ? null : order.Supplier?.EdiCode),
                     new XElement(Cac + "PartyName",
                         new XElement(Cbc + "Name", supplierName)),
                     BuildPostalAddress(supplierParty?.Street, supplierParty?.City, supplierParty?.PostalCode, supplierParty?.Country),
                     BuildPartyTaxScheme(FirstNonBlank(order.SellerTaxId, supplierParty?.Vat))))
         );
 
-        // UBL 2.1 Order sequence after the parties: Delivery → TaxTotal → AnticipatedMonetaryTotal → OrderLine+.
+        // UBL 2.1 Order sequence after the parties: Delivery → PaymentTerms → TaxTotal → AnticipatedMonetaryTotal → OrderLine+.
         // Each block is null-gated, so an order without the data emits none of them.
         var lines = order.Lines.OrderBy(l => l.LineNumber).ToList();
-        root.Add(BuildDelivery(order), BuildTotals(order, lines, currency));
+        root.Add(BuildDelivery(order),
+            IsBlank(order.PaymentTerms) ? null : new XElement(Cac + "PaymentTerms", new XElement(Cbc + "Note", order.PaymentTerms)),
+            BuildTotals(order, lines, currency));
 
         // One OrderLine per purchase-order line, sorted deterministically.
         foreach (var line in lines)
@@ -234,7 +240,7 @@ public sealed class UblOrderTransformService : ITransformService
                 Amount("PayableAmount", gross));
     }
 
-    private static decimal LineAmount(PurchaseOrderLineEntity l) => Math.Round(l.Quantity * l.UnitPrice, 2, MidpointRounding.AwayFromZero);
+    private static decimal LineAmount(PurchaseOrderLineEntity l) => l.LineAmount ?? Math.Round(l.Quantity * l.UnitPrice, 2, MidpointRounding.AwayFromZero);
 
     /// <summary>
     /// Builds a <c>cac:Contact</c> (Name / Telephone / ElectronicMail) from the order's ordering
@@ -303,7 +309,7 @@ public sealed class UblOrderTransformService : ITransformService
     /// An absent endpoint is a known gap; a wrong one routes the document to the wrong party or
     /// fails the receiver's validation while claiming to be identified.</para>
     /// </summary>
-    private static XElement? BuildEndpointId(string? ediCode)
+    private static XElement? BuildGlnEndpointId(string? ediCode)
     {
         var gln = ExtractGln(ediCode);
         if (gln is null) return null;
@@ -362,6 +368,11 @@ public sealed class UblOrderTransformService : ITransformService
         return sum % 10 == 0;
     }
 
+    /// <summary>A read Peppol ID (scheme and id) as <c>cbc:EndpointID</c>: the reader stated the scheme, so it is not a guess.</summary>
+    private static XElement? BuildEndpointId(string? peppolId) => StandardCodes.Endpoint(peppolId) is var (scheme, id)
+        ? new XElement(Cbc + "EndpointID", new XAttribute("schemeID", scheme), id)
+        : null;
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private static XElement BuildOrderLine(PurchaseOrderLineEntity line, string currency)
@@ -391,8 +402,15 @@ public sealed class UblOrderTransformService : ITransformService
 
                 new XElement(Cac + "Item",
                     new XElement(Cbc + "Name", line.Description ?? string.Empty),
+                    IsBlank(line.BuyerItemCode) ? null
+                        : new XElement(Cac + "BuyersItemIdentification", new XElement(Cbc + "ID", line.BuyerItemCode)),
                     new XElement(Cac + "SellersItemIdentification",
-                        new XElement(Cbc + "ID", line.SupplierItemCode ?? string.Empty)))));
+                        new XElement(Cbc + "ID", line.SupplierItemCode ?? string.Empty)),
+                    // No category ID is claimed: the rate was read, the category (standard, reduced, exempt) was not.
+                    line.TaxRate is not { } rate ? null
+                        : new XElement(Cac + "ClassifiedTaxCategory",
+                            new XElement(Cbc + "Percent", rate.ToString("0.##", CultureInfo.InvariantCulture)),
+                            new XElement(Cac + "TaxScheme", new XElement(Cbc + "ID", "VAT"))))));
     }
 
     /// <summary>

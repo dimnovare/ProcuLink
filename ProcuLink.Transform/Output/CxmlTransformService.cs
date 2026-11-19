@@ -450,7 +450,8 @@ public sealed class CxmlTransformService : ITransformService
                 : null,
 
             new XElement("ItemID",
-                new XElement("SupplierPartID", line.SupplierItemCode ?? string.Empty)),
+                new XElement("SupplierPartID", line.SupplierItemCode ?? string.Empty),
+                string.IsNullOrWhiteSpace(line.BuyerItemCode) ? null : new XElement("BuyerPartID", line.BuyerItemCode)),
 
             new XElement("ItemDetail",
                 new XElement("UnitPrice",
@@ -480,7 +481,11 @@ public sealed class CxmlTransformService : ITransformService
     /// </summary>
     private static XElement? BuildLineTax(PurchaseOrderLineEntity line, string currency)
     {
-        if (line.TaxAmount is not { } taxAmount)
+        // No captured amount but a read rate: the amount is the rate of the line amount (q × p when none was read).
+        var derived = line.TaxRate is { } rate
+            ? Math.Round((line.LineAmount ?? line.Quantity * line.UnitPrice) * rate / 100m, 2, MidpointRounding.AwayFromZero)
+            : (decimal?)null;
+        if ((line.TaxAmount ?? derived) is not { } taxAmount)
             return null;
 
         // Prefer the captured rate; treat 0/absent as "not stated" (the strict-mode convention) and

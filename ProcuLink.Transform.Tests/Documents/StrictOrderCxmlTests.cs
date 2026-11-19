@@ -40,6 +40,17 @@ public class StrictOrderCxmlTests
     }
 
     [Fact]
+    public async Task Buyer_codes_and_line_tax_have_their_homes()
+    {
+        var read = StrictOrderFixture.With(StrictOrderFixture.With(FieldMeanings.LineBuyerItemCode, "BUY-1", "BUY-2", "BUY-3"), FieldMeanings.LineTaxRate, "19");
+        var item = XDocument.Parse(await StrictOrderFixture.Render("cxml-1-2", read)).Descendants("ItemOut").First();
+
+        item.Element("ItemID")!.Elements().Select(e => e.Name.LocalName).Should().Equal("SupplierPartID", "BuyerPartID");
+        item.Element("ItemID")!.Element("BuyerPartID")!.Value.Should().Be("BUY-1");
+        (item.Element("Tax")!.Element("Money")!.Value, item.Element("Tax")!.Element("Description")!.Value).Should().Be(("4.75", "VAT 19%"));
+    }
+
+    [Fact]
     public async Task An_incomplete_address_drops_only_its_postal_part_and_no_buyer_is_refused()
     {
         var text = await StrictOrderFixture.Render("cxml-1-2", StrictOrderFixture.Read(without: [FieldMeanings.DeliveryStreet]));

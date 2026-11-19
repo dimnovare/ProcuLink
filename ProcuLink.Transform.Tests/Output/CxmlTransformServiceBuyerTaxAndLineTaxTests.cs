@@ -168,13 +168,15 @@ public class CxmlTransformServiceBuyerTaxAndLineTaxTests
     }
 
     [Fact]
-    public async Task LineTaxAmount_Absent_NoTaxBlock_ByteIdentical()
+    public async Task LineTaxAmount_Absent_RateAlone_TaxIsTheRateOfTheLine()
     {
         var order = BuildOrder();          // no TaxAmount on the line
-        order.Lines[0].TaxRate = 25m;      // rate alone (no amount) → still no <Tax> (amount is what we emit)
-
         var xml = await RenderAsync(order);
-        xml.Should().NotContain("<Tax>", "with no captured tax AMOUNT the ItemDetail is byte-identical to today");
+        xml.Should().NotContain("<Tax>", "with neither a tax amount nor a rate there is no Tax block");
+
+        order.Lines[0].TaxRate = 25m;      // rate alone: the amount is 25% of 1 × 3337.08
+        xml = await RenderAsync(order);
+        xml.Should().Contain("834.27").And.Contain("VAT 25%");
     }
 
     [Fact]
