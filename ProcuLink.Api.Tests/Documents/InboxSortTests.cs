@@ -68,13 +68,13 @@ public sealed class InboxSortTests(DocumentEngineTestFactory factory) : IClassFi
     };
 
     /// <summary>A person flow of <paramref name="org"/>, holding one earlier invoice when <paramref name="holdsInvoice"/>.</summary>
-    private async Task<Flow> FlowAsync(Guid org, string name, bool holdsInvoice)
+    private async Task<Flow> FlowAsync(Guid org, string name, bool holdsInvoice, bool confirmed = true)
     {
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
         var flow = new Flow
         {
-            Id = Guid.NewGuid(), OrgId = org, Name = name, FieldsJson = FlowFields, FieldsConfirmed = true,
+            Id = Guid.NewGuid(), OrgId = org, Name = name, FieldsJson = FlowFields, FieldsConfirmed = confirmed,
             CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
         };
         db.Flows.Add(flow);
@@ -143,6 +143,23 @@ public sealed class InboxSortTests(DocumentEngineTestFactory factory) : IClassFi
         doc.BillingUnits.Should().Be(1);
         Query(db => db.Set<FlowReadCall>().Count(c => c.DocumentId == id)).Should().Be(4);
         factory.Enqueued<SendDocumentJob>().Should().Be(sends);
+    }
+
+    [Fact]
+    public async Task A_flow_left_before_its_fields_were_confirmed_never_catches_an_inbox_document()
+    {
+        var org = Guid.NewGuid();
+        var draft = await FlowAsync(org, "Left behind", holdsInvoice: true, confirmed: false);
+        await RememberAsync(org, draft.Id);
+
+        var (inbox, a) = await InboxDocAsync(org);
+        await ReadAsync(org, a, Result("Invoice"));
+        (Doc(a).FlowId, Doc(a).StatusReason).Should().Be((inbox, "new_kind"));
+
+        var live = await FlowAsync(org, "Supplier invoices", holdsInvoice: true);
+        var (_, b) = await InboxDocAsync(org);
+        await ReadAsync(org, b, Result("Invoice"));
+        (Doc(b).FlowId, Doc(b).SortUnconfirmed).Should().Be((live.Id, true));
     }
 
     [Fact]
