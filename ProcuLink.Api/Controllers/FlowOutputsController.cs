@@ -320,7 +320,9 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
             var flow = await db.Flows.AsNoTracking().FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == doc.FlowId, ct);
             if (flow is null) return FlowNotFound();
             if (request.Template?.Envelope is { } e && !PartnerIdsFit(e)) return Invalid("partner_ids");
-            render = await StandardOutputs.RenderAsync(standard, read, (await FlowConfigLoader.LiveAsync(db, flow, ct)).Fields, request.TableKey, orgId, ct, request.Template?.Envelope);
+            // A test reaches the partner's system too, and its duplicate check runs on tests: a fresh interchange number.
+            var controlNumber = StandardOutputs.Find(standard)?.NeedsControlNumber == true ? await InterchangeNumbers.NextAsync(db, ct) : (long?)null;
+            render = await StandardOutputs.RenderAsync(standard, read, (await FlowConfigLoader.LiveAsync(db, flow, ct)).Fields, request.TableKey, orgId, ct, request.Template?.Envelope, controlNumber);
         }
         else
         {

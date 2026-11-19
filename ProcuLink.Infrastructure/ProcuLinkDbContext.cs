@@ -2416,6 +2416,15 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasOne<Organisation>().WithMany().HasForeignKey(i => i.OrgId).OnDelete(DeleteBehavior.Cascade);
         });
 
+        modelBuilder.Entity<InterchangeNumber>(b =>
+        {
+            b.ToTable("interchange_numbers");
+            b.HasKey(n => n.Id);
+            // Starts at 2: the null path (preview, the legacy order delivery) writes 000000001 under the same default sender ID.
+            b.Property(n => n.Id).HasColumnName("id").HasIdentityOptions(startValue: 2);
+            b.Property(n => n.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+        });
+
         // ── Organisation query filters ───────────────────────────────────────
         // LAST, deliberately: this walks every entity type configured above and attaches the
         // org filter to each one that carries an organisation column. Running it here means a
