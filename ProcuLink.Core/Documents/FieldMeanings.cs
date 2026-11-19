@@ -37,6 +37,7 @@ public static class FieldMeanings
     public const string DeliveryCity = "delivery_city";
     public const string DeliveryPostcode = "delivery_postcode";
     public const string DeliveryCountry = "delivery_country";
+    public const string PaymentTerms = "payment_terms";
 
     public const string LineDescription = "line_description";
     public const string LineQuantity = "line_quantity";
@@ -45,6 +46,7 @@ public static class FieldMeanings
     public const string LineAmount = "line_amount";
     public const string LineTaxRate = "line_tax_rate";
     public const string LineItemCode = "line_item_code";
+    public const string LineBuyerItemCode = "line_buyer_item_code";
     public const string LineNumber = "line_number";
 
     public static readonly IReadOnlyList<string> All =
@@ -55,8 +57,8 @@ public static class FieldMeanings
         SenderEndpointId, ReceiverEndpointId,
         SenderStreet, SenderCity, SenderPostcode, ReceiverStreet, ReceiverCity, ReceiverPostcode,
         SenderContactName, SenderContactPhone, SenderContactEmail,
-        DeliveryName, DeliveryStreet, DeliveryCity, DeliveryPostcode, DeliveryCountry,
-        LineDescription, LineQuantity, LineUnit, LineUnitPrice, LineAmount, LineTaxRate, LineItemCode, LineNumber,
+        DeliveryName, DeliveryStreet, DeliveryCity, DeliveryPostcode, DeliveryCountry, PaymentTerms,
+        LineDescription, LineQuantity, LineUnit, LineUnitPrice, LineAmount, LineTaxRate, LineItemCode, LineBuyerItemCode, LineNumber,
     ];
 
     /// <summary>Plain names (lower-case letters and digits only) that a column or output leaf is commonly called, per meaning. Data for auto-binding.</summary>
@@ -96,6 +98,7 @@ public static class FieldMeanings
         [DeliveryCity] = ["deliverycity", "shiptocity", "consigneecity", "lieferort"],
         [DeliveryPostcode] = ["deliverypostcode", "deliveryzip", "deliverypostalcode", "shiptopostcode", "shiptozip"],
         [DeliveryCountry] = ["deliverycountry", "shiptocountry", "consigneecountry", "lieferland"],
+        [PaymentTerms] = ["paymentterms", "termsofpayment", "paymentconditions", "zahlungsbedingungen", "maksetingimused"],
         [LineDescription] = ["description", "itemdescription", "linedescription", "productname", "item", "artikelbezeichnung", "nimetus"],
         [LineQuantity] = ["quantity", "qty", "amountordered", "menge", "kogus"],
         [LineUnit] = ["unit", "uom", "unitofmeasure", "einheit", "uhik"],
@@ -103,6 +106,7 @@ public static class FieldMeanings
         [LineAmount] = ["lineamount", "linetotal", "amount", "extendedprice", "gesamtpreis", "summa"],
         [LineTaxRate] = ["taxrate", "vatrate", "vatpercent", "taxpercent", "mwstsatz"],
         [LineItemCode] = ["itemcode", "sku", "partnumber", "articlenumber", "productcode", "artikelnummer", "tootekood"],
+        [LineBuyerItemCode] = ["buyeritemcode", "buyerpartnumber", "customeritemcode", "customerpartnumber", "customerarticlenumber"],
         [LineNumber] = ["linenumber", "lineno", "position", "pos", "positionsnummer"],
     };
 
@@ -143,6 +147,7 @@ public static class FieldMeanings
         [DeliveryCity] = "the city of the delivery or ship-to address.",
         [DeliveryPostcode] = "the postcode of the delivery or ship-to address.",
         [DeliveryCountry] = "the country of the delivery or ship-to address.",
+        [PaymentTerms] = "the payment terms as printed, such as '14 days net'.",
         [LineDescription] = "a line's full description. A description continues on the printed lines below it until the next line starts: join the pieces.",
         [LineQuantity] = "a line's quantity: one number, without its unit. When several quantities are printed (ordered, delivered, back-ordered), the one the line amount is charged for.",
         [LineUnit] = "a line's unit of measure.",
@@ -150,6 +155,7 @@ public static class FieldMeanings
         [LineAmount] = "a line's total amount: one number.",
         [LineTaxRate] = "a line's tax rate.",
         [LineItemCode] = "a line's item, article or part number.",
+        [LineBuyerItemCode] = "a line's item code in the buyer's own numbering, such as 'our item no.' on an order or 'your item no.' on an invoice. Not the supplier's article number.",
         [LineNumber] = "a line's position number.",
     };
 

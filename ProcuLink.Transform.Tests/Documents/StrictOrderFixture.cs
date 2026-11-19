@@ -41,7 +41,7 @@ internal static class StrictOrderFixture
     [
         ("PO number", PoNumber, FieldMeanings.DocumentNumber), ("Order date", OrderDate, FieldMeanings.IssueDate),
         ("Delivery date", DeliveryDate, FieldMeanings.DeliveryDate), ("Currency", Currency, FieldMeanings.Currency),
-        ("Payment terms", PaymentTerms, null),
+        ("Payment terms", PaymentTerms, FieldMeanings.PaymentTerms),
         ("Buyer", BuyerName, FieldMeanings.SenderName), ("Buyer street", BuyerStreet, FieldMeanings.SenderStreet),
         ("Buyer postcode", BuyerPostcode, FieldMeanings.SenderPostcode), ("Buyer city", BuyerCity, FieldMeanings.SenderCity),
         ("Buyer country", BuyerCountry, FieldMeanings.SenderCountry), ("Buyer VAT", BuyerVat, FieldMeanings.SenderVatId),
@@ -101,6 +101,12 @@ internal static class StrictOrderFixture
     }
 
     public static ReadResult With(string meaning, params string[] values) => With(Read(), meaning, values);
+
+    /// <summary>The fixture plus the values the writers once dropped: order reference, buyer item codes, tax rate and Peppol IDs.</summary>
+    public static ReadResult WithEveryValue() =>
+        With(With(With(With(With(Read(), FieldMeanings.OrderReference, "FRAME-2026-01"),
+            FieldMeanings.LineBuyerItemCode, "BUY-1", "BUY-2", "BUY-3"), FieldMeanings.LineTaxRate, "19"),
+            FieldMeanings.SenderEndpointId, "0191:12345678"), FieldMeanings.ReceiverEndpointId, "0088:0000000000000");
 
     /// <summary>The standard's file for <paramref name="read"/> (default: the full fixture); asserts it was written.</summary>
     public static async Task<string> Render(string standardId, ReadResult? read = null)

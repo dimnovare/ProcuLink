@@ -44,17 +44,25 @@ public static partial class StandardOrderAdapter
             SubTotal = a.OptionalNumber(FieldMeanings.TotalNet),
             TaxTotal = a.OptionalNumber(FieldMeanings.TotalTax),
             GrandTotal = a.OptionalNumber(FieldMeanings.TotalGross),
-            // The entity has no supplier address columns: it rides on the "supplier" party.
-            Parties = new[] { FieldMeanings.ReceiverStreet, FieldMeanings.ReceiverCity, FieldMeanings.ReceiverPostcode, FieldMeanings.ReceiverCountry, FieldMeanings.ReceiverVatId }
-                .Any(m => a.Text(m) is not null)
-                ? [new OrderParty
-                {
-                    OrgId = orgId, Role = "supplier", Name = a.Text(FieldMeanings.ReceiverName),
-                    Street = a.Text(FieldMeanings.ReceiverStreet), City = a.Text(FieldMeanings.ReceiverCity),
-                    PostalCode = a.Text(FieldMeanings.ReceiverPostcode), Country = a.Text(FieldMeanings.ReceiverCountry),
-                    Vat = a.Text(FieldMeanings.ReceiverVatId),
-                }]
-                : [],
+            BuyerOrderRef = a.Text(FieldMeanings.OrderReference),
+            PaymentTerms = a.Text(FieldMeanings.PaymentTerms),
+            // The entity has no supplier address columns: it rides on the "supplier" party; a Peppol ID on its party.
+            Parties =
+            [
+                .. new[] { FieldMeanings.ReceiverStreet, FieldMeanings.ReceiverCity, FieldMeanings.ReceiverPostcode, FieldMeanings.ReceiverCountry, FieldMeanings.ReceiverVatId, FieldMeanings.ReceiverEndpointId }
+                    .Any(m => a.Text(m) is not null)
+                    ? [new OrderParty
+                    {
+                        OrgId = orgId, Role = "supplier", Name = a.Text(FieldMeanings.ReceiverName),
+                        Street = a.Text(FieldMeanings.ReceiverStreet), City = a.Text(FieldMeanings.ReceiverCity),
+                        PostalCode = a.Text(FieldMeanings.ReceiverPostcode), Country = a.Text(FieldMeanings.ReceiverCountry),
+                        Vat = a.Text(FieldMeanings.ReceiverVatId), EdiCode = a.Text(FieldMeanings.ReceiverEndpointId),
+                    }]
+                    : Array.Empty<OrderParty>(),
+                .. a.Text(FieldMeanings.SenderEndpointId) is { } sender
+                    ? [new OrderParty { OrgId = orgId, Role = "buyer", EdiCode = sender }]
+                    : Array.Empty<OrderParty>(),
+            ],
             Lines = a.Rows.Select((r, i) => new PurchaseOrderLineEntity
             {
                 LineNumber = a.LineNumber(i),
@@ -63,6 +71,9 @@ public static partial class StandardOrderAdapter
                 Quantity = a.Number(r, FieldMeanings.LineQuantity),
                 Unit = a.Cell(r, FieldMeanings.LineUnit),
                 UnitPrice = a.Number(r, FieldMeanings.LineUnitPrice),
+                BuyerItemCode = a.Cell(r, FieldMeanings.LineBuyerItemCode) ?? "",
+                LineAmount = FieldValueParser.Number(a.Cell(r, FieldMeanings.LineAmount)),
+                TaxRate = FieldValueParser.Number(a.Cell(r, FieldMeanings.LineTaxRate)),
             }).ToList(),
         });
 

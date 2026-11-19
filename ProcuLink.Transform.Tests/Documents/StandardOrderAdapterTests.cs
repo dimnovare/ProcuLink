@@ -25,6 +25,17 @@ public class StandardOrderAdapterTests
         var supplier = OrderHeaderReader.SupplierParty(order)!;
         (supplier.Name, supplier.Street, supplier.PostalCode, supplier.City, supplier.Country, supplier.Vat)
             .Should().Be(("Example Supplier OU", "Example Road 2", "10111", "Tallinn", "Estonia", "EE000000000"));
-        order.PaymentTerms.Should().BeNull("payment terms has no meaning, so nothing binds it");
+    }
+
+    [Fact]
+    public void Every_read_order_value_reaches_the_order()
+    {
+        var (order, _) = StandardOrderAdapter.ToOrder(StrictOrderFixture.WithEveryValue(), FlowFieldList.Empty, "lines", [], Guid.Empty);
+
+        (order!.BuyerOrderRef, order.PaymentTerms).Should().Be(("FRAME-2026-01", "30 days net"));
+        order.Lines.Select(l => (l.BuyerItemCode, l.LineAmount, l.TaxRate))
+            .Should().Equal(("BUY-1", 25.00m, 19m), ("BUY-2", 10.00m, 19m), ("BUY-3", 25.00m, 19m));
+        OrderHeaderReader.BuyerParty(order)!.EdiCode.Should().Be("0191:12345678");
+        OrderHeaderReader.SupplierParty(order)!.EdiCode.Should().Be("0088:0000000000000");
     }
 }
