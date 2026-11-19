@@ -42,7 +42,10 @@ public sealed record AdminOrganisationDto(
     int DocumentUnitsThisMonth,
     int AiCallsThisMonth,
     long AiTokensInThisMonth,
-    long AiTokensOutThisMonth);
+    long AiTokensOutThisMonth,
+    int DocumentsSent,
+    int FailedLast7Days,
+    DateTime? LastDocumentAt);
 
 /// <summary>
 /// Response for GET /api/admin/orders/find — the support-triage lookup from a

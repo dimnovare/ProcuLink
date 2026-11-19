@@ -10,6 +10,7 @@ using ProcuLink.Api.Controllers;
 using ProcuLink.Api.Services;
 using ProcuLink.Api.Tests.TestDoubles;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure;
 using Xunit;
@@ -301,6 +302,38 @@ public class AdminControllerTests
         acme.AiTokensOutThisMonth.Should().Be(500);
         var beta = list.Single(o => o.Name == "Beta");
         (beta.DocumentUnitsThisMonth, beta.AiCallsThisMonth, beta.AiTokensInThisMonth, beta.AiTokensOutThisMonth).Should().Be((0, 0, 0L, 0L));
+    }
+
+    [Fact]
+    public async Task GetOrganisations_ReportsDocumentsSentRecentFailuresAndTheLatestDocument()
+    {
+        var db = MakeDb();
+        var org = Org("Acme", PlanConstants.Starter, AccountStatusConstants.Active);
+        db.Organisations.AddRange(org, Org("Beta", PlanConstants.Pilot, AccountStatusConstants.Trialing));
+        var now = DateTime.UtcNow;
+        FlowDocument Doc(string status, DateTime at, bool sample = false) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = org.Id, FlowId = Guid.NewGuid(), FileName = "f.pdf", ContentType = "application/pdf",
+            SourceFileKey = "k", Status = status, IsSample = sample, CreatedAt = at, UpdatedAt = at,
+        };
+        db.FlowDocuments.AddRange(
+            Doc(DocumentStatus.Sent, now.AddDays(-30)),
+            Doc(DocumentStatus.Sent, now.AddDays(-2)),
+            Doc(DocumentStatus.ReadFailed, now.AddDays(-1)),
+            Doc(DocumentStatus.SendFailed, now.AddDays(-3)),
+            Doc(DocumentStatus.SendFailed, now.AddDays(-10)),
+            Doc(DocumentStatus.Sent, now, sample: true));
+        await db.SaveChangesAsync();
+
+        var list = (await Build(db).GetOrganisations(CancellationToken.None)).Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeAssignableTo<IEnumerable<AdminOrganisationDto>>().Subject.ToList();
+
+        var acme = list.Single(o => o.Name == "Acme");
+        acme.DocumentsSent.Should().Be(2, "the sample is not counted");
+        acme.FailedLast7Days.Should().Be(2, "a failure that last changed 10 days ago is not recent");
+        acme.LastDocumentAt.Should().BeCloseTo(now.AddDays(-1), TimeSpan.FromSeconds(1));
+        var beta = list.Single(o => o.Name == "Beta");
+        (beta.DocumentsSent, beta.FailedLast7Days, beta.LastDocumentAt).Should().Be((0, 0, (DateTime?)null));
     }
 
     // ── invoices guard ────────────────────────────────────────────────────

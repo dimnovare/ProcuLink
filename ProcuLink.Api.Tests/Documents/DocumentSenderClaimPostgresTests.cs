@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Moq;
 using ProcuLink.Api.Services.Documents;
 using ProcuLink.Api.Tests.Integration;
+using ProcuLink.Api.Tests.TestDoubles;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -54,9 +55,10 @@ public sealed class DocumentSenderClaimPostgresTests(PostgresContainerFixture po
         var billing = new Mock<IBillingService>();
         billing.Setup(b => b.CanProcessOrdersAsync(org, It.IsAny<CancellationToken>())).ReturnsAsync(true);
         var storage = new Mock<IFileStorageService>();
+        var analytics = new FakeAnalyticsService();
 
         await using var db = NewDb();
-        var sender = new DocumentSender(db, billing.Object, storage.Object, Mock.Of<IBackgroundJobClient>(), Microsoft.Extensions.Logging.Abstractions.NullLogger<DocumentSender>.Instance, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())));
+        var sender = new DocumentSender(db, billing.Object, storage.Object, Mock.Of<IBackgroundJobClient>(), Microsoft.Extensions.Logging.Abstractions.NullLogger<DocumentSender>.Instance, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), analytics);
         var loaded = await db.FlowDocuments.SingleAsync(d => d.Id == current.Id);
         var staleCopy = await db.FlowDocuments.SingleAsync(d => d.Id == stale.Id);
         await using (var other = NewDb())
@@ -69,6 +71,11 @@ public sealed class DocumentSenderClaimPostgresTests(PostgresContainerFixture po
         (await check.FlowDocuments.Where(d => d.Id == current.Id).Select(d => d.Status).SingleAsync())
             .Should().BeOneOf(DocumentStatus.Sending, DocumentStatus.Sent);
         (await check.FlowDocuments.Where(d => d.Id == stale.Id).Select(d => d.Status).SingleAsync()).Should().Be(DocumentStatus.Ready);
+
+        // The committed send is counted once, with its mode and nothing else; the refused one is not counted.
+        var sentEvent = analytics.CapturedEvents.Should().ContainSingle(e => e.EventName == "document_sent").Subject;
+        sentEvent.OrgId.Should().Be(org);
+        sentEvent.Properties.Should().BeEquivalentTo(new Dictionary<string, object?> { ["mode"] = "person" });
     }
 
     [DockerRequiredFact]
@@ -121,9 +128,10 @@ public sealed class DocumentSenderClaimPostgresTests(PostgresContainerFixture po
                 var text = new StreamReader(body).ReadToEnd();
                 controls.Add(text.StartsWith("ISA") ? text.Split('~')[0].Split('*')[13] : text.Split('\'').Single(s => s.StartsWith("UNB+")).Split('+')[^1]);
             });
+        var analytics = new FakeAnalyticsService();
 
         await using var db = NewDb();
-        var sender = new DocumentSender(db, billing.Object, storage.Object, Mock.Of<IBackgroundJobClient>(), Microsoft.Extensions.Logging.Abstractions.NullLogger<DocumentSender>.Instance, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())));
+        var sender = new DocumentSender(db, billing.Object, storage.Object, Mock.Of<IBackgroundJobClient>(), Microsoft.Extensions.Logging.Abstractions.NullLogger<DocumentSender>.Instance, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), analytics);
         foreach (var d in docs)
             (await sender.SendAsync(await db.FlowDocuments.SingleAsync(x => x.Id == d.Id), SendMode.Person, null, CancellationToken.None)).Ok.Should().BeTrue();
 

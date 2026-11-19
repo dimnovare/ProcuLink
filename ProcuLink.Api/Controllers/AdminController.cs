@@ -6,6 +6,7 @@ using ProcuLink.Api.Auth;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Services;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Infrastructure;
@@ -251,6 +252,21 @@ public sealed class AdminController : ControllerBase
             })
             .ToDictionaryAsync(x => x.OrgId, ct);
 
+        // Activation, all time: documents sent, failures that changed in the last 7 days, the latest arrival.
+        var since7d = now.AddDays(-7);
+        var activityByOrg = await _db.FlowDocuments
+            .AsNoTracking()
+            .Where(d => !d.IsSample)
+            .GroupBy(d => d.OrgId)
+            .Select(g => new
+            {
+                OrgId  = g.Key,
+                Sent   = g.Count(d => d.Status == DocumentStatus.Sent),
+                Failed = g.Count(d => (d.Status == DocumentStatus.ReadFailed || d.Status == DocumentStatus.SendFailed) && d.UpdatedAt >= since7d),
+                Last   = (DateTime?)g.Max(d => d.CreatedAt),
+            })
+            .ToDictionaryAsync(x => x.OrgId, ct);
+
         var orgs = await _db.Organisations
             .AsNoTracking()
             .OrderByDescending(o => o.CreatedAt)
@@ -272,6 +288,7 @@ public sealed class AdminController : ControllerBase
             suppliersByOrg.TryGetValue(o.Id, out var supCount);
             unitsByOrg.TryGetValue(o.Id, out var units);
             callsByOrg.TryGetValue(o.Id, out var calls);
+            activityByOrg.TryGetValue(o.Id, out var activity);
 
             return new AdminOrganisationDto(
                 Id:                   o.Id,
@@ -289,7 +306,10 @@ public sealed class AdminController : ControllerBase
                 DocumentUnitsThisMonth: units,
                 AiCallsThisMonth:       calls?.Calls ?? 0,
                 AiTokensInThisMonth:    calls?.TokensIn ?? 0,
-                AiTokensOutThisMonth:   calls?.TokensOut ?? 0);
+                AiTokensOutThisMonth:   calls?.TokensOut ?? 0,
+                DocumentsSent:          activity?.Sent ?? 0,
+                FailedLast7Days:        activity?.Failed ?? 0,
+                LastDocumentAt:         activity?.Last);
         }).ToList();
 
         return Ok(result);
