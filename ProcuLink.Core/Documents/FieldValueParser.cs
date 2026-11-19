@@ -11,6 +11,8 @@ public static class FieldValueParser
         new(@"^(?:[A-Z]{3}|[€$£])?\s*(-?[\d.,]+)\s*(?:[A-Z]{3}|[€$£])?$", RegexOptions.Compiled);
     private static readonly Regex VatShape = new("^[A-Z]{2}[A-Z0-9]{2,13}$", RegexOptions.Compiled);
     private static readonly Regex EmailShape = new(@"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$", RegexOptions.Compiled);
+    // A date read with its time ("18.11.2026 14:23", "2026-11-18T14:23:05") is still that date.
+    private static readonly Regex TrailingTime = new(@"[ T]\d{1,2}:\d{2}(?::\d{2})?$", RegexOptions.Compiled);
 
     // Order matters: an ambiguous 03/04/2026 matches d/M/yyyy first, so it reads day first.
     private static readonly string[] DateFormats =
@@ -63,7 +65,7 @@ public static class FieldValueParser
     }
 
     public static bool TryDate(string? s, out DateOnly value) =>
-        DateOnly.TryParseExact(s?.Trim(), DateFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out value);
+        DateOnly.TryParseExact(TrailingTime.Replace(s?.Trim() ?? "", "").TrimEnd(), DateFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out value);
 
     /// <summary>ISO 13616: country letters, check digits, then mod-97 of the rearranged digits is 1.</summary>
     public static bool IsIban(string? iban)

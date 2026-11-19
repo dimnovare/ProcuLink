@@ -78,8 +78,8 @@ public static class DocumentChecks
         }
 
         var haveNet = Header(FieldMeanings.TotalNet, out var net, out var netKey);
-        if (haveNet && Header(FieldMeanings.TotalTax, out var tax, out _) && Header(FieldMeanings.TotalGross, out var gross, out var grossKey)
-            && R(net) + R(tax) != R(gross))
+        var haveGross = Header(FieldMeanings.TotalGross, out var gross, out var grossKey);
+        if (haveNet && haveGross && Header(FieldMeanings.TotalTax, out var tax, out _) && R(net) + R(tax) != R(gross))
             fail(ArithmeticMismatch, grossKey, "Net plus tax doesn't equal the total.");
 
         var table = read.Tables.FirstOrDefault(t => t.Columns.Any(c => FieldMeanings.Of(t, c, flow) == FieldMeanings.LineAmount));
@@ -90,7 +90,9 @@ public static class DocumentChecks
 
         var amountKey = Col(FieldMeanings.LineAmount);
         var amounts = table.Rows.Select(r => Cell(r, amountKey)).ToList();
-        if (haveNet && amounts.All(a => a is not null) && Math.Abs(amounts.Sum(a => R(a!.Value)) - R(net)) > unit)
+        // Lines priced with tax included (receipts) add up to the gross total instead; either one passes.
+        var lines = amounts.All(a => a is not null) ? amounts.Sum(a => R(a!.Value)) : (decimal?)null;
+        if (haveNet && lines is { } sum && Math.Abs(sum - R(net)) > unit && !(haveGross && Math.Abs(sum - R(gross)) <= unit))
             fail(ArithmeticMismatch, table.Key, "The lines don't add up to the net total.");
 
         var qtyKey = Col(FieldMeanings.LineQuantity);
