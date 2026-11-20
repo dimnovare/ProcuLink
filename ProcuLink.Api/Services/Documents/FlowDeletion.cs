@@ -15,7 +15,9 @@ public static class FlowDeletion
     public static async Task<bool> CanDeleteAsync(ProcuLinkDbContext db, Flow flow, CancellationToken ct) =>
         flow.PublishedVersionNo is null && !flow.IsInbox
         && !await db.Set<FlowDelivery>().AnyAsync(d => d.OrgId == flow.OrgId
-            && db.FlowDocuments.Any(doc => doc.OrgId == flow.OrgId && doc.Id == d.DocumentId && doc.FlowId == flow.Id), ct);
+            && db.FlowDocuments.Any(doc => doc.OrgId == flow.OrgId && doc.Id == d.DocumentId && doc.FlowId == flow.Id), ct)
+        // A sent document a person removed still means the flow sent: its fingerprint must not go with the flow.
+        && !await db.RemovedDocumentFingerprints.AnyAsync(f => f.OrgId == flow.OrgId && f.FlowId == flow.Id, ct);
 
     /// <summary>Null when deleted (or already gone), else <c>flow_in_use</c> or <c>flow_busy</c>. Destinations and lookups are the workspace's and stay.</summary>
     public static async Task<string?> DeleteAsync(ProcuLinkDbContext db, IDocumentEraser eraser, Flow flow, string userId, CancellationToken ct)

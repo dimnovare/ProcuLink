@@ -98,12 +98,14 @@ public static class FlowVersions
         return null;
     }
 
-    /// <summary>The outputs every flow's live version sends, each with the id of that flow.</summary>
-    public static async Task<IReadOnlyList<(Guid FlowId, FlowSnapshotOutput Output)>> LiveVersionOutputsByFlowAsync(ProcuLinkDbContext db, Guid orgId, CancellationToken ct)
+    /// <summary>The outputs every flow's live version sends, each with the id of that flow. <paramref name="flowIds"/>: only those flows.</summary>
+    public static async Task<IReadOnlyList<(Guid FlowId, FlowSnapshotOutput Output)>> LiveVersionOutputsByFlowAsync(ProcuLinkDbContext db, Guid orgId, CancellationToken ct,
+        IReadOnlyCollection<Guid>? flowIds = null)
     {
-        var rows = await db.Set<FlowVersion>().AsNoTracking()
-            .Where(v => v.OrgId == orgId && db.Flows.Any(f => f.OrgId == orgId && f.Id == v.FlowId && f.PublishedVersionNo == v.VersionNo))
-            .Select(v => new { v.FlowId, v.SnapshotJson }).ToListAsync(ct);
+        var versions = db.Set<FlowVersion>().AsNoTracking()
+            .Where(v => v.OrgId == orgId && db.Flows.Any(f => f.OrgId == orgId && f.Id == v.FlowId && f.PublishedVersionNo == v.VersionNo));
+        if (flowIds is not null) versions = versions.Where(v => flowIds.Contains(v.FlowId));
+        var rows = await versions.Select(v => new { v.FlowId, v.SnapshotJson }).ToListAsync(ct);
         return rows.SelectMany(r => (DocumentJson.Deserialize<FlowSnapshot>(r.SnapshotJson)?.Outputs ?? []).Select(o => (r.FlowId, o))).ToList();
     }
 }

@@ -245,4 +245,72 @@ public class DocumentListApiTests(DocumentEngineTestFactory factory) : IClassFix
         var bareList = await http.GetFromJsonAsync<JsonElement>($"/api/documents?flowId={flow}&take=1");
         Assert.False(bareList[0].TryGetProperty("number", out _));
     }
+
+    [Fact]
+    public async Task A_sent_row_lists_its_files_and_where_each_went()
+    {
+        var flow = await Flow(Org);
+        var sent = await Doc(Org, flow, "bill-1042.pdf");
+        var waiting = await Doc(Org, flow, "bill-1043.pdf", status: DocumentStatus.NeedsReview);
+        var folder = new FlowDestination { Id = Guid.NewGuid(), OrgId = Org, Name = "Accounting folder", Protocol = "sftp", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        await Save(folder);
+        var at = DateTime.UtcNow;
+        async Task<Guid> File(FlowDocument doc, string status, Guid? destinationId, string? artifact, string fileName, int minute)
+        {
+            var d = new FlowDelivery
+            {
+                Id = Guid.NewGuid(), OrgId = Org, DocumentId = doc.Id, OutputId = Guid.NewGuid(), OutputName = "CSV", DestinationId = destinationId,
+                Status = status, ArtifactKey = artifact, FileName = fileName, DispatchKey = Guid.NewGuid(), CreatedAt = at.AddMinutes(minute), UpdatedAt = at,
+            };
+            await Save(d);
+            return d.Id;
+        }
+        var stored = await File(sent, FlowDeliveryStatus.Stored, null, "k1", "invoice-1042.csv", 1);
+        var delivered = await File(sent, FlowDeliveryStatus.Delivered, folder.Id, "k2", "invoice-1042.xml", 2);
+        var orphaned = await File(sent, FlowDeliveryStatus.Delivered, Guid.NewGuid(), "k3", "invoice-1042.json", 3);
+        await File(sent, FlowDeliveryStatus.Queued, folder.Id, "k4", "queued.csv", 4);
+        await File(sent, FlowDeliveryStatus.Delivered, folder.Id, null, "no-artifact.csv", 5);
+        await File(waiting, FlowDeliveryStatus.Stored, null, "k6", "invoice-1043.csv", 1);
+
+        var page = await factory.ClientFor(Org).GetFromJsonAsync<JsonElement>($"/api/documents?flowId={flow}&page=1&pageSize=50");
+        JsonElement Row(string name) => page.GetProperty("items").EnumerateArray().Single(r => r.GetProperty("fileName").GetString() == name);
+        var files = Row("bill-1042.pdf").GetProperty("files").EnumerateArray()
+            .Select(f => (f.GetProperty("deliveryId").GetGuid(), f.GetProperty("fileName").GetString(), f.GetProperty("delivered").GetBoolean(),
+                f.GetProperty("destination").GetString()))
+            .ToList();
+        Assert.Equal(new (Guid, string?, bool, string?)[] { (stored, "invoice-1042.csv", false, null), (delivered, "invoice-1042.xml", true, "Accounting folder"), (orphaned, "invoice-1042.json", true, null) }, files);
+        Assert.Empty(Row("bill-1043.pdf").GetProperty("files").EnumerateArray());
+
+        var deliveries = await factory.ClientFor(Org).GetFromJsonAsync<JsonElement>($"/api/documents/{sent.Id}/deliveries");
+        Assert.Equal("Accounting folder", deliveries.EnumerateArray().Single(d => d.GetProperty("id").GetGuid() == delivered).GetProperty("destination").GetString());
+    }
+
+    [Fact]
+    public async Task A_duplicate_row_says_when_the_same_file_came_before()
+    {
+        var flow = await Flow(Org);
+        var (t0, t1) = (DateTime.UtcNow.AddHours(-2), DateTime.UtcNow.AddHours(-1));
+        var sha = Guid.NewGuid().ToString("N");
+        async Task<FlowDocument> Seed(string name, string status, DateTime createdAt, string? reason = null, DateTime? readAt = null, int units = 0, bool sample = false)
+        {
+            var d = new FlowDocument
+            {
+                Id = Guid.NewGuid(), OrgId = Org, FlowId = flow, FileName = name, ContentType = "application/pdf", Status = status, StatusReason = reason,
+                Sha256 = sha, ReadAt = readAt, BillingUnits = units, IsSample = sample, CreatedAt = createdAt, UpdatedAt = createdAt,
+            };
+            await Save(d);
+            return d;
+        }
+        await Seed("first.pdf", DocumentStatus.Sent, t0, readAt: DateTime.UtcNow, units: 1);
+        await Seed("again.pdf", DocumentStatus.NeedsReview, t1, reason: "duplicate_file");
+        await Seed("sample.pdf", DocumentStatus.Sent, t1, readAt: DateTime.UtcNow, units: 1, sample: true);
+
+        var page = await factory.ClientFor(Org).GetFromJsonAsync<JsonElement>($"/api/documents?flowId={flow}&page=1&pageSize=50");
+        JsonElement Row(string name) => page.GetProperty("items").EnumerateArray().Single(r => r.GetProperty("fileName").GetString() == name);
+        Assert.Equal(t0, Row("again.pdf").GetProperty("duplicateOfAt").GetDateTime(), TimeSpan.FromMilliseconds(1));
+        Assert.Equal(JsonValueKind.Null, Row("first.pdf").GetProperty("duplicateOfAt").ValueKind);
+        Assert.True(Row("first.pdf").GetProperty("countsThisMonth").GetBoolean());
+        Assert.False(Row("again.pdf").GetProperty("countsThisMonth").GetBoolean());
+        Assert.False(Row("sample.pdf").GetProperty("countsThisMonth").GetBoolean());
+    }
 }

@@ -35,7 +35,7 @@ public sealed class InboxDownloadTests(DocumentEngineTestFactory factory) : ICla
         var flowId = (await InboxFlow.GetOrCreateAsync(db, OrgA, CancellationToken.None)).Id;
         if (inFlow)
         {
-            var flow = FlowCreation.New(OrgA, "Supplier invoices", FlowFieldList.Empty, confirmed: true);
+            var flow = FlowCreation.New(OrgA, "Supplier invoices", FlowFieldList.Empty, confirmed: true, FlowAutomation.Review);
             db.Flows.Add(flow);
             flowId = flow.Id;
         }

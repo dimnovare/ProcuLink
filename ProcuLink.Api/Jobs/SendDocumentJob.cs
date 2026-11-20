@@ -8,9 +8,10 @@ using ProcuLink.Infrastructure;
 namespace ProcuLink.Api.Jobs;
 
 /// <summary>
-/// Hangfire job: sends a freshly read document when its flow is set to <c>auto</c>. A failed check never blocks it, with two
-/// exceptions: a repeated document number waits for a person, because on an unattended flow it would be a second posting; and so
-/// does the first document from a new email address, because anyone who knows the workspace's address can email it.
+/// Hangfire job: sends a freshly read document when its flow sends by itself. On <c>auto</c> a failed check never blocks it, with
+/// two exceptions: a repeated document number waits for a person, because on an unattended flow it would be a second posting; and
+/// so does the first document from a new email address, because anyone who knows the workspace's address can email it. On
+/// <c>marked</c> only a document with no failed check (status <c>ready</c>) is sent; anything marked waits for a person.
 /// It loads the document itself so the sender's claim sees the row as it is now. Paused processing or any other refusal
 /// leaves the document as it was, for a person to send.
 /// </summary>
@@ -29,8 +30,13 @@ public class SendDocumentJob(ProcuLinkDbContext db, DocumentSender sender)
 
     // A sample is invented, and a sort that was not certain is unconfirmed: neither is sent by itself, only by a person (DocumentsController.Send, which does not come here).
     private static bool ShouldSend(FlowDocument doc, Flow flow) =>
-        !doc.IsSample && !doc.SortUnconfirmed && flow.Automation == FlowAutomation.Auto && doc.Status is DocumentStatus.NeedsReview or DocumentStatus.Ready && DocumentStatus.IsEditable(doc.Status, doc.StatusReason)
-        && !DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).Any(c => c.Code is DocumentChecks.Duplicate or DocumentChecks.NewSender && !c.Passed);
+        !doc.IsSample && !doc.SortUnconfirmed && DocumentStatus.IsEditable(doc.Status, doc.StatusReason) && flow.Automation switch
+        {
+            FlowAutomation.Auto => doc.Status is DocumentStatus.NeedsReview or DocumentStatus.Ready
+                && !DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).Any(c => c.Code is DocumentChecks.Duplicate or DocumentChecks.NewSender && !c.Passed),
+            FlowAutomation.Marked => doc.Status == DocumentStatus.Ready,
+            _ => false,
+        };
 
     public static void EnqueueIfAutomatic(IBackgroundJobClient jobs, FlowDocument doc, Flow flow)
     {

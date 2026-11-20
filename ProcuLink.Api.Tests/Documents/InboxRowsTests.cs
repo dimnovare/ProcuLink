@@ -22,7 +22,7 @@ public sealed class InboxRowsTests(DocumentEngineTestFactory factory) : IClassFi
 
     private async Task<(Guid Inbox, Guid Flow)> FlowsAsync(ProcuLinkDbContext db)
     {
-        var flow = FlowCreation.New(Org, $"Delivery notes {Guid.NewGuid():N}", FlowFieldList.Empty, confirmed: true);
+        var flow = FlowCreation.New(Org, $"Delivery notes {Guid.NewGuid():N}", FlowFieldList.Empty, confirmed: true, FlowAutomation.Review);
         db.Flows.Add(flow);
         return ((await InboxFlow.GetOrCreateAsync(db, Org, CancellationToken.None)).Id, flow.Id);
     }

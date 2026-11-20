@@ -160,6 +160,19 @@ internal static class OrgAdminGateIlScanner
             "Deletes a flow that was never put in use, with its documents and their stored files, its outputs, "
           + "intakes and email address. It cannot be undone."),
 
+        // 2026-11-20, plan 25a: a new flow may start on "marked", which sends by itself.
+        new("FlowCreation.New",
+            member => member is MethodBase { Name: "New" } m && m.DeclaringType == typeof(ProcuLink.Api.Services.Documents.FlowCreation),
+            "Creates a flow and chooses its mode: an administrator's starts on \"marked\", which sends a document with nothing "
+          + "marked to the vendor's destination with nobody checking it. Its callers gate in-method, because every member may "
+          + "still create a flow, on review."),
+
+        // 2026-11-20, plan 25a: removing one document.
+        new("DocumentRemoval.RemoveAsync",
+            member => member is MethodBase { Name: "RemoveAsync" } m && m.DeclaringType == typeof(ProcuLink.Api.Services.Documents.DocumentRemoval),
+            "Erases a document for good, with the files made from it and its delivery history. An administrator may remove "
+          + "any document; a member only one nothing was made or sent from, so its caller gates in-method."),
+
         new("FlowVersions.RestoreAsync",
             member => member is MethodBase { Name: "RestoreAsync" } m && m.DeclaringType == typeof(ProcuLink.Api.Services.Documents.FlowVersions),
             "Overwrites a flow's fields and outputs, discarding the changes not yet published."),

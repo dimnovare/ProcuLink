@@ -50,7 +50,7 @@ public sealed class OrgAdminGateIsRealTests
     // 22 -> 19 on 2026-11-13 (plan 13b Task 6b): IAcceptanceGate.RecordOverrideAsync,
     // OrderIngestionService.ApplyInvoiceProblemsAsync and IOrderService.ResolveAsync left the declared
     // set with the three endpoints above, their only gated callers.
-    private const int ExpectedDestructivePrimitiveCount = 24; // 19 + 4, one per Google endpoint (plan 9b) + flow delete (plan 21)
+    private const int ExpectedDestructivePrimitiveCount = 26; // 19 + 4, one per Google endpoint (plan 9b) + flow delete (plan 21) + FlowCreation.New and DocumentRemoval.RemoveAsync (plan 25a)
 
     /// <summary>
     /// Endpoints that gate only PART of a request, in-method: the organisation settings PUT (where
@@ -59,7 +59,10 @@ public sealed class OrgAdminGateIsRealTests
     /// </summary>
     // 3 -> 2 on 2026-11-13 (plan 13b Task 6b): POST /api/orders/{id}/resolve, which gated an
     // invoice's IBAN, number and seller in-method, was deleted with the order write API.
-    private const int ExpectedInMethodGatedCount = 2;
+    // 2 -> 4 on 2026-11-20 (plan 25a): FlowsController.Create and InboxController's set-up choose a new flow's mode, and only
+    // an administrator's new flow may start on one that sends by itself ("marked"); a member's starts on "review".
+    // 4 -> 5 the same day: DocumentsController.Remove, where a member may remove only a document nothing was made or sent from.
+    private const int ExpectedInMethodGatedCount = 5;
 
     private static HashSet<string> AllGated() =>
         GatedActions().Concat(InMethodGatedActions()).Select(a => a.Display).ToHashSet(StringComparer.Ordinal);

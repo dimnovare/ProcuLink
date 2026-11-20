@@ -52,6 +52,9 @@ public sealed class FlowFilesApiTests(PostgresContainerFixture postgres) : IAsyn
         var got = await http.GetAsync($"/api/v1/documents/{doc.Id}");
         Assert.Equal(HttpStatusCode.OK, got.StatusCode);
         Assert.Contains(doc.Id.ToString(), await got.Content.ReadAsStringAsync());
+        // The app-only fields stay off the public file API.
+        var detail = System.Text.Json.JsonDocument.Parse(await got.Content.ReadAsStringAsync()).RootElement.GetProperty("document");
+        Assert.False(detail.GetProperty("summary").TryGetProperty("countsThisMonth", out _) || detail.TryGetProperty("canRemove", out _));
 
         var other = await factory.ApiKeyClientFor(DocumentEngineTestFactory.OrgB).GetAsync($"/api/v1/documents/{doc.Id}");
         Assert.Equal(HttpStatusCode.NotFound, other.StatusCode);

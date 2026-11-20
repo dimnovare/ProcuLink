@@ -964,20 +964,28 @@ public sealed class StripeBillingService : IBillingService
     /// </summary>
     private async Task<int> CountOrdersAsync(Core.Entities.Organisation org, CancellationToken ct)
     {
+        var since = UsageSince(org);
         if (NormalizePlan(org.Plan) == PlanConstants.Pilot)
         {
             var pilotOrders = _db.PurchaseOrders
-                .Where(o => o.OrgId == org.Id && !o.IsSample && o.CreatedAt >= org.TrialStartedAt)
+                .Where(o => o.OrgId == org.Id && !o.IsSample && o.CreatedAt >= since)
                 // Hard-cap forgiveness — Pilot only. See the remarks above.
                 .Where(o => !PilotForgivenFailureStatuses.Contains(o.Status));
-            return await ApplyMeterStatusFilter(pilotOrders).CountAsync(ct) + await CountDocumentUnitsAsync(org.Id, org.TrialStartedAt, ct);
+            return await ApplyMeterStatusFilter(pilotOrders).CountAsync(ct) + await CountDocumentUnitsAsync(org.Id, since, ct);
         }
 
-        var monthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc);
         var monthOrders = _db.PurchaseOrders
-            .Where(o => o.OrgId == org.Id && !o.IsSample && o.CreatedAt >= monthStart);
-        return await ApplyMeterStatusFilter(monthOrders).CountAsync(ct) + await CountDocumentUnitsAsync(org.Id, monthStart, ct);
+            .Where(o => o.OrgId == org.Id && !o.IsSample && o.CreatedAt >= since);
+        return await ApplyMeterStatusFilter(monthOrders).CountAsync(ct) + await CountDocumentUnitsAsync(org.Id, since, ct);
     }
+
+    /// <summary>Where the usage count starts: the trial start for a Pilot, the current UTC calendar month otherwise.</summary>
+    public static DateTime UsageSince(Core.Entities.Organisation org) =>
+        NormalizePlan(org.Plan) == PlanConstants.Pilot ? org.TrialStartedAt
+            : new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    /// <summary>Whether a document is in the usage count from <paramref name="since"/>, as <see cref="CountDocumentUnitsAsync"/> counts it.</summary>
+    public static bool CountsAsUsage(Core.Entities.FlowDocument d, DateTime since) => !d.IsSample && d.ReadAt >= since && d.BillingUnits > 0;
 
     /// <summary>Flow documents count their billing units once read (<c>ReadAt</c>); the delivered-only flag does not apply.
     /// Units of documents erased on request keep counting through <c>ErasedDocumentUnits</c>.</summary>

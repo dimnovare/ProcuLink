@@ -22,13 +22,14 @@ public sealed class FlowsController(
 
     private static IActionResult FlowNotFound() => new NotFoundObjectResult(new { error = "flow_not_found" });
 
-    private FlowDto ToDto(Flow f, int documentCount, bool hasChanges = false, int? streak = null, FlowSummaryDto? summary = null, bool canDelete = false) =>
-        new(f.Id, f.Name, f.FieldsConfirmed, DocumentJson.Deserialize<FlowFieldList>(f.FieldsJson), documentCount, f.CreatedAt, f.Automation, gate.ScansOn(f.OrgId), gate.FormatsOn(f.OrgId), gate.DocsOutputsOn(f.OrgId), gate.PeppolOn(f.OrgId), f.PublishedVersionNo, hasChanges, streak, summary, canDelete);
+    private FlowDto ToDto(Flow f, int documentCount, bool hasChanges = false, int? streak = null, FlowSummaryDto? summary = null, bool canDelete = false, bool downloadOnly = false) =>
+        new(f.Id, f.Name, f.FieldsConfirmed, DocumentJson.Deserialize<FlowFieldList>(f.FieldsJson), documentCount, f.CreatedAt, f.Automation, gate.ScansOn(f.OrgId), gate.FormatsOn(f.OrgId), gate.DocsOutputsOn(f.OrgId), gate.PeppolOn(f.OrgId), f.PublishedVersionNo, hasChanges, streak, summary, canDelete, downloadOnly);
 
     /// <summary>Every single-flow response: the web app caches each one whole, so none may drop a field.</summary>
     private async Task<FlowDto> SingleAsync(Flow flow, Guid orgId, CancellationToken ct) =>
         ToDto(flow, await CountDocs(orgId, flow.Id, ct), await FlowVersions.HasChangesAsync(db, flow, ct), await FlowStreak.CountAsync(db, orgId, flow.Id, ct),
-            canDelete: await FlowDeletion.CanDeleteAsync(db, flow, ct));
+            canDelete: await FlowDeletion.CanDeleteAsync(db, flow, ct),
+            downloadOnly: FlowSummaries.DownloadOnly((await FlowSummaries.OutputsInUseAsync(db, orgId, [flow], ct))[flow.Id]));
 
     private Task<int> CountDocs(Guid orgId, Guid flowId, CancellationToken ct) =>
         db.FlowDocuments.CountAsync(d => d.OrgId == orgId && d.FlowId == flowId, ct);
@@ -43,7 +44,7 @@ public sealed class FlowsController(
             .GroupBy(d => d.FlowId).Select(g => new { FlowId = g.Key, N = g.Count() })
             .ToDictionaryAsync(x => x.FlowId, x => x.N, ct);
         var summaries = await FlowSummaries.ForOrgAsync(db, orgId, flows, ct);
-        return Ok(flows.Select(f => ToDto(f, counts.GetValueOrDefault(f.Id), summary: summaries.GetValueOrDefault(f.Id))));
+        return Ok(flows.Select(f => ToDto(f, counts.GetValueOrDefault(f.Id), summary: summaries[f.Id], downloadOnly: FlowSummaries.DownloadOnly(summaries[f.Id].Outputs))));
     }
 
     [HttpPost]
@@ -54,10 +55,10 @@ public sealed class FlowsController(
         if (await FlowCreation.LimitReachedAsync(db, orgId, ct) is { } reached)
             return StatusCode(429, new { error = "flow_limit_reached", plan = reached.Plan, limit = reached.Cap, upgradeUrl = "/settings" });
         if (!FlowCreation.TryName(request.Name, out var name)) return BadRequest(new { error = "invalid_name" });
-        var flow = FlowCreation.New(orgId, name, FlowFieldList.Empty, confirmed: false);
+        var flow = FlowCreation.New(orgId, name, FlowFieldList.Empty, confirmed: false, RequireOrgAdminAttribute.IsAdmin(HttpContext) ? FlowAutomation.Marked : FlowAutomation.Review);
         db.Flows.Add(flow);
         await db.SaveChangesAsync(ct);
-        return Created($"/api/flows/{flow.Id}", ToDto(flow, 0));
+        return Created($"/api/flows/{flow.Id}", ToDto(flow, 0, downloadOnly: true)); // a new flow makes no file yet
     }
 
     [HttpGet("{id:guid}")]

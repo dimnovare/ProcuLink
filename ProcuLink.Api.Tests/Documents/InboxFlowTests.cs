@@ -51,7 +51,7 @@ public class InboxFlowTests(DocumentEngineTestFactory factory) : IClassFixture<D
             var cap = PlanConstants.GetFlowLimit(PlanConstants.Pilot)!.Value;
             var existing = await db.Flows.CountAsync(f => f.OrgId == OrgA && !f.IsInbox);
             for (var i = existing; i < cap - 1; i++)
-                db.Flows.Add(FlowCreation.New(OrgA, $"Supplier invoices {i}", FlowFieldList.Empty, confirmed: false));
+                db.Flows.Add(FlowCreation.New(OrgA, $"Supplier invoices {i}", FlowFieldList.Empty, confirmed: false, FlowAutomation.Review));
             await db.SaveChangesAsync();
 
             Assert.Null(await FlowCreation.LimitReachedAsync(db, OrgA, CancellationToken.None));

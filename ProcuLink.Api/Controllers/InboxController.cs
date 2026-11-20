@@ -161,7 +161,7 @@ public sealed class InboxController(
         ct = CancellationToken.None;
         try
         {
-            var flow = FlowCreation.New(orgId, name, fields, confirmed: true);
+            var flow = FlowCreation.New(orgId, name, fields, confirmed: true, RequireOrgAdminAttribute.IsAdmin(HttpContext) ? FlowAutomation.Marked : FlowAutomation.Review);
             db.Flows.Add(flow);
             db.Set<FlowOutput>().Add(DefaultOutputTemplate.CsvFile(flow, fields));
             // Read in the inbox already: checked against the new flow straight away, never read again.

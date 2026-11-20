@@ -29,7 +29,7 @@ public sealed class DocumentEraser(
         return d => d.Status == DocumentStatus.Reading || d.Status == DocumentStatus.Sending || sending.Any(x => x.DocumentId == d.Id);
     }
 
-    public async Task<DocumentEraseReceipt> EraseAsync(Guid orgId, DocumentEraseFilter filter, string actor, CancellationToken ct)
+    public async Task<DocumentEraseReceipt> EraseAsync(Guid orgId, DocumentEraseFilter filter, string actor, CancellationToken ct, AuditEvent? history = null)
     {
         if (db.ScopedOrganisationId is { } scoped && scoped != orgId)
             throw new InvalidOperationException($"DocumentEraser needs an unscoped DbContext; this one is scoped to {scoped}.");
@@ -49,6 +49,9 @@ public sealed class DocumentEraser(
         var matches = db.FlowDocuments.Where(d => d.OrgId == orgId);
         if (ids is not null) matches = matches.Where(d => ids.Contains(d.Id));
         if (before is { } cutoff) matches = matches.Where(d => d.CreatedAt < cutoff);
+        // No delivery row and not sent: a download marks a document sent without writing one.
+        Expression<Func<FlowDocument, bool>> neverDelivered = d => d.Status != DocumentStatus.Sent && !deliveries.Any(x => x.DocumentId == d.Id);
+        if (filter.NeverDelivered) matches = matches.Where(neverDelivered);
         var busy = InFlight(db, orgId);
         // Repeated by the delete itself, so a document that starts being read or sent after this check is kept.
         var idle = Expression.Lambda<Func<FlowDocument, bool>>(Expression.Not(busy.Body), busy.Parameters);
@@ -57,10 +60,14 @@ public sealed class DocumentEraser(
             .OrderBy(d => d.CreatedAt).ThenBy(d => d.Id).Select(d => d.Id).ToListAsync(ct);
         var docs = await matches.Where(idle)
             .OrderBy(d => d.CreatedAt).ThenBy(d => d.Id).Take(MaxPerCall + 1)
-            .Select(d => new { d.Id, d.SourceFileKey, d.SplitFileKey, d.ReadAt, d.IsSample, d.BillingUnits }).ToListAsync(ct);
+            .Select(d => new { d.Id, d.SourceFileKey, d.SplitFileKey, d.ReadAt, d.IsSample, d.BillingUnits, d.FlowId, d.Sha256, d.DedupKey, d.Status, d.CreatedAt }).ToListAsync(ct);
         var more = docs.Count > MaxPerCall;
         if (more) docs.RemoveAt(MaxPerCall);
-        if (docs.Count == 0) return Receipt(skipped: skipped, more: more);
+        // A legal erase by date also forgets what removed documents left behind. The date is the only part of a request a
+        // fingerprint can honestly match: it holds no document id and no content, so a request that also names ids keeps them.
+        var forget = before is { } until && ids is null && !filter.KeepFingerprints
+            ? db.RemovedDocumentFingerprints.Where(f => f.OrgId == orgId && f.DocumentCreatedAt < until) : null;
+        if (docs.Count == 0 && (forget is null || !await forget.AnyAsync(ct))) return Receipt(skipped: skipped, more: more);
 
         var docIds = docs.Select(d => d.Id).ToList();
         var linked = docIds.Select(id => (Guid?)id).ToList();
@@ -75,6 +82,12 @@ public sealed class DocumentEraser(
         ct.ThrowIfCancellationRequested();
         var none = CancellationToken.None;
         await using var tx = await db.Database.BeginTransactionAsync(none);
+        // In the transaction, before the delete cascades the deliveries away: the real documents that were sent or delivered.
+        var fingerprinted = filter.KeepFingerprints
+            ? await db.FlowDocuments.Where(d => d.OrgId == orgId && docIds.Contains(d.Id) && !d.IsSample
+                    && (d.Status == DocumentStatus.Sent || deliveries.Any(x => x.DocumentId == d.Id)))
+                .Select(d => d.Id).ToListAsync(none)
+            : [];
 
         var rows = new Dictionary<string, int>
         {
@@ -85,14 +98,30 @@ public sealed class DocumentEraser(
             ["flow_deliveries"] = await batchDeliveries.CountAsync(none),
             ["flow_read_calls"] = await db.Set<FlowReadCall>().CountAsync(c => c.OrgId == orgId && docIds.Contains(c.DocumentId), none),
         };
-        rows["flow_documents"] = await db.FlowDocuments.Where(d => d.OrgId == orgId && docIds.Contains(d.Id)).Where(idle).ExecuteDeleteAsync(none);
+        var deleting = db.FlowDocuments.Where(d => d.OrgId == orgId && docIds.Contains(d.Id)).Where(idle);
+        if (filter.NeverDelivered) deleting = deleting.Where(neverDelivered);
+        // One not fingerprinted that a send finished on since the read above is kept, and the erase stops below: none is erased unrecorded.
+        if (filter.KeepFingerprints)
+            deleting = deleting.Where(d => fingerprinted.Contains(d.Id) || d.IsSample
+                || (d.Status != DocumentStatus.Sent && !deliveries.Any(x => x.DocumentId == d.Id)));
+        rows["flow_documents"] = await deleting.ExecuteDeleteAsync(none);
         // Disposing the transaction uncommitted rolls back every row above; no file has been touched yet.
         if (rows["flow_documents"] < docIds.Count)
             throw new DocumentsChangedDuringEraseException();
+        if (forget is not null) rows["removed_document_fingerprints"] = await forget.ExecuteDeleteAsync(none);
 
         // Billed units outlive the document, dated by when it was READ so the month it was billed in keeps them.
         db.ErasedDocumentUnits.AddRange(docs.Where(d => d.ReadAt != null && !d.IsSample && d.BillingUnits > 0)
             .Select(d => new ErasedDocumentUnit { Id = Guid.NewGuid(), OrgId = orgId, ReadAt = d.ReadAt!.Value, BillingUnits = d.BillingUnits }));
+        // A removed sent document still holds back its next copy. Hashes only: no content, no file name, no raw key.
+        if (filter.KeepFingerprints)
+            db.RemovedDocumentFingerprints.AddRange(docs.Where(d => fingerprinted.Contains(d.Id))
+                .Select(d => new RemovedDocumentFingerprint
+                {
+                    Id = Guid.NewGuid(), OrgId = orgId, FlowId = d.FlowId, Sha256 = d.Sha256,
+                    DedupKeyHash = d.DedupKey is { } key ? RemovedDocumentFingerprint.HashOf(key) : null,
+                    DocumentCreatedAt = d.CreatedAt, RemovedAt = DateTime.UtcNow,
+                }));
 
         // Until cleanup confirms them, every key and folder is listed as failed, so a crash after the commit
         // still leaves an honest record of what may remain in storage.
@@ -103,6 +132,7 @@ public sealed class DocumentEraser(
         void Record(DocumentEraseReceipt r) => audit.Payload = JsonSerializer.Serialize(r, OrganisationEraser.ReceiptJson);
         Record(Receipt(rows["flow_documents"], skipped, more, rows, 0, [.. knownKeys, .. prefixes]));
         db.PlatformAuditEvents.Add(audit);
+        if (history is not null) db.AuditEvents.Add(history);
         await db.SaveChangesAsync(none);
         await tx.CommitAsync(none);
 

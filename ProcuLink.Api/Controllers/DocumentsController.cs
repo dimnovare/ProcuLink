@@ -4,8 +4,10 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Api.Auth;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Jobs;
+using ProcuLink.Api.Services;
 using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
@@ -85,6 +87,10 @@ public sealed class DocumentsController(
             SenderIdentity.Of(read, d.Source, d.SourceRef)?.Label);
     }
 
+    /// <summary>Where the plan's usage count starts, from the billing code's own window.</summary>
+    private async Task<DateTime> UsageSinceAsync(CancellationToken ct) =>
+        StripeBillingService.UsageSince(await db.Organisations.AsNoTracking().FirstAsync(o => o.Id == tenant.OrganisationId, ct));
+
     private Task<FlowDocument?> FindAsync(Guid id, CancellationToken ct) =>
         db.FlowDocuments.FirstOrDefaultAsync(d => d.OrgId == tenant.OrganisationId && d.Id == id, ct);
 
@@ -92,6 +98,14 @@ public sealed class DocumentsController(
         (await db.Flows.FirstAsync(f => f.OrgId == d.OrgId && f.Id == d.FlowId, ct)).Name;
 
     private static readonly object NotFoundBody = new { error = "document_not_found" };
+
+    /// <summary>The document screen's detail: the file API's, plus whether this caller may remove it and whether it still counts.</summary>
+    private async Task<DocumentDetailDto> DetailAsync(FlowDocument doc, string flowName, CancellationToken ct) =>
+        new(ToDto(doc, flowName))
+        {
+            CanRemove = DocumentRemoval.CanRemove(HttpContext, await DocumentRemoval.HasDeliveryAsync(db, doc, ct), doc.Status),
+            CountsThisMonth = StripeBillingService.CountsAsUsage(doc, await UsageSinceAsync(ct)),
+        };
 
     [HttpGet]
     public async Task<IActionResult> List(Guid? flowId, string? status, int? take, string? q,
@@ -121,7 +135,8 @@ public sealed class DocumentsController(
         var size = Math.Clamp(pageSize ?? 50, 1, 200);
         var p = Math.Clamp(page.Value, 1, int.MaxValue / size); // an absurd page is an empty page, not an overflowed Skip
         var total = await docs.CountAsync(ct);
-        return Ok(new PaginatedResult<DocumentRowDto>(await DocumentListRows.ForAsync(db, orgId, docs.Skip((p - 1) * size).Take(size), ct), total, p, size));
+        var rows = await DocumentListRows.ForAsync(db, orgId, docs.Skip((p - 1) * size).Take(size), (hasDelivery, docStatus) => DocumentRemoval.CanRemove(HttpContext, hasDelivery, docStatus), await UsageSinceAsync(ct), ct);
+        return Ok(new PaginatedResult<DocumentRowDto>(rows, total, p, size));
     }
 
     [HttpGet("{id:guid}")]
@@ -129,7 +144,24 @@ public sealed class DocumentsController(
     {
         if (Refuse() is { } refused) return refused;
         var doc = await FindAsync(id, ct);
-        return doc is null ? NotFound(NotFoundBody) : Ok(ToDto(doc, await FlowNameAsync(doc, ct)));
+        return doc is null ? NotFound(NotFoundBody) : Ok(await DetailAsync(doc, await FlowNameAsync(doc, ct), ct));
+    }
+
+    /// <summary>Removes a document for good. An org admin: any document. A member: only one nothing was made or sent from
+    /// (no delivery, and not sent or downloaded), else 403. Never while it is received, read or sent (409). Another workspace's is 404, checked first.</summary>
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Remove(Guid id, [FromServices] IDocumentEraser eraser, CancellationToken ct)
+    {
+        if (Refuse() is { } refused) return refused;
+        var doc = await FindAsync(id, ct);
+        if (doc is null) return NotFound(NotFoundBody);
+        var isAdmin = RequireOrgAdminAttribute.IsAdmin(HttpContext);
+        return await DocumentRemoval.RemoveAsync(db, eraser, doc, await FlowNameAsync(doc, ct), tenant.ClerkUserId, isAdmin, ct) switch
+        {
+            null => NoContent(),
+            DocumentRemoval.AdminRequired => RequireOrgAdminAttribute.Refusal(),
+            var error => Conflict(new { error }),
+        };
     }
 
     /// <summary>The media type comes from the closed allowlist, keyed by the extension intake already validated, never from the client-supplied content type.</summary>
@@ -345,8 +377,10 @@ public sealed class DocumentsController(
         // The undelivered outputs still need sending; an edit does not make the document unsent-ready again.
         if (wasSendFailed) doc.Status = DocumentStatus.SendFailed;
         foreach (var c in changes) DocumentAudit.Add(db, doc, "document.value_edited", new { target = c.Target, old = c.Old, @new = c.New }, tenant.ClerkUserId);
-        await db.SaveChangesAsync(ct);
-        return Ok(ToDto(doc, flow.Name));
+        // Removed while being edited: the update matches no row, and the document is gone.
+        try { await db.SaveChangesAsync(ct); }
+        catch (DbUpdateConcurrencyException) { return NotFound(NotFoundBody); }
+        return Ok(await DetailAsync(doc, flow.Name, ct));
     }
 
     [HttpPost("{id:guid}/send")]
@@ -382,6 +416,10 @@ public sealed class DocumentsController(
     internal static object ToDeliveryDto(FlowDelivery d) =>
         new { d.Id, d.OutputName, d.Protocol, d.Status, d.Attempts, d.LastError, d.FileName, d.DeliveredAt };
 
+    /// <summary>As above, plus where it went: the destination's name, null when stored for download or the destination is gone.</summary>
+    internal static object ToDeliveryDto(FlowDelivery d, string? destination) =>
+        new { d.Id, d.OutputName, d.Protocol, d.Status, d.Attempts, d.LastError, d.FileName, d.DeliveredAt, destination };
+
     [HttpGet("{id:guid}/deliveries")]
     public async Task<IActionResult> Deliveries(Guid id, CancellationToken ct)
     {
@@ -389,7 +427,10 @@ public sealed class DocumentsController(
         if (await FindAsync(id, ct) is null) return NotFound(NotFoundBody);
         var rows = await db.Set<FlowDelivery>().AsNoTracking()
             .Where(d => d.OrgId == tenant.OrganisationId && d.DocumentId == id).OrderBy(d => d.CreatedAt).ToListAsync(ct);
-        return Ok(rows.Select(ToDeliveryDto));
+        var ids = rows.Select(d => d.DestinationId).OfType<Guid>().Distinct().ToList();
+        var names = await db.Set<FlowDestination>().AsNoTracking().Where(x => x.OrgId == tenant.OrganisationId && ids.Contains(x.Id))
+            .ToDictionaryAsync(x => x.Id, x => x.Name, ct);
+        return Ok(rows.Select(d => ToDeliveryDto(d, d.DestinationId is { } to ? names.GetValueOrDefault(to) : null)));
     }
 
     [HttpGet("{id:guid}/deliveries/{deliveryId:guid}/file")]

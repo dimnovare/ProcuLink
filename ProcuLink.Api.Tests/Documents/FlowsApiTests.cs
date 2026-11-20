@@ -41,6 +41,87 @@ public class FlowsApiTests(DocumentEngineTestFactory factory) : IClassFixture<Do
     }
 
     [Fact]
+    public async Task A_new_flow_starts_on_check_only_what_we_marked_only_when_an_admin_makes_it()
+    {
+        var http = factory.ClientFor(DocumentEngineTestFactory.OrgA);
+        var member = factory.ClientFor(DocumentEngineTestFactory.OrgA);
+        member.DefaultRequestHeaders.Remove(ProcuLink.Api.Tests.Integration.RbacTestAuthHandler.RoleHeader);
+        member.DefaultRequestHeaders.Add(ProcuLink.Api.Tests.Integration.RbacTestAuthHandler.RoleHeader, "org:member");
+
+        // A mode that sends by itself is an admin's choice (PATCH refuses a member): a member's new flow starts on review,
+        // through the flows list and through setting one up from an inbox document.
+        var byMember = (await (await member.PostAsJsonAsync("/api/flows", new CreateFlowRequest("Member flow"))).Content.ReadFromJsonAsync<FlowDto>(DocumentJson.Options))!;
+        Assert.Equal(FlowAutomation.Review, byMember.Automation);
+        Guid inboxDoc;
+        using (var seed = factory.Services.CreateScope())
+        {
+            var sdb = seed.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            var doc = new FlowDocument
+            {
+                Id = Guid.NewGuid(), OrgId = DocumentEngineTestFactory.OrgA, FlowId = (await InboxFlow.GetOrCreateAsync(sdb, DocumentEngineTestFactory.OrgA, CancellationToken.None)).Id,
+                FileName = "invoice-1042.pdf", ContentType = "application/pdf", SourceFileKey = "k", BillingUnits = 1, Kind = "invoice",
+                SenderKey = "name:example supplier ltd", Status = DocumentStatus.NeedsReview, StatusReason = DocumentSort.NewKind, ReadAt = DateTime.UtcNow,
+                ReadJson = DocumentJson.Serialize(new ReadResult("Invoice", [new ReadField("invoice_number", "Invoice number", "INV-1042", FieldTypes.Text, FieldMeanings.DocumentNumber, 0.99, null, false, true, false)])),
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            };
+            sdb.FlowDocuments.Add(doc);
+            await sdb.SaveChangesAsync();
+            inboxDoc = doc.Id;
+        }
+        var setUp = await member.PostAsJsonAsync($"/api/documents/{inboxDoc}/set-up", new { });
+        Assert.Equal(HttpStatusCode.Created, setUp.StatusCode);
+        var setUpFlowId = (await setUp.Content.ReadFromJsonAsync<SetUpResultDto>(DocumentJson.Options))!.FlowId;
+        Assert.Equal(FlowAutomation.Review, (await http.GetFromJsonAsync<FlowDto>($"/api/flows/{setUpFlowId}", DocumentJson.Options))!.Automation);
+
+        var created = await http.PostAsJsonAsync("/api/flows", new CreateFlowRequest("Marked mode"));
+        var flow = (await created.Content.ReadFromJsonAsync<FlowDto>(DocumentJson.Options))!;
+        Assert.Equal(FlowAutomation.Marked, flow.Automation);
+
+        foreach (var mode in new[] { FlowAutomation.Review, FlowAutomation.Marked })
+        {
+            Assert.Equal(HttpStatusCode.OK, (await http.PatchAsync($"/api/flows/{flow.Id}", JsonContent.Create(new { automation = mode }))).StatusCode);
+            Assert.Equal(mode, (await http.GetFromJsonAsync<FlowDto>($"/api/flows/{flow.Id}", DocumentJson.Options))!.Automation);
+        }
+
+        Assert.Equal(FlowAutomation.Review, new Flow().Automation);
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        Assert.Equal(FlowAutomation.Review, (await InboxFlow.GetOrCreateAsync(db, DocumentEngineTestFactory.OrgA, CancellationToken.None)).Automation);
+    }
+
+    [Fact]
+    public async Task A_flow_is_download_only_until_one_of_its_files_has_a_destination()
+    {
+        var http = factory.ClientFor(DocumentEngineTestFactory.OrgA);
+        var created = (await (await http.PostAsJsonAsync("/api/flows", new CreateFlowRequest("Download only"))).Content.ReadFromJsonAsync<FlowDto>(DocumentJson.Options))!;
+        Assert.True(created.DownloadOnly);
+        async Task<bool> DownloadOnly()
+        {
+            var single = (await http.GetFromJsonAsync<FlowDto>($"/api/flows/{created.Id}", DocumentJson.Options))!.DownloadOnly;
+            var listed = (await http.GetFromJsonAsync<List<FlowDto>>("/api/flows", DocumentJson.Options))!.Single(f => f.Id == created.Id).DownloadOnly;
+            Assert.Equal(single, listed);
+            return single;
+        }
+
+        Assert.True(await DownloadOnly());
+        await http.PutAsJsonAsync($"/api/flows/{created.Id}/fields", Fields("total_gross"));
+        var output = await http.PostAsJsonAsync($"/api/flows/{created.Id}/outputs", new { name = "CSV", format = "csv" });
+        Assert.Equal(HttpStatusCode.Created, output.StatusCode);
+        var outputId = (await output.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        Assert.True(await DownloadOnly());
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            var destination = new FlowDestination { Id = Guid.NewGuid(), OrgId = DocumentEngineTestFactory.OrgA, Name = "Accounting folder", Protocol = "http", ConfigJson = """{"url":"https://example.com/in"}""" };
+            db.Set<FlowDestination>().Add(destination);
+            db.Set<FlowOutput>().Single(o => o.Id == outputId).DestinationId = destination.Id;
+            await db.SaveChangesAsync();
+        }
+        Assert.False(await DownloadOnly());
+    }
+
+    [Fact]
     public async Task Single_flow_says_whether_it_can_be_deleted()
     {
         var http = factory.ClientFor(DocumentEngineTestFactory.OrgA);
@@ -51,6 +132,18 @@ public class FlowsApiTests(DocumentEngineTestFactory factory) : IClassFixture<Do
         Assert.True(await CanDelete());
         await http.PostAsync($"/api/flows/{id}/documents/sample", null);
         Assert.True(await CanDelete());
+        using (var scope = factory.Services.CreateScope())
+        {
+            // A sent document that was removed: the flow sent, so it stays.
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.RemovedDocumentFingerprints.Add(new RemovedDocumentFingerprint
+            {
+                Id = Guid.NewGuid(), OrgId = DocumentEngineTestFactory.OrgA, FlowId = id, Sha256 = new string('a', 64),
+                DocumentCreatedAt = DateTime.UtcNow, RemovedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+        Assert.False(await CanDelete());
         await http.PutAsJsonAsync($"/api/flows/{id}/fields", Fields("total_gross"));
         Assert.Equal(HttpStatusCode.OK, (await http.PostAsync($"/api/flows/{id}/publish", null)).StatusCode);
         Assert.False(await CanDelete());

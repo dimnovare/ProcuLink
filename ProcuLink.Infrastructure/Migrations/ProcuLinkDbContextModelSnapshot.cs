@@ -3383,6 +3383,51 @@ namespace ProcuLink.Infrastructure.Migrations
                     b.ToTable("push_devices", (string)null);
                 });
 
+            modelBuilder.Entity("ProcuLink.Core.Entities.RemovedDocumentFingerprint", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("DedupKeyHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("dedup_key_hash");
+
+                    b.Property<DateTime>("DocumentCreatedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("document_created_at");
+
+                    b.Property<Guid>("FlowId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("flow_id");
+
+                    b.Property<Guid>("OrgId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("org_id");
+
+                    b.Property<DateTime>("RemovedAt")
+                        .HasColumnType("timestamptz")
+                        .HasColumnName("removed_at");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("sha256");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FlowId");
+
+                    b.HasIndex("OrgId", "Sha256");
+
+                    b.HasIndex("OrgId", "FlowId", "DedupKeyHash");
+
+                    b.ToTable("removed_document_fingerprints", (string)null);
+                });
+
             modelBuilder.Entity("ProcuLink.Core.Entities.RetentionAuditLog", b =>
                 {
                     b.Property<Guid>("Id")
@@ -5240,6 +5285,21 @@ namespace ProcuLink.Infrastructure.Migrations
 
             modelBuilder.Entity("ProcuLink.Core.Entities.PushDevice", b =>
                 {
+                    b.HasOne("ProcuLink.Core.Entities.Organisation", null)
+                        .WithMany()
+                        .HasForeignKey("OrgId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ProcuLink.Core.Entities.RemovedDocumentFingerprint", b =>
+                {
+                    b.HasOne("ProcuLink.Core.Entities.Flow", null)
+                        .WithMany()
+                        .HasForeignKey("FlowId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
                     b.HasOne("ProcuLink.Core.Entities.Organisation", null)
                         .WithMany()
                         .HasForeignKey("OrgId")

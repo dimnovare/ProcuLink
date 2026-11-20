@@ -164,6 +164,52 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
     }
 
     [Fact]
+    public void A_marked_flow_sends_a_document_with_nothing_marked_and_holds_one_with_a_mark()
+    {
+        var flow = new Flow { Automation = FlowAutomation.Marked };
+        var jobs = new Mock<IBackgroundJobClient>();
+        int Sends() => jobs.Invocations.Count(i => i.Method.Name == nameof(IBackgroundJobClient.Create));
+
+        SendDocumentJob.EnqueueIfAutomatic(jobs.Object, new FlowDocument { Status = DocumentStatus.Ready }, flow);
+        Sends().Should().Be(1);
+
+        var marked = new FlowDocument
+        {
+            Status = DocumentStatus.NeedsReview,
+            ChecksJson = DocumentJson.Serialize(new[] { new DocumentCheck(DocumentChecks.LowConfidence, false, "invoice_no", "Hard to read.") }),
+        };
+        SendDocumentJob.EnqueueIfAutomatic(jobs.Object, marked, flow);
+        SendDocumentJob.EnqueueIfAutomatic(jobs.Object, new FlowDocument { Status = DocumentStatus.Ready, IsSample = true }, flow);
+        Sends().Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_first_document_from_an_email_address_waits_on_a_marked_flow()
+    {
+        var now = DateTime.UtcNow;
+        var flow = new Flow
+        {
+            Id = Guid.NewGuid(), OrgId = Org, Name = "Synthetic flow", FieldsConfirmed = true, Automation = FlowAutomation.Marked, CreatedAt = now, UpdatedAt = now,
+            FieldsJson = DocumentJson.Serialize(FlowFieldList.Empty),
+        };
+        var doc = new FlowDocument
+        {
+            Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, FileName = "synthetic.csv", ContentType = "text/csv",
+            SourceFileKey = "k", Source = IntakeKind.Email, SourceRef = $"marked-{Guid.NewGuid():N}@example.test", Status = DocumentStatus.Received, CreatedAt = now, UpdatedAt = now,
+        };
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        db.Flows.Add(flow);
+        db.FlowDocuments.Add(doc);
+        await new DocumentRechecker(db, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), Mock.Of<IStandardValidator>())
+            .ApplyAsync(doc, flow, new ReadResult("Invoice", []), CancellationToken.None);
+        await db.SaveChangesAsync();
+
+        DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).Should().Contain(c => c.Code == DocumentChecks.NewSender && !c.Passed);
+        doc.Status.Should().Be(DocumentStatus.NeedsReview);
+    }
+
+    [Fact]
     public async Task A_first_document_from_an_email_address_waits_on_an_automatic_flow_only()
     {
         var now = DateTime.UtcNow;

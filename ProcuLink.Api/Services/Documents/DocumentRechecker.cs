@@ -33,6 +33,7 @@ public sealed class DocumentRechecker(ProcuLinkDbContext db, DocumentEngineGate 
         var duplicate = false;
         if (doc.DedupKey is { } key)
         {
+            var keyHash = RemovedDocumentFingerprint.HashOf(key);
             // A sample is invented: its number never makes a real document a repeat.
             var others = await db.FlowDocuments
                 .Where(d => d.OrgId == doc.OrgId && d.FlowId == doc.FlowId && d.DedupKey == key && d.Id != doc.Id && !d.IsSample)
@@ -40,12 +41,14 @@ public sealed class DocumentRechecker(ProcuLinkDbContext db, DocumentEngineGate 
                 .ToListAsync(ct);
             // A copy the flow already sent, or is sending, is a repeat whenever it arrived: a document moved in later must not send the number twice.
             duplicate = others.Any(d => d.Status is DocumentStatus.Sent or DocumentStatus.Sending || d.CreatedAt < doc.CreatedAt
-                || (d.CreatedAt == doc.CreatedAt && d.Id.CompareTo(doc.Id) < 0));
+                || (d.CreatedAt == doc.CreatedAt && d.Id.CompareTo(doc.Id) < 0))
+                // A sent copy a person removed is an earlier copy.
+                || await db.RemovedDocumentFingerprints.AnyAsync(f => f.OrgId == doc.OrgId && f.FlowId == doc.FlowId && f.DedupKeyHash == keyHash, ct);
         }
 
-        // Anyone who knows a workspace's address can email it: on an automatic flow, the first emailed document from an address
+        // Anyone who knows a workspace's address can email it: on a flow that sends by itself, the first emailed document from an address
         // the workspace never sent a document from waits for a person. Once a person sends it, the address is trusted.
-        var newSender = flow.Automation == FlowAutomation.Auto && !doc.IsSample && doc.Source is IntakeKind.Email or IntakeKind.Imap
+        var newSender = FlowAutomation.SendsByItself(flow.Automation) && !doc.IsSample && doc.Source is IntakeKind.Email or IntakeKind.Imap
             && (doc.SourceRef?.Trim().ToLowerInvariant() is not { Length: > 0 } sender
                 || !await db.FlowDocuments.AnyAsync(d => d.OrgId == doc.OrgId && d.Id != doc.Id && !d.IsSample
                     && (d.Source == IntakeKind.Email || d.Source == IntakeKind.Imap) && d.Status == DocumentStatus.Sent && d.SourceRef != null && d.SourceRef.Trim().ToLower() == sender, ct));

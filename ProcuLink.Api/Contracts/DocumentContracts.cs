@@ -5,7 +5,7 @@ using ProcuLink.Core.Entities;
 namespace ProcuLink.Api.Contracts;
 
 public record FlowDto(Guid Id, string Name, bool FieldsConfirmed, FlowFieldList Fields, int DocumentCount, DateTime CreatedAt, string Automation = "review", bool ScansOn = false, bool FormatsOn = false, bool DocsOutputsOn = false, bool PeppolOn = false,
-    int? PublishedVersion = null, bool HasChanges = false, int? NoCorrectionStreak = null, FlowSummaryDto? Summary = null, bool CanDelete = false);
+    int? PublishedVersion = null, bool HasChanges = false, int? NoCorrectionStreak = null, FlowSummaryDto? Summary = null, bool CanDelete = false, bool DownloadOnly = false);
 
 /// <summary>The workspace inbox: its flow, its email address and the address's intake id, and which file kinds it reads.</summary>
 public sealed record InboxDto(Guid FlowId, string? Address, Guid? IntakeId, bool ScansOn, bool FormatsOn);
@@ -41,6 +41,9 @@ public record DocumentSummaryDto(
             DocumentJson.Deserialize<List<DocumentCheck>>(d.ChecksJson).Count, d.CreatedAt, d.Source, d.SourceRef, d.FlowVersion);
 }
 
+/// <summary>One file a sent document made. Destination is the destination's name, null when stored for download or the destination is gone.</summary>
+public sealed record DocumentFileDto(Guid DeliveryId, string FileName, bool Delivered, string? Destination);
+
 /// <summary>Where sending stopped. Destination is null when it has no name left to give (deleted, or not this workspace's).</summary>
 public sealed record DocumentStopDto(Guid? DestinationId, string? Destination, string? Error);
 
@@ -58,10 +61,30 @@ public sealed record DocumentRowDto : DocumentSummaryDto
     /// <summary>What the read says the document is, as written: trimmed, at most 80 characters.</summary>
     public string? Kind { get; init; }
     public bool InInbox { get; init; }
+    /// <summary>A sent document's files that can be downloaded (delivered or stored, with a made file). Empty for any other status.</summary>
+    public IReadOnlyList<DocumentFileDto> Files { get; init; } = [];
+    /// <summary>For a repeated file (<c>duplicate_file</c>): when the newest earlier copy arrived.</summary>
+    public DateTime? DuplicateOfAt { get; init; }
+    /// <summary>The flow's current answer: no file it makes goes to a destination.</summary>
+    public bool DownloadOnly { get; init; }
+    /// <summary>Whether the caller may remove it: an org admin always; a member only when nothing was made or sent from it.</summary>
+    public bool CanRemove { get; init; }
+    /// <summary>It counts toward the plan's current usage window, so removing it still leaves it counted.</summary>
+    public bool CountsThisMonth { get; init; }
 }
 
 public record DocumentDto(DocumentSummaryDto Summary, string ContentType, ReadResult Read, IReadOnlyList<DocumentCheck> Checks,
     string? SenderLabel = null);
+
+/// <summary>The app's document detail: the file API's, plus what only the app shows. Never returned by the file API.</summary>
+public sealed record DocumentDetailDto : DocumentDto
+{
+    public DocumentDetailDto(DocumentDto detail) : base(detail) { }
+    /// <summary>Whether the caller may remove it: an org admin always; a member only when nothing was made or sent from it.</summary>
+    public bool CanRemove { get; init; }
+    /// <summary>It counts toward the plan's current usage window, so removing it still leaves it counted.</summary>
+    public bool CountsThisMonth { get; init; }
+}
 
 /// <summary>What the file API returns for a document: the read result and the sends made from it.</summary>
 public record FlowFileResultDto(DocumentDto Document, IReadOnlyList<object> Deliveries);

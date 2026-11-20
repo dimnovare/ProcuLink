@@ -823,7 +823,7 @@ public class AdminControllerTests
         wrongSlug.Should().BeOfType<BadRequestObjectResult>();
 
         eraser.Verify(e => e.EraseAsync(Moq.It.IsAny<Guid>(), Moq.It.IsAny<ProcuLink.Core.Services.DocumentEraseFilter>(),
-            Moq.It.IsAny<string>(), Moq.It.IsAny<CancellationToken>()), Moq.Times.Never());
+            Moq.It.IsAny<string>(), Moq.It.IsAny<CancellationToken>(), Moq.It.IsAny<ProcuLink.Core.Entities.AuditEvent?>()), Moq.Times.Never());
     }
 
     // ── bulk erase ─────────────────────────────────────────────────────────
