@@ -18,7 +18,7 @@ using ProcuLink.Transform.Output;
 
 namespace ProcuLink.Api.Controllers;
 
-public sealed record OutputRequest(string Name, string Format, string? TableKey, Guid? DestinationId, OutputNodeTemplate? Template, SendWhen? SendWhen = null, OutputLayout? Layout = null, string? Standard = null, bool Replace = false);
+public sealed record OutputRequest(string Name, string Format, string? TableKey, Guid? DestinationId, OutputNodeTemplate? Template, SendWhen? SendWhen = null, OutputLayout? Layout = null, string? Standard = null, bool Replace = false, string? CsvSeparator = null);
 
 /// <summary><paramref name="Needs"/> lists the meanings a standard output needs; null for a template output.</summary>
 public sealed record OutputDto(
@@ -308,7 +308,12 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         }
         else
         {
-            using var reader = new StreamReader(render.Result.Content, StandardOutputs.TextEncoding(standardId));
+            using var text = new MemoryStream();
+            await render.Result.Content.CopyToAsync(text, ct);
+            // The reader drops a byte-order mark, so the shown text stays the same; the flag lets a download put it back.
+            if (text.Length >= 3 && text.GetBuffer() is [0xEF, 0xBB, 0xBF, ..]) shownBody["byteOrderMark"] = true;
+            text.Position = 0;
+            using var reader = new StreamReader(text, StandardOutputs.TextEncoding(standardId));
             shownBody["content"] = await reader.ReadToEndAsync(ct);
         }
         shownBody["lookupMisses"] = shown;
@@ -397,7 +402,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         var templateJson = "{}";
         if (standard is null)
         {
-            var template = request.Template ?? DefaultOutputTemplate.For(fields, format, request.TableKey);
+            var template = request.Template ?? DefaultOutputTemplate.For(fields, format, request.TableKey, request.CsvSeparator);
             if (await CheckTemplate(template, format, ct) is { } badTemplate) return badTemplate;
             templateJson = DocumentJson.Serialize(template);
         }

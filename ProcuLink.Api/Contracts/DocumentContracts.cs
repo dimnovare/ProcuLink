@@ -23,9 +23,9 @@ public record CreateFlowRequest(string Name);
 
 public sealed record MoveDocumentRequest(Guid FlowId);
 
-public sealed record SetUpDocumentRequest(string? Name = null);
+public sealed record SetUpDocumentRequest(string? Name = null, string? CsvSeparator = null);
 
-public sealed record DownloadDocumentRequest(string? Format);
+public sealed record DownloadDocumentRequest(string? Format, string? CsvSeparator = null);
 
 public sealed record SetUpResultDto(Guid FlowId, string FlowName, DocumentSummaryDto Document);
 

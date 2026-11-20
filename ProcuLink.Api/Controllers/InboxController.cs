@@ -163,7 +163,7 @@ public sealed class InboxController(
         {
             var flow = FlowCreation.New(orgId, name, fields, confirmed: true, RequireOrgAdminAttribute.IsAdmin(HttpContext) ? FlowAutomation.Marked : FlowAutomation.Review);
             db.Flows.Add(flow);
-            db.Set<FlowOutput>().Add(DefaultOutputTemplate.CsvFile(flow, fields));
+            db.Set<FlowOutput>().Add(DefaultOutputTemplate.CsvFile(flow, fields, request?.CsvSeparator));
             // Read in the inbox already: checked against the new flow straight away, never read again.
             await DocumentSort.MoveToAsync(db, doc, flow.Id, flow.Name, true, "document.moved", tenant.ClerkUserId, ct, newFlow: true);
             await rechecker.ApplyAsync(doc, flow, read, ct);
@@ -194,7 +194,7 @@ public sealed class InboxController(
 
         var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
         var tableKey = read.Tables.FirstOrDefault()?.Key;
-        var render = DocumentOutputRenderer.Render(request.Format, DefaultOutputTemplate.For(ReadMerge.KeysOf(read), request.Format, tableKey), read, tableKey);
+        var render = DocumentOutputRenderer.Render(request.Format, DefaultOutputTemplate.For(ReadMerge.KeysOf(read), request.Format, tableKey, request.CsvSeparator), read, tableKey);
         if (!render.Ok) return UnprocessableEntity(new { error = render.Error, detail = render.Detail });
         if (!downloaded)
         {

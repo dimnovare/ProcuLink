@@ -9,6 +9,7 @@ using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using Xunit;
 
@@ -129,6 +130,25 @@ public sealed class InboxSetUpTests(DocumentEngineTestFactory factory) : IClassF
             (org.Plan, org.AccountStatus) = (plan, "active");
             await db.SaveChangesAsync();
         }
+    }
+
+    [Fact]
+    public async Task Set_up_with_a_separator_makes_an_excel_csv()
+    {
+        // OrgB, and exactly two flows: no more than the Pilot cap the flow-limit test fills OrgB up to.
+        async Task<CsvDialect?> DialectAfterSetUp(string sender, string separator)
+        {
+            var doc = await InboxDocAsync(OrgB, sender);
+            var res = await factory.ClientFor(OrgB).PostAsJsonAsync($"/api/documents/{doc}/set-up", new { csvSeparator = separator });
+            res.StatusCode.Should().Be(HttpStatusCode.Created);
+            var flowId = (await res.Content.ReadFromJsonAsync<SetUpResultDto>(DocumentJson.Options))!.FlowId;
+            var json = Db(db => db.Set<FlowOutput>().Single(o => o.FlowId == flowId).TemplateJson);
+            return DocumentJson.Deserialize<OutputNodeTemplate>(json).CsvDialect;
+        }
+
+        var excel = await DialectAfterSetUp("name:example excel sender", ",");
+        (excel?.Delimiter, excel?.ByteOrderMark).Should().Be(((string?)null, (bool?)true));
+        (await DialectAfterSetUp("name:example pipe sender", "|")).Should().BeNull();
     }
 
     [Fact]

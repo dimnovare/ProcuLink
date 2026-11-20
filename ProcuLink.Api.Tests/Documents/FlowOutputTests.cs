@@ -119,6 +119,23 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
     }
 
     [Fact]
+    public async Task A_new_csv_with_a_separator_is_made_for_excel()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, docId) = await Seed(confirmed: true);
+        async Task<OutputDto> Create(object body) =>
+            (await (await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", body)).Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+
+        var excel = await Create(new { name = "CSV file", format = "csv", csvSeparator = ";" });
+        (excel.Template.CsvDialect?.Delimiter, excel.Template.CsvDialect?.ByteOrderMark).Should().Be(((string?)";", (bool?)true));
+        (await Create(new { name = "CSV file 2", format = "csv" })).Template.CsvDialect.Should().BeNull();
+
+        var p = await (await http.PostAsync($"/api/documents/{docId}/outputs/{excel.Id}/preview", null)).Content.ReadFromJsonAsync<JsonElement>();
+        p.GetProperty("byteOrderMark").GetBoolean().Should().BeTrue();
+        p.GetProperty("content").GetString().Should().StartWith("Invoice number;Total;SKU");
+    }
+
+    [Fact]
     public async Task Replace_changes_a_files_kind_in_place_and_keeps_its_id()
     {
         var http = factory.ClientFor(Org);
