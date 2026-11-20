@@ -8,6 +8,7 @@ using Moq;
 using ProcuLink.Api.Tests.Integration;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Controllers;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -115,6 +116,78 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         var (unconfirmedFlow, _) = await Seed(confirmed: false);
         (await http.PostAsJsonAsync($"/api/flows/{unconfirmedFlow}/outputs", new { name = "x", format = "csv" }))
             .StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task Replace_changes_a_files_kind_in_place_and_keeps_its_id()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, _) = await Seed(confirmed: true);
+        var rule = new SendWhen("invoice_no", "is", "Acme");
+        var csv = (await (await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "CSV", format = "csv", sendWhen = rule }))
+            .Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+
+        var toStandard = await http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{csv.Id}",
+            new { name = "X12", format = "", standard = "x12-850", tableKey = "items", sendWhen = rule, replace = true });
+        toStandard.StatusCode.Should().Be(HttpStatusCode.OK, await toStandard.Content.ReadAsStringAsync());
+        var std = (await toStandard.Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+        (std.Id, std.Standard, std.SendWhen).Should().Be((csv.Id, "x12-850", rule));
+
+        var back = (await (await http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{csv.Id}",
+            new { name = "JSON", format = "json", standard = (string?)null, tableKey = "items", replace = true }))
+            .Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+        (back.Id, back.Format, back.Standard).Should().Be((csv.Id, "json", (string?)null));
+        Leaves(back.Template.Root).Select(l => l.Name).Should().Equal("invoice_no", "total", "sku");
+    }
+
+    [Fact]
+    public async Task A_google_sheets_destination_takes_only_a_csv_file()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, _) = await Seed(confirmed: true);
+        var sheet = new FlowDestination { Id = Guid.NewGuid(), OrgId = Org, Name = "Sheet", Protocol = DeliveryProtocolConstants.GoogleSheets, ConfigJson = "{}" };
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.Set<FlowDestination>().Add(sheet);
+            await db.SaveChangesAsync();
+        }
+        var csv = await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "CSV", format = "csv", destinationId = sheet.Id });
+        csv.StatusCode.Should().Be(HttpStatusCode.Created);
+        var id = (await csv.Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!.Id;
+
+        var toXml = await http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{id}", new { name = "XML", format = "xml", destinationId = sheet.Id, replace = true });
+        toXml.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await toXml.Content.ReadAsStringAsync()).Should().Contain("Google Sheets takes only a CSV file. Choose CSV, or change where this file goes first.");
+    }
+
+    [Fact]
+    public async Task Preview_as_another_type_renders_it_and_saves_nothing()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, docId) = await Seed(confirmed: true);
+        var csv = (await (await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "CSV", format = "csv" }))
+            .Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+
+        var res = await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/{csv.Id}/preview", new { format = "json", tableKey = "items" });
+        res.StatusCode.Should().Be(HttpStatusCode.OK, await res.Content.ReadAsStringAsync());
+        (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("content").GetString().Should().Contain("\"invoice_no\"").And.Contain("INV-7");
+
+        var bad = await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/{csv.Id}/preview", new { format = "nope" });
+        bad.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await bad.Content.ReadAsStringAsync()).Should().Contain("unsupported_format");
+
+        var asStd = await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/{csv.Id}/preview", new { standard = "x12-850", tableKey = "items" });
+        asStd.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await asStd.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("detail").GetString().Should().StartWith("This standard needs");
+        (await (await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/{csv.Id}/preview", new { standard = "nope" })).Content.ReadAsStringAsync())
+            .Should().Contain("unsupported_format");
+        (await (await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/{csv.Id}/preview", new { format = "json", tableKey = "nope" })).Content.ReadAsStringAsync())
+            .Should().Contain("The flow has no table 'nope'.");
+
+        using var scope = factory.Services.CreateScope();
+        (await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowOutput>().AsNoTracking().SingleAsync(o => o.Id == csv.Id))
+            .Format.Should().Be("csv");
     }
 
     [Fact]
@@ -380,7 +453,7 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         (output.Format, output.Standard, output.Layout).Should().Be(("xml", "cxml-1-2", (OutputLayout?)null));
         output.Needs.Should().Contain(FieldMeanings.LineItemCode);
 
-        // An update can never turn a standard output into a template output, nor give it a template.
+        // An update without `replace` never turns a standard output into a template output, nor gives it a template.
         var csv = new OutputNodeTemplate { Format = OutputFormat.Csv };
         var put = await http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{output.Id}", new { name = "Orders 2", format = "csv", standard = (string?)null, template = csv });
         put.StatusCode.Should().Be(HttpStatusCode.OK);
