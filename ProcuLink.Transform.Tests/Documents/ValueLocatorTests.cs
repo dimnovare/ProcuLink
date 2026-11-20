@@ -1,6 +1,10 @@
 using FluentAssertions;
 using ProcuLink.Core.Documents;
 using ProcuLink.Transform.Documents;
+using ProcuLink.Transform.Parsing;
+using UglyToad.PdfPig.Core;
+using UglyToad.PdfPig.Fonts.Standard14Fonts;
+using UglyToad.PdfPig.Writer;
 
 namespace ProcuLink.Transform.Tests.Documents;
 
@@ -102,5 +106,23 @@ public class ValueLocatorTests
     public void A_word_in_the_same_column_rows_further_down_does_not_continue_a_value()
     {
         ValueLocator.Locate("Kontori tool must", WrappedCell(0.10, 0.49)).Should().BeNull();
+    }
+
+    [Fact]
+    public void A_wrapped_cell_in_a_real_pdf_is_found_even_when_its_words_are_short()
+    {
+        // Helvetica 10pt on 12pt lines: "case" and "mm" have no capitals or ascenders, so their boxes are low.
+        var builder = new PdfDocumentBuilder();
+        var font = builder.AddStandard14Font(Standard14Font.Helvetica);
+        var page = builder.AddPage(595, 842);
+        foreach (var (text, x, y) in new[] { ("Paper", 60, 700), ("case", 92, 700), ("2", 300, 700), ("49,90", 400, 700), ("mm", 60, 688), ("Kontori", 60, 676) })
+            page.AddText(text, 10, new PdfPoint(x, y), font);
+        var words = PdfWordExtractor.Extract(builder.Build()).Words;
+
+        var hit = ValueLocator.Locate("Paper case mm", words)!;
+
+        hit.Box!.Y.Should().BeLessThan(words.Single(w => w.Text == "case").Box.Y + 1e-9);
+        (hit.Box.Y + hit.Box.Height).Should().BeApproximately(words.Single(w => w.Text == "mm").Box.Y + words.Single(w => w.Text == "mm").Box.Height, 1e-9);
+        ValueLocator.Locate("Paper case Kontori", words).Should().BeNull(); // two lines down is the next row
     }
 }

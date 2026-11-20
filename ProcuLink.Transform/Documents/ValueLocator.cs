@@ -53,10 +53,12 @@ public static class ValueLocator
                 {
                     var w = words[j];
                     if (w.Page != words[i].Page || Norm(w.Text) != tokens[k]) continue;
-                    var below = w.Box.Y > p.Y + p.Height / 2;
+                    // Boxes hug the glyphs ("mm" is shorter than "Kontori"), so lines are compared by their bottoms,
+                    // and the next line sits about 1.2 to 2.5 glyph heights under the one above.
+                    var (drop, h) = (w.Box.Y + w.Box.Height - (p.Y + p.Height), Math.Max(w.Box.Height, p.Height));
                     var inColumn = w.Box.X >= matched[0].X - ColumnSlack && w.Box.X <= matched.Max(b => b.X + b.Width);
-                    // Same line: only the very next word. Below: the next line only (top within 2 line heights).
-                    if (below ? inColumn && w.Box.Y < p.Y + 2 * p.Height : j == prev + 1 && Math.Abs(w.Box.Y - p.Y) <= p.Height / 2)
+                    // Same line: only the very next word. Below: the next line only.
+                    if (drop > h / 2 ? inColumn && drop < 2.5 * h : j == prev + 1 && Math.Abs(drop) <= h / 2)
                         next = j;
                 }
                 if (next >= 0) matched.Add(words[next].Box);

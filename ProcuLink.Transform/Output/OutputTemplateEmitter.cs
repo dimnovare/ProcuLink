@@ -449,7 +449,7 @@ public sealed class OutputTemplateEmitter
         return new CsvGrid(header, rows);
     }
 
-    /// <summary>Column names as written, a repeat (ignoring case) numbered " 2", " 3"… so every column is unique.</summary>
+    /// <summary>Column names as written, a repeat (ignoring case) numbered " 2", " 3"… so every column is unique. A blank stays blank.</summary>
     public static List<string> UniqueNames(IEnumerable<string> names)
     {
         var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -457,7 +457,7 @@ public sealed class OutputTemplateEmitter
         foreach (var name in names)
         {
             var unique = name;
-            for (var n = 2; !used.Add(unique); n++) unique = $"{name} {n}";
+            for (var n = 2; !string.IsNullOrWhiteSpace(name) && !used.Add(unique); n++) unique = $"{name} {n}";
             result.Add(unique);
         }
         return result;

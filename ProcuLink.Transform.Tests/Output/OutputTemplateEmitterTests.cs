@@ -210,6 +210,7 @@ public class OutputTemplateEmitterTests
         var header = EmitterRows.Emit(template).Text().Replace("\r\n", "\n").Split('\n')[0];
 
         Assert.Equal("Summa,Arve nr,Summa 2,summa 3", header);
+        Assert.Equal(["", "", "Kogus", "Kogus 2"], OutputTemplateEmitter.UniqueNames(["", "", "Kogus", "Kogus"])); // a blank stays blank
     }
 
     [Fact]
