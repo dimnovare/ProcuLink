@@ -172,7 +172,7 @@ public class JsonTypedLeafTests
             () => Emit(Tree("BuyerName", valueType: "boolean"), Buyer("maybe")));
 
         Assert.Contains("maybe", ex.Message);
-        Assert.Contains("yes/no", ex.Message);
+        Assert.Contains("yes or no", ex.Message);
     }
 
     // ── null ─────────────────────────────────────────────────────────────────

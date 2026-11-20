@@ -58,7 +58,8 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
     private static bool HasNullHole(OutputNode? n) =>
         n?.Children is null || n.Rule?.FieldManipulators?.Any(m => m?.Params is null) == true || n.Children.Any(HasNullHole);
 
-    private static IActionResult WrongFormat(string format) => Invalid($"The template must be a {FlowOutputFormats.TemplateFormat(format)} template.");
+    private const string NoTable = "The table this file uses is no longer on the flow. Choose another table.";
+    private static IActionResult WrongFormat() => Invalid("This file's layout is for another file type. Choose the file type again, or start the columns over.");
 
     private static IActionResult OutputNotFound() => new NotFoundObjectResult(new { error = "output_not_found" });
 
@@ -262,7 +263,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         var standardId = proposed ? body!.Standard : output.Standard;
         if (string.IsNullOrEmpty(standardId)) standardId = null;
         var tableKey = proposed ? body!.TableKey : output.TableKey;
-        if (proposed && tableKey is not null && config.Fields.Tables.All(t => t.Key != tableKey)) return Invalid($"The flow has no table '{tableKey}'.");
+        if (proposed && tableKey is not null && config.Fields.Tables.All(t => t.Key != tableKey)) return Invalid(NoTable);
         var known = StandardOutputs.Find(standardId);
         var format = (standardId is not null ? known?.Format : proposed ? body!.Format : output.Format) ?? "";
 
@@ -285,7 +286,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
             var template = body?.Template ?? (proposed
                 ? DefaultOutputTemplate.For(config.Fields, format, tableKey)
                 : DocumentJson.Deserialize<OutputNodeTemplate>(output.TemplateJson));
-            if (body?.Template is not null && !FitsFormat(template, format)) return WrongFormat(format);
+            if (body?.Template is not null && !FitsFormat(template, format)) return WrongFormat();
             if (HasNullHole(template.Root)) return Invalid("template");
 
             var lookups = await DocumentLookups.LoadAsync(db, orgId, [template], ct);
@@ -386,11 +387,11 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
 
         var fields = DocumentJson.Deserialize<FlowFieldList>(flow.FieldsJson);
         if (request.TableKey is not null && fields.Tables.All(t => t.Key != request.TableKey))
-            return Invalid($"The flow has no table '{request.TableKey}'.");
+            return Invalid(NoTable);
         if (request.DestinationId is { } destinationId)
         {
             var protocol = await db.Set<FlowDestination>().Where(d => d.OrgId == orgId && d.Id == destinationId).Select(d => d.Protocol).FirstOrDefaultAsync(ct);
-            if (protocol is null) return Invalid("The destination does not exist.");
+            if (protocol is null) return Invalid("That destination no longer exists. Choose another place to send it.");
             if (protocol == DeliveryProtocolConstants.GoogleSheets && format != FlowOutputFormats.Csv)
                 return Invalid("Google Sheets takes only a CSV file. Choose CSV, or change where this file goes first.");
         }
@@ -469,7 +470,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
     /// <summary>The checks a template must pass for <paramref name="format"/>; returns the refusal, or null.</summary>
     private async Task<IActionResult?> CheckTemplate(OutputNodeTemplate template, string format, CancellationToken ct)
     {
-        if (!FitsFormat(template, format)) return WrongFormat(format);
+        if (!FitsFormat(template, format)) return WrongFormat();
         if (HasNullHole(template.Root)) return Invalid("template");
 
         var lookups = await DocumentLookups.LoadAsync(db, tenant.OrganisationId, [template], ct);

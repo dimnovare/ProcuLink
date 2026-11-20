@@ -9,7 +9,7 @@ public class ConcatManipulator : IFieldManipulator
     public ConcatManipulator(IReadOnlyList<string> @params)
     {
         if (@params.Count < 2)
-            throw new ArgumentException("Concat requires at least 2 params: [separator, col1, ...]", nameof(@params));
+            throw new ArgumentException("“Add text to the end” needs a separator and at least one field.", nameof(@params));
         _separator = @params[0];
         _columns = @params.Skip(1).ToList();
     }

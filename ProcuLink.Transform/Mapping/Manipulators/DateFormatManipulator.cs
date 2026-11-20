@@ -9,7 +9,7 @@ public class DateFormatManipulator : IFieldManipulator
     public DateFormatManipulator(IReadOnlyList<string> @params)
     {
         if (@params.Count != 2)
-            throw new ArgumentException("DateFormat requires exactly 2 params: [inputFormat, outputFormat]", nameof(@params));
+            throw new ArgumentException("“Reformat the date” needs two formats: the one the date has now, and the one you want.", nameof(@params));
         _inputFormat = @params[0];
         _outputFormat = @params[1];
     }

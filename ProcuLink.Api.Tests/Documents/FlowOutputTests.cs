@@ -200,7 +200,7 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         (await (await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/{csv.Id}/preview", new { standard = "nope" })).Content.ReadAsStringAsync())
             .Should().Contain("unsupported_format");
         (await (await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/{csv.Id}/preview", new { format = "json", tableKey = "nope" })).Content.ReadAsStringAsync())
-            .Should().Contain("The flow has no table 'nope'.");
+            .Should().Contain("The table this file uses is no longer on the flow. Choose another table.");
 
         using var scope = factory.Services.CreateScope();
         (await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowOutput>().AsNoTracking().SingleAsync(o => o.Id == csv.Id))
@@ -308,7 +308,7 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
 
         var res = await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/{csv.Id}/preview", new { template = json.Template });
         res.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
-        (await res.Content.ReadAsStringAsync()).Should().Contain("output_invalid").And.Contain("must be a Csv template");
+        (await res.Content.ReadAsStringAsync()).Should().Contain("output_invalid").And.Contain("This file's layout is for another file type.");
     }
 
     [Fact]

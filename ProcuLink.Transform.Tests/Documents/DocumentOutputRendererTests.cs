@@ -60,6 +60,21 @@ public class DocumentOutputRendererTests
     }
 
     [Fact]
+    public void A_step_without_its_settings_says_what_it_needs()
+    {
+        var read = new ReadResult("Invoice", [Field("total", "100")]);
+        var t = Csv(Lf, OutputNode.FieldOf("Total", new OutputFieldRule
+        {
+            OutputPath = "Total", CanonicalField = "total",
+            FieldManipulators = [new ManipulatorEntry { Type = "Divide", Params = [] }],
+        }));
+
+        var r = DocumentOutputRenderer.Render("csv", t, read, null);
+
+        (r.Ok, r.Error, r.Detail).Should().Be((false, "output_invalid", "“Divide the number” needs a number to divide by, such as 100."));
+    }
+
+    [Fact]
     public void Values_go_out_exactly_as_read()
     {
         var read = new ReadResult("Invoice", [Field("total", "1.500", "number"), Field("tax", "1.234,50", "money")]);
