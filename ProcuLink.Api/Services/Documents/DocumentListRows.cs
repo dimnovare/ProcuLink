@@ -63,13 +63,13 @@ public static class DocumentListRows
             : (await db.FlowDocuments.Where(x => x.OrgId == orgId && shas.Contains(x.Sha256)).Select(x => new { x.Id, x.Sha256, x.CreatedAt }).ToListAsync(ct))
                 .Select(x => (x.Id, x.Sha256, x.CreatedAt)).ToList())
             .ToLookup(x => x.Sha256);
-        // No live earlier copy: the sent copy a person removed.
+        // The newest earlier copy, live or a sent one a person removed.
         var removed = (shas.Count == 0 ? []
             : await db.RemovedDocumentFingerprints.Where(x => x.OrgId == orgId && shas.Contains(x.Sha256)).Select(x => new { x.Sha256, x.DocumentCreatedAt }).ToListAsync(ct))
             .ToLookup(x => x.Sha256, x => x.DocumentCreatedAt);
         var duplicateOf = repeats.ToDictionary(d => d.Id,
-            d => copies[d.Sha256].Where(x => x.Id != d.Id && x.CreatedAt < d.CreatedAt).Max(x => (DateTime?)x.CreatedAt)
-                ?? removed[d.Sha256].Where(at => at < d.CreatedAt).Max(at => (DateTime?)at));
+            d => copies[d.Sha256].Where(x => x.Id != d.Id && x.CreatedAt < d.CreatedAt).Select(x => x.CreatedAt)
+                .Concat(removed[d.Sha256].Where(at => at < d.CreatedAt)).Max(at => (DateTime?)at));
 
         return docs.Select(r =>
         {

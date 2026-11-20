@@ -2375,7 +2375,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.HasIndex(f => new { f.OrgId, f.Sha256 });
             b.HasIndex(f => new { f.OrgId, f.FlowId, f.DedupKeyHash });
             b.HasOne<Organisation>().WithMany().HasForeignKey(f => f.OrgId).OnDelete(DeleteBehavior.Cascade);
-            // Deleting the flow forgets its removed documents, as it erases its live ones.
+            // FlowDeletion refuses a flow that has any; the cascade only keeps the FK honest.
             b.HasOne<Flow>().WithMany().HasForeignKey(f => f.FlowId).OnDelete(DeleteBehavior.Cascade);
         });
 

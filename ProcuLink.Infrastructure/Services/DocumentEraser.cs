@@ -63,7 +63,11 @@ public sealed class DocumentEraser(
             .Select(d => new { d.Id, d.SourceFileKey, d.SplitFileKey, d.ReadAt, d.IsSample, d.BillingUnits, d.FlowId, d.Sha256, d.DedupKey, d.Status, d.CreatedAt }).ToListAsync(ct);
         var more = docs.Count > MaxPerCall;
         if (more) docs.RemoveAt(MaxPerCall);
-        if (docs.Count == 0) return Receipt(skipped: skipped, more: more);
+        // A legal erase by date also forgets what removed documents left behind. The date is the only part of a request a
+        // fingerprint can honestly match: it holds no document id and no content, so a request that also names ids keeps them.
+        var forget = before is { } until && ids is null && !filter.KeepFingerprints
+            ? db.RemovedDocumentFingerprints.Where(f => f.OrgId == orgId && f.DocumentCreatedAt < until) : null;
+        if (docs.Count == 0 && (forget is null || !await forget.AnyAsync(ct))) return Receipt(skipped: skipped, more: more);
 
         var docIds = docs.Select(d => d.Id).ToList();
         var linked = docIds.Select(id => (Guid?)id).ToList();
@@ -104,6 +108,7 @@ public sealed class DocumentEraser(
         // Disposing the transaction uncommitted rolls back every row above; no file has been touched yet.
         if (rows["flow_documents"] < docIds.Count)
             throw new DocumentsChangedDuringEraseException();
+        if (forget is not null) rows["removed_document_fingerprints"] = await forget.ExecuteDeleteAsync(none);
 
         // Billed units outlive the document, dated by when it was READ so the month it was billed in keeps them.
         db.ErasedDocumentUnits.AddRange(docs.Where(d => d.ReadAt != null && !d.IsSample && d.BillingUnits > 0)

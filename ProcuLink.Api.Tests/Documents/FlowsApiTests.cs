@@ -132,6 +132,18 @@ public class FlowsApiTests(DocumentEngineTestFactory factory) : IClassFixture<Do
         Assert.True(await CanDelete());
         await http.PostAsync($"/api/flows/{id}/documents/sample", null);
         Assert.True(await CanDelete());
+        using (var scope = factory.Services.CreateScope())
+        {
+            // A sent document that was removed: the flow sent, so it stays.
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.RemovedDocumentFingerprints.Add(new RemovedDocumentFingerprint
+            {
+                Id = Guid.NewGuid(), OrgId = DocumentEngineTestFactory.OrgA, FlowId = id, Sha256 = new string('a', 64),
+                DocumentCreatedAt = DateTime.UtcNow, RemovedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+        Assert.False(await CanDelete());
         await http.PutAsJsonAsync($"/api/flows/{id}/fields", Fields("total_gross"));
         Assert.Equal(HttpStatusCode.OK, (await http.PostAsync($"/api/flows/{id}/publish", null)).StatusCode);
         Assert.False(await CanDelete());

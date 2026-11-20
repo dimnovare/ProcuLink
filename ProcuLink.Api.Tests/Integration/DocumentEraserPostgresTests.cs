@@ -157,6 +157,28 @@ public sealed class DocumentEraserPostgresTests(PostgresContainerFixture postgre
     }
 
     [DockerRequiredFact]
+    public async Task Erase_by_date_forgets_the_workspaces_older_fingerprints_only()
+    {
+        var s = await SeedAsync();
+        var now = DateTime.UtcNow;
+        await using var db = new ProcuLinkDbContext(_options!);
+        RemovedDocumentFingerprint Print(Guid org, DateTime created) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = org, Sha256 = new string('c', 64), DocumentCreatedAt = created, RemovedAt = now,
+            FlowId = db.FlowDocuments.Where(d => d.OrgId == org).Select(d => d.FlowId).First(),
+        };
+        var (older, newer, theirs) = (Print(s.A, now.AddDays(-10)), Print(s.A, now), Print(s.B, now.AddDays(-10)));
+        db.RemovedDocumentFingerprints.AddRange(older, newer, theirs);
+        await db.SaveChangesAsync();
+
+        var r = await new DocumentEraser(db, Mock.Of<IFileStorageService>(), NullLogger<DocumentEraser>.Instance)
+            .EraseAsync(s.A, new(ReceivedBefore: now.AddDays(-1)), "test", CancellationToken.None);
+
+        r.RowsDeleted["removed_document_fingerprints"].Should().Be(1);
+        (await db.RemovedDocumentFingerprints.Select(f => f.Id).ToListAsync()).Should().BeEquivalentTo([newer.Id, theirs.Id]);
+    }
+
+    [DockerRequiredFact]
     public async Task Erase_NeverDelivered_keeps_a_document_with_a_delivery()
     {
         var s = await SeedAsync();

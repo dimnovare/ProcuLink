@@ -148,7 +148,7 @@ public sealed class DocumentsController(
     }
 
     /// <summary>Removes a document for good. An org admin: any document. A member: only one nothing was made or sent from
-    /// (no delivery), else 403. Never while it is received, read or sent (409). Another workspace's is 404, checked first.</summary>
+    /// (no delivery, and not sent or downloaded), else 403. Never while it is received, read or sent (409). Another workspace's is 404, checked first.</summary>
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Remove(Guid id, [FromServices] IDocumentEraser eraser, CancellationToken ct)
     {

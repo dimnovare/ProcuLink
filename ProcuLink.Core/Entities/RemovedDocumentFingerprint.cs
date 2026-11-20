@@ -5,7 +5,9 @@ namespace ProcuLink.Core.Entities;
 
 /// <summary>
 /// What is left of a sent document a person removed, so the "already received" holds still see it: the file's SHA-256 and the
-/// SHA-256 of its dedup key. No content, no file name, no raw key. Written only by a person's remove; a legal erase writes none.
+/// SHA-256 of its dedup key, unsalted. No file name and no raw key are stored, but a hash is not secrecy: anyone holding the file
+/// can confirm it by its SHA-256, and a typical document number can be recovered from its hash by trying candidates.
+/// Written only by a person's remove; a legal erase writes none, and an erase by date deletes those older than its cutoff.
 /// </summary>
 public class RemovedDocumentFingerprint
 {
