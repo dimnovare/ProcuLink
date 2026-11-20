@@ -49,10 +49,16 @@ public static class DocumentRemoval
             Id = Guid.NewGuid(), OrgId = doc.OrgId, EntityType = "Flow", EntityId = doc.FlowId, Action = Action,
             Payload = JsonSerializer.SerializeToDocument(new { flow = flowName, by = userId }), CreatedAt = DateTime.UtcNow,
         };
-        DocumentEraseReceipt receipt;
-        try { receipt = await eraser.EraseAsync(doc.OrgId, new DocumentEraseFilter(Ids: [doc.Id], NeverDelivered: !isAdmin, KeepFingerprints: true), $"user:{userId}", ct, history); }
-        catch (DocumentsChangedDuringEraseException) { return Busy; }
-        if (receipt.DocumentsErased == 1) return null;
-        return await db.FlowDocuments.AnyAsync(d => d.OrgId == doc.OrgId && d.Id == doc.Id, ct) ? Busy : null;
+        try
+        {
+            var receipt = await eraser.EraseAsync(doc.OrgId, new DocumentEraseFilter(Ids: [doc.Id], NeverDelivered: !isAdmin, KeepFingerprints: true), $"user:{userId}", ct, history);
+            if (receipt.DocumentsErased == 1) return null;
+        }
+        catch (DocumentsChangedDuringEraseException) { }
+
+        // Not erased: gone already, or it changed meanwhile. A member whose document was sent in between gets the refusal a retry would.
+        var status = await db.FlowDocuments.Where(d => d.OrgId == doc.OrgId && d.Id == doc.Id).Select(d => d.Status).FirstOrDefaultAsync(ct);
+        if (status is null) return null;
+        return CanRemove(isAdmin, await HasDeliveryAsync(db, doc, ct), status) ? Busy : AdminRequired;
     }
 }
