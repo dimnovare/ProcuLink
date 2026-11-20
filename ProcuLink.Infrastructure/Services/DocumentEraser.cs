@@ -73,14 +73,17 @@ public sealed class DocumentEraser(
             .Concat(await batchDeliveries.Where(x => x.ArtifactKey != null).Select(x => x.ArtifactKey!).ToListAsync(ct))
             .Where(k => k != "").Distinct().ToList();
         var prefixes = docIds.Select(id => $"{orgId}/documents/{id}/").ToList();
-        // Read before the delete cascades the deliveries away.
-        var delivered = filter.KeepFingerprints
-            ? (await batchDeliveries.Select(x => x.DocumentId).Distinct().ToListAsync(ct)).ToHashSet() : [];
 
         // The last point a cancellation may stop this: from here every call runs to completion.
         ct.ThrowIfCancellationRequested();
         var none = CancellationToken.None;
         await using var tx = await db.Database.BeginTransactionAsync(none);
+        // In the transaction, before the delete cascades the deliveries away: the real documents that were sent or delivered.
+        var fingerprinted = filter.KeepFingerprints
+            ? await db.FlowDocuments.Where(d => d.OrgId == orgId && docIds.Contains(d.Id) && !d.IsSample
+                    && (d.Status == DocumentStatus.Sent || deliveries.Any(x => x.DocumentId == d.Id)))
+                .Select(d => d.Id).ToListAsync(none)
+            : [];
 
         var rows = new Dictionary<string, int>
         {
@@ -93,6 +96,10 @@ public sealed class DocumentEraser(
         };
         var deleting = db.FlowDocuments.Where(d => d.OrgId == orgId && docIds.Contains(d.Id)).Where(idle);
         if (filter.NeverDelivered) deleting = deleting.Where(neverDelivered);
+        // One not fingerprinted that a send finished on since the read above is kept, and the erase stops below: none is erased unrecorded.
+        if (filter.KeepFingerprints)
+            deleting = deleting.Where(d => fingerprinted.Contains(d.Id) || d.IsSample
+                || (d.Status != DocumentStatus.Sent && !deliveries.Any(x => x.DocumentId == d.Id)));
         rows["flow_documents"] = await deleting.ExecuteDeleteAsync(none);
         // Disposing the transaction uncommitted rolls back every row above; no file has been touched yet.
         if (rows["flow_documents"] < docIds.Count)
@@ -103,7 +110,7 @@ public sealed class DocumentEraser(
             .Select(d => new ErasedDocumentUnit { Id = Guid.NewGuid(), OrgId = orgId, ReadAt = d.ReadAt!.Value, BillingUnits = d.BillingUnits }));
         // A removed sent document still holds back its next copy. Hashes only: no content, no file name, no raw key.
         if (filter.KeepFingerprints)
-            db.RemovedDocumentFingerprints.AddRange(docs.Where(d => !d.IsSample && (d.Status == DocumentStatus.Sent || delivered.Contains(d.Id)))
+            db.RemovedDocumentFingerprints.AddRange(docs.Where(d => fingerprinted.Contains(d.Id))
                 .Select(d => new RemovedDocumentFingerprint
                 {
                     Id = Guid.NewGuid(), OrgId = orgId, FlowId = d.FlowId, Sha256 = d.Sha256,
