@@ -8,6 +8,7 @@ using Moq;
 using ProcuLink.Api.Tests.Integration;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Controllers;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -140,6 +141,27 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
     }
 
     [Fact]
+    public async Task A_google_sheets_destination_takes_only_a_csv_file()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, _) = await Seed(confirmed: true);
+        var sheet = new FlowDestination { Id = Guid.NewGuid(), OrgId = Org, Name = "Sheet", Protocol = DeliveryProtocolConstants.GoogleSheets, ConfigJson = "{}" };
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.Set<FlowDestination>().Add(sheet);
+            await db.SaveChangesAsync();
+        }
+        var csv = await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "CSV", format = "csv", destinationId = sheet.Id });
+        csv.StatusCode.Should().Be(HttpStatusCode.Created);
+        var id = (await csv.Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!.Id;
+
+        var toXml = await http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{id}", new { name = "XML", format = "xml", destinationId = sheet.Id, replace = true });
+        toXml.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await toXml.Content.ReadAsStringAsync()).Should().Contain("Google Sheets takes only a CSV file. Choose CSV, or change where this file goes first.");
+    }
+
+    [Fact]
     public async Task Preview_as_another_type_renders_it_and_saves_nothing()
     {
         var http = factory.ClientFor(Org);
@@ -154,6 +176,14 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         var bad = await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/{csv.Id}/preview", new { format = "nope" });
         bad.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
         (await bad.Content.ReadAsStringAsync()).Should().Contain("unsupported_format");
+
+        var asStd = await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/{csv.Id}/preview", new { standard = "x12-850", tableKey = "items" });
+        asStd.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await asStd.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("detail").GetString().Should().StartWith("This standard needs");
+        (await (await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/{csv.Id}/preview", new { standard = "nope" })).Content.ReadAsStringAsync())
+            .Should().Contain("unsupported_format");
+        (await (await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/{csv.Id}/preview", new { format = "json", tableKey = "nope" })).Content.ReadAsStringAsync())
+            .Should().Contain("The flow has no table 'nope'.");
 
         using var scope = factory.Services.CreateScope();
         (await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowOutput>().AsNoTracking().SingleAsync(o => o.Id == csv.Id))
@@ -423,7 +453,7 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         (output.Format, output.Standard, output.Layout).Should().Be(("xml", "cxml-1-2", (OutputLayout?)null));
         output.Needs.Should().Contain(FieldMeanings.LineItemCode);
 
-        // An update can never turn a standard output into a template output, nor give it a template.
+        // An update without `replace` never turns a standard output into a template output, nor gives it a template.
         var csv = new OutputNodeTemplate { Format = OutputFormat.Csv };
         var put = await http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{output.Id}", new { name = "Orders 2", format = "csv", standard = (string?)null, template = csv });
         put.StatusCode.Should().Be(HttpStatusCode.OK);

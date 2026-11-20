@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Auth;
 using ProcuLink.Api.Helpers;
 using ProcuLink.Api.Services.Documents;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -261,6 +262,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         var standardId = proposed ? body!.Standard : output.Standard;
         if (string.IsNullOrEmpty(standardId)) standardId = null;
         var tableKey = proposed ? body!.TableKey : output.TableKey;
+        if (proposed && tableKey is not null && config.Fields.Tables.All(t => t.Key != tableKey)) return Invalid($"The flow has no table '{tableKey}'.");
         var known = StandardOutputs.Find(standardId);
         var format = (standardId is not null ? known?.Format : proposed ? body!.Format : output.Format) ?? "";
 
@@ -272,6 +274,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
             if (proposed && known is null) return UnprocessableEntity(new { error = "unsupported_format" });
             if (proposed && known!.Flagged && !gate.PeppolOn(orgId)) return StatusCode(403, new { error = "peppol_off" });
             if (body?.Template?.Envelope is { } draft && !PartnerIdsFit(draft)) return Invalid("partner_ids");
+            // A proposed standard uses only the envelope sent in the body, by design: it starts with no saved partner IDs.
             render = proposed || body?.Template?.Envelope is not null
                 ? await StandardOutputs.RenderAsync(standardId, read, config.Fields, tableKey, orgId, ct, body?.Template?.Envelope)
                 : await StandardOutputs.RenderAsync(output, read, config.Fields, orgId, ct);
@@ -379,9 +382,13 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         var fields = DocumentJson.Deserialize<FlowFieldList>(flow.FieldsJson);
         if (request.TableKey is not null && fields.Tables.All(t => t.Key != request.TableKey))
             return Invalid($"The flow has no table '{request.TableKey}'.");
-        if (request.DestinationId is { } destinationId
-            && !await db.Set<FlowDestination>().AnyAsync(d => d.OrgId == orgId && d.Id == destinationId, ct))
-            return Invalid("The destination does not exist.");
+        if (request.DestinationId is { } destinationId)
+        {
+            var protocol = await db.Set<FlowDestination>().Where(d => d.OrgId == orgId && d.Id == destinationId).Select(d => d.Protocol).FirstOrDefaultAsync(ct);
+            if (protocol is null) return Invalid("The destination does not exist.");
+            if (protocol == DeliveryProtocolConstants.GoogleSheets && format != FlowOutputFormats.Csv)
+                return Invalid("Google Sheets takes only a CSV file. Choose CSV, or change where this file goes first.");
+        }
 
         if (request.SendWhen is { } rule
             && (fields.Fields.All(f => f.Key != rule.Field) || !SendWhenOps.All.Contains(rule.Op) || rule.Value?.Trim().Length is not (>= 1 and <= 200)))
