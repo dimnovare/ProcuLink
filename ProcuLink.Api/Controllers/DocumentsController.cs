@@ -377,7 +377,9 @@ public sealed class DocumentsController(
         // The undelivered outputs still need sending; an edit does not make the document unsent-ready again.
         if (wasSendFailed) doc.Status = DocumentStatus.SendFailed;
         foreach (var c in changes) DocumentAudit.Add(db, doc, "document.value_edited", new { target = c.Target, old = c.Old, @new = c.New }, tenant.ClerkUserId);
-        await db.SaveChangesAsync(ct);
+        // Removed while being edited: the update matches no row, and the document is gone.
+        try { await db.SaveChangesAsync(ct); }
+        catch (DbUpdateConcurrencyException) { return NotFound(NotFoundBody); }
         return Ok(await DetailAsync(doc, flow.Name, ct));
     }
 
