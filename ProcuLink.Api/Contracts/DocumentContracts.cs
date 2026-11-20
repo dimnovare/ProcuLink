@@ -69,10 +69,14 @@ public sealed record DocumentRowDto : DocumentSummaryDto
     public DateTime? DuplicateOfAt { get; init; }
     /// <summary>The flow's current answer: no file it makes goes to a destination.</summary>
     public bool DownloadOnly { get; init; }
+    /// <summary>Whether the caller may remove it: an org admin always; a member only when nothing was made or sent from it.</summary>
+    public bool CanRemove { get; init; }
 }
 
+/// <summary>CanRemove: whether the caller may remove it (an org admin always; a member only when nothing was made or sent from
+/// it). Set on the app's detail; false from the file API, which offers no removal.</summary>
 public record DocumentDto(DocumentSummaryDto Summary, string ContentType, ReadResult Read, IReadOnlyList<DocumentCheck> Checks,
-    string? SenderLabel = null);
+    string? SenderLabel = null, bool CanRemove = false);
 
 /// <summary>What the file API returns for a document: the read result and the sends made from it.</summary>
 public record FlowFileResultDto(DocumentDto Document, IReadOnlyList<object> Deliveries);

@@ -1,3 +1,5 @@
+using ProcuLink.Core.Entities;
+
 namespace ProcuLink.Core.Services;
 
 /// <summary>
@@ -8,11 +10,13 @@ namespace ProcuLink.Core.Services;
 public interface IDocumentEraser
 {
     /// Org id ANDed into every match; an empty filter matches nothing; ids of another org are ignored.
-    Task<DocumentEraseReceipt> EraseAsync(Guid orgId, DocumentEraseFilter filter, string actor, CancellationToken ct);
+    /// <paramref name="history"/>, when given, is saved in the same transaction as the erase: both happen or neither.
+    Task<DocumentEraseReceipt> EraseAsync(Guid orgId, DocumentEraseFilter filter, string actor, CancellationToken ct, AuditEvent? history = null);
 }
 
-/// <summary>Both parts AND together. <see cref="ReceivedBefore"/> compares the document's CreatedAt with <c>&lt;</c>.</summary>
-public sealed record DocumentEraseFilter(IReadOnlyList<Guid>? Ids = null, DateTime? ReceivedBefore = null);
+/// <summary>All parts AND together. <see cref="ReceivedBefore"/> compares the document's CreatedAt with <c>&lt;</c>.
+/// <see cref="NeverDelivered"/> matches only a document with no delivery row, checked again by the delete itself.</summary>
+public sealed record DocumentEraseFilter(IReadOnlyList<Guid>? Ids = null, DateTime? ReceivedBefore = null, bool NeverDelivered = false);
 
 /// <summary>
 /// What an erase did. <see cref="SkippedInFlight"/> are matches still being read or delivered; <see cref="More"/>

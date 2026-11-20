@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Api.Auth;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -12,39 +13,45 @@ namespace ProcuLink.Api.Services.Documents;
 /// A person removes one document: the eraser takes it whole, exactly as deleting its flow would (row, deliveries, read calls,
 /// its own audit rows, the original and the made files). A read document stays counted in the month it was read, because the
 /// eraser keeps its units. Refused while the document is being received, read or sent.
+/// <para>Who: an org admin removes any document; a member only one that never had a delivery (nothing was made or sent from
+/// it), so a member cannot wipe what was delivered. Flow deletion keeps the same line (<see cref="FlowDeletion.CanDeleteAsync"/>).</para>
 /// </summary>
 public static class DocumentRemoval
 {
     public const string Action = "document.removed";
+    public const string Busy = "document_busy";
+    public const string AdminRequired = "org_admin_required";
 
-    /// <summary>Null when removed (or already gone), else <c>document_busy</c>.</summary>
-    public static async Task<string?> RemoveAsync(ProcuLinkDbContext db, IDocumentEraser eraser, ILogger logger,
-        FlowDocument doc, string flowName, string userId, CancellationToken ct)
+    /// <summary>The one rule, for the endpoint and for every DTO's <c>canRemove</c>.</summary>
+    public static bool CanRemove(bool isAdmin, bool hasDelivery) => isAdmin || !hasDelivery;
+
+    /// <summary>The rule for the current caller, for the DTOs only. The endpoint asks <see cref="RequireOrgAdminAttribute.IsAdmin"/> itself.</summary>
+    public static bool CanRemove(HttpContext http, bool hasDelivery) => CanRemove(RequireOrgAdminAttribute.IsAdmin(http), hasDelivery);
+
+    public static Task<bool> HasDeliveryAsync(ProcuLinkDbContext db, FlowDocument doc, CancellationToken ct) =>
+        db.Set<FlowDelivery>().AnyAsync(x => x.OrgId == doc.OrgId && x.DocumentId == doc.Id, ct);
+
+    /// <summary>Null when removed (or already gone), else <see cref="AdminRequired"/> or <see cref="Busy"/>.</summary>
+    public static async Task<string?> RemoveAsync(ProcuLinkDbContext db, IDocumentEraser eraser,
+        FlowDocument doc, string flowName, string userId, bool isAdmin, CancellationToken ct)
     {
+        if (!CanRemove(isAdmin, await HasDeliveryAsync(db, doc, ct))) return AdminRequired;
         if (doc.Status is DocumentStatus.Received or DocumentStatus.Reading or DocumentStatus.Sending
             || await db.FlowDocuments.Where(d => d.OrgId == doc.OrgId && d.Id == doc.Id).AnyAsync(DocumentEraser.InFlight(db, doc.OrgId), ct))
-            return "document_busy";
-        try
-        {
-            var receipt = await eraser.EraseAsync(doc.OrgId, new DocumentEraseFilter(Ids: [doc.Id]), $"user:{userId}", ct);
-            if (receipt.SkippedInFlight.Count > 0) return "document_busy";
-        }
-        catch (DocumentsChangedDuringEraseException) { return "document_busy"; }
+            return Busy;
 
-        // History, best effort: no file name, since a removed document leaves no contents behind.
-        try
+        // History in the erase's own transaction: never one without the other. No file name, since a removed document leaves
+        // no contents behind. For a member the eraser checks again that nothing was delivered, so a send that lands in between
+        // keeps the document.
+        var history = new AuditEvent
         {
-            db.AuditEvents.Add(new AuditEvent
-            {
-                Id = Guid.NewGuid(), OrgId = doc.OrgId, EntityType = "Flow", EntityId = doc.FlowId, Action = Action,
-                Payload = JsonSerializer.SerializeToDocument(new { flow = flowName, by = userId }), CreatedAt = DateTime.UtcNow,
-            });
-            await db.SaveChangesAsync(ct);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Removed document {DocumentId} but could not record it in the flow's history", doc.Id);
-        }
-        return null;
+            Id = Guid.NewGuid(), OrgId = doc.OrgId, EntityType = "Flow", EntityId = doc.FlowId, Action = Action,
+            Payload = JsonSerializer.SerializeToDocument(new { flow = flowName, by = userId }), CreatedAt = DateTime.UtcNow,
+        };
+        DocumentEraseReceipt receipt;
+        try { receipt = await eraser.EraseAsync(doc.OrgId, new DocumentEraseFilter(Ids: [doc.Id], NeverDelivered: !isAdmin), $"user:{userId}", ct, history); }
+        catch (DocumentsChangedDuringEraseException) { return Busy; }
+        if (receipt.DocumentsErased == 1) return null;
+        return await db.FlowDocuments.AnyAsync(d => d.OrgId == doc.OrgId && d.Id == doc.Id, ct) ? Busy : null;
     }
 }

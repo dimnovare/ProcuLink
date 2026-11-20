@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using ProcuLink.Api.Auth;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Jobs;
 using ProcuLink.Api.Services.Documents;
@@ -78,11 +79,11 @@ public sealed class DocumentsController(
         return IntakeResults.From(this, result, flowName, submitter.AcceptedFormats(orgId));
     }
 
-    internal static DocumentDto ToDto(FlowDocument d, string flowName)
+    internal static DocumentDto ToDto(FlowDocument d, string flowName, bool canRemove = false)
     {
         var read = DocumentJson.Deserialize<ReadResult>(d.ReadJson);
         return new(ToSummary(d, flowName), d.ContentType, read, DocumentJson.Deserialize<List<DocumentCheck>>(d.ChecksJson),
-            SenderIdentity.Of(read, d.Source, d.SourceRef)?.Label);
+            SenderIdentity.Of(read, d.Source, d.SourceRef)?.Label, canRemove);
     }
 
     private Task<FlowDocument?> FindAsync(Guid id, CancellationToken ct) =>
@@ -92,6 +93,10 @@ public sealed class DocumentsController(
         (await db.Flows.FirstAsync(f => f.OrgId == d.OrgId && f.Id == d.FlowId, ct)).Name;
 
     private static readonly object NotFoundBody = new { error = "document_not_found" };
+
+    /// <summary>The document screen's detail: the file API's, plus whether this caller may remove it.</summary>
+    private async Task<DocumentDto> DetailAsync(FlowDocument doc, string flowName, CancellationToken ct) =>
+        ToDto(doc, flowName, DocumentRemoval.CanRemove(HttpContext, await DocumentRemoval.HasDeliveryAsync(db, doc, ct)));
 
     [HttpGet]
     public async Task<IActionResult> List(Guid? flowId, string? status, int? take, string? q,
@@ -121,7 +126,8 @@ public sealed class DocumentsController(
         var size = Math.Clamp(pageSize ?? 50, 1, 200);
         var p = Math.Clamp(page.Value, 1, int.MaxValue / size); // an absurd page is an empty page, not an overflowed Skip
         var total = await docs.CountAsync(ct);
-        return Ok(new PaginatedResult<DocumentRowDto>(await DocumentListRows.ForAsync(db, orgId, docs.Skip((p - 1) * size).Take(size), ct), total, p, size));
+        var rows = await DocumentListRows.ForAsync(db, orgId, docs.Skip((p - 1) * size).Take(size), hasDelivery => DocumentRemoval.CanRemove(HttpContext, hasDelivery), ct);
+        return Ok(new PaginatedResult<DocumentRowDto>(rows, total, p, size));
     }
 
     [HttpGet("{id:guid}")]
@@ -129,19 +135,22 @@ public sealed class DocumentsController(
     {
         if (Refuse() is { } refused) return refused;
         var doc = await FindAsync(id, ct);
-        return doc is null ? NotFound(NotFoundBody) : Ok(ToDto(doc, await FlowNameAsync(doc, ct)));
+        return doc is null ? NotFound(NotFoundBody) : Ok(await DetailAsync(doc, await FlowNameAsync(doc, ct), ct));
     }
 
-    /// <summary>Removes a document for good: any member, since a member uploads. Not while it is received, read or sent.</summary>
+    /// <summary>Removes a document for good. An org admin: any document. A member: only one nothing was made or sent from
+    /// (no delivery), else 403. Never while it is received, read or sent (409). Another workspace's is 404, checked first.</summary>
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Remove(Guid id, [FromServices] IDocumentEraser eraser, CancellationToken ct)
     {
         if (Refuse() is { } refused) return refused;
         var doc = await FindAsync(id, ct);
         if (doc is null) return NotFound(NotFoundBody);
-        return await DocumentRemoval.RemoveAsync(db, eraser, logger, doc, await FlowNameAsync(doc, ct), tenant.ClerkUserId, ct) switch
+        var isAdmin = RequireOrgAdminAttribute.IsAdmin(HttpContext);
+        return await DocumentRemoval.RemoveAsync(db, eraser, doc, await FlowNameAsync(doc, ct), tenant.ClerkUserId, isAdmin, ct) switch
         {
             null => NoContent(),
+            DocumentRemoval.AdminRequired => RequireOrgAdminAttribute.Refusal(),
             var error => Conflict(new { error }),
         };
     }
@@ -360,7 +369,7 @@ public sealed class DocumentsController(
         if (wasSendFailed) doc.Status = DocumentStatus.SendFailed;
         foreach (var c in changes) DocumentAudit.Add(db, doc, "document.value_edited", new { target = c.Target, old = c.Old, @new = c.New }, tenant.ClerkUserId);
         await db.SaveChangesAsync(ct);
-        return Ok(ToDto(doc, flow.Name));
+        return Ok(await DetailAsync(doc, flow.Name, ct));
     }
 
     [HttpPost("{id:guid}/send")]

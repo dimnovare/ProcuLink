@@ -29,7 +29,7 @@ public sealed class DocumentEraser(
         return d => d.Status == DocumentStatus.Reading || d.Status == DocumentStatus.Sending || sending.Any(x => x.DocumentId == d.Id);
     }
 
-    public async Task<DocumentEraseReceipt> EraseAsync(Guid orgId, DocumentEraseFilter filter, string actor, CancellationToken ct)
+    public async Task<DocumentEraseReceipt> EraseAsync(Guid orgId, DocumentEraseFilter filter, string actor, CancellationToken ct, AuditEvent? history = null)
     {
         if (db.ScopedOrganisationId is { } scoped && scoped != orgId)
             throw new InvalidOperationException($"DocumentEraser needs an unscoped DbContext; this one is scoped to {scoped}.");
@@ -49,6 +49,7 @@ public sealed class DocumentEraser(
         var matches = db.FlowDocuments.Where(d => d.OrgId == orgId);
         if (ids is not null) matches = matches.Where(d => ids.Contains(d.Id));
         if (before is { } cutoff) matches = matches.Where(d => d.CreatedAt < cutoff);
+        if (filter.NeverDelivered) matches = matches.Where(d => !deliveries.Any(x => x.DocumentId == d.Id));
         var busy = InFlight(db, orgId);
         // Repeated by the delete itself, so a document that starts being read or sent after this check is kept.
         var idle = Expression.Lambda<Func<FlowDocument, bool>>(Expression.Not(busy.Body), busy.Parameters);
@@ -85,7 +86,9 @@ public sealed class DocumentEraser(
             ["flow_deliveries"] = await batchDeliveries.CountAsync(none),
             ["flow_read_calls"] = await db.Set<FlowReadCall>().CountAsync(c => c.OrgId == orgId && docIds.Contains(c.DocumentId), none),
         };
-        rows["flow_documents"] = await db.FlowDocuments.Where(d => d.OrgId == orgId && docIds.Contains(d.Id)).Where(idle).ExecuteDeleteAsync(none);
+        var deleting = db.FlowDocuments.Where(d => d.OrgId == orgId && docIds.Contains(d.Id)).Where(idle);
+        if (filter.NeverDelivered) deleting = deleting.Where(d => !deliveries.Any(x => x.DocumentId == d.Id));
+        rows["flow_documents"] = await deleting.ExecuteDeleteAsync(none);
         // Disposing the transaction uncommitted rolls back every row above; no file has been touched yet.
         if (rows["flow_documents"] < docIds.Count)
             throw new DocumentsChangedDuringEraseException();
@@ -103,6 +106,7 @@ public sealed class DocumentEraser(
         void Record(DocumentEraseReceipt r) => audit.Payload = JsonSerializer.Serialize(r, OrganisationEraser.ReceiptJson);
         Record(Receipt(rows["flow_documents"], skipped, more, rows, 0, [.. knownKeys, .. prefixes]));
         db.PlatformAuditEvents.Add(audit);
+        if (history is not null) db.AuditEvents.Add(history);
         await db.SaveChangesAsync(none);
         await tx.CommitAsync(none);
 

@@ -1,7 +1,9 @@
 using System.Net;
+using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using ProcuLink.Api.Auth;
 using ProcuLink.Api.Services.Documents;
 using ProcuLink.Api.Tests.Integration;
 using ProcuLink.Core.Documents;
@@ -78,15 +80,24 @@ public sealed class DocumentRemoveApiTests(PostgresContainerFixture postgres) : 
         return await db.AuditEvents.AsNoTracking().Where(a => a.OrgId == OrgA && a.Action == DocumentRemoval.Action).ToListAsync();
     }
 
+    private async Task<(bool Detail, bool Row)> CanRemove(HttpClient http, FlowDocument doc)
+    {
+        var detail = await http.GetFromJsonAsync<JsonElement>($"/api/documents/{doc.Id}");
+        var page = await http.GetFromJsonAsync<JsonElement>($"/api/documents?flowId={doc.FlowId}&page=1&pageSize=50");
+        return (detail.GetProperty("canRemove").GetBoolean(), page.GetProperty("items")[0].GetProperty("canRemove").GetBoolean());
+    }
+
     [DockerRequiredFact]
-    public async Task A_member_removes_a_read_document_and_the_month_still_counts_it()
+    public async Task An_admin_removes_a_sent_document_the_month_still_counts_it_and_its_flow_history_keeps_it()
     {
         var doc = await Seed(OrgA, DocumentStatus.Sent, readAt: DateTime.UtcNow, units: 1, delivery: FlowDeliveryStatus.Stored);
         var before = await OrdersThisMonth(OrgA);
-        var http = Member(OrgA);
+        var admin = factory.ClientFor(OrgA);
+        Assert.Equal((false, false), await CanRemove(Member(OrgA), doc));
+        Assert.Equal((true, true), await CanRemove(admin, doc));
 
-        Assert.Equal(HttpStatusCode.NoContent, (await http.DeleteAsync($"/api/documents/{doc.Id}")).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await http.GetAsync($"/api/documents/{doc.Id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.DeleteAsync($"/api/documents/{doc.Id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await admin.GetAsync($"/api/documents/{doc.Id}")).StatusCode);
         Assert.Equal(before, await OrdersThisMonth(OrgA));
 
         var audit = Assert.Single(await Removals());
@@ -100,7 +111,7 @@ public sealed class DocumentRemoveApiTests(PostgresContainerFixture postgres) : 
     [DockerRequiredFact]
     public async Task Removing_refuses_a_document_being_read_or_sent()
     {
-        var http = Member(OrgA);
+        var http = factory.ClientFor(OrgA);
         foreach (var (status, delivery) in new[]
                  {
                      (DocumentStatus.Received, (string?)null), (DocumentStatus.Reading, null), (DocumentStatus.Sending, null),
@@ -117,20 +128,29 @@ public sealed class DocumentRemoveApiTests(PostgresContainerFixture postgres) : 
     }
 
     [DockerRequiredFact]
-    public async Task An_unread_duplicate_never_counts_and_another_workspace_is_not_found()
+    public async Task A_member_removes_an_unread_duplicate_but_never_what_was_sent_or_another_workspaces()
     {
-        var duplicate = await Seed(OrgA, DocumentStatus.NeedsReview, reason: "duplicate_file");
-        var http = Member(OrgA);
+        var member = Member(OrgA);
+        var sent = await Seed(OrgA, DocumentStatus.Sent, readAt: DateTime.UtcNow, units: 1, delivery: FlowDeliveryStatus.Delivered);
+        var refused = await member.DeleteAsync($"/api/documents/{sent.Id}");
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Contains(RequireOrgAdminAttribute.ErrorCode, await refused.Content.ReadAsStringAsync());
+        Assert.True(await Exists(sent.Id));
+        Assert.Empty(await Removals());
 
-        Assert.Equal(HttpStatusCode.NoContent, (await http.DeleteAsync($"/api/documents/{duplicate.Id}")).StatusCode);
+        var duplicate = await Seed(OrgA, DocumentStatus.NeedsReview, reason: "duplicate_file");
+        Assert.Equal((true, true), await CanRemove(member, duplicate));
+        var counted = await OrdersThisMonth(OrgA);
+        Assert.Equal(HttpStatusCode.NoContent, (await member.DeleteAsync($"/api/documents/{duplicate.Id}")).StatusCode);
         await using (var db = Db())
             Assert.False(await db.ErasedDocumentUnits.AnyAsync(u => u.OrgId == OrgA));
-        Assert.Equal(0, await OrdersThisMonth(OrgA));
+        Assert.Equal(counted, await OrdersThisMonth(OrgA));
+        Assert.Single(await Removals());
 
         var theirs = await Seed(OrgB, DocumentStatus.Sent, readAt: DateTime.UtcNow, units: 1);
-        var refused = await http.DeleteAsync($"/api/documents/{theirs.Id}");
-        Assert.Equal(HttpStatusCode.NotFound, refused.StatusCode);
-        Assert.Contains("document_not_found", await refused.Content.ReadAsStringAsync());
+        var missing = await member.DeleteAsync($"/api/documents/{theirs.Id}");
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        Assert.Contains("document_not_found", await missing.Content.ReadAsStringAsync());
         Assert.True(await Exists(theirs.Id));
     }
 }
