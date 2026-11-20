@@ -45,13 +45,17 @@ public static class FlowSummaries
     public static async Task<ILookup<Guid, FlowSummaryOutputDto>> OutputsInUseAsync(
         ProcuLinkDbContext db, Guid orgId, IReadOnlyCollection<Flow> flows, CancellationToken ct)
     {
-        var editable = (await db.Set<FlowOutput>().AsNoTracking().Where(o => o.OrgId == orgId)
+        var flowIds = flows.Select(f => f.Id).ToList();
+        var editable = (await db.Set<FlowOutput>().AsNoTracking().Where(o => o.OrgId == orgId && flowIds.Contains(o.FlowId))
                 .Select(o => new { o.FlowId, o.Id, o.Name, o.Format, o.Standard, o.DestinationId }).ToListAsync(ct))
             .ToLookup(o => o.FlowId, o => (o.Id, o.Name, o.Format, o.Standard, o.DestinationId));
-        var live = (await FlowVersions.LiveVersionOutputsByFlowAsync(db, orgId, ct))
+        var live = (await FlowVersions.LiveVersionOutputsByFlowAsync(db, orgId, ct, flowIds))
             .ToLookup(x => x.FlowId, x => (x.Output.Id, x.Output.Name, x.Output.Format, x.Output.Standard, x.Output.DestinationId));
-        var destinations = await db.Set<FlowDestination>().AsNoTracking().Where(d => d.OrgId == orgId)
-            .ToDictionaryAsync(d => d.Id, d => d.Name, ct);
+        // Only the destinations these outputs name.
+        var destinationIds = editable.SelectMany(g => g).Concat(live.SelectMany(g => g)).Select(o => o.DestinationId).OfType<Guid>().Distinct().ToList();
+        var destinations = destinationIds.Count == 0 ? new Dictionary<Guid, string>()
+            : await db.Set<FlowDestination>().AsNoTracking().Where(d => d.OrgId == orgId && destinationIds.Contains(d.Id))
+                .ToDictionaryAsync(d => d.Id, d => d.Name, ct);
 
         return flows.SelectMany(f => (f.PublishedVersionNo is null ? editable[f.Id] : live[f.Id])
                 .OrderBy(o => o.Name, StringComparer.Ordinal).ThenBy(o => o.Id)
