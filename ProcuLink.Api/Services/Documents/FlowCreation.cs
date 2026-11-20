@@ -44,13 +44,15 @@ public static class FlowCreation
             : null;
     }
 
-    public static Flow New(Guid orgId, string name, FlowFieldList fields, bool confirmed)
+    /// <summary>A new flow. <paramref name="automation"/> has no default: a mode that sends by itself is an admin's choice, so a caller passes
+    /// <see cref="FlowAutomation.Marked"/> only behind <c>RequireOrgAdminAttribute.IsAdmin</c>, and <see cref="FlowAutomation.Review"/> otherwise.</summary>
+    public static Flow New(Guid orgId, string name, FlowFieldList fields, bool confirmed, string automation)
     {
         var now = DateTime.UtcNow;
         return new Flow
         {
             Id = Guid.NewGuid(), OrgId = orgId, Name = name, FieldsJson = DocumentJson.Serialize(fields),
-            FieldsConfirmed = confirmed, Automation = FlowAutomation.Marked, CreatedAt = now, UpdatedAt = now,
+            FieldsConfirmed = confirmed, Automation = automation, CreatedAt = now, UpdatedAt = now,
         };
     }
 }

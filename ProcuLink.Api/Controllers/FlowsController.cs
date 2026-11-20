@@ -55,7 +55,7 @@ public sealed class FlowsController(
         if (await FlowCreation.LimitReachedAsync(db, orgId, ct) is { } reached)
             return StatusCode(429, new { error = "flow_limit_reached", plan = reached.Plan, limit = reached.Cap, upgradeUrl = "/settings" });
         if (!FlowCreation.TryName(request.Name, out var name)) return BadRequest(new { error = "invalid_name" });
-        var flow = FlowCreation.New(orgId, name, FlowFieldList.Empty, confirmed: false);
+        var flow = FlowCreation.New(orgId, name, FlowFieldList.Empty, confirmed: false, RequireOrgAdminAttribute.IsAdmin(HttpContext) ? FlowAutomation.Marked : FlowAutomation.Review);
         db.Flows.Add(flow);
         await db.SaveChangesAsync(ct);
         return Created($"/api/flows/{flow.Id}", ToDto(flow, 0, downloadOnly: true)); // a new flow makes no file yet

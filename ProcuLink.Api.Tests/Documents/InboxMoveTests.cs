@@ -33,7 +33,7 @@ public sealed class InboxMoveTests(DocumentEngineTestFactory factory) : IClassFi
         factory.ClientFor(org).Dispose();
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
-        var flow = FlowCreation.New(org, name, FlowFieldList.Empty, confirmed: true);
+        var flow = FlowCreation.New(org, name, FlowFieldList.Empty, confirmed: true, FlowAutomation.Review);
         db.Flows.Add(flow);
         if (holdsKind is not null) db.FlowDocuments.Add(NewDoc(org, flow.Id, holdsKind, DocumentStatus.Sent, null, null));
         await db.SaveChangesAsync();

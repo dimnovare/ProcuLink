@@ -41,9 +41,38 @@ public class FlowsApiTests(DocumentEngineTestFactory factory) : IClassFixture<Do
     }
 
     [Fact]
-    public async Task A_new_flow_starts_on_check_only_what_we_marked()
+    public async Task A_new_flow_starts_on_check_only_what_we_marked_only_when_an_admin_makes_it()
     {
         var http = factory.ClientFor(DocumentEngineTestFactory.OrgA);
+        var member = factory.ClientFor(DocumentEngineTestFactory.OrgA);
+        member.DefaultRequestHeaders.Remove(ProcuLink.Api.Tests.Integration.RbacTestAuthHandler.RoleHeader);
+        member.DefaultRequestHeaders.Add(ProcuLink.Api.Tests.Integration.RbacTestAuthHandler.RoleHeader, "org:member");
+
+        // A mode that sends by itself is an admin's choice (PATCH refuses a member): a member's new flow starts on review,
+        // through the flows list and through setting one up from an inbox document.
+        var byMember = (await (await member.PostAsJsonAsync("/api/flows", new CreateFlowRequest("Member flow"))).Content.ReadFromJsonAsync<FlowDto>(DocumentJson.Options))!;
+        Assert.Equal(FlowAutomation.Review, byMember.Automation);
+        Guid inboxDoc;
+        using (var seed = factory.Services.CreateScope())
+        {
+            var sdb = seed.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            var doc = new FlowDocument
+            {
+                Id = Guid.NewGuid(), OrgId = DocumentEngineTestFactory.OrgA, FlowId = (await InboxFlow.GetOrCreateAsync(sdb, DocumentEngineTestFactory.OrgA, CancellationToken.None)).Id,
+                FileName = "invoice-1042.pdf", ContentType = "application/pdf", SourceFileKey = "k", BillingUnits = 1, Kind = "invoice",
+                SenderKey = "name:example supplier ltd", Status = DocumentStatus.NeedsReview, StatusReason = DocumentSort.NewKind, ReadAt = DateTime.UtcNow,
+                ReadJson = DocumentJson.Serialize(new ReadResult("Invoice", [new ReadField("invoice_number", "Invoice number", "INV-1042", FieldTypes.Text, FieldMeanings.DocumentNumber, 0.99, null, false, true, false)])),
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            };
+            sdb.FlowDocuments.Add(doc);
+            await sdb.SaveChangesAsync();
+            inboxDoc = doc.Id;
+        }
+        var setUp = await member.PostAsJsonAsync($"/api/documents/{inboxDoc}/set-up", new { });
+        Assert.Equal(HttpStatusCode.Created, setUp.StatusCode);
+        var setUpFlowId = (await setUp.Content.ReadFromJsonAsync<SetUpResultDto>(DocumentJson.Options))!.FlowId;
+        Assert.Equal(FlowAutomation.Review, (await http.GetFromJsonAsync<FlowDto>($"/api/flows/{setUpFlowId}", DocumentJson.Options))!.Automation);
+
         var created = await http.PostAsJsonAsync("/api/flows", new CreateFlowRequest("Marked mode"));
         var flow = (await created.Content.ReadFromJsonAsync<FlowDto>(DocumentJson.Options))!;
         Assert.Equal(FlowAutomation.Marked, flow.Automation);

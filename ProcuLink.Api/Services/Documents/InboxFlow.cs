@@ -15,9 +15,8 @@ public static class InboxFlow
     public static async Task<Flow> GetOrCreateAsync(ProcuLinkDbContext db, Guid orgId, CancellationToken ct)
     {
         if (await db.Flows.FirstOrDefaultAsync(f => f.OrgId == orgId && f.IsInbox, ct) is { } found) return found;
-        var flow = FlowCreation.New(orgId, Name, FlowFieldList.Empty, confirmed: false);
+        var flow = FlowCreation.New(orgId, Name, FlowFieldList.Empty, confirmed: false, FlowAutomation.Review); // the inbox never sends by itself
         flow.IsInbox = true;
-        flow.Automation = FlowAutomation.Review; // the inbox never sends by itself
         db.Flows.Add(flow);
         try
         {

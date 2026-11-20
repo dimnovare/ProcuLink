@@ -106,7 +106,7 @@ public sealed class InboxSetUpTests(DocumentEngineTestFactory factory) : IClassF
             var org = await db.Organisations.SingleAsync(o => o.Id == OrgB);
             plan = org.Plan;
             (org.Plan, org.TrialStartedAt, org.TrialEndsAt) = (PlanConstants.Pilot, DateTime.UtcNow, null); // an active Pilot
-            for (var n = PersonFlowCount(OrgB); n < cap; n++) db.Flows.Add(FlowCreation.New(OrgB, $"Flow {n}", FlowFieldList.Empty, confirmed: false));
+            for (var n = PersonFlowCount(OrgB); n < cap; n++) db.Flows.Add(FlowCreation.New(OrgB, $"Flow {n}", FlowFieldList.Empty, confirmed: false, FlowAutomation.Review));
             await db.SaveChangesAsync();
         }
         try
