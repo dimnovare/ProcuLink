@@ -37,6 +37,12 @@ public sealed class DocumentChecksTests
         ambiguous.Should().Be(new DateOnly(2026, 4, 3)); // day first wins
         FieldValueParser.TryDate("3 Apr 2026", out _).Should().BeTrue();
         FieldValueParser.TryDate("31/31/2026", out _).Should().BeFalse();
+        foreach (var text in new[] { "03.04.2026 14:23", "2026-04-03T09:15:00", "3/4/2026 9:05" })
+        {
+            FieldValueParser.TryDate(text, out var d).Should().BeTrue(text);
+            d.Should().Be(new DateOnly(2026, 4, 3), text);
+        }
+        FieldValueParser.TryDate("14:23", out _).Should().BeFalse();
     }
 
     [Fact]
@@ -143,6 +149,11 @@ public sealed class DocumentChecksTests
         var net = M("net", "100", FieldMeanings.TotalNet);
         Arith(new ReadResult("I", [net], [Lines(("1", "50", "50"), ("1", "50.01", "50.01"))])).Should().BeEmpty();
         Arith(new ReadResult("I", [net], [Lines(("1", "50", "50"), ("1", "49", "49"))])).Should().ContainSingle()
+            .Which.Message.Should().Be("The lines don't add up to the net total.");
+        // A receipt prices its lines with tax included: they add up to the gross total, not the net one.
+        var totals = new[] { M("net", "10.00", FieldMeanings.TotalNet), M("tax", "2.40", FieldMeanings.TotalTax), M("g", "12.40", FieldMeanings.TotalGross) };
+        Arith(new ReadResult("I", totals, [Lines(("2", "6.20", "12.40"))])).Should().BeEmpty();
+        Arith(new ReadResult("I", totals, [Lines(("2", "6.00", "12.00"))])).Should().ContainSingle()
             .Which.Message.Should().Be("The lines don't add up to the net total.");
 
         Arith(new ReadResult("I", [], [Lines(("1", "5", "5"), ("3", "9.99", "29.97"))])).Should().BeEmpty();
