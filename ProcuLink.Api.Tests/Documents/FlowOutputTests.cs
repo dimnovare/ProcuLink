@@ -118,6 +118,49 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
     }
 
     [Fact]
+    public async Task Replace_changes_a_files_kind_in_place_and_keeps_its_id()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, _) = await Seed(confirmed: true);
+        var rule = new SendWhen("invoice_no", "is", "Acme");
+        var csv = (await (await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "CSV", format = "csv", sendWhen = rule }))
+            .Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+
+        var toStandard = await http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{csv.Id}",
+            new { name = "X12", format = "", standard = "x12-850", tableKey = "items", sendWhen = rule, replace = true });
+        toStandard.StatusCode.Should().Be(HttpStatusCode.OK, await toStandard.Content.ReadAsStringAsync());
+        var std = (await toStandard.Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+        (std.Id, std.Standard, std.SendWhen).Should().Be((csv.Id, "x12-850", rule));
+
+        var back = (await (await http.PutAsJsonAsync($"/api/flows/{flowId}/outputs/{csv.Id}",
+            new { name = "JSON", format = "json", standard = (string?)null, tableKey = "items", replace = true }))
+            .Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+        (back.Id, back.Format, back.Standard).Should().Be((csv.Id, "json", (string?)null));
+        Leaves(back.Template.Root).Select(l => l.Name).Should().Equal("invoice_no", "total", "sku");
+    }
+
+    [Fact]
+    public async Task Preview_as_another_type_renders_it_and_saves_nothing()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, docId) = await Seed(confirmed: true);
+        var csv = (await (await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "CSV", format = "csv" }))
+            .Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+
+        var res = await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/{csv.Id}/preview", new { format = "json", tableKey = "items" });
+        res.StatusCode.Should().Be(HttpStatusCode.OK, await res.Content.ReadAsStringAsync());
+        (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("content").GetString().Should().Contain("\"invoice_no\"").And.Contain("INV-7");
+
+        var bad = await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/{csv.Id}/preview", new { format = "nope" });
+        bad.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await bad.Content.ReadAsStringAsync()).Should().Contain("unsupported_format");
+
+        using var scope = factory.Services.CreateScope();
+        (await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowOutput>().AsNoTracking().SingleAsync(o => o.Id == csv.Id))
+            .Format.Should().Be("csv");
+    }
+
+    [Fact]
     public async Task A_template_with_a_null_step_params_or_child_is_refused_not_a_500()
     {
         var http = factory.ClientFor(Org);

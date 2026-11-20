@@ -17,7 +17,7 @@ using ProcuLink.Transform.Output;
 
 namespace ProcuLink.Api.Controllers;
 
-public sealed record OutputRequest(string Name, string Format, string? TableKey, Guid? DestinationId, OutputNodeTemplate? Template, SendWhen? SendWhen = null, OutputLayout? Layout = null, string? Standard = null);
+public sealed record OutputRequest(string Name, string Format, string? TableKey, Guid? DestinationId, OutputNodeTemplate? Template, SendWhen? SendWhen = null, OutputLayout? Layout = null, string? Standard = null, bool Replace = false);
 
 /// <summary><paramref name="Needs"/> lists the meanings a standard output needs; null for a template output.</summary>
 public sealed record OutputDto(
@@ -25,7 +25,8 @@ public sealed record OutputDto(
     OutputNodeTemplate Template, DateTime CreatedAt, SendWhen? SendWhen, OutputLayout? Layout, bool HasLogo,
     string? Standard = null, IReadOnlyList<string>? Needs = null);
 
-public sealed record PreviewRequest(OutputNodeTemplate? Template);
+/// <summary>A body with <paramref name="Format"/> or <paramref name="Standard"/> is a proposed file: rendered as that type, nothing saved.</summary>
+public sealed record PreviewRequest(OutputNodeTemplate? Template, string? Format = null, string? Standard = null, string? TableKey = null);
 
 public sealed record TestOutputRequest(string Format, string? TableKey, Guid DestinationId, OutputNodeTemplate Template, OutputLayout? Layout = null, string? Standard = null);
 
@@ -79,7 +80,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
     public async Task<IActionResult> Create(Guid flowId, [FromBody] OutputRequest request, CancellationToken ct)
     {
         if (Refuse() is { } refused) return refused;
-        // The standard is set here only: an update can never turn a standard output into a template output, or back.
+        // The standard is set here, or by an update that sends replace (a standard output becomes a template output, or back).
         var output = new FlowOutput { Id = Guid.NewGuid(), OrgId = tenant.OrganisationId, FlowId = flowId, CreatedAt = DateTime.UtcNow, Standard = request.Standard };
         if (await Apply(output, request, ct) is { } rejected) return rejected;
         db.Set<FlowOutput>().Add(output);
@@ -95,6 +96,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         var orgId = tenant.OrganisationId;
         var output = await db.Set<FlowOutput>().FirstOrDefaultAsync(o => o.OrgId == orgId && o.FlowId == flowId && o.Id == id, ct);
         if (output is null) return OutputNotFound();
+        if (request.Replace) output.Standard = string.IsNullOrEmpty(request.Standard) ? null : request.Standard;
         if (await Apply(output, request, ct) is { } rejected) return rejected;
         await db.SaveChangesAsync(ct);
         return Ok(ToDto(output));
@@ -237,7 +239,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         return Ok(new { status = outcome.Status.ToString().ToLowerInvariant(), issues = outcome.Issues.Select(i => new { ruleId = i.RuleId, severity = i.Severity, message = i.Message }) });
     }
 
-    /// <summary>Renders the document through the output (or the draft template in the body, if given) and returns the text. Nothing is sent or saved.</summary>
+    /// <summary>Renders the document through the output (or the draft template in the body, or the proposed type it names) and returns the text. Nothing is sent or saved.</summary>
     [HttpPost("api/documents/{documentId:guid}/outputs/{outputId:guid}/preview")]
     public async Task<IActionResult> Preview(Guid documentId, Guid outputId,
         [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] PreviewRequest? body, CancellationToken ct, [FromQuery] bool published = false,
@@ -254,26 +256,39 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         var output = config.Outputs.FirstOrDefault(o => o.Id == outputId);
         if (output is null) return OutputNotFound();
 
+        // A body naming a format or a standard proposes another file type for this output: rendered as that, nothing saved.
+        var proposed = body is { Format: not null } or { Standard: not null };
+        var standardId = proposed ? body!.Standard : output.Standard;
+        if (string.IsNullOrEmpty(standardId)) standardId = null;
+        var tableKey = proposed ? body!.TableKey : output.TableKey;
+        var known = StandardOutputs.Find(standardId);
+        var format = (standardId is not null ? known?.Format : proposed ? body!.Format : output.Format) ?? "";
+
         var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
         DocumentRender render;
         // A standard is filled by meaning: no template, no lookups. A draft's sender and receiver IDs are previewed unsaved.
-        if (output.Standard is not null)
+        if (standardId is not null)
         {
+            if (proposed && known is null) return UnprocessableEntity(new { error = "unsupported_format" });
+            if (proposed && known!.Flagged && !gate.PeppolOn(orgId)) return StatusCode(403, new { error = "peppol_off" });
             if (body?.Template?.Envelope is { } draft && !PartnerIdsFit(draft)) return Invalid("partner_ids");
-            render = body?.Template?.Envelope is { } envelope
-                ? await StandardOutputs.RenderAsync(output.Standard, read, config.Fields, output.TableKey, orgId, ct, envelope)
+            render = proposed || body?.Template?.Envelope is not null
+                ? await StandardOutputs.RenderAsync(standardId, read, config.Fields, tableKey, orgId, ct, body?.Template?.Envelope)
                 : await StandardOutputs.RenderAsync(output, read, config.Fields, orgId, ct);
         }
         else
         {
-            var template = body?.Template ?? DocumentJson.Deserialize<OutputNodeTemplate>(output.TemplateJson);
-            if (body?.Template is not null && !FitsFormat(template, output.Format)) return WrongFormat(output.Format);
-            // A workbook is binary; its preview is the CSV text of the same grid (xlsx renders from the csv template).
-            var format = output.Format == FlowOutputFormats.Xlsx ? FlowOutputFormats.Csv : output.Format;
+            if (proposed && !FlowOutputFormats.All.Contains(format)) return UnprocessableEntity(new { error = "unsupported_format" });
+            var template = body?.Template ?? (proposed
+                ? DefaultOutputTemplate.For(config.Fields, format, tableKey)
+                : DocumentJson.Deserialize<OutputNodeTemplate>(output.TemplateJson));
+            if (body?.Template is not null && !FitsFormat(template, format)) return WrongFormat(format);
             if (HasNullHole(template.Root)) return Invalid("template");
 
             var lookups = await DocumentLookups.LoadAsync(db, orgId, [template], ct);
-            render = DocumentOutputRenderer.Render(format, template, read, output.TableKey, lookups, LayoutOf(output), output.Logo);
+            // A workbook is binary; its preview is the CSV text of the same grid (xlsx renders from the csv template).
+            render = DocumentOutputRenderer.Render(format == FlowOutputFormats.Xlsx ? FlowOutputFormats.Csv : format,
+                template, read, tableKey, lookups, LayoutOf(output), output.Logo);
         }
         if (!render.Ok) return UnprocessableEntity(new { error = render.Error, detail = render.Detail });
 
@@ -281,7 +296,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         var shown = misses.Select(m => new { lookupId = m.LookupId, value = m.Value }).ToList();
         var fileName = Path.GetFileNameWithoutExtension(doc.FileName) + render.Result!.FileExtension;
         var shownBody = new Dictionary<string, object?> { ["contentType"] = render.Result.ContentType, ["fileName"] = fileName };
-        if (output.Format == FlowOutputFormats.Pdf)
+        if (format == FlowOutputFormats.Pdf)
         {
             // A pdf is binary: it travels as base64 and has no text to show.
             using var pdf = new MemoryStream();
@@ -290,13 +305,13 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         }
         else
         {
-            using var reader = new StreamReader(render.Result.Content, StandardOutputs.TextEncoding(output.Standard));
+            using var reader = new StreamReader(render.Result.Content, StandardOutputs.TextEncoding(standardId));
             shownBody["content"] = await reader.ReadToEndAsync(ct);
         }
         shownBody["lookupMisses"] = shown;
         if (!suggest) return Ok(shownBody);
 
-        var found = await suggester!.SuggestAsync(orgId, misses, DocumentRows.Build(read, output.TableKey).Header, ct);
+        var found = await suggester!.SuggestAsync(orgId, misses, DocumentRows.Build(read, tableKey).Header, ct);
         if (found.CapReached) return StatusCode(429, new { error = "ai_usage_cap" });
         shownBody["suggestions"] = found.Suggestions;
         return Ok(shownBody);
