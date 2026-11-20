@@ -156,6 +156,27 @@ public sealed class DocumentEraserPostgresTests(PostgresContainerFixture postgre
         deletedKeys.Should().Contain(whole);
     }
 
+    [DockerRequiredFact]
+    public async Task Erase_NeverDelivered_keeps_a_document_with_a_delivery()
+    {
+        var s = await SeedAsync();
+        await using var db = new ProcuLinkDbContext(_options!);
+        // Ready, not sent: only the delivery row can keep it.
+        db.Set<FlowDelivery>().Add(new FlowDelivery
+        {
+            Id = Guid.NewGuid(), OrgId = s.A, DocumentId = s.A2, OutputName = "Order", Status = FlowDeliveryStatus.Stored,
+            DispatchKey = Guid.NewGuid(), ArtifactKey = $"{s.A}/documents/{s.A2}/outputs/kept.csv", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var r = await new DocumentEraser(db, Mock.Of<IFileStorageService>(), NullLogger<DocumentEraser>.Instance)
+            .EraseAsync(s.A, new(Ids: [s.A2], NeverDelivered: true), "test", CancellationToken.None);
+
+        r.DocumentsErased.Should().Be(0);
+        (await db.FlowDocuments.AnyAsync(d => d.Id == s.A2)).Should().BeTrue();
+        (await db.ErasedDocumentUnits.AnyAsync()).Should().BeFalse();
+    }
+
     private async Task<Seeded> SeedAsync()
     {
         await using var db = new ProcuLinkDbContext(_options!);
