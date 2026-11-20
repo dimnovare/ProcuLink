@@ -132,6 +132,20 @@ public sealed class DocumentsController(
         return doc is null ? NotFound(NotFoundBody) : Ok(ToDto(doc, await FlowNameAsync(doc, ct)));
     }
 
+    /// <summary>Removes a document for good: any member, since a member uploads. Not while it is received, read or sent.</summary>
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Remove(Guid id, [FromServices] IDocumentEraser eraser, CancellationToken ct)
+    {
+        if (Refuse() is { } refused) return refused;
+        var doc = await FindAsync(id, ct);
+        if (doc is null) return NotFound(NotFoundBody);
+        return await DocumentRemoval.RemoveAsync(db, eraser, logger, doc, await FlowNameAsync(doc, ct), tenant.ClerkUserId, ct) switch
+        {
+            null => NoContent(),
+            var error => Conflict(new { error }),
+        };
+    }
+
     /// <summary>The media type comes from the closed allowlist, keyed by the extension intake already validated, never from the client-supplied content type.</summary>
     [HttpGet("{id:guid}/source")]
     [EnableRateLimiting("signed-url")]
