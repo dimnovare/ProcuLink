@@ -75,6 +75,15 @@ public class DocumentOutputRendererTests
     }
 
     [Fact]
+    public void A_text_file_numbers_a_repeated_label_like_the_csv_header()
+    {
+        var read = new ReadResult("Invoice", [Field("total", "120.00"), Field("net", "100.00")]);
+        var t = Csv(Lf, Rule("Summa", "total"), Rule("summa", "net"));
+
+        Text(DocumentOutputRenderer.Render("text", t, read, null)).Should().Contain("summa 2");
+    }
+
+    [Fact]
     public void Values_go_out_exactly_as_read()
     {
         var read = new ReadResult("Invoice", [Field("total", "1.500", "number"), Field("tax", "1.234,50", "money")]);

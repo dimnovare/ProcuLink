@@ -312,7 +312,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
             using var text = new MemoryStream();
             await render.Result.Content.CopyToAsync(text, ct);
             // The reader drops a byte-order mark, so the shown text stays the same; the flag lets a download put it back.
-            if (text.Length >= 3 && text.GetBuffer() is [0xEF, 0xBB, 0xBF, ..]) shownBody["byteOrderMark"] = true;
+            if (format == FlowOutputFormats.Csv && text.Length >= 3 && text.GetBuffer() is [0xEF, 0xBB, 0xBF, ..]) shownBody["byteOrderMark"] = true;
             text.Position = 0;
             using var reader = new StreamReader(text, StandardOutputs.TextEncoding(standardId));
             shownBody["content"] = await reader.ReadToEndAsync(ct);

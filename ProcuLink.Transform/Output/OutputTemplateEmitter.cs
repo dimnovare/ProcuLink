@@ -450,7 +450,7 @@ public sealed class OutputTemplateEmitter
     }
 
     /// <summary>Column names as written, a repeat (ignoring case) numbered " 2", " 3"… so every column is unique.</summary>
-    private static List<string> UniqueNames(IEnumerable<string> names)
+    internal static List<string> UniqueNames(IEnumerable<string> names)
     {
         var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var result = new List<string>();

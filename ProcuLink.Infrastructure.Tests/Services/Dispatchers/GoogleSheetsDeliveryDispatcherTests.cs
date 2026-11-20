@@ -75,7 +75,7 @@ public class GoogleSheetsDeliveryDispatcherTests
     {
         var sheets = new FakeSheets("""{"values":[["No","Summa"]]}""");
 
-        (await Send(sheets, "﻿No;Summa\r\nACME-1;\"12,50\"\r\n", "text/csv")).Success.Should().BeTrue();
+        (await Send(sheets, "\uFEFFNo;Summa\r\nACME-1;\"12,50\"\r\n", "text/csv")).Success.Should().BeTrue();
 
         Appended(sheets).Should().BeEquivalentTo(new[] { new[] { "ACME-1", "12,50" } }, o => o.WithStrictOrdering());
     }
