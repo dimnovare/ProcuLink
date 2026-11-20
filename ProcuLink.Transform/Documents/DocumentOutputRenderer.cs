@@ -56,5 +56,6 @@ public static class DocumentOutputRenderer
 
     /// <summary>The message without .NET's " (Parameter 'x')" suffix, which is not a sentence for a person.</summary>
     private static string Plain(Exception ex) =>
-        ex is ArgumentException { ParamName: { } p } ? ex.Message.Replace($" (Parameter '{p}')", "") : ex.Message;
+        ex is ArgumentException { ParamName: { } p } && ex.Message.EndsWith($" (Parameter '{p}')")
+            ? ex.Message[..^$" (Parameter '{p}')".Length] : ex.Message;
 }

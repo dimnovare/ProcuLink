@@ -12,6 +12,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Google;
 using ProcuLink.Infrastructure.Services.Google;
+using ProcuLink.Transform.Output;
 
 namespace ProcuLink.Infrastructure.Services.Dispatchers;
 
@@ -78,7 +79,7 @@ public sealed class GoogleSheetsDeliveryDispatcher(
             if (!head.IsSuccessStatusCode) return await Refused(head, tab, deadline.Token);
             var existing = JsonNode.Parse(await head.Content.ReadAsStringAsync(deadline.Token))?["values"]?.AsArray().FirstOrDefault()?.AsArray()
                 .Select(v => v?.ToString().Trim() ?? "").ToArray() ?? [];
-            if (rows.Count > 0 && existing.Length > 0 && TrimTrailingEmpty(rows[0]).SequenceEqual(TrimTrailingEmpty(existing))) rows.RemoveAt(0);
+            if (rows.Count > 0 && existing.Length > 0 && IsHeader(rows[0], existing)) rows.RemoveAt(0);
             if (rows.Count == 0) return new DeliveryResult(true, null, 200);
 
             var range = Uri.EscapeDataString(tab is null ? "A1" : $"{Quote(tab)}!A1");
@@ -111,6 +112,13 @@ public sealed class GoogleSheetsDeliveryDispatcher(
         if (!PlainNumber.IsMatch(t) || t.Replace("-", "").Replace(".", "").TrimStart('0').Length > 15)
             return JsonValue.Create(v);
         return JsonValue.Create(decimal.Parse(t, NumberStyles.Float, CultureInfo.InvariantCulture));
+    }
+
+    // Row 1 may predate numbered repeats ("Summa", "Summa" now goes out as "Summa", "Summa 2"), so it also matches numbered.
+    private static bool IsHeader(string[] first, string[] existing)
+    {
+        var (row, head) = (TrimTrailingEmpty(first), TrimTrailingEmpty(existing));
+        return row.SequenceEqual(head) || row.SequenceEqual(OutputTemplateEmitter.UniqueNames(head));
     }
 
     // Sheets omits trailing empty cells from a row, so compare without them.

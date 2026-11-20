@@ -91,6 +91,16 @@ public class GoogleSheetsDeliveryDispatcherTests
     }
 
     [Fact]
+    public async Task A_header_row_written_before_repeats_were_numbered_still_matches()
+    {
+        var sheets = new FakeSheets("""{"values":[["No","Summa","Summa"]]}""");
+
+        (await Send(sheets, "No,Summa,Summa 2\r\nACME-1,10,12\r\n", "text/csv")).Success.Should().BeTrue();
+
+        Appended(sheets).Should().BeEquivalentTo(new[] { new[] { "ACME-1", "10", "12" } }, o => o.WithStrictOrdering());
+    }
+
+    [Fact]
     public async Task CheckOnly_NeverAppends()
     {
         var sheets = new FakeSheets("{}", """{"sheets":[{"properties":{"title":"Q4 'test'"}}]}""");
