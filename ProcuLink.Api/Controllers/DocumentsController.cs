@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Auth;
 using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Jobs;
+using ProcuLink.Api.Services;
 using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
@@ -79,12 +80,16 @@ public sealed class DocumentsController(
         return IntakeResults.From(this, result, flowName, submitter.AcceptedFormats(orgId));
     }
 
-    internal static DocumentDto ToDto(FlowDocument d, string flowName, bool canRemove = false)
+    internal static DocumentDto ToDto(FlowDocument d, string flowName)
     {
         var read = DocumentJson.Deserialize<ReadResult>(d.ReadJson);
         return new(ToSummary(d, flowName), d.ContentType, read, DocumentJson.Deserialize<List<DocumentCheck>>(d.ChecksJson),
-            SenderIdentity.Of(read, d.Source, d.SourceRef)?.Label, canRemove);
+            SenderIdentity.Of(read, d.Source, d.SourceRef)?.Label);
     }
+
+    /// <summary>Where the plan's usage count starts, from the billing code's own window.</summary>
+    private async Task<DateTime> UsageSinceAsync(CancellationToken ct) =>
+        StripeBillingService.UsageSince(await db.Organisations.AsNoTracking().FirstAsync(o => o.Id == tenant.OrganisationId, ct));
 
     private Task<FlowDocument?> FindAsync(Guid id, CancellationToken ct) =>
         db.FlowDocuments.FirstOrDefaultAsync(d => d.OrgId == tenant.OrganisationId && d.Id == id, ct);
@@ -94,9 +99,13 @@ public sealed class DocumentsController(
 
     private static readonly object NotFoundBody = new { error = "document_not_found" };
 
-    /// <summary>The document screen's detail: the file API's, plus whether this caller may remove it.</summary>
-    private async Task<DocumentDto> DetailAsync(FlowDocument doc, string flowName, CancellationToken ct) =>
-        ToDto(doc, flowName, DocumentRemoval.CanRemove(HttpContext, await DocumentRemoval.HasDeliveryAsync(db, doc, ct), doc.Status));
+    /// <summary>The document screen's detail: the file API's, plus whether this caller may remove it and whether it still counts.</summary>
+    private async Task<DocumentDetailDto> DetailAsync(FlowDocument doc, string flowName, CancellationToken ct) =>
+        new(ToDto(doc, flowName))
+        {
+            CanRemove = DocumentRemoval.CanRemove(HttpContext, await DocumentRemoval.HasDeliveryAsync(db, doc, ct), doc.Status),
+            CountsThisMonth = StripeBillingService.CountsAsUsage(doc, await UsageSinceAsync(ct)),
+        };
 
     [HttpGet]
     public async Task<IActionResult> List(Guid? flowId, string? status, int? take, string? q,
@@ -126,7 +135,7 @@ public sealed class DocumentsController(
         var size = Math.Clamp(pageSize ?? 50, 1, 200);
         var p = Math.Clamp(page.Value, 1, int.MaxValue / size); // an absurd page is an empty page, not an overflowed Skip
         var total = await docs.CountAsync(ct);
-        var rows = await DocumentListRows.ForAsync(db, orgId, docs.Skip((p - 1) * size).Take(size), (hasDelivery, docStatus) => DocumentRemoval.CanRemove(HttpContext, hasDelivery, docStatus), ct);
+        var rows = await DocumentListRows.ForAsync(db, orgId, docs.Skip((p - 1) * size).Take(size), (hasDelivery, docStatus) => DocumentRemoval.CanRemove(HttpContext, hasDelivery, docStatus), await UsageSinceAsync(ct), ct);
         return Ok(new PaginatedResult<DocumentRowDto>(rows, total, p, size));
     }
 

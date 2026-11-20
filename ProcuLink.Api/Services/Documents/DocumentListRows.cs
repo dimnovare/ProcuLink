@@ -23,7 +23,9 @@ public static class DocumentListRows
     }
 
     /// <param name="canRemove">The caller's removal rule, given whether the document has any delivery and its status (<see cref="DocumentRemoval.CanRemove(bool, bool, string)"/>).</param>
-    public static async Task<List<DocumentRowDto>> ForAsync(ProcuLinkDbContext db, Guid orgId, IQueryable<FlowDocument> page, Func<bool, string, bool> canRemove, CancellationToken ct)
+    /// <param name="usageSince">Where the plan's usage count starts (<see cref="StripeBillingService.UsageSince"/>).</param>
+    public static async Task<List<DocumentRowDto>> ForAsync(ProcuLinkDbContext db, Guid orgId, IQueryable<FlowDocument> page, Func<bool, string, bool> canRemove,
+        DateTime usageSince, CancellationToken ct)
     {
         var docs = await page.Select(d => new { Doc = d, FlowName = d.Flow!.Name, d.Flow.IsInbox }).ToListAsync(ct);
         if (docs.Count == 0) return [];
@@ -97,6 +99,7 @@ public static class DocumentListRows
                 DuplicateOfAt = duplicateOf.GetValueOrDefault(d.Id),
                 DownloadOnly = FlowSummaries.DownloadOnly(outputs[d.FlowId]),
                 CanRemove = canRemove(deliveries[d.Id].Any(), d.Status),
+                CountsThisMonth = StripeBillingService.CountsAsUsage(d, usageSince),
             };
         }).ToList();
     }

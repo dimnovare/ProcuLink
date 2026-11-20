@@ -34,13 +34,11 @@ public record RenameFlowRequest(string? Name = null, string? Automation = null);
 public record DocumentSummaryDto(
     Guid Id, Guid FlowId, string FlowName, string FileName, string Status, string? StatusReason,
     int? PageCount, int BillingUnits, int FailedChecks, DateTime CreatedAt,
-    string Source = "upload", string? SourceRef = null, int? FlowVersion = null, bool CountsThisMonth = false)
+    string Source = "upload", string? SourceRef = null, int? FlowVersion = null)
 {
-    /// <summary>CountsThisMonth: read in the current UTC month, not a sample, and billed, so removing it still leaves it counted this month.</summary>
     public static DocumentSummaryDto From(FlowDocument d, string flowName) =>
         new(d.Id, d.FlowId, flowName, d.FileName, d.Status, d.StatusReason, d.PageCount, d.BillingUnits,
-            DocumentJson.Deserialize<List<DocumentCheck>>(d.ChecksJson).Count, d.CreatedAt, d.Source, d.SourceRef, d.FlowVersion,
-            d.ReadAt is { } read && read.Year == DateTime.UtcNow.Year && read.Month == DateTime.UtcNow.Month && !d.IsSample && d.BillingUnits > 0);
+            DocumentJson.Deserialize<List<DocumentCheck>>(d.ChecksJson).Count, d.CreatedAt, d.Source, d.SourceRef, d.FlowVersion);
 }
 
 /// <summary>One file a sent document made. Destination is the destination's name, null when stored for download or the destination is gone.</summary>
@@ -71,12 +69,22 @@ public sealed record DocumentRowDto : DocumentSummaryDto
     public bool DownloadOnly { get; init; }
     /// <summary>Whether the caller may remove it: an org admin always; a member only when nothing was made or sent from it.</summary>
     public bool CanRemove { get; init; }
+    /// <summary>It counts toward the plan's current usage window, so removing it still leaves it counted.</summary>
+    public bool CountsThisMonth { get; init; }
 }
 
-/// <summary>CanRemove: whether the caller may remove it (an org admin always; a member only when nothing was made or sent from
-/// it). Set on the app's detail; false from the file API, which offers no removal.</summary>
 public record DocumentDto(DocumentSummaryDto Summary, string ContentType, ReadResult Read, IReadOnlyList<DocumentCheck> Checks,
-    string? SenderLabel = null, bool CanRemove = false);
+    string? SenderLabel = null);
+
+/// <summary>The app's document detail: the file API's, plus what only the app shows. Never returned by the file API.</summary>
+public sealed record DocumentDetailDto : DocumentDto
+{
+    public DocumentDetailDto(DocumentDto detail) : base(detail) { }
+    /// <summary>Whether the caller may remove it: an org admin always; a member only when nothing was made or sent from it.</summary>
+    public bool CanRemove { get; init; }
+    /// <summary>It counts toward the plan's current usage window, so removing it still leaves it counted.</summary>
+    public bool CountsThisMonth { get; init; }
+}
 
 /// <summary>What the file API returns for a document: the read result and the sends made from it.</summary>
 public record FlowFileResultDto(DocumentDto Document, IReadOnlyList<object> Deliveries);
