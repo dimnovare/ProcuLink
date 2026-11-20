@@ -61,6 +61,38 @@ public class FlowsApiTests(DocumentEngineTestFactory factory) : IClassFixture<Do
     }
 
     [Fact]
+    public async Task A_flow_is_download_only_until_one_of_its_files_has_a_destination()
+    {
+        var http = factory.ClientFor(DocumentEngineTestFactory.OrgA);
+        var created = (await (await http.PostAsJsonAsync("/api/flows", new CreateFlowRequest("Download only"))).Content.ReadFromJsonAsync<FlowDto>(DocumentJson.Options))!;
+        Assert.True(created.DownloadOnly);
+        async Task<bool> DownloadOnly()
+        {
+            var single = (await http.GetFromJsonAsync<FlowDto>($"/api/flows/{created.Id}", DocumentJson.Options))!.DownloadOnly;
+            var listed = (await http.GetFromJsonAsync<List<FlowDto>>("/api/flows", DocumentJson.Options))!.Single(f => f.Id == created.Id).DownloadOnly;
+            Assert.Equal(single, listed);
+            return single;
+        }
+
+        Assert.True(await DownloadOnly());
+        await http.PutAsJsonAsync($"/api/flows/{created.Id}/fields", Fields("total_gross"));
+        var output = await http.PostAsJsonAsync($"/api/flows/{created.Id}/outputs", new { name = "CSV", format = "csv" });
+        Assert.Equal(HttpStatusCode.Created, output.StatusCode);
+        var outputId = (await output.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        Assert.True(await DownloadOnly());
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            var destination = new FlowDestination { Id = Guid.NewGuid(), OrgId = DocumentEngineTestFactory.OrgA, Name = "Accounting folder", Protocol = "http", ConfigJson = """{"url":"https://example.com/in"}""" };
+            db.Set<FlowDestination>().Add(destination);
+            db.Set<FlowOutput>().Single(o => o.Id == outputId).DestinationId = destination.Id;
+            await db.SaveChangesAsync();
+        }
+        Assert.False(await DownloadOnly());
+    }
+
+    [Fact]
     public async Task Single_flow_says_whether_it_can_be_deleted()
     {
         var http = factory.ClientFor(DocumentEngineTestFactory.OrgA);

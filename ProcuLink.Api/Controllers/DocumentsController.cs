@@ -382,6 +382,10 @@ public sealed class DocumentsController(
     internal static object ToDeliveryDto(FlowDelivery d) =>
         new { d.Id, d.OutputName, d.Protocol, d.Status, d.Attempts, d.LastError, d.FileName, d.DeliveredAt };
 
+    /// <summary>As above, plus where it went: the destination's name, null when stored for download or the destination is gone.</summary>
+    internal static object ToDeliveryDto(FlowDelivery d, string? destination) =>
+        new { d.Id, d.OutputName, d.Protocol, d.Status, d.Attempts, d.LastError, d.FileName, d.DeliveredAt, destination };
+
     [HttpGet("{id:guid}/deliveries")]
     public async Task<IActionResult> Deliveries(Guid id, CancellationToken ct)
     {
@@ -389,7 +393,10 @@ public sealed class DocumentsController(
         if (await FindAsync(id, ct) is null) return NotFound(NotFoundBody);
         var rows = await db.Set<FlowDelivery>().AsNoTracking()
             .Where(d => d.OrgId == tenant.OrganisationId && d.DocumentId == id).OrderBy(d => d.CreatedAt).ToListAsync(ct);
-        return Ok(rows.Select(ToDeliveryDto));
+        var ids = rows.Select(d => d.DestinationId).OfType<Guid>().Distinct().ToList();
+        var names = await db.Set<FlowDestination>().AsNoTracking().Where(x => x.OrgId == tenant.OrganisationId && ids.Contains(x.Id))
+            .ToDictionaryAsync(x => x.Id, x => x.Name, ct);
+        return Ok(rows.Select(d => ToDeliveryDto(d, d.DestinationId is { } to ? names.GetValueOrDefault(to) : null)));
     }
 
     [HttpGet("{id:guid}/deliveries/{deliveryId:guid}/file")]
