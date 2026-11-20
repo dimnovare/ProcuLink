@@ -120,7 +120,11 @@ public sealed class GoogleSheetsDeliveryDispatcher(
     private static List<string[]> ReadCsv(byte[] content)
     {
         using var reader = new StreamReader(new MemoryStream(content), new UTF8Encoding(false, true), detectEncodingFromByteOrderMarks: true);
-        using var csv = new CsvParser(reader, new CsvConfiguration(CultureInfo.InvariantCulture) { HasHeaderRecord = false });
+        using var csv = new CsvParser(reader, new CsvConfiguration(CultureInfo.InvariantCulture)
+        {
+            // A CSV made for Excel on a European PC is ";"-separated; only "," and ";" are ever written by default.
+            HasHeaderRecord = false, DetectDelimiter = true, DetectDelimiterValues = [",", ";"],
+        });
         var rows = new List<string[]>();
         while (csv.Read()) rows.Add(csv.Record!);
         return rows;

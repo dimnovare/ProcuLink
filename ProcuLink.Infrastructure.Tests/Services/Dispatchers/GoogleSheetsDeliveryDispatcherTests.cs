@@ -66,6 +66,30 @@ public class GoogleSheetsDeliveryDispatcherTests
         cells[4]!.GetValue<string>().Should().Be("1234567890123456");
     }
 
+    private static string[][] Appended(FakeSheets sheets) =>
+        JsonNode.Parse(sheets.Requests.Single(r => r.Url.Contains(":append")).Body)!["values"]!.AsArray()
+            .Select(row => row!.AsArray().Select(c => c!.ToString()).ToArray()).ToArray();
+
+    [Fact]
+    public async Task A_semicolon_csv_with_a_byte_order_mark_lands_in_separate_cells()
+    {
+        var sheets = new FakeSheets("""{"values":[["No","Summa"]]}""");
+
+        (await Send(sheets, "﻿No;Summa\r\nACME-1;\"12,50\"\r\n", "text/csv")).Success.Should().BeTrue();
+
+        Appended(sheets).Should().BeEquivalentTo(new[] { new[] { "ACME-1", "12,50" } }, o => o.WithStrictOrdering());
+    }
+
+    [Fact]
+    public async Task A_comma_csv_with_semicolons_in_a_value_stays_comma_separated()
+    {
+        var sheets = new FakeSheets("""{"values":[["No","Kirjeldus"]]}""");
+
+        (await Send(sheets, "No,Kirjeldus\r\nACME-1,Poldid; M8; tsink\r\n", "text/csv")).Success.Should().BeTrue();
+
+        Appended(sheets).Should().BeEquivalentTo(new[] { new[] { "ACME-1", "Poldid; M8; tsink" } }, o => o.WithStrictOrdering());
+    }
+
     [Fact]
     public async Task CheckOnly_NeverAppends()
     {
