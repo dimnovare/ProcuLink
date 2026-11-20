@@ -67,7 +67,7 @@ public sealed class InboxSetUpTests(DocumentEngineTestFactory factory) : IClassF
         res.Headers.Location!.ToString().Should().Be($"/api/flows/{result.FlowId}");
         var flow = Db(db => db.Flows.AsNoTracking().Single(f => f.Id == result.FlowId));
         flow.FieldsConfirmed.Should().BeTrue();
-        flow.Automation.Should().Be("review");
+        flow.Automation.Should().Be(FlowAutomation.Marked);
         DocumentJson.Deserialize<FlowFieldList>(flow.FieldsJson).Fields.Should().Contain(f => f.Key == "invoice_number");
         Db(db => db.Set<FlowOutput>().Where(o => o.FlowId == flow.Id).Select(o => new { o.Name, o.Format }).ToList())
             .Should().ContainSingle().Which.Should().Be(new { Name = "CSV file", Format = "csv" });

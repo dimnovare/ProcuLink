@@ -17,6 +17,7 @@ public static class InboxFlow
         if (await db.Flows.FirstOrDefaultAsync(f => f.OrgId == orgId && f.IsInbox, ct) is { } found) return found;
         var flow = FlowCreation.New(orgId, Name, FlowFieldList.Empty, confirmed: false);
         flow.IsInbox = true;
+        flow.Automation = FlowAutomation.Review; // the inbox never sends by itself
         db.Flows.Add(flow);
         try
         {

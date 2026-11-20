@@ -50,7 +50,7 @@ public static class FlowCreation
         return new Flow
         {
             Id = Guid.NewGuid(), OrgId = orgId, Name = name, FieldsJson = DocumentJson.Serialize(fields),
-            FieldsConfirmed = confirmed, CreatedAt = now, UpdatedAt = now,
+            FieldsConfirmed = confirmed, Automation = FlowAutomation.Marked, CreatedAt = now, UpdatedAt = now,
         };
     }
 }

@@ -41,6 +41,26 @@ public class FlowsApiTests(DocumentEngineTestFactory factory) : IClassFixture<Do
     }
 
     [Fact]
+    public async Task A_new_flow_starts_on_check_only_what_we_marked()
+    {
+        var http = factory.ClientFor(DocumentEngineTestFactory.OrgA);
+        var created = await http.PostAsJsonAsync("/api/flows", new CreateFlowRequest("Marked mode"));
+        var flow = (await created.Content.ReadFromJsonAsync<FlowDto>(DocumentJson.Options))!;
+        Assert.Equal(FlowAutomation.Marked, flow.Automation);
+
+        foreach (var mode in new[] { FlowAutomation.Review, FlowAutomation.Marked })
+        {
+            Assert.Equal(HttpStatusCode.OK, (await http.PatchAsync($"/api/flows/{flow.Id}", JsonContent.Create(new { automation = mode }))).StatusCode);
+            Assert.Equal(mode, (await http.GetFromJsonAsync<FlowDto>($"/api/flows/{flow.Id}", DocumentJson.Options))!.Automation);
+        }
+
+        Assert.Equal(FlowAutomation.Review, new Flow().Automation);
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        Assert.Equal(FlowAutomation.Review, (await InboxFlow.GetOrCreateAsync(db, DocumentEngineTestFactory.OrgA, CancellationToken.None)).Automation);
+    }
+
+    [Fact]
     public async Task Single_flow_says_whether_it_can_be_deleted()
     {
         var http = factory.ClientFor(DocumentEngineTestFactory.OrgA);

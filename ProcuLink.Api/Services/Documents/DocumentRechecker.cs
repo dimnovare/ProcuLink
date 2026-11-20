@@ -43,9 +43,9 @@ public sealed class DocumentRechecker(ProcuLinkDbContext db, DocumentEngineGate 
                 || (d.CreatedAt == doc.CreatedAt && d.Id.CompareTo(doc.Id) < 0));
         }
 
-        // Anyone who knows a workspace's address can email it: on an automatic flow, the first emailed document from an address
+        // Anyone who knows a workspace's address can email it: on a flow that sends by itself, the first emailed document from an address
         // the workspace never sent a document from waits for a person. Once a person sends it, the address is trusted.
-        var newSender = flow.Automation == FlowAutomation.Auto && !doc.IsSample && doc.Source is IntakeKind.Email or IntakeKind.Imap
+        var newSender = FlowAutomation.SendsByItself(flow.Automation) && !doc.IsSample && doc.Source is IntakeKind.Email or IntakeKind.Imap
             && (doc.SourceRef?.Trim().ToLowerInvariant() is not { Length: > 0 } sender
                 || !await db.FlowDocuments.AnyAsync(d => d.OrgId == doc.OrgId && d.Id != doc.Id && !d.IsSample
                     && (d.Source == IntakeKind.Email || d.Source == IntakeKind.Imap) && d.Status == DocumentStatus.Sent && d.SourceRef != null && d.SourceRef.Trim().ToLower() == sender, ct));
