@@ -25,13 +25,54 @@ public static class ValueLocator
             }
             if (!run) continue;
 
-            var matched = words.Skip(i).Take(tokens.Length).Select(w => w.Box).ToList();
-            var x = matched.Min(b => b.X);
-            var y = matched.Min(b => b.Y);
-            return new SourceLocation(page,
-                new Box(x, y, matched.Max(b => b.X + b.Width) - x, matched.Max(b => b.Y + b.Height) - y), null);
+            return Union(page, words.Skip(i).Take(tokens.Length).Select(w => w.Box).ToList());
+        }
+        return tokens.Length > 1 ? LocateWrapped(tokens, words) : null;
+    }
+
+    private const int MaxWordsBetweenLines = 12;
+    private const double ColumnSlack = 0.02;
+
+    /// <summary>
+    /// A table cell that wraps: words are ordered line by line, so the cell's second line comes after the rest of
+    /// its first line. The next token may skip up to <see cref="MaxWordsBetweenLines"/> words, but only onto the
+    /// line just below, inside the column the matched words span.
+    /// </summary>
+    private static SourceLocation? LocateWrapped(string[] tokens, IReadOnlyList<PageWord> words)
+    {
+        for (var i = 0; i < words.Count; i++)
+        {
+            if (Norm(words[i].Text) != tokens[0]) continue;
+            var matched = new List<Box> { words[i].Box };
+            var prev = i;
+            for (var k = 1; k < tokens.Length && prev >= 0; k++)
+            {
+                var p = words[prev].Box;
+                var next = -1;
+                for (var j = prev + 1; j < words.Count && j <= prev + 1 + MaxWordsBetweenLines && next < 0; j++)
+                {
+                    var w = words[j];
+                    if (w.Page != words[i].Page || Norm(w.Text) != tokens[k]) continue;
+                    var below = w.Box.Y > p.Y + p.Height / 2;
+                    var inColumn = w.Box.X >= matched[0].X - ColumnSlack && w.Box.X <= matched.Max(b => b.X + b.Width);
+                    // Same line: only the very next word. Below: the next line only (top within 2 line heights).
+                    if (below ? inColumn && w.Box.Y < p.Y + 2 * p.Height : j == prev + 1 && Math.Abs(w.Box.Y - p.Y) <= p.Height / 2)
+                        next = j;
+                }
+                if (next >= 0) matched.Add(words[next].Box);
+                prev = next;
+            }
+            if (prev >= 0) return Union(words[i].Page, matched);
         }
         return null;
+    }
+
+    private static SourceLocation Union(int page, List<Box> matched)
+    {
+        var x = matched.Min(b => b.X);
+        var y = matched.Min(b => b.Y);
+        return new SourceLocation(page,
+            new Box(x, y, matched.Max(b => b.X + b.Width) - x, matched.Max(b => b.Y + b.Height) - y), null);
     }
 
     public static SourceLocation? LocateInCells(string? value, IReadOnlyList<SheetCell> cells)

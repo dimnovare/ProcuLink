@@ -71,4 +71,36 @@ public class ValueLocatorTests
         ValueLocator.Locate("1500", words)!.Box!.Y.Should().BeApproximately(0.1, 1e-9);
         ValueLocator.Locate("4471", words)!.Box!.Y.Should().BeApproximately(0.3, 1e-9);
     }
+
+    private static List<PageWord> WrappedCell(double mustX, double mustY = 0.43) =>
+    [
+        new("Kontori", 1, new Box(0.10, 0.40, 0.08, 0.02)),
+        new("tool", 1, new Box(0.19, 0.40, 0.05, 0.02)),
+        new("2", 1, new Box(0.60, 0.40, 0.02, 0.02)),
+        new("49,90", 1, new Box(0.80, 0.40, 0.06, 0.02)),
+        new("must", 1, new Box(mustX, mustY, 0.05, 0.02)),
+    ];
+
+    [Fact]
+    public void A_value_wrapped_onto_the_next_line_of_its_cell_is_found()
+    {
+        var hit = ValueLocator.Locate("Kontori tool must", WrappedCell(0.10))!;
+        hit.Page.Should().Be(1);
+        hit.Box!.X.Should().BeApproximately(0.10, 1e-9);
+        hit.Box.Y.Should().BeApproximately(0.40, 1e-9);
+        hit.Box.Width.Should().BeApproximately(0.14, 1e-9);
+        hit.Box.Height.Should().BeApproximately(0.05, 1e-9);
+    }
+
+    [Fact]
+    public void A_word_under_another_column_does_not_continue_a_value()
+    {
+        ValueLocator.Locate("Kontori tool must", WrappedCell(0.60)).Should().BeNull();
+    }
+
+    [Fact]
+    public void A_word_in_the_same_column_rows_further_down_does_not_continue_a_value()
+    {
+        ValueLocator.Locate("Kontori tool must", WrappedCell(0.10, 0.49)).Should().BeNull();
+    }
 }
