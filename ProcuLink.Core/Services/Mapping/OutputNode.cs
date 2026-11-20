@@ -194,6 +194,12 @@ public sealed record CsvDialect
     /// </summary>
     public string? Encoding { get; init; }
 
+    /// <summary>
+    /// True writes the UTF-8 byte-order mark first, so Excel reads the text as UTF-8. Null/false
+    /// writes none, as before. Ignored for a non-UTF-8 encoding.
+    /// </summary>
+    public bool? ByteOrderMark { get; init; }
+
     /// <summary>Null/true writes the header row. False omits it, for feeds that expect data only.</summary>
     public bool? WriteHeaderRow { get; init; }
 }

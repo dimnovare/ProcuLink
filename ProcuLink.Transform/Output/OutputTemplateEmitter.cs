@@ -392,7 +392,12 @@ public sealed class OutputTemplateEmitter
         foreach (var row in grid.Header is null ? grid.Rows : grid.Rows.Prepend(grid.Header))
             sb.Append(string.Join(delimiter, row.Select(Field))).Append(lineEnding);
 
-        return CsvEncoding(dialect?.Encoding).GetBytes(sb.ToString());
+        var encoding = CsvEncoding(dialect?.Encoding);
+        var bytes    = encoding.GetBytes(sb.ToString());
+        // Opt-in only: CsvEncoding stays preamble-free, the mark is prepended here and only for UTF-8.
+        return dialect?.ByteOrderMark == true && encoding.CodePage == 65001
+            ? [0xEF, 0xBB, 0xBF, .. bytes]
+            : bytes;
     }
 
     private static OutputNode? LineItem(OutputNodeTemplate template)

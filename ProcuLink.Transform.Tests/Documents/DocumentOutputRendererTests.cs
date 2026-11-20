@@ -70,6 +70,28 @@ public class DocumentOutputRendererTests
     }
 
     [Fact]
+    public void A_byte_order_mark_is_written_only_when_the_dialect_asks()
+    {
+        var read = new ReadResult("Invoice", [Field("total", "120.00", "money")]);
+        byte[] Bytes(CsvDialect d)
+        {
+            var r = DocumentOutputRenderer.Render("csv", Csv(d, Rule("Summa", "total")), read, null);
+            r.Ok.Should().BeTrue(r.Detail);
+            using var ms = new MemoryStream();
+            r.Result!.Content.CopyTo(ms);
+            return ms.ToArray();
+        }
+
+        var bom = Bytes(new CsvDialect { Delimiter = ";", LineEnding = "\n", ByteOrderMark = true });
+        bom.Take(3).Should().Equal(0xEF, 0xBB, 0xBF);
+        System.Text.Encoding.UTF8.GetString(bom, 3, bom.Length - 3).Should().Be("Summa\n120.00\n");
+
+        Bytes(new CsvDialect { Delimiter = ";", LineEnding = "\n" })[0].Should().Be((byte)'S');
+        Bytes(new CsvDialect { Delimiter = ";", LineEnding = "\n", Encoding = "windows-1252", ByteOrderMark = true })[0]
+            .Should().Be((byte)'S');
+    }
+
+    [Fact]
     public void Formula_text_is_neutralised_in_csv_and_stored_as_text_in_xlsx()
     {
         var read = new ReadResult("Invoice", [Field("note", "=1+1")]);
