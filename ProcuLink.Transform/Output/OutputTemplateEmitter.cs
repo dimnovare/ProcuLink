@@ -432,7 +432,7 @@ public sealed class OutputTemplateEmitter
         var lineItem = LineItem(template);
 
         var header = (template.CsvDialect?.WriteHeaderRow ?? true)
-            ? headerFields.Select(f => f.Name).Concat(lineFields.Select(f => f.Name)).ToList()
+            ? UniqueNames(headerFields.Concat(lineFields).Select(f => f.Name))
             : null;
 
         var headerValues = headerFields
@@ -451,6 +451,20 @@ public sealed class OutputTemplateEmitter
             rows.Add(headerValues.Concat(lineValues).ToList());
         }
         return new CsvGrid(header, rows);
+    }
+
+    /// <summary>Column names as written, a repeat (ignoring case) numbered " 2", " 3"… so every column is unique.</summary>
+    private static List<string> UniqueNames(IEnumerable<string> names)
+    {
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<string>();
+        foreach (var name in names)
+        {
+            var unique = name;
+            for (var n = 2; !used.Add(unique); n++) unique = $"{name} {n}";
+            result.Add(unique);
+        }
+        return result;
     }
 
     /// <summary>
