@@ -60,7 +60,7 @@ public sealed class DocumentEraser(
             .OrderBy(d => d.CreatedAt).ThenBy(d => d.Id).Select(d => d.Id).ToListAsync(ct);
         var docs = await matches.Where(idle)
             .OrderBy(d => d.CreatedAt).ThenBy(d => d.Id).Take(MaxPerCall + 1)
-            .Select(d => new { d.Id, d.SourceFileKey, d.SplitFileKey, d.ReadAt, d.IsSample, d.BillingUnits }).ToListAsync(ct);
+            .Select(d => new { d.Id, d.SourceFileKey, d.SplitFileKey, d.ReadAt, d.IsSample, d.BillingUnits, d.FlowId, d.Sha256, d.DedupKey, d.Status, d.CreatedAt }).ToListAsync(ct);
         var more = docs.Count > MaxPerCall;
         if (more) docs.RemoveAt(MaxPerCall);
         if (docs.Count == 0) return Receipt(skipped: skipped, more: more);
@@ -73,6 +73,9 @@ public sealed class DocumentEraser(
             .Concat(await batchDeliveries.Where(x => x.ArtifactKey != null).Select(x => x.ArtifactKey!).ToListAsync(ct))
             .Where(k => k != "").Distinct().ToList();
         var prefixes = docIds.Select(id => $"{orgId}/documents/{id}/").ToList();
+        // Read before the delete cascades the deliveries away.
+        var delivered = filter.KeepFingerprints
+            ? (await batchDeliveries.Select(x => x.DocumentId).Distinct().ToListAsync(ct)).ToHashSet() : [];
 
         // The last point a cancellation may stop this: from here every call runs to completion.
         ct.ThrowIfCancellationRequested();
@@ -98,6 +101,15 @@ public sealed class DocumentEraser(
         // Billed units outlive the document, dated by when it was READ so the month it was billed in keeps them.
         db.ErasedDocumentUnits.AddRange(docs.Where(d => d.ReadAt != null && !d.IsSample && d.BillingUnits > 0)
             .Select(d => new ErasedDocumentUnit { Id = Guid.NewGuid(), OrgId = orgId, ReadAt = d.ReadAt!.Value, BillingUnits = d.BillingUnits }));
+        // A removed sent document still holds back its next copy. Hashes only: no content, no file name, no raw key.
+        if (filter.KeepFingerprints)
+            db.RemovedDocumentFingerprints.AddRange(docs.Where(d => !d.IsSample && (d.Status == DocumentStatus.Sent || delivered.Contains(d.Id)))
+                .Select(d => new RemovedDocumentFingerprint
+                {
+                    Id = Guid.NewGuid(), OrgId = orgId, FlowId = d.FlowId, Sha256 = d.Sha256,
+                    DedupKeyHash = d.DedupKey is { } key ? RemovedDocumentFingerprint.HashOf(key) : null,
+                    DocumentCreatedAt = d.CreatedAt, RemovedAt = DateTime.UtcNow,
+                }));
 
         // Until cleanup confirms them, every key and folder is listed as failed, so a crash after the commit
         // still leaves an honest record of what may remain in storage.

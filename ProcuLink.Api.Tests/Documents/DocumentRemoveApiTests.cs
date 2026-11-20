@@ -3,7 +3,10 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using ProcuLink.Api.Auth;
+using ProcuLink.Api.Jobs;
 using ProcuLink.Api.Services.Documents;
 using ProcuLink.Api.Tests.Integration;
 using ProcuLink.Core.Documents;
@@ -156,5 +159,79 @@ public sealed class DocumentRemoveApiTests(PostgresContainerFixture postgres) : 
         Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
         Assert.Contains("document_not_found", await missing.Content.ReadAsStringAsync());
         Assert.True(await Exists(theirs.Id));
+    }
+
+    [DockerRequiredFact]
+    public async Task A_removed_sent_document_still_holds_back_its_next_copy_and_its_number()
+    {
+        var bytes = "a,b\r\n1,2\r\n"u8.ToArray();
+        var read = new ReadResult("Invoice",
+            [new ReadField("invoice_no", "Invoice number", "INV-7310", FieldTypes.Text, FieldMeanings.DocumentNumber, 0.99, null, false, true, false)]);
+        var key = DocumentChecks.DedupKeyOf(read)!;
+        var now = DateTime.UtcNow;
+        var flow = new Flow
+        {
+            Id = Guid.NewGuid(), OrgId = OrgA, Name = "Supplier invoices", FieldsConfirmed = true, Automation = FlowAutomation.Marked, CreatedAt = now, UpdatedAt = now,
+            FieldsJson = DocumentJson.Serialize(new FlowFieldList([new FlowField("invoice_no", "Invoice number", FieldTypes.Text, null, Required: false)])),
+        };
+        FlowDocument NewDoc(string status, string sha) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = OrgA, FlowId = flow.Id, FileName = "invoice-7310.csv", ContentType = "text/csv", SourceFileKey = $"docs/{Guid.NewGuid():N}.csv",
+            Sha256 = sha, Status = status, CreatedAt = now.AddMinutes(-5), UpdatedAt = now,
+        };
+        var sent = NewDoc(DocumentStatus.Sent, Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant());
+        (sent.DedupKey, sent.ReadAt, sent.BillingUnits) = (key, now, 1);
+        var later = NewDoc(DocumentStatus.Received, new string('f', 64));
+        factory.ClientFor(OrgA).Dispose();
+        await using (var db = Db())
+        {
+            db.Flows.Add(flow);
+            db.FlowDocuments.Add(sent);
+            await db.SaveChangesAsync();
+        }
+        var admin = factory.ClientFor(OrgA);
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.DeleteAsync($"/api/documents/{sent.Id}")).StatusCode);
+        await using (var db = Db())
+        {
+            var print = await db.RemovedDocumentFingerprints.AsNoTracking().SingleAsync(f => f.FlowId == flow.Id);
+            Assert.Equal((sent.Sha256, RemovedDocumentFingerprint.HashOf(key)), (print.Sha256, print.DedupKeyHash));
+            var stored = JsonSerializer.Serialize(print);
+            Assert.DoesNotContain("invoice-7310", stored);
+            Assert.DoesNotContain(key, stored);
+        }
+        var (reads, sends) = (factory.Enqueued<ReadDocumentJob>(), factory.Enqueued<SendDocumentJob>());
+
+        // (i) The same file again: held at the door, unread.
+        var res = await admin.PostAsync($"/api/flows/{flow.Id}/documents", new MultipartFormDataContent { { new ByteArrayContent(bytes), "file", "again.csv" } });
+        var again = (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("statusReason").GetString();
+        Assert.Equal("duplicate_file", again);
+        Assert.Equal(reads, factory.Enqueued<ReadDocumentJob>());
+
+        // (ii) Another file with the same number: read, and waits on the failed duplicate check.
+        await using (var db = Db())
+        {
+            db.FlowDocuments.Add(later);
+            await db.SaveChangesAsync();
+        }
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            var storage = new Mock<IFileStorageService>();
+            storage.Setup(s => s.DownloadAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(() => new MemoryStream(bytes));
+            var reader = new Mock<IDocumentReader>();
+            reader.Setup(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), OrgA, It.IsAny<CancellationToken>())).ReturnsAsync(new DocumentReadOutcome(true, read, null));
+            var gate = new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions()));
+            await new ReadDocumentJob(db, storage.Object, reader.Object, scope.ServiceProvider.GetRequiredService<DocumentRechecker>(), factory.Jobs.Object,
+                    Mock.Of<ProcuLink.Core.Services.Ocr.IPdfRasterizer>(), Mock.Of<ProcuLink.Core.Services.Ocr.IDocumentOcrService>(), gate,
+                    new ProcuLink.Transform.Tokenizing.SourceTokenizer(), NullLogger<ReadDocumentJob>.Instance)
+                .ExecuteAsync(later.Id, OrgA, null, CancellationToken.None);
+        }
+        await using (var db = Db())
+        {
+            var waiting = await db.FlowDocuments.AsNoTracking().SingleAsync(d => d.Id == later.Id);
+            Assert.Equal(DocumentStatus.NeedsReview, waiting.Status);
+            Assert.Contains(DocumentJson.Deserialize<List<DocumentCheck>>(waiting.ChecksJson), c => c.Code == DocumentChecks.Duplicate && !c.Passed);
+        }
+        Assert.Equal(sends, factory.Enqueued<SendDocumentJob>());
     }
 }

@@ -43,14 +43,14 @@ public static class DocumentRemoval
 
         // History in the erase's own transaction: never one without the other. No file name, since a removed document leaves
         // no contents behind. For a member the eraser checks again that nothing was delivered, so a send that lands in between
-        // keeps the document.
+        // keeps the document. A removed sent document leaves its fingerprint, so its next copy still waits as already received.
         var history = new AuditEvent
         {
             Id = Guid.NewGuid(), OrgId = doc.OrgId, EntityType = "Flow", EntityId = doc.FlowId, Action = Action,
             Payload = JsonSerializer.SerializeToDocument(new { flow = flowName, by = userId }), CreatedAt = DateTime.UtcNow,
         };
         DocumentEraseReceipt receipt;
-        try { receipt = await eraser.EraseAsync(doc.OrgId, new DocumentEraseFilter(Ids: [doc.Id], NeverDelivered: !isAdmin), $"user:{userId}", ct, history); }
+        try { receipt = await eraser.EraseAsync(doc.OrgId, new DocumentEraseFilter(Ids: [doc.Id], NeverDelivered: !isAdmin, KeepFingerprints: true), $"user:{userId}", ct, history); }
         catch (DocumentsChangedDuringEraseException) { return Busy; }
         if (receipt.DocumentsErased == 1) return null;
         return await db.FlowDocuments.AnyAsync(d => d.OrgId == doc.OrgId && d.Id == doc.Id, ct) ? Busy : null;

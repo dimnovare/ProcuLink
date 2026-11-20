@@ -15,8 +15,10 @@ public interface IDocumentEraser
 }
 
 /// <summary>All parts AND together. <see cref="ReceivedBefore"/> compares the document's CreatedAt with <c>&lt;</c>.
-/// <see cref="NeverDelivered"/> matches only a document with no delivery row, checked again by the delete itself.</summary>
-public sealed record DocumentEraseFilter(IReadOnlyList<Guid>? Ids = null, DateTime? ReceivedBefore = null, bool NeverDelivered = false);
+/// <see cref="NeverDelivered"/> matches only a document with no delivery row that is not sent, checked again by the delete itself.
+/// <see cref="KeepFingerprints"/>: a person's remove, not a legal erase. Each erased real document that was sent or had a delivery
+/// leaves a <see cref="RemovedDocumentFingerprint"/>, so a later copy still waits as already received.</summary>
+public sealed record DocumentEraseFilter(IReadOnlyList<Guid>? Ids = null, DateTime? ReceivedBefore = null, bool NeverDelivered = false, bool KeepFingerprints = false);
 
 /// <summary>
 /// What an erase did. <see cref="SkippedInFlight"/> are matches still being read or delivered; <see cref="More"/>

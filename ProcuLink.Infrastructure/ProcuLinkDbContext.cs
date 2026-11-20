@@ -190,6 +190,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
     public DbSet<Flow>                           Flows                         { get; set; } = null!;
     public DbSet<FlowDocument>                   FlowDocuments                 { get; set; } = null!;
     public DbSet<ErasedDocumentUnit>             ErasedDocumentUnits           { get; set; } = null!;
+    public DbSet<RemovedDocumentFingerprint>     RemovedDocumentFingerprints   { get; set; } = null!;
     public DbSet<FlowIntake>                     FlowIntakes                   { get; set; } = null!;
     public DbSet<FlowIntakeItem>                 FlowIntakeItems               { get; set; } = null!;
     public DbSet<LinkedAccount>                  LinkedAccounts                { get; set; } = null!;
@@ -2358,6 +2359,24 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(u => u.BillingUnits).HasColumnName("billing_units");
             b.HasIndex(u => new { u.OrgId, u.ReadAt });
             b.HasOne<Organisation>().WithMany().HasForeignKey(u => u.OrgId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<RemovedDocumentFingerprint>(b =>
+        {
+            b.ToTable("removed_document_fingerprints");
+            b.HasKey(f => f.Id);
+            b.Property(f => f.Id).HasColumnName("id");
+            b.Property(f => f.OrgId).HasColumnName("org_id");
+            b.Property(f => f.FlowId).HasColumnName("flow_id");
+            b.Property(f => f.Sha256).HasColumnName("sha256").HasMaxLength(64);
+            b.Property(f => f.DedupKeyHash).HasColumnName("dedup_key_hash").HasMaxLength(64);
+            b.Property(f => f.DocumentCreatedAt).HasColumnName("document_created_at").HasColumnType("timestamptz");
+            b.Property(f => f.RemovedAt).HasColumnName("removed_at").HasColumnType("timestamptz");
+            b.HasIndex(f => new { f.OrgId, f.Sha256 });
+            b.HasIndex(f => new { f.OrgId, f.FlowId, f.DedupKeyHash });
+            b.HasOne<Organisation>().WithMany().HasForeignKey(f => f.OrgId).OnDelete(DeleteBehavior.Cascade);
+            // Deleting the flow forgets its removed documents, as it erases its live ones.
+            b.HasOne<Flow>().WithMany().HasForeignKey(f => f.FlowId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<FlowSortMemory>(b =>

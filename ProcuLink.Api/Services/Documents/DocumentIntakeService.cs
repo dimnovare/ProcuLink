@@ -93,7 +93,9 @@ public sealed class DocumentIntakeService(
         // The inbox sorts documents on into flows, so a file the workspace already holds anywhere is held at the door.
         var toInbox = await db.Flows.AnyAsync(f => f.OrgId == orgId && f.Id == flowId && f.IsInbox, ct);
         var duplicate = await db.FlowDocuments.AnyAsync(
-            d => d.OrgId == orgId && d.Sha256 == sha && (d.FlowId == flowId || (toInbox && !d.IsSample)), ct);
+            d => d.OrgId == orgId && d.Sha256 == sha && (d.FlowId == flowId || (toInbox && !d.IsSample)), ct)
+            // A sent copy a person removed still counts: it is never a sample.
+            || await db.RemovedDocumentFingerprints.AnyAsync(f => f.OrgId == orgId && f.Sha256 == sha && (f.FlowId == flowId || toInbox), ct);
         if (duplicate) HoldAsDuplicateFile(doc, toInbox ? "This file is already in your workspace." : null);
 
         db.FlowDocuments.Add(doc);
