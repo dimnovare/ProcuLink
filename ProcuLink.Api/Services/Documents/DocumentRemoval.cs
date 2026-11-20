@@ -13,8 +13,8 @@ namespace ProcuLink.Api.Services.Documents;
 /// A person removes one document: the eraser takes it whole, exactly as deleting its flow would (row, deliveries, read calls,
 /// its own audit rows, the original and the made files). A read document stays counted in the month it was read, because the
 /// eraser keeps its units. Refused while the document is being received, read or sent.
-/// <para>Who: an org admin removes any document; a member only one that never had a delivery (nothing was made or sent from
-/// it), so a member cannot wipe what was delivered. Flow deletion keeps the same line (<see cref="FlowDeletion.CanDeleteAsync"/>).</para>
+/// <para>Who: an org admin removes any document; a member only one that never had a delivery and is not sent (nothing was
+/// made, sent or downloaded from it), so a member cannot wipe what was delivered. Flow deletion keeps the same line (<see cref="FlowDeletion.CanDeleteAsync"/>).</para>
 /// </summary>
 public static class DocumentRemoval
 {
@@ -22,11 +22,12 @@ public static class DocumentRemoval
     public const string Busy = "document_busy";
     public const string AdminRequired = "org_admin_required";
 
-    /// <summary>The one rule, for the endpoint and for every DTO's <c>canRemove</c>.</summary>
-    public static bool CanRemove(bool isAdmin, bool hasDelivery) => isAdmin || !hasDelivery;
+    /// <summary>The one rule, for the endpoint and for every DTO's <c>canRemove</c>.
+    /// A sent document counts as made or sent even with no delivery row: a download marks it sent and writes none.</summary>
+    public static bool CanRemove(bool isAdmin, bool hasDelivery, string status) => isAdmin || (!hasDelivery && status != DocumentStatus.Sent);
 
     /// <summary>The rule for the current caller, for the DTOs only. The endpoint asks <see cref="RequireOrgAdminAttribute.IsAdmin"/> itself.</summary>
-    public static bool CanRemove(HttpContext http, bool hasDelivery) => CanRemove(RequireOrgAdminAttribute.IsAdmin(http), hasDelivery);
+    public static bool CanRemove(HttpContext http, bool hasDelivery, string status) => CanRemove(RequireOrgAdminAttribute.IsAdmin(http), hasDelivery, status);
 
     public static Task<bool> HasDeliveryAsync(ProcuLinkDbContext db, FlowDocument doc, CancellationToken ct) =>
         db.Set<FlowDelivery>().AnyAsync(x => x.OrgId == doc.OrgId && x.DocumentId == doc.Id, ct);
@@ -35,7 +36,7 @@ public static class DocumentRemoval
     public static async Task<string?> RemoveAsync(ProcuLinkDbContext db, IDocumentEraser eraser,
         FlowDocument doc, string flowName, string userId, bool isAdmin, CancellationToken ct)
     {
-        if (!CanRemove(isAdmin, await HasDeliveryAsync(db, doc, ct))) return AdminRequired;
+        if (!CanRemove(isAdmin, await HasDeliveryAsync(db, doc, ct), doc.Status)) return AdminRequired;
         if (doc.Status is DocumentStatus.Received or DocumentStatus.Reading or DocumentStatus.Sending
             || await db.FlowDocuments.Where(d => d.OrgId == doc.OrgId && d.Id == doc.Id).AnyAsync(DocumentEraser.InFlight(db, doc.OrgId), ct))
             return Busy;

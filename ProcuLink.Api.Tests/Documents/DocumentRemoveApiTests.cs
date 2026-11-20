@@ -136,6 +136,10 @@ public sealed class DocumentRemoveApiTests(PostgresContainerFixture postgres) : 
         Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
         Assert.Contains(RequireOrgAdminAttribute.ErrorCode, await refused.Content.ReadAsStringAsync());
         Assert.True(await Exists(sent.Id));
+        // Downloaded: sent with no delivery row. Still refused.
+        var downloaded = await Seed(OrgA, DocumentStatus.Sent, reason: DocumentSort.Downloaded, readAt: DateTime.UtcNow, units: 1);
+        Assert.Equal(HttpStatusCode.Forbidden, (await member.DeleteAsync($"/api/documents/{downloaded.Id}")).StatusCode);
+        Assert.True(await Exists(downloaded.Id));
         Assert.Empty(await Removals());
 
         var duplicate = await Seed(OrgA, DocumentStatus.NeedsReview, reason: "duplicate_file");

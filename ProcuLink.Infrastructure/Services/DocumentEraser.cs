@@ -49,7 +49,9 @@ public sealed class DocumentEraser(
         var matches = db.FlowDocuments.Where(d => d.OrgId == orgId);
         if (ids is not null) matches = matches.Where(d => ids.Contains(d.Id));
         if (before is { } cutoff) matches = matches.Where(d => d.CreatedAt < cutoff);
-        if (filter.NeverDelivered) matches = matches.Where(d => !deliveries.Any(x => x.DocumentId == d.Id));
+        // No delivery row and not sent: a download marks a document sent without writing one.
+        Expression<Func<FlowDocument, bool>> neverDelivered = d => d.Status != DocumentStatus.Sent && !deliveries.Any(x => x.DocumentId == d.Id);
+        if (filter.NeverDelivered) matches = matches.Where(neverDelivered);
         var busy = InFlight(db, orgId);
         // Repeated by the delete itself, so a document that starts being read or sent after this check is kept.
         var idle = Expression.Lambda<Func<FlowDocument, bool>>(Expression.Not(busy.Body), busy.Parameters);
@@ -87,7 +89,7 @@ public sealed class DocumentEraser(
             ["flow_read_calls"] = await db.Set<FlowReadCall>().CountAsync(c => c.OrgId == orgId && docIds.Contains(c.DocumentId), none),
         };
         var deleting = db.FlowDocuments.Where(d => d.OrgId == orgId && docIds.Contains(d.Id)).Where(idle);
-        if (filter.NeverDelivered) deleting = deleting.Where(d => !deliveries.Any(x => x.DocumentId == d.Id));
+        if (filter.NeverDelivered) deleting = deleting.Where(neverDelivered);
         rows["flow_documents"] = await deleting.ExecuteDeleteAsync(none);
         // Disposing the transaction uncommitted rolls back every row above; no file has been touched yet.
         if (rows["flow_documents"] < docIds.Count)

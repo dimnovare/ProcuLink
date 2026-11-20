@@ -22,8 +22,8 @@ public static class DocumentListRows
         return docs;
     }
 
-    /// <param name="canRemove">The caller's removal rule, given whether the document has any delivery (<see cref="DocumentRemoval.CanRemove(bool, bool)"/>).</param>
-    public static async Task<List<DocumentRowDto>> ForAsync(ProcuLinkDbContext db, Guid orgId, IQueryable<FlowDocument> page, Func<bool, bool> canRemove, CancellationToken ct)
+    /// <param name="canRemove">The caller's removal rule, given whether the document has any delivery and its status (<see cref="DocumentRemoval.CanRemove(bool, bool, string)"/>).</param>
+    public static async Task<List<DocumentRowDto>> ForAsync(ProcuLinkDbContext db, Guid orgId, IQueryable<FlowDocument> page, Func<bool, string, bool> canRemove, CancellationToken ct)
     {
         var docs = await page.Select(d => new { Doc = d, FlowName = d.Flow!.Name, d.Flow.IsInbox }).ToListAsync(ct);
         if (docs.Count == 0) return [];
@@ -91,7 +91,7 @@ public static class DocumentListRows
                     x.Status == FlowDeliveryStatus.Delivered && x.DestinationId is { } to ? names.GetValueOrDefault(to) : null)).ToList() ?? [],
                 DuplicateOfAt = duplicateOf.GetValueOrDefault(d.Id),
                 DownloadOnly = FlowSummaries.DownloadOnly(outputs[d.FlowId]),
-                CanRemove = canRemove(deliveries[d.Id].Any()),
+                CanRemove = canRemove(deliveries[d.Id].Any(), d.Status),
             };
         }).ToList();
     }

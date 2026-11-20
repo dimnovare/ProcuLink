@@ -96,7 +96,7 @@ public sealed class DocumentsController(
 
     /// <summary>The document screen's detail: the file API's, plus whether this caller may remove it.</summary>
     private async Task<DocumentDto> DetailAsync(FlowDocument doc, string flowName, CancellationToken ct) =>
-        ToDto(doc, flowName, DocumentRemoval.CanRemove(HttpContext, await DocumentRemoval.HasDeliveryAsync(db, doc, ct)));
+        ToDto(doc, flowName, DocumentRemoval.CanRemove(HttpContext, await DocumentRemoval.HasDeliveryAsync(db, doc, ct), doc.Status));
 
     [HttpGet]
     public async Task<IActionResult> List(Guid? flowId, string? status, int? take, string? q,
@@ -126,7 +126,7 @@ public sealed class DocumentsController(
         var size = Math.Clamp(pageSize ?? 50, 1, 200);
         var p = Math.Clamp(page.Value, 1, int.MaxValue / size); // an absurd page is an empty page, not an overflowed Skip
         var total = await docs.CountAsync(ct);
-        var rows = await DocumentListRows.ForAsync(db, orgId, docs.Skip((p - 1) * size).Take(size), hasDelivery => DocumentRemoval.CanRemove(HttpContext, hasDelivery), ct);
+        var rows = await DocumentListRows.ForAsync(db, orgId, docs.Skip((p - 1) * size).Take(size), (hasDelivery, docStatus) => DocumentRemoval.CanRemove(HttpContext, hasDelivery, docStatus), ct);
         return Ok(new PaginatedResult<DocumentRowDto>(rows, total, p, size));
     }
 
