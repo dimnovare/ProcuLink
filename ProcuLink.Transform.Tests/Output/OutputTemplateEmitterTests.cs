@@ -193,6 +193,27 @@ public class OutputTemplateEmitterTests
     }
 
     [Fact]
+    public void Repeated_column_names_get_a_number()
+    {
+        var template = new OutputNodeTemplate
+        {
+            Format = OutputFormat.Csv,
+            Root = OutputNode.Obj("root",
+                OutputNode.FieldOf("Summa", Canon("PoNumber")),
+                OutputNode.FieldOf("Arve nr", Canon("PoNumber")),
+                OutputNode.Arr("lines",
+                    OutputNode.Obj("line",
+                        OutputNode.FieldOf("Summa", Canon("SupplierItemCode")),
+                        OutputNode.FieldOf("summa", Canon("Quantity"))))),
+        };
+
+        var header = EmitterRows.Emit(template).Text().Replace("\r\n", "\n").Split('\n')[0];
+
+        Assert.Equal("Summa,Arve nr,Summa 2,summa 3", header);
+        Assert.Equal(["", "", "Kogus", "Kogus 2"], OutputTemplateEmitter.UniqueNames(["", "", "Kogus", "Kogus"])); // a blank stays blank
+    }
+
+    [Fact]
     public void IncludeWhen_NullOrBlank_IsByteIdentical_NoBehaviourChange()
     {
         // Regression guard: a tree with IncludeWhen left null must render the EXACT bytes as before.

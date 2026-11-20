@@ -8,7 +8,9 @@ namespace ProcuLink.Api.Services.Documents;
 /// <summary>The starting template of an output: every confirmed flow field and one table's columns, already bound.</summary>
 public static class DefaultOutputTemplate
 {
-    public static OutputNodeTemplate For(FlowFieldList fields, string format, string? tableKey)
+    /// <param name="csvSeparator">The separator the app read from the user's Excel: <c>,</c> or <c>;</c> makes a CSV
+    /// Excel opens as UTF-8 (byte-order mark) with that separator; anything else keeps today's bytes.</param>
+    public static OutputNodeTemplate For(FlowFieldList fields, string format, string? tableKey, string? csvSeparator = null)
     {
         // json and xml name a field by its key; csv and xlsx head the column with its label.
         var byKey = format is FlowOutputFormats.Json or FlowOutputFormats.Xml;
@@ -31,13 +33,16 @@ public static class DefaultOutputTemplate
         {
             Format = FlowOutputFormats.TemplateFormat(format),
             Root = OutputNode.Obj("document", children.ToArray()),
+            CsvDialect = format == FlowOutputFormats.Csv && csvSeparator is "," or ";"
+                ? new CsvDialect { Delimiter = csvSeparator == ";" ? ";" : null, ByteOrderMark = true }
+                : null,
         };
     }
 
     /// <summary>The output a flow starts with, as its first run creates it: a CSV file of the header values and the first table, no destination.</summary>
-    public static FlowOutput CsvFile(Flow flow, FlowFieldList fields) => new()
+    public static FlowOutput CsvFile(Flow flow, FlowFieldList fields, string? csvSeparator = null) => new()
     {
         Id = Guid.NewGuid(), OrgId = flow.OrgId, FlowId = flow.Id, Name = "CSV file", Format = FlowOutputFormats.Csv,
-        TemplateJson = DocumentJson.Serialize(For(fields, FlowOutputFormats.Csv, null)), CreatedAt = flow.CreatedAt, UpdatedAt = flow.CreatedAt,
+        TemplateJson = DocumentJson.Serialize(For(fields, FlowOutputFormats.Csv, null, csvSeparator)), CreatedAt = flow.CreatedAt, UpdatedAt = flow.CreatedAt,
     };
 }

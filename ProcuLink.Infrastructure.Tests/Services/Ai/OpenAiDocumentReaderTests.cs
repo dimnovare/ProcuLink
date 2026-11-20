@@ -221,6 +221,15 @@ public class OpenAiDocumentReaderTests
     }
 
     [Fact]
+    public async Task System_prompt_asks_for_labels_as_printed_in_the_documents_language()
+    {
+        var system = (await CaptureAsync(Input())).OfType<SystemChatMessage>().Single().Content.Single().Text;
+
+        system.Should().Contain("its name exactly as printed on the document")
+            .And.Contain("in the language of the document, never in another language");
+    }
+
+    [Fact]
     public async Task Text_pdf_with_page_images_is_told_the_images_are_the_same_pages()
     {
         var captured = await CaptureAsync(new DocumentReadInput("text.pdf", "application/pdf", "Invoice 1", null, [[0x89, 0x50, 0x4E, 0x47]]));

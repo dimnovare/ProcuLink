@@ -13,10 +13,11 @@ public sealed record DocumentLayout(
     {
         // Labels come from the nodes: grid.Header is null when the header row is switched off.
         var (header, line) = OutputTemplateEmitter.CsvColumns(template);
+        var names = OutputTemplateEmitter.UniqueNames(header.Concat(line).Select(n => n.Name)); // as the csv header numbers them
         var first = grid.Rows.Count > 0 ? grid.Rows[0] : [];
-        var fields = header.Select((n, i) => (n.Name, i < first.Count ? first[i] : "")).ToList();
+        var fields = header.Select((n, i) => (names[i], i < first.Count ? first[i] : "")).ToList();
         if (!hasTableRows) return new(fields, [], []);
-        return new(fields, line.Select(n => n.Name).ToList(),
+        return new(fields, names.Skip(header.Count).ToList(),
             grid.Rows.Select(r => (IReadOnlyList<string>)r.Skip(header.Count).ToList()).ToList());
     }
 }

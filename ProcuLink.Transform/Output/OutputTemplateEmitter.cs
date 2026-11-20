@@ -186,17 +186,14 @@ public sealed class OutputTemplateEmitter
                 if (!decimal.TryParse(value, System.Globalization.NumberStyles.Any,
                                       System.Globalization.CultureInfo.InvariantCulture, out var num))
                     throw new InvalidOperationException(
-                        $"Output field '{node.Name}' is set to emit a number, but resolved to " +
-                        $"'{value}', which is not one. Change the field's type back to text, or " +
-                        "fix what it is bound to.");
+                        $"“{node.Name}” must be a number, but its value is “{value}”. Set it to text, or fill it from a value that holds a number.");
                 w.WriteNumberValue(num);
                 break;
 
             case "boolean":
                 if (!TryParseBoolean(value, out var flag))
                     throw new InvalidOperationException(
-                        $"Output field '{node.Name}' is set to emit true/false, but resolved to '{value}'. " +
-                        "Accepted: true/false, yes/no, 1/0.");
+                        $"“{node.Name}” must be yes or no, but its value is “{value}”. Use true or false, yes or no, or 1 or 0, or set it to text.");
                 w.WriteBooleanValue(flag);
                 break;
 
@@ -241,11 +238,10 @@ public sealed class OutputTemplateEmitter
         var hasPerNode = AnyNamespacedNode(template.Root);
         if (hasRootMap && hasPerNode)
             throw new ArgumentException(
-                "Use either root-level Namespaces OR per-node Prefix/Namespace, not both.", nameof(template));
+                "This XML file sets its namespaces in two ways at once. Make the file again from your sample or the documentation.", nameof(template));
         if (AnyPrefixWithoutNamespace(template.Root))
             throw new ArgumentException(
-                "A node has a Prefix set without a Namespace URI; a prefix must be bound to a namespace " +
-                "(set the node's Namespace, or use a root-level Namespaces map).", nameof(template));
+                "An XML element has a prefix but no namespace. Make the file again from your sample or the documentation.", nameof(template));
 
         // The xmlns declarations to write on the root element. Legacy → the template map verbatim
         // (byte-identical). Per-node → the distinct prefixed namespaces collected from the tree (the
@@ -392,7 +388,12 @@ public sealed class OutputTemplateEmitter
         foreach (var row in grid.Header is null ? grid.Rows : grid.Rows.Prepend(grid.Header))
             sb.Append(string.Join(delimiter, row.Select(Field))).Append(lineEnding);
 
-        return CsvEncoding(dialect?.Encoding).GetBytes(sb.ToString());
+        var encoding = CsvEncoding(dialect?.Encoding);
+        var bytes    = encoding.GetBytes(sb.ToString());
+        // Opt-in only: CsvEncoding stays preamble-free, the mark is prepended here and only for UTF-8.
+        return dialect?.ByteOrderMark == true && encoding.CodePage == 65001
+            ? [0xEF, 0xBB, 0xBF, .. bytes]
+            : bytes;
     }
 
     private static OutputNode? LineItem(OutputNodeTemplate template)
@@ -427,7 +428,7 @@ public sealed class OutputTemplateEmitter
         var lineItem = LineItem(template);
 
         var header = (template.CsvDialect?.WriteHeaderRow ?? true)
-            ? headerFields.Select(f => f.Name).Concat(lineFields.Select(f => f.Name)).ToList()
+            ? UniqueNames(headerFields.Concat(lineFields).Select(f => f.Name))
             : null;
 
         var headerValues = headerFields
@@ -446,6 +447,20 @@ public sealed class OutputTemplateEmitter
             rows.Add(headerValues.Concat(lineValues).ToList());
         }
         return new CsvGrid(header, rows);
+    }
+
+    /// <summary>Column names as written, a repeat (ignoring case) numbered " 2", " 3"… so every column is unique. A blank stays blank.</summary>
+    public static List<string> UniqueNames(IEnumerable<string> names)
+    {
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<string>();
+        foreach (var name in names)
+        {
+            var unique = name;
+            for (var n = 2; !string.IsNullOrWhiteSpace(name) && !used.Add(unique); n++) unique = $"{name} {n}";
+            result.Add(unique);
+        }
+        return result;
     }
 
     /// <summary>
@@ -480,8 +495,7 @@ public sealed class OutputTemplateEmitter
         catch (ArgumentException ex)
         {
             throw new InvalidOperationException(
-                $"CSV dialect declares an unknown text encoding '{name}'. Use a .NET encoding name " +
-                "such as 'utf-8' or 'windows-1252'.", ex);
+                $"This CSV file is set to a text encoding we don't know: “{name}”. Use utf-8 or windows-1252.", ex);
         }
     }
 

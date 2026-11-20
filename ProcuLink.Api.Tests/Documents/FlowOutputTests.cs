@@ -119,6 +119,23 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
     }
 
     [Fact]
+    public async Task A_new_csv_with_a_separator_is_made_for_excel()
+    {
+        var http = factory.ClientFor(Org);
+        var (flowId, docId) = await Seed(confirmed: true);
+        async Task<OutputDto> Create(object body) =>
+            (await (await http.PostAsJsonAsync($"/api/flows/{flowId}/outputs", body)).Content.ReadFromJsonAsync<OutputDto>(DocumentJson.Options))!;
+
+        var excel = await Create(new { name = "CSV file", format = "csv", csvSeparator = ";" });
+        (excel.Template.CsvDialect?.Delimiter, excel.Template.CsvDialect?.ByteOrderMark).Should().Be(((string?)";", (bool?)true));
+        (await Create(new { name = "CSV file 2", format = "csv" })).Template.CsvDialect.Should().BeNull();
+
+        var p = await (await http.PostAsync($"/api/documents/{docId}/outputs/{excel.Id}/preview", null)).Content.ReadFromJsonAsync<JsonElement>();
+        p.GetProperty("byteOrderMark").GetBoolean().Should().BeTrue();
+        p.GetProperty("content").GetString().Should().StartWith("Invoice number;Total;SKU");
+    }
+
+    [Fact]
     public async Task Replace_changes_a_files_kind_in_place_and_keeps_its_id()
     {
         var http = factory.ClientFor(Org);
@@ -183,7 +200,7 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
         (await (await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/{csv.Id}/preview", new { standard = "nope" })).Content.ReadAsStringAsync())
             .Should().Contain("unsupported_format");
         (await (await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/{csv.Id}/preview", new { format = "json", tableKey = "nope" })).Content.ReadAsStringAsync())
-            .Should().Contain("The flow has no table 'nope'.");
+            .Should().Contain("The table this file uses is no longer on the flow. Choose another table.");
 
         using var scope = factory.Services.CreateScope();
         (await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().Set<FlowOutput>().AsNoTracking().SingleAsync(o => o.Id == csv.Id))
@@ -291,7 +308,7 @@ public class FlowOutputTests(DocumentEngineTestFactory factory) : IClassFixture<
 
         var res = await http.PostAsJsonAsync($"/api/documents/{docId}/outputs/{csv.Id}/preview", new { template = json.Template });
         res.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
-        (await res.Content.ReadAsStringAsync()).Should().Contain("output_invalid").And.Contain("must be a Csv template");
+        (await res.Content.ReadAsStringAsync()).Should().Contain("output_invalid").And.Contain("This file's layout is for another file type.");
     }
 
     [Fact]

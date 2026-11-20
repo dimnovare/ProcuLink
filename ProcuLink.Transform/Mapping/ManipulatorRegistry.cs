@@ -18,6 +18,6 @@ public static class ManipulatorRegistry
             "Divide"     => new DivideManipulator(@params),
             "LoadCatalogProduct" => new LoadCatalogProductManipulator(@params),
             "Lookup"     => new LookupManipulator(@params, LookupScope.Current),
-            _            => throw new InvalidOperationException($"Unknown manipulator type: {type}")
+            _            => throw new InvalidOperationException($"This file uses a step we don't know: “{type}”. Remove the step.")
         };
 }

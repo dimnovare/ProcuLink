@@ -9,7 +9,7 @@ public class ReplaceManipulator : IFieldManipulator
     public ReplaceManipulator(IReadOnlyList<string> @params)
     {
         if (@params.Count != 2)
-            throw new ArgumentException("Replace requires exactly 2 params: [find, with]", nameof(@params));
+            throw new ArgumentException("“Find & replace text” needs the text to find and the text to put instead.", nameof(@params));
         _find = @params[0];
         _with = @params[1];
     }

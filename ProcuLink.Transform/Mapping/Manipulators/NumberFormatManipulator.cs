@@ -29,7 +29,7 @@ public class NumberFormatManipulator : IFieldManipulator
     {
         if (@params.Count is < 1 or > 2)
             throw new ArgumentException(
-                "NumberFormat requires 1 or 2 params: [format] or [format, culture].", nameof(@params));
+                "“Reformat the number” needs a format, such as 0.00.", nameof(@params));
 
         _format = @params[0];
         _culture = @params.Count == 2 && !string.IsNullOrWhiteSpace(@params[1])

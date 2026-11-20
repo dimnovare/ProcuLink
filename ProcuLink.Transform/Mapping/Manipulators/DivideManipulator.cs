@@ -8,10 +8,10 @@ public class DivideManipulator : IFieldManipulator
     public DivideManipulator(IReadOnlyList<string> @params)
     {
         if (@params.Count != 1)
-            throw new ArgumentException("Divide requires exactly 1 param: [divisor]", nameof(@params));
+            throw new ArgumentException("“Divide the number” needs a number to divide by, such as 100.", nameof(@params));
         if (!decimal.TryParse(@params[0], System.Globalization.NumberStyles.Any,
             System.Globalization.CultureInfo.InvariantCulture, out _divisor))
-            throw new ArgumentException("Divide param 'divisor' must be a valid decimal number.", nameof(@params));
+            throw new ArgumentException("“Divide the number” needs a number to divide by, such as 100.", nameof(@params));
     }
 
     public string? Apply(string? value, IReadOnlyDictionary<string, string> row)

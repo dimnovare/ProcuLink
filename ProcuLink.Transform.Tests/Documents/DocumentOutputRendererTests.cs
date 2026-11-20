@@ -60,6 +60,30 @@ public class DocumentOutputRendererTests
     }
 
     [Fact]
+    public void A_step_without_its_settings_says_what_it_needs()
+    {
+        var read = new ReadResult("Invoice", [Field("total", "100")]);
+        var t = Csv(Lf, OutputNode.FieldOf("Total", new OutputFieldRule
+        {
+            OutputPath = "Total", CanonicalField = "total",
+            FieldManipulators = [new ManipulatorEntry { Type = "Divide", Params = [] }],
+        }));
+
+        var r = DocumentOutputRenderer.Render("csv", t, read, null);
+
+        (r.Ok, r.Error, r.Detail).Should().Be((false, "output_invalid", "“Divide the number” needs a number to divide by, such as 100."));
+    }
+
+    [Fact]
+    public void A_text_file_numbers_a_repeated_label_like_the_csv_header()
+    {
+        var read = new ReadResult("Invoice", [Field("total", "120.00"), Field("net", "100.00")]);
+        var t = Csv(Lf, Rule("Summa", "total"), Rule("summa", "net"));
+
+        Text(DocumentOutputRenderer.Render("text", t, read, null)).Should().Contain("summa 2");
+    }
+
+    [Fact]
     public void Values_go_out_exactly_as_read()
     {
         var read = new ReadResult("Invoice", [Field("total", "1.500", "number"), Field("tax", "1.234,50", "money")]);
@@ -67,6 +91,28 @@ public class DocumentOutputRendererTests
 
         // The comma is always quoted by the shared escaper (even with ';' as delimiter); the value itself is untouched.
         Text(DocumentOutputRenderer.Render("csv", t, read, null)).Should().Be("Total;Tax\n1.500;\"1.234,50\"\n");
+    }
+
+    [Fact]
+    public void A_byte_order_mark_is_written_only_when_the_dialect_asks()
+    {
+        var read = new ReadResult("Invoice", [Field("total", "120.00", "money")]);
+        byte[] Bytes(CsvDialect d)
+        {
+            var r = DocumentOutputRenderer.Render("csv", Csv(d, Rule("Summa", "total")), read, null);
+            r.Ok.Should().BeTrue(r.Detail);
+            using var ms = new MemoryStream();
+            r.Result!.Content.CopyTo(ms);
+            return ms.ToArray();
+        }
+
+        var bom = Bytes(new CsvDialect { Delimiter = ";", LineEnding = "\n", ByteOrderMark = true });
+        bom.Take(3).Should().Equal(0xEF, 0xBB, 0xBF);
+        System.Text.Encoding.UTF8.GetString(bom, 3, bom.Length - 3).Should().Be("Summa\n120.00\n");
+
+        Bytes(new CsvDialect { Delimiter = ";", LineEnding = "\n" })[0].Should().Be((byte)'S');
+        Bytes(new CsvDialect { Delimiter = ";", LineEnding = "\n", Encoding = "windows-1252", ByteOrderMark = true })[0]
+            .Should().Be((byte)'S');
     }
 
     [Fact]

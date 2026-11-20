@@ -9,10 +9,10 @@ public class SplitManipulator : IFieldManipulator
     public SplitManipulator(IReadOnlyList<string> @params)
     {
         if (@params.Count != 2)
-            throw new ArgumentException("Split requires exactly 2 params: [delimiter, index]", nameof(@params));
+            throw new ArgumentException("“Split & take one part” needs a separator and which part to take.", nameof(@params));
         _delimiter = @params[0];
         if (!int.TryParse(@params[1], out _index))
-            throw new ArgumentException("Split param 'index' must be a valid integer.", nameof(@params));
+            throw new ArgumentException("“Split & take one part” needs the part as a whole number: 0 for the first part, 1 for the second.", nameof(@params));
     }
 
     public string? Apply(string? value, IReadOnlyDictionary<string, string> row)

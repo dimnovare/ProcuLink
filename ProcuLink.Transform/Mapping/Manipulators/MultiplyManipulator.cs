@@ -8,10 +8,10 @@ public class MultiplyManipulator : IFieldManipulator
     public MultiplyManipulator(IReadOnlyList<string> @params)
     {
         if (@params.Count != 1)
-            throw new ArgumentException("Multiply requires exactly 1 param: [factor]", nameof(@params));
+            throw new ArgumentException("“Multiply the number” needs a number to multiply by, such as 100.", nameof(@params));
         if (!decimal.TryParse(@params[0], System.Globalization.NumberStyles.Any,
             System.Globalization.CultureInfo.InvariantCulture, out _factor))
-            throw new ArgumentException("Multiply param 'factor' must be a valid decimal number.", nameof(@params));
+            throw new ArgumentException("“Multiply the number” needs a number to multiply by, such as 100.", nameof(@params));
     }
 
     public string? Apply(string? value, IReadOnlyDictionary<string, string> row)

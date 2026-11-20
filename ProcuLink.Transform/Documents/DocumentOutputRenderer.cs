@@ -45,7 +45,7 @@ public static class DocumentOutputRenderer
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or TransformValidationException)
         {
-            return new(null, "output_invalid", ex.Message);
+            return new(null, "output_invalid", Plain(ex));
         }
         catch (Exception ex) when (ex is XmlException or DocumentLayoutException or DocumentComposeException)
         {
@@ -53,4 +53,9 @@ public static class DocumentOutputRenderer
             return new(null, "output_invalid", null);
         }
     }
+
+    /// <summary>The message without .NET's " (Parameter 'x')" suffix, which is not a sentence for a person.</summary>
+    private static string Plain(Exception ex) =>
+        ex is ArgumentException { ParamName: { } p } && ex.Message.EndsWith($" (Parameter '{p}')")
+            ? ex.Message[..^$" (Parameter '{p}')".Length] : ex.Message;
 }
