@@ -45,6 +45,11 @@ public sealed record SenderIdentity(string Key, string Label)
         return domain.Length > 0 ? domain : null;
     }
 
+    /// <summary>The sender names read on a document, as one text to search. On Postgres the database computes it from the
+    /// jsonb column (mapped in <c>ProcuLinkDbContext</c>); this body runs only where a query is evaluated in memory.</summary>
+    public static string SenderNames(string readJson) =>
+        string.Join(" ", DocumentJson.Deserialize<ReadResult>(readJson).Fields?.Where(f => f.Meaning == FieldMeanings.SenderName).Select(f => f.Value) ?? []);
+
     public static string NormaliseVat(string vat) =>
         new(vat.ToUpperInvariant().Where(c => c is (>= 'A' and <= 'Z') or (>= '0' and <= '9')).ToArray());
 

@@ -317,6 +317,16 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
         // The HasConversion(jsonDocConverter) calls below handle the actual column mapping.
         modelBuilder.Ignore<JsonDocument>();
 
+        // Document search by sender, in SQL: the sender_name values of read_json as text, e.g. ["Näidis Tarnija OÜ"].
+        var text = new Microsoft.EntityFrameworkCore.Storage.StringTypeMapping("text", System.Data.DbType.String);
+        modelBuilder.HasDbFunction(typeof(Core.Documents.SenderIdentity).GetMethod(nameof(Core.Documents.SenderIdentity.SenderNames))!)
+            .HasTranslation(args => new Microsoft.EntityFrameworkCore.Query.SqlExpressions.SqlFunctionExpression("concat",
+                [new Microsoft.EntityFrameworkCore.Query.SqlExpressions.SqlFunctionExpression("jsonb_path_query_array",
+                    [args[0], new Microsoft.EntityFrameworkCore.Query.SqlExpressions.SqlConstantExpression(
+                        System.Linq.Expressions.Expression.Constant($"$.fields[*] ? (@.meaning == \"{Core.Documents.FieldMeanings.SenderName}\").value"), text)],
+                    nullable: true, argumentsPropagateNullability: [true, false], typeof(string), text)],
+                nullable: false, argumentsPropagateNullability: [false], typeof(string), text));
+
         // EF InMemory has no native JsonDocument type handler (Npgsql supplies one for Postgres).
         // Register a string round-trip converter so all providers can materialise these columns.
         // ParseJsonDoc is a static helper because expression trees cannot call methods with
