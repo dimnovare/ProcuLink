@@ -84,13 +84,21 @@ public class DocumentOutputRendererTests
     }
 
     [Fact]
-    public void Values_go_out_exactly_as_read()
+    public void Dates_and_amounts_go_out_one_way_and_uncertain_ones_as_read()
     {
-        var read = new ReadResult("Invoice", [Field("total", "1.500", "number"), Field("tax", "1.234,50", "money")]);
-        var t = Csv(new CsvDialect { Delimiter = ";", LineEnding = "\n" }, Rule("Total", "total"), Rule("Tax", "tax"));
+        var estonian = new ReadResult("Invoice",
+            [Field("total", "1.500", "number"), Field("tax", "1.234,50", "money"), Field("date", "18.11.2026", "date")]);
+        var english = new ReadResult("Invoice",
+            [Field("total", "285.00", "money"), Field("tax", "57.00", "money"), Field("date", "14 Nov 2026", "date")]);
+        var t = Csv(new CsvDialect { Delimiter = ";", LineEnding = "\n" }, Rule("Total", "total"), Rule("Tax", "tax"), Rule("Date", "date"));
 
-        // The comma is always quoted by the shared escaper (even with ';' as delimiter); the value itself is untouched.
-        Text(DocumentOutputRenderer.Render("csv", t, read, null)).Should().Be("Total;Tax\n1.500;\"1.234,50\"\n");
+        // "1.500" is one and a half or fifteen hundred, so it stays; the comma is always quoted by the shared escaper.
+        Text(DocumentOutputRenderer.Render("csv", t, estonian, null)).Should().Be("Total;Tax;Date\n1.500;\"1234,50\";2026-11-18\n");
+        Text(DocumentOutputRenderer.Render("csv", t, english, null)).Should().Be("Total;Tax;Date\n\"285,00\";\"57,00\";2026-11-14\n");
+        // A text layout shows the document as printed; a json file takes the decimal point.
+        Text(DocumentOutputRenderer.Render(FlowOutputFormats.Text, t, estonian, null)).Should().Contain("18.11.2026").And.Contain("1.234,50");
+        Text(DocumentOutputRenderer.Render("json", t with { Format = OutputFormat.Json, CsvDialect = null }, estonian, null))
+            .Should().Contain("\"1234.50\"").And.Contain("\"2026-11-18\"");
     }
 
     [Fact]
@@ -108,7 +116,8 @@ public class DocumentOutputRendererTests
 
         var bom = Bytes(new CsvDialect { Delimiter = ";", LineEnding = "\n", ByteOrderMark = true });
         bom.Take(3).Should().Equal(0xEF, 0xBB, 0xBF);
-        System.Text.Encoding.UTF8.GetString(bom, 3, bom.Length - 3).Should().Be("Summa\n120.00\n");
+        // The amount takes the decimal comma that goes with ';'.
+        System.Text.Encoding.UTF8.GetString(bom, 3, bom.Length - 3).Should().Be("Summa\n\"120,00\"\n");
 
         Bytes(new CsvDialect { Delimiter = ";", LineEnding = "\n" })[0].Should().Be((byte)'S');
         Bytes(new CsvDialect { Delimiter = ";", LineEnding = "\n", Encoding = "windows-1252", ByteOrderMark = true })[0]

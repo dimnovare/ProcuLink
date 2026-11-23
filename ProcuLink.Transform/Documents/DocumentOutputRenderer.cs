@@ -20,7 +20,10 @@ public static class DocumentOutputRenderer
     /// <summary>Render a read through <paramref name="template"/> as csv, json, xml, xlsx, pdf, txt or fixed, with <paramref name="lookups"/> in scope for its Lookup steps. <paramref name="layout"/> frames pdf and txt; <paramref name="logo"/> is for pdf.</summary>
     public static DocumentRender Render(string format, OutputNodeTemplate template, ReadResult read, string? tableKey, LookupTables? lookups = null, OutputLayout? layout = null, byte[]? logo = null)
     {
-        var rows = DocumentRows.Build(read, tableKey);
+        // Files for a system write dates and amounts one way, the decimal comma going with the ';' a European Excel splits on;
+        // a pdf or text layout shows the document as printed.
+        var rows = DocumentRows.Build(read, tableKey, format is FlowOutputFormats.Pdf or FlowOutputFormats.Text ? null
+            : template.CsvDialect?.Delimiter == ";" ? ',' : '.');
         // A flat grid has nothing else to put the header values on: a read with no table rows is one row.
         var lines = rows.Lines.Count == 0 && FlowOutputFormats.TemplateFormat(format) == OutputFormat.Csv
             ? [rows.Header]
