@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -78,7 +79,10 @@ public sealed class InboxMoveTests(DocumentEngineTestFactory factory) : IClassFi
         var b = await DocAsync(OrgA, "invoice", "name:sample traders ltd");
         var reads = factory.Enqueued<ReadDocumentJob>();
 
-        (await Move(OrgA, a.Id, f)).StatusCode.Should().Be(HttpStatusCode.OK);
+        var res = await Move(OrgA, a.Id, f);
+        res.StatusCode.Should().Be(HttpStatusCode.OK);
+        // The person is told what went with it.
+        (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("alsoMoved").GetInt32().Should().Be(1);
 
         var movedA = Doc(a.Id);
         movedA.FlowId.Should().Be(f);

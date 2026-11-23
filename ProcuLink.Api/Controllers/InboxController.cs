@@ -119,8 +119,8 @@ public sealed class InboxController(
                 return Ok(DocumentSummaryDto.From(doc, flow.Name));
             }
             var mustRead = await DocumentSort.MoveToAsync(db, doc, flow.Id, flow.Name, true, "document.moved", tenant.ClerkUserId, ct);
-            await RememberAndResortAsync(doc, ct, readIt: mustRead);
-            return Ok(DocumentSummaryDto.From(doc, flow.Name));
+            var alsoMoved = await RememberAndResortAsync(doc, ct, readIt: mustRead);
+            return Ok(new MovedDocumentDto(DocumentSummaryDto.From(doc, flow.Name)) { AlsoMoved = alsoMoved });
         }
         catch
         {
@@ -214,14 +214,16 @@ public sealed class InboxController(
     /// Remembers the document's flow and saves, enqueues its own read when <paramref name="readIt"/>, then sorts again the inbox
     /// documents of its kind and enqueues their reads: a failing re-sort cannot leave the saved document unread.
     /// </summary>
-    private async Task RememberAndResortAsync(FlowDocument doc, CancellationToken ct, bool readIt = false)
+    private async Task<int> RememberAndResortAsync(FlowDocument doc, CancellationToken ct, bool readIt = false)
     {
         await DocumentSort.RememberAsync(db, doc, ct);
         await DocumentSort.SaveRememberedAsync(db, doc, ct);
         if (readIt) ReadDocumentJob.Enqueue(jobs, doc.Id, doc.OrgId);
-        if (doc.Kind is null) return;
+        if (doc.Kind is null) return 0;
         var moved = await DocumentSort.ResortWaitingAsync(db, doc.OrgId, doc.Kind, ct);
         await db.SaveChangesAsync(ct);
         foreach (var movedId in moved) ReadDocumentJob.Enqueue(jobs, movedId, doc.OrgId);
+        // How many went where this one went (another may have gone to a flow its sender is remembered for).
+        return moved.Count == 0 ? 0 : await db.FlowDocuments.CountAsync(d => d.OrgId == doc.OrgId && moved.Contains(d.Id) && d.FlowId == doc.FlowId, ct);
     }
 }
