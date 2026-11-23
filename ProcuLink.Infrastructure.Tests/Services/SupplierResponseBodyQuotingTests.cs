@@ -207,7 +207,7 @@ public class SupplierResponseBodyQuotingTests
     {
         var result = await DeliverAgainst(HttpStatusCode.BadRequest, "   ");
 
-        result.ErrorMessage.Should().Be("HTTP 400: supplier endpoint returned an error.");
+        result.ErrorMessage.Should().Be("The address answered with an error (HTTP 400).");
     }
 
     /// <summary>

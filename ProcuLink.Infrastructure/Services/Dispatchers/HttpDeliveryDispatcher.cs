@@ -209,7 +209,7 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
         if (OutboundRedirectPolicy.IsRedirect(code))
             return OutboundRedirectPolicy.DescribeRefusal(code);
 
-        var opening = $"HTTP {code}: supplier endpoint returned an error.";
+        var opening = $"The address answered with an error (HTTP {code}).";
         var summary = SupplierResponseClassification.SummarizeResponseBody(body);
 
         if (summary.Text is null) return opening;
