@@ -207,17 +207,21 @@ public sealed class OpenAiDocumentReader : IDocumentReader
         // A listed key keeps the flow's meaning when it has one; otherwise the AI's stands.
         static string? Pinned(string? flowMeaning, string? ai) => flowMeaning ?? Meaning(ai);
         static double Clamp(double c) => double.IsNaN(c) ? 0 : Math.Clamp(c, 0, 1);
+        static bool Same(string? a, string? b) => string.Equals(a?.Trim(), b?.Trim(), StringComparison.OrdinalIgnoreCase);
 
         var seenFields = new HashSet<string>();
         // Filtered before the key dedupe so a dropped blank field can't reserve a key.
         var fields = (dto.Fields ?? []).Where(f => !string.IsNullOrWhiteSpace(f.Value) || fieldKeys?.Contains(FieldKey.Normalise(f.Key)) == true).Select(f =>
         {
             var key = FieldKey.Unique(seenFields, f.Key);
-            // A value used as its own name ("Turku" named "Turku") says nothing: name it from its key instead.
-            var label = !string.IsNullOrWhiteSpace(f.Value) && string.Equals(f.Label?.Trim(), f.Value?.Trim(), StringComparison.OrdinalIgnoreCase)
+            var meaning = Pinned(expected?.Fields.FirstOrDefault(x => x.Key == key)?.Meaning, f.Meaning);
+            // A value used as its own name ("Turku" named "Turku") says nothing, and a currency named after the amount beside it
+            // ("Total due" twice) hides which is which: name it from its key instead.
+            var label = (!string.IsNullOrWhiteSpace(f.Value) && Same(f.Label, f.Value))
+                        || (meaning == FieldMeanings.Currency && dto.Fields!.Count(o => Same(o.Label, f.Label)) > 1)
                 ? char.ToUpperInvariant(key[0]) + key[1..].Replace('_', ' ')
                 : f.Label;
-            return new ReadField(key, label, f.Value, Type(f.Type), Pinned(expected?.Fields.FirstOrDefault(x => x.Key == key)?.Meaning, f.Meaning), Clamp(f.Confidence),
+            return new ReadField(key, label, f.Value, Type(f.Type), meaning, Clamp(f.Confidence),
                 Location: null, NotOnPage: false, Listed: fieldKeys?.Contains(key) ?? true, Edited: false);
         }).ToList();
 

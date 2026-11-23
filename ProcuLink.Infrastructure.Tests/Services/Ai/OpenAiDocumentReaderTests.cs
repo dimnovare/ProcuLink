@@ -91,6 +91,18 @@ public class OpenAiDocumentReaderTests
     }
 
     [Fact]
+    public void A_currency_named_after_the_amount_beside_it_is_named_from_its_key()
+    {
+        var shared = new OpenAiDocumentReader.ReadDto(null,
+            [new("currency", "Total due", "GBP", "currency", FieldMeanings.Currency, 1), new("total_gross", "Total due", "342.00", "money", FieldMeanings.TotalGross, 1)], []);
+        var own = new OpenAiDocumentReader.ReadDto(null,
+            [new("currency", "Valuuta", "EUR", "currency", FieldMeanings.Currency, 1), new("total_gross", "Summa", "212,04", "money", FieldMeanings.TotalGross, 1)], []);
+
+        OpenAiDocumentReader.Map(shared, null).Fields.Select(f => f.Label).Should().Equal("Currency", "Total due");
+        OpenAiDocumentReader.Map(own, null).Fields.Select(f => f.Label).Should().Equal("Valuuta", "Summa");
+    }
+
+    [Fact]
     public void A_unit_or_price_basis_after_a_line_figure_is_dropped()
     {
         var dto = new OpenAiDocumentReader.ReadDto("Order", [],
