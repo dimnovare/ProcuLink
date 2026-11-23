@@ -121,10 +121,10 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
             await new SendDocumentJob(db, scope.ServiceProvider.GetRequiredService<DocumentSender>()).ExecuteAsync(sample.Id, Org, CancellationToken.None);
             (await db.Set<FlowDelivery>().AnyAsync(d => d.DocumentId == sample.Id)).Should().BeFalse();
 
-            // A person may send the sample, but its public sender never teaches sort memory.
+            // A person cannot send the sample either, and its public sender never teaches sort memory.
             (await db.FlowDocuments.SingleAsync(d => d.Id == sample.Id)).SenderKey = "name:example sample sender";
             await db.SaveChangesAsync();
-            (await factory.ClientFor(Org).PostAsync($"/api/documents/{sample.Id}/send", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+            (await factory.ClientFor(Org).PostAsync($"/api/documents/{sample.Id}/send", null)).StatusCode.Should().Be(HttpStatusCode.Conflict);
             (await db.Set<FlowSortMemory>().AnyAsync(m => m.OrgId == Org && m.SenderKey == "name:example sample sender")).Should().BeFalse();
         }
     }

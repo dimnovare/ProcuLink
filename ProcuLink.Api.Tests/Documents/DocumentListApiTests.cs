@@ -74,6 +74,23 @@ public class DocumentListApiTests(DocumentEngineTestFactory factory) : IClassFix
     }
 
     [Fact]
+    public async Task Search_finds_the_sender_from_three_characters()
+    {
+        var flow = await Flow(Org);
+        var doc = await Doc(Org, flow, "receipt.pdf");
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.Attach(doc).Entity.ReadJson = DocumentJson.Serialize(new ReadResult("Receipt",
+                [new ReadField("seller", "Müüja", "Kohvik Näide OÜ", FieldTypes.Text, FieldMeanings.SenderName, 1, null, false, true, false)], []));
+            await db.SaveChangesAsync();
+        }
+
+        Assert.Equal(["receipt.pdf"], await Names(Org, $"flowId={flow}&q=kohvik"));
+        Assert.Empty(await Names(Org, $"flowId={flow}&q=ko"));                              // two characters never search senders
+    }
+
+    [Fact]
     public async Task Paging_gives_a_total_and_each_document_once()
     {
         var flow = await Flow(Org);

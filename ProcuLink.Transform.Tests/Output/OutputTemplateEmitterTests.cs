@@ -213,6 +213,25 @@ public class OutputTemplateEmitterTests
         Assert.Equal(["", "", "Kogus", "Kogus 2"], OutputTemplateEmitter.UniqueNames(["", "", "Kogus", "Kogus"])); // a blank stays blank
     }
 
+    private static OutputNodeTemplate RepeatedNames(OutputFormat format) => new()
+    {
+        Format = format,
+        Root = OutputNode.Obj("arve",
+            OutputNode.FieldOf("Müüja", Canon("PoNumber")),
+            OutputNode.FieldOf("Müüja", Canon("Currency")),
+            OutputNode.FieldOf("Summa", Canon("OrderDate")),
+            OutputNode.FieldOf("Summa", Canon("PoNumber"))),
+    };
+
+    [Fact]
+    public void Json_repeated_names_are_numbered_and_every_value_kept()
+    {
+        using var doc = JsonDocument.Parse(EmitterRows.Emit(RepeatedNames(OutputFormat.Json)).Text());
+        var props = doc.RootElement.EnumerateObject().Select(p => (p.Name, p.Value.GetString())).ToList();
+
+        Assert.Equal([("Müüja", "PO-1"), ("Müüja 2", "EUR"), ("Summa", "2026-06-15"), ("Summa 2", "PO-1")], props);
+    }
+
     [Fact]
     public void IncludeWhen_NullOrBlank_IsByteIdentical_NoBehaviourChange()
     {

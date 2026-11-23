@@ -84,6 +84,8 @@ public sealed record DocumentDetailDto : DocumentDto
     public bool CanRemove { get; init; }
     /// <summary>It counts toward the plan's current usage window, so removing it still leaves it counted.</summary>
     public bool CountsThisMonth { get; init; }
+    /// <summary>Our built-in sample: the screen offers no Send for it.</summary>
+    public bool IsSample { get; init; }
 }
 
 /// <summary>What the file API returns for a document: the read result and the sends made from it.</summary>

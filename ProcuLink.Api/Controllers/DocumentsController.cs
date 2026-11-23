@@ -105,6 +105,7 @@ public sealed class DocumentsController(
         {
             CanRemove = DocumentRemoval.CanRemove(HttpContext, await DocumentRemoval.HasDeliveryAsync(db, doc, ct), doc.Status),
             CountsThisMonth = StripeBillingService.CountsAsUsage(doc, await UsageSinceAsync(ct)),
+            IsSample = doc.IsSample,
         };
 
     [HttpGet]
@@ -119,6 +120,8 @@ public sealed class DocumentsController(
         {
             var statuses = status.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
             docs = docs.Where(d => statuses.Contains(d.Status));
+            // The sample is never sent, so it never waits in Needs you; All still lists it.
+            if (statuses.Contains(DocumentStatus.NeedsReview) || statuses.Contains(DocumentStatus.Ready)) docs = docs.Where(d => !d.IsSample);
         }
         if (DocumentSearch.Matches(q) is { } match) docs = docs.Where(match);
         // The documents "Send it now" sends: stopped after their retries at this destination, with an output that still exists.
@@ -389,6 +392,8 @@ public sealed class DocumentsController(
         if (Refuse() is { } refused) return refused;
         var doc = await FindAsync(id, ct);
         if (doc is null) return NotFound(NotFoundBody);
+        if (doc.IsSample)
+            return Conflict(new { error = "sample_document", message = "This is our sample invoice, so it can't be sent. Add one of your own to send it." });
         var outcome = await sender.SendAsync(doc, SendMode.Person, tenant.ClerkUserId, ct);
         if (outcome.Ok)
         {

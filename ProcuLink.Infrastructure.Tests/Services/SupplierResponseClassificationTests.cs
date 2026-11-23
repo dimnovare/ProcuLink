@@ -246,7 +246,7 @@ public class SupplierResponseClassificationTests
     {
         var message = SupplierResponseClassification.DescribeFailure(
             401, "token expired at 2026-07-30T09:00Z", Observable,
-            "HTTP 401: supplier endpoint returned an error.");
+            "The address answered with an error (HTTP 401).");
 
         message.Should().Contain("401");
         message.Should().Contain("delivery settings", "the copy must point at where the fix is made");
