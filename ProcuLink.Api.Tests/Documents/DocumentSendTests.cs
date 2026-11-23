@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -97,6 +98,8 @@ public class DocumentSendTests(DocumentEngineTestFactory factory) : IClassFixtur
         (await response.Content.ReadAsStringAsync()).Should().Contain("This is our sample invoice, so it can't be sent. Add one of your own to send it.");
         (await Deliveries(doc)).Should().BeEmpty();
         factory.Enqueued<DeliverDocumentJob>().Should().Be(queuedBefore);
+        var detail = await factory.ClientFor(Org).GetFromJsonAsync<JsonElement>($"/api/documents/{doc}");
+        detail.GetProperty("isSample").GetBoolean().Should().BeTrue();
     }
 
     private sealed record IdRow(Guid Id);
