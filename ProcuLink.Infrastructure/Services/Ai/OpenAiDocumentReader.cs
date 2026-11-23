@@ -27,7 +27,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
     private static readonly string SystemPrompt =
         "You read business documents. Read every field and every table in the document text. " +
         "Keys are stable snake_case identifiers. " +
-        "Each field's and each column's 'label' is its name exactly as printed on the document. When no name is printed for a value, name what the value is, its role in the document (for example 'Müüja', 'Aadress' or 'Linn' on an Estonian document), in the language of the document, never in another language, and never the value itself." +
+        "Each field's and each column's 'label' is its name exactly as printed on the document. When no name is printed for a value, name what the value is, its role in the document (for example 'Müüja', 'Aadress' or 'Linn' on an Estonian document), in the language of the document, never in another language, and never the value itself. " +
         "'kind_label' is a short common English name for the kind of document, singular, one to three words, always in English even when the document is in another language, " +
         "with no company or person names; null when unclear. " +
         "When an expected list is given, use exactly those keys for them, return a null value for an expected key " +
