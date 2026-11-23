@@ -27,8 +27,8 @@ public sealed class OpenAiDocumentReader : IDocumentReader
     private static readonly string SystemPrompt =
         "You read business documents. Read every field and every table in the document text. " +
         "Keys are stable snake_case identifiers. " +
-        "Each field's and each column's 'label' is its name exactly as printed on the document. When no name is printed for a value, give it a short name in the language of the document, never in another language. " +
-        "'kind_label' is a short common English name for the kind of document, singular, one to three words, " +
+        "Each field's and each column's 'label' is its name exactly as printed on the document. When no name is printed for a value, name what the value is, its role in the document (for example 'Müüja', 'Aadress' or 'Linn' on an Estonian document), in the language of the document, never in another language, and never the value itself." +
+        "'kind_label' is a short common English name for the kind of document, singular, one to three words, always in English even when the document is in another language, " +
         "with no company or person names; null when unclear. " +
         "When an expected list is given, use exactly those keys for them, return a null value for an expected key " +
         "that is not present in the document, and report all other fields and tables you find too. " +
@@ -175,7 +175,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
         if (input.Pages is not { Count: > 0 } pages) return [ChatMessageContentPart.CreateTextPart(text)];
         return pages.Select(png => ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(png), "image/png", ChatImageDetailLevel.High))
             .Prepend(ChatMessageContentPart.CreateTextPart(text + (input.Scanned
-                ? "\nThe document is the attached page images, in page order."
+                ? "\nThe document is the attached page images, in page order. Copy only text you can see on the images: never add a country, a city or any other value from general knowledge."
                 : "\nThe attached page images show the same pages as the document text, in page order: use them to see the layout (logos, address blocks, columns, table rows).")));
     }
 
@@ -213,7 +213,11 @@ public sealed class OpenAiDocumentReader : IDocumentReader
         var fields = (dto.Fields ?? []).Where(f => !string.IsNullOrWhiteSpace(f.Value) || fieldKeys?.Contains(FieldKey.Normalise(f.Key)) == true).Select(f =>
         {
             var key = FieldKey.Unique(seenFields, f.Key);
-            return new ReadField(key, f.Label, f.Value, Type(f.Type), Pinned(expected?.Fields.FirstOrDefault(x => x.Key == key)?.Meaning, f.Meaning), Clamp(f.Confidence),
+            // A value used as its own name ("Turku" named "Turku") says nothing: name it from its key instead.
+            var label = !string.IsNullOrWhiteSpace(f.Value) && string.Equals(f.Label?.Trim(), f.Value?.Trim(), StringComparison.OrdinalIgnoreCase)
+                ? char.ToUpperInvariant(key[0]) + key[1..].Replace('_', ' ')
+                : f.Label;
+            return new ReadField(key, label, f.Value, Type(f.Type), Pinned(expected?.Fields.FirstOrDefault(x => x.Key == key)?.Meaning, f.Meaning), Clamp(f.Confidence),
                 Location: null, NotOnPage: false, Listed: fieldKeys?.Contains(key) ?? true, Edited: false);
         }).ToList();
 

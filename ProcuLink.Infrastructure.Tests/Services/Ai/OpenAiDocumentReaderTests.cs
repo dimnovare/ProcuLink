@@ -82,6 +82,15 @@ public class OpenAiDocumentReaderTests
     }
 
     [Fact]
+    public void A_value_used_as_its_own_label_is_named_from_its_key()
+    {
+        var dto = new OpenAiDocumentReader.ReadDto(null,
+            [new("supplier_city", "Turku", "turku ", "text", null, 1), new("city", "Linn", "Turku", "text", null, 1)], []);
+
+        OpenAiDocumentReader.Map(dto, null).Fields.Select(f => f.Label).Should().Equal("Supplier city", "Linn");
+    }
+
+    [Fact]
     public void A_unit_or_price_basis_after_a_line_figure_is_dropped()
     {
         var dto = new OpenAiDocumentReader.ReadDto("Order", [],

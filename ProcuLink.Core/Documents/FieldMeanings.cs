@@ -119,7 +119,7 @@ public static class FieldMeanings
         [SenderName] = "the party that issued the document: the buyer on an order, the seller on an invoice. Often named only in the letterhead, the logo or the footer, next to its bank details and registration or VAT number.",
         [SenderVatId] = "the sender's VAT or tax registration number.",
         [ReceiverName] = "the party the document is addressed to: the supplier on an order, the customer on an invoice. Not the party at a delivery or ship-to address, unless no other party is named.",
-        [Currency] = "the currency of the amounts, as printed (code or symbol), also when it is printed only next to the amounts.",
+        [Currency] = "the currency of the amounts, as printed (code or symbol), also when it is printed only next to the amounts. Name it for the currency in the document's language (e.g. 'Valuuta', 'Currency'), never with the label of the amount it is printed next to.",
         [TotalNet] = "the document's total before tax, including charges such as shipping, handling or fees: the amount the tax is calculated on.",
         [TotalTax] = "the document's total tax.",
         [TotalGross] = "the document's total including tax: the amount to pay.",
