@@ -108,6 +108,17 @@ public class DocumentOutputRendererTests
     }
 
     [Fact]
+    public void A_text_value_that_is_wholly_a_date_goes_out_as_a_date()
+    {
+        // A due date read as payment terms; a short-year text may be a version; a code stays as printed.
+        var read = new ReadResult("Invoice",
+            [Field("terms", "02.12.2026", "text"), Field("version", "1.2.26", "text"), Field("ref", "18.11.2026", "code")]);
+        var t = Csv(new CsvDialect { Delimiter = ";", LineEnding = "\n" }, Rule("Terms", "terms"), Rule("Version", "version"), Rule("Ref", "ref"));
+
+        Text(DocumentOutputRenderer.Render("csv", t, read, null)).Should().Be("Terms;Version;Ref\n2026-12-02;1.2.26;18.11.2026\n");
+    }
+
+    [Fact]
     public void A_byte_order_mark_is_written_only_when_the_dialect_asks()
     {
         var read = new ReadResult("Invoice", [Field("total", "120.00", "money")]);

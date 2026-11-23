@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using ProcuLink.Core.Documents;
 
 namespace ProcuLink.Transform.Documents;
@@ -9,17 +10,22 @@ public sealed record DocumentRowSet(
 
 public static class DocumentRows
 {
+    private static readonly Regex FourDigitYear = new(@"\b\d{4}\b", RegexOptions.Compiled);
+
     /// <summary>
     /// Fields with a value become the header bag; each row of the chosen table (the first when
     /// <paramref name="tableKey"/> is null) is that bag overlaid by its own cells (a present-but-blank cell blanks the key rather than inheriting the header).
     /// Without <paramref name="decimalMark"/> values are placed verbatim. With it, a certain date becomes yyyy-MM-dd and a certain amount bare digits
     /// with that mark, so every file of a flow writes them one way; an uncertain one (<c>1.500</c>, <c>03/04/2026</c>, <c>EUR 12</c>) still goes out as read.
+    /// A text value that is wholly a certain date with a four-digit year (a due date read as payment terms) is written as a date too;
+    /// "1.2.26" may be a version, and a code never is.
     /// </summary>
     public static DocumentRowSet Build(ReadResult read, string? tableKey, char? decimalMark = null)
     {
         string Value(string type, string v) => decimalMark is not { } mark || string.IsNullOrWhiteSpace(v) ? v : type switch
         {
             FieldTypes.Date => FieldValueParser.IsoDate(v) ?? v,
+            FieldTypes.Text when FourDigitYear.IsMatch(v) => FieldValueParser.IsoDate(v) ?? v,
             FieldTypes.Money or FieldTypes.Number => FieldValueParser.PlainNumber(v, mark) ?? v,
             _ => v,
         };
