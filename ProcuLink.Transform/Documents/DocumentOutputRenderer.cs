@@ -20,7 +20,7 @@ public static class DocumentOutputRenderer
     /// <summary>Render a read through <paramref name="template"/> as csv, json, xml, xlsx, pdf, txt or fixed, with <paramref name="lookups"/> in scope for its Lookup steps. <paramref name="layout"/> frames pdf and txt; <paramref name="logo"/> is for pdf.</summary>
     public static DocumentRender Render(string format, OutputNodeTemplate template, ReadResult read, string? tableKey, LookupTables? lookups = null, OutputLayout? layout = null, byte[]? logo = null)
     {
-        var rows = DocumentRows.Build(read, tableKey);
+        var rows = DocumentRows.Build(read, tableKey, DecimalMark(format, template));
         // A flat grid has nothing else to put the header values on: a read with no table rows is one row.
         var lines = rows.Lines.Count == 0 && FlowOutputFormats.TemplateFormat(format) == OutputFormat.Csv
             ? [rows.Header]
@@ -53,6 +53,23 @@ public static class DocumentOutputRenderer
             return new(null, "output_invalid", null);
         }
     }
+
+    /// <summary>
+    /// How a file writes dates and amounts: null keeps them as printed (pdf and txt show the document; a fixed-width
+    /// receiver sized its columns to them). A grid that splits on ';', the European Excel separator, takes the decimal comma
+    /// that goes with it, unless a step, expression or condition reads the numbers, which reads them the invariant way.
+    /// </summary>
+    private static char? DecimalMark(string format, OutputNodeTemplate template) => format switch
+    {
+        FlowOutputFormats.Pdf or FlowOutputFormats.Text or FlowOutputFormats.Fixed => null,
+        _ when FlowOutputFormats.TemplateFormat(format) == OutputFormat.Csv && template.CsvDialect?.Delimiter == ";" && !Computes(template.Root) => ',',
+        _ => '.',
+    };
+
+    private static bool Computes(OutputNode n) =>
+        !string.IsNullOrWhiteSpace(n.IncludeWhen)
+        || (n.Rule is { } r && (!string.IsNullOrWhiteSpace(r.Expression) || r.FieldManipulators.Any(m => m.Type != "Lookup")))
+        || n.Children.Any(Computes);
 
     /// <summary>The message without .NET's " (Parameter 'x')" suffix, which is not a sentence for a person.</summary>
     private static string Plain(Exception ex) =>

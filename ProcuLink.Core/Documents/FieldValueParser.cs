@@ -67,6 +67,28 @@ public static class FieldValueParser
     public static bool TryDate(string? s, out DateOnly value) =>
         DateOnly.TryParseExact(TrailingTime.Replace(s?.Trim() ?? "", "").TrimEnd(), DateFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out value);
 
+    // 03/04/2026 is 3 April in the UK and March 4 in the US, and 26-11-05 may put the year first; 05/05 and 21/11 read the same either way.
+    private static readonly Regex DayMonthShape = new(@"^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$", RegexOptions.Compiled);
+    // Digits, at most one decimal mark, and thousands groups of exactly three behind a mark that differs from it: "18.11.2026" and "0012" are not amounts.
+    private static readonly Regex PlainNumberShape =
+        new(@"^-?(?!0\d)(?:\d{1,3}(?<g>[.,  ])\d{3}(?:\k<g>\d{3})*|\d+)(?:(?!\k<g>)[.,]\d+)?$", RegexOptions.Compiled);
+
+    /// <summary>The date as yyyy-MM-dd, or null when the value is not wholly a date, carries a time, or could be read two ways.</summary>
+    public static string? IsoDate(string? s)
+    {
+        var v = s?.Trim() ?? "";
+        if (TrailingTime.IsMatch(v)) return null;
+        if (DayMonthShape.Match(v) is { Success: true } m && (m.Groups[3].Length == 2
+            || (int.Parse(m.Groups[1].Value) is var a and <= 12 && int.Parse(m.Groups[2].Value) is var b and <= 12 && a != b))) return null;
+        return TryDate(v, out var d) ? d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : null;
+    }
+
+    /// <summary>The number as bare digits with <paramref name="decimalMark"/>, its decimals as printed; null when it has words, a currency, or two readings.</summary>
+    public static string? PlainNumber(string? s, char decimalMark) =>
+        s is not null && PlainNumberShape.IsMatch(s.Trim()) && Number(s) is { } n
+            ? n.ToString(CultureInfo.InvariantCulture).Replace('.', decimalMark)
+            : null;
+
     /// <summary>ISO 13616: country letters, check digits, then mod-97 of the rearranged digits is 1.</summary>
     public static bool IsIban(string? iban)
     {
