@@ -148,7 +148,12 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
             delivery.DispatchKey = Guid.NewGuid();
             delivery.ArtifactKey = $"{doc.OrgId}/documents/{doc.Id}/outputs/{delivery.DispatchKey}{r.Extension}";
             delivery.ContentType = r.ContentType;
-            delivery.FileName = $"{stem}-{delivery.DispatchKey.ToString("N")[..8]}{r.Extension}";
+            // Kept for download, a file is named as the preview names it. For a destination, or beside another of this
+            // document's files with that name, it carries the send's key so no file overwrites another.
+            var plain = $"{stem}{r.Extension}";
+            delivery.FileName = destination is null && rendered.Count(x => x.Extension == r.Extension) == 1 && !existing.Any(d => d != delivery && d.FileName == plain)
+                ? plain
+                : $"{stem}-{delivery.DispatchKey.ToString("N")[..8]}{r.Extension}";
             delivery.Attempts = 0;
             delivery.LastError = null;
             delivery.ResponseCode = null;

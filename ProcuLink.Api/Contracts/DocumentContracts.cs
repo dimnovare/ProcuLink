@@ -29,6 +29,13 @@ public sealed record DownloadDocumentRequest(string? Format, string? CsvSeparato
 
 public sealed record SetUpResultDto(Guid FlowId, string FlowName, DocumentSummaryDto Document);
 
+/// <summary>A moved document, plus how many waiting documents like it the move took to the same flow.</summary>
+public sealed record MovedDocumentDto : DocumentSummaryDto
+{
+    public MovedDocumentDto(DocumentSummaryDto summary) : base(summary) { }
+    public int AlsoMoved { get; init; }
+}
+
 public record RenameFlowRequest(string? Name = null, string? Automation = null);
 
 public record DocumentSummaryDto(
