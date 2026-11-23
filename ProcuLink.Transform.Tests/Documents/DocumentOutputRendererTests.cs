@@ -99,6 +99,12 @@ public class DocumentOutputRendererTests
         Text(DocumentOutputRenderer.Render(FlowOutputFormats.Text, t, estonian, null)).Should().Contain("18.11.2026").And.Contain("1.234,50");
         Text(DocumentOutputRenderer.Render("json", t with { Format = OutputFormat.Json, CsvDialect = null }, estonian, null))
             .Should().Contain("\"1234.50\"").And.Contain("\"2026-11-18\"");
+        // A step reads numbers the invariant way, so a file with one keeps the decimal point: 57.00 doubles, never 5700.
+        var doubled = Csv(new CsvDialect { Delimiter = ";", LineEnding = "\n" }, Rule("Total", "total"), OutputNode.FieldOf("Tax", new OutputFieldRule
+        {
+            OutputPath = "Tax", CanonicalField = "tax", FieldManipulators = [new ManipulatorEntry { Type = "Multiply", Params = ["2"] }],
+        }));
+        Text(DocumentOutputRenderer.Render("csv", doubled, english, null)).Should().StartWith("Total;Tax\n285.00;114").And.NotContain("11400");
     }
 
     [Fact]

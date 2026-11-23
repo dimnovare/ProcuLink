@@ -15,6 +15,8 @@ public class FieldValueParserNormalTests
     [InlineData("05/05/2026", "2026-05-05")]   // same either way
     [InlineData("03/04/2026", null)]           // US or UK: never guessed
     [InlineData("18.11.2026 14:23", null)]     // the time would be lost
+    [InlineData("21.11.26", "2026-11-21")]     // dotted short year: day first
+    [InlineData("26-11-05", null)]             // year first, or day first?
     [InlineData("soon", null)]
     public void IsoDate_writes_only_what_is_certain(string value, string? expected) =>
         FieldValueParser.IsoDate(value).Should().Be(expected);
@@ -29,6 +31,11 @@ public class FieldValueParserNormalTests
     [InlineData("1.500", '.', null)]       // one and a half, or fifteen hundred
     [InlineData("EUR 171,00", '.', null)]  // the currency would be lost
     [InlineData("10 pcs", '.', null)]
+    [InlineData("1.234.567", ',', "1234567")]
+    [InlineData("18.11.2026", '.', null)]  // a date, not eighteen million
+    [InlineData("1,5.3", '.', null)]
+    [InlineData("0012", '.', null)]        // a code: its zeros matter
+    [InlineData("0,50", '.', "0.50")]
     public void PlainNumber_writes_only_what_is_certain(string value, char mark, string? expected) =>
         FieldValueParser.PlainNumber(value, mark).Should().Be(expected);
 }
