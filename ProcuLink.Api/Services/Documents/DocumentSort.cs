@@ -26,7 +26,7 @@ public static class DocumentSort
 
     /// <summary>
     /// Certain: a remembered person flow for this sender and kind. Not certain: the one person flow holding a non-sample document
-    /// of this kind. Otherwise no target, and the reason the document waits.
+    /// of this kind, or, when none does, the one holding our sample of it. Otherwise no target, and the reason the document waits.
     /// </summary>
     public static async Task<(SortTarget? Target, string? WaitReason)> DecideAsync(ProcuLinkDbContext db, FlowDocument doc, CancellationToken ct)
     {
@@ -41,17 +41,21 @@ public static class DocumentSort
                 .FirstOrDefaultAsync(ct);
             if (remembered is not null) return (new SortTarget(remembered.Id, remembered.Name, true), null);
         }
-        var holding = await flows
-            .Where(f => db.FlowDocuments.Any(d => d.OrgId == doc.OrgId && d.FlowId == f.Id && d.Kind == doc.Kind && !d.IsSample))
-            .Select(f => new { f.Id, f.Name })
-            .Take(2)
-            .ToListAsync(ct);
+        var holding = await HoldingAsync(sample: false);
+        // Only our sample holds this kind, as after a first run: its flow is the guess, and a person confirms it.
+        if (holding.Count == 0) holding = await HoldingAsync(sample: true);
         return holding.Count switch
         {
             0 => (null, NewKind),
-            1 => (new SortTarget(holding[0].Id, holding[0].Name, false), null),
+            1 => (holding[0], null),
             _ => (null, ChooseFlow),
         };
+
+        Task<List<SortTarget>> HoldingAsync(bool sample) => flows
+            .Where(f => db.FlowDocuments.Any(d => d.OrgId == doc.OrgId && d.FlowId == f.Id && d.Kind == doc.Kind && d.IsSample == sample))
+            .Select(f => new SortTarget(f.Id, f.Name, false))
+            .Take(2)
+            .ToListAsync(ct);
     }
 
     /// <summary>Moves the document to an inbox-sorted target, or leaves it waiting with its reason. True when it moved and must be read there.</summary>

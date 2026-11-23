@@ -68,7 +68,7 @@ public sealed class InboxSortTests(DocumentEngineTestFactory factory) : IClassFi
     };
 
     /// <summary>A person flow of <paramref name="org"/>, holding one earlier invoice when <paramref name="holdsInvoice"/>.</summary>
-    private async Task<Flow> FlowAsync(Guid org, string name, bool holdsInvoice, bool confirmed = true)
+    private async Task<Flow> FlowAsync(Guid org, string name, bool holdsInvoice, bool confirmed = true, bool sample = false)
     {
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
@@ -78,7 +78,12 @@ public sealed class InboxSortTests(DocumentEngineTestFactory factory) : IClassFi
             CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
         };
         db.Flows.Add(flow);
-        if (holdsInvoice) db.FlowDocuments.Add(NewDoc(org, flow.Id, "invoice"));
+        if (holdsInvoice)
+        {
+            var invoice = NewDoc(org, flow.Id, "invoice");
+            invoice.IsSample = sample;
+            db.FlowDocuments.Add(invoice);
+        }
         await db.SaveChangesAsync();
         return flow;
     }
@@ -160,6 +165,24 @@ public sealed class InboxSortTests(DocumentEngineTestFactory factory) : IClassFi
         var (_, b) = await InboxDocAsync(org);
         await ReadAsync(org, b, Result("Invoice"));
         (Doc(b).FlowId, Doc(b).SortUnconfirmed).Should().Be((live.Id, true));
+    }
+
+    [Fact]
+    public async Task A_flow_holding_only_our_sample_takes_the_first_real_document_of_its_kind()
+    {
+        var org = Guid.NewGuid();
+        var first = await FlowAsync(org, "Invoices", holdsInvoice: true, sample: true);
+        var (_, a) = await InboxDocAsync(org);
+        await ReadAsync(org, a, Result("Invoice"));
+        (Doc(a).FlowId, Doc(a).SortUnconfirmed).Should().Be((first.Id, true));
+
+        // A flow holding a real one is the better guess: beside it, the sample's flow does not count.
+        var other = Guid.NewGuid();
+        await FlowAsync(other, "Invoices", holdsInvoice: true, sample: true);
+        var real = await FlowAsync(other, "Supplier invoices", holdsInvoice: true);
+        var (_, b) = await InboxDocAsync(other);
+        await ReadAsync(other, b, Result("Invoice"));
+        Doc(b).FlowId.Should().Be(real.Id);
     }
 
     [Fact]
