@@ -20,7 +20,7 @@ public static class FlowSummaries
             .Select(g => new
             {
                 FlowId = g.Key,
-                NeedsYou = g.Count(d => d.Status == DocumentStatus.NeedsReview || d.Status == DocumentStatus.Ready),
+                NeedsYou = g.Count(d => !d.IsSample && (d.Status == DocumentStatus.NeedsReview || d.Status == DocumentStatus.Ready)),
                 CouldNotSend = g.Count(d => d.Status == DocumentStatus.SendFailed),
                 CouldNotRead = g.Count(d => d.Status == DocumentStatus.ReadFailed),
                 Last = g.Max(d => (DateTime?)d.CreatedAt),

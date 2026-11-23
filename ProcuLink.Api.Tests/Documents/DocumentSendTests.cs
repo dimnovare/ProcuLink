@@ -21,7 +21,7 @@ public class DocumentSendTests(DocumentEngineTestFactory factory) : IClassFixtur
     private sealed record DeliveryRow(Guid Id, string OutputName, string Status);
 
     /// <summary>A flow with a CSV output sent to an http destination and a JSON output with no destination, plus one document.</summary>
-    private async Task<(Guid DocId, Guid CsvOutput, Guid JsonOutput)> Seed(string status)
+    private async Task<(Guid DocId, Guid CsvOutput, Guid JsonOutput)> Seed(string status, bool sample = false)
     {
         var http = factory.ClientFor(Org);
         var destinationId = Guid.NewGuid();
@@ -36,7 +36,7 @@ public class DocumentSendTests(DocumentEngineTestFactory factory) : IClassFixtur
             Id = Guid.NewGuid(), OrgId = Org, FlowId = flow.Id, FileName = "synthetic.pdf", ContentType = "application/pdf", Status = status,
             ReadJson = DocumentJson.Serialize(new ReadResult("Invoice",
                 [new ReadField("invoice_no", "Invoice number", "INV-7", FieldTypes.Text, null, 1, null, false, true, false)], [])),
-            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            IsSample = sample, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
         };
         using (var scope = factory.Services.CreateScope())
         {
@@ -83,6 +83,36 @@ public class DocumentSendTests(DocumentEngineTestFactory factory) : IClassFixtur
         factory.Enqueued<DeliverDocumentJob>().Should().Be(queuedBefore + 1);
         var list = await factory.ClientFor(Org).GetFromJsonAsync<List<DeliveryRow>>($"/api/documents/{doc}/deliveries", DocumentJson.Options);
         list.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task The_sample_is_never_sent()
+    {
+        var (doc, _, _) = await Seed(DocumentStatus.Ready, sample: true);
+        var queuedBefore = factory.Enqueued<DeliverDocumentJob>();
+
+        var response = await Send(doc);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("This is our sample invoice, so it can't be sent. Add one of your own to send it.");
+        (await Deliveries(doc)).Should().BeEmpty();
+        factory.Enqueued<DeliverDocumentJob>().Should().Be(queuedBefore);
+    }
+
+    private sealed record IdRow(Guid Id);
+
+    [Fact]
+    public async Task The_sample_never_waits_in_needs_you_but_all_lists_it()
+    {
+        var (doc, _, _) = await Seed(DocumentStatus.NeedsReview, sample: true);
+        Guid flowId;
+        using (var scope = factory.Services.CreateScope())
+            flowId = (await scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().FlowDocuments.SingleAsync(d => d.Id == doc)).FlowId;
+        async Task<List<Guid>> Ids(string query) =>
+            (await factory.ClientFor(Org).GetFromJsonAsync<List<IdRow>>($"/api/documents?flowId={flowId}{query}", DocumentJson.Options))!.Select(r => r.Id).ToList();
+
+        (await Ids("&status=needs_review,ready")).Should().BeEmpty();
+        (await Ids("")).Should().Equal(doc);
     }
 
     private static readonly Guid OldKey = Guid.NewGuid();
