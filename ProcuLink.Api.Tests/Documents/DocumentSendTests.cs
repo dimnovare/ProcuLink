@@ -81,6 +81,9 @@ public class DocumentSendTests(DocumentEngineTestFactory factory) : IClassFixtur
         d.Single(x => x.OutputName == "JSON").Status.Should().Be("stored");
         d.Single(x => x.OutputName == "CSV").Status.Should().Be("queued");
         d.Single(x => x.OutputName == "CSV").ArtifactKey.Should().Be($"{Org}/documents/{doc}/outputs/{d.Single(x => x.OutputName == "CSV").DispatchKey}.csv");
+        // A file kept for download is named as the preview names it; one for a destination keeps the send's key.
+        d.Single(x => x.OutputName == "JSON").FileName.Should().Be("synthetic.json");
+        d.Single(x => x.OutputName == "CSV").FileName.Should().MatchRegex(@"^synthetic-[0-9a-f]{8}\.csv$");
         factory.Enqueued<DeliverDocumentJob>().Should().Be(queuedBefore + 1);
         var list = await factory.ClientFor(Org).GetFromJsonAsync<List<DeliveryRow>>($"/api/documents/{doc}/deliveries", DocumentJson.Options);
         list.Should().HaveCount(2);
