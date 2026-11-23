@@ -34,6 +34,9 @@ public sealed class OutputTemplateEmitter
         IReadOnlyList<IReadOnlyDictionary<string, string>> lineRows)
     {
         RequireRenderable(template);
+        // Repeated sibling names would be duplicate JSON properties (a reader keeps one value): number them as the CSV header does.
+        // XML keeps repeats: sibling elements of one name are legal there, and a template inferred from a sample relies on them.
+        if (template.Format == OutputFormat.Json) template = template with { Root = Distinct(template.Root) };
         return Render(template, headerRow, r => r, lineRows);
     }
 
@@ -447,6 +450,13 @@ public sealed class OutputTemplateEmitter
             rows.Add(headerValues.Concat(lineValues).ToList());
         }
         return new CsvGrid(header, rows);
+    }
+
+    private static OutputNode Distinct(OutputNode node)
+    {
+        var kids = RealChildren(node).ToList();
+        var names = UniqueNames(kids.Select(c => c.Name));
+        return node with { Children = kids.Select((c, i) => Distinct(c) with { Name = names[i] }).ToList() };
     }
 
     /// <summary>Column names as written, a repeat (ignoring case) numbered " 2", " 3"… so every column is unique. A blank stays blank.</summary>
