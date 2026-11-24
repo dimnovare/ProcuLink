@@ -60,6 +60,8 @@ public sealed class DocumentRechecker(ProcuLinkDbContext db, DocumentEngineGate 
         config ??= await FlowConfigLoader.CurrentAsync(db, flow, ct);
         doc.FlowVersion = config.VersionNo;
         var failed = DocumentChecks.Run(read, config.Fields, config.FieldsConfirmed, duplicate, newSender, unconfirmedFrom);
+        // A customer's own check marks its value like a hard-to-read one: it joins BEFORE the status, so the flow's mode decides (marked waits, auto sends).
+        failed = [.. failed, .. FieldChecks.Run(read, config.Fields, await DocumentLookups.ForChecksAsync(db, doc.OrgId, config.Fields, ct), DateOnly.FromDateTime(DateTime.UtcNow))];
         // Rule checks are a heads-up, never a block: they join the list after the status is decided.
         doc.Status = DocumentChecks.StatusFor(failed);
         IReadOnlyList<DocumentCheck> withRules = [.. failed, .. await OutputRuleChecks.RunAsync(gate, validator, doc.OrgId, read, config, ct, batch)];

@@ -287,4 +287,65 @@ public class FlowsApiTests(DocumentEngineTestFactory factory) : IClassFixture<Do
 
         Assert.Equal("Invoice CSV", list.Single(f => f.Id == flow.Id).Summary!.Outputs[0].Name);
     }
+
+    [Fact]
+    public async Task PutFields_SavesACheckNormalised_AndRefusesABadOne()
+    {
+        var http = factory.ClientFor(DocumentEngineTestFactory.OrgA);
+        var flow = (await (await http.PostAsJsonAsync("/api/flows", new CreateFlowRequest("Checked flow"))).Content.ReadFromJsonAsync<FlowDto>(DocumentJson.Options))!;
+        FlowFieldList With(FieldCheck check, IReadOnlyList<FlowTable>? tables = null) =>
+            new([new FlowField("amount", "Amount", FieldTypes.Money, null, false, check)], tables);
+        async Task<string> Refused(FlowFieldList list)
+        {
+            var put = await http.PutAsJsonAsync($"/api/flows/{flow.Id}/fields", list);
+            Assert.Equal(HttpStatusCode.BadRequest, put.StatusCode);
+            return await put.Content.ReadAsStringAsync();
+        }
+
+        var ok = await http.PutAsJsonAsync($"/api/flows/{flow.Id}/fields", With(new FieldCheck(FieldCheckOps.OneOf, [" EUR ", ""], Min: " 5 ")));
+        Assert.Equal(HttpStatusCode.OK, ok.StatusCode);
+        var saved = (await http.GetFromJsonAsync<FlowDto>($"/api/flows/{flow.Id}", DocumentJson.Options))!.Fields.Fields[0].Check!;
+        Assert.Equal(["EUR"], saved.Values!);
+        Assert.Null(saved.Min);
+
+        Assert.Contains("Add a lowest or highest number for Amount.", await Refused(With(new FieldCheck(FieldCheckOps.Between))));
+        Assert.Contains("A check can be added to a single value, not to a table column.", await Refused(With(new FieldCheck(FieldCheckOps.NotAfterToday),
+            [new FlowTable("lines", "Lines", [new FlowField("qty", "Qty", FieldTypes.Number, null, false, new FieldCheck(FieldCheckOps.NotAfterToday))])])));
+        var theirs = Guid.NewGuid();
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.Set<Lookup>().Add(new Lookup { Id = theirs, OrgId = DocumentEngineTestFactory.OrgB, Name = "Their codes", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+            await db.SaveChangesAsync();
+        }
+        Assert.Contains("That lookup was not found. Choose another one.", await Refused(With(new FieldCheck(FieldCheckOps.InLookup, LookupId: theirs))));
+    }
+
+    [Fact]
+    public async Task A_flow_published_before_checks_existed_shows_no_changes()
+    {
+        var http = factory.ClientFor(DocumentEngineTestFactory.OrgA);
+        var flow = (await (await http.PostAsJsonAsync("/api/flows", new CreateFlowRequest("Old flow"))).Content.ReadFromJsonAsync<FlowDto>(DocumentJson.Options))!;
+        // The shape stored before checks existed: no "check" key anywhere.
+        const string fields = """{"fields":[{"key":"amount","label":"Amount","type":"money","meaning":null,"required":true}],"tables":[]}""";
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            var entity = db.Flows.Single(f => f.Id == flow.Id);
+            entity.FieldsJson = fields;
+            entity.FieldsConfirmed = true;
+            entity.PublishedVersionNo = 1;
+            db.Set<FlowVersion>().Add(new FlowVersion
+            {
+                Id = Guid.NewGuid(), OrgId = entity.OrgId, FlowId = entity.Id, VersionNo = 1, PublishedAt = DateTime.UtcNow,
+                SnapshotJson = $$"""{"fields":{{fields}},"fieldsConfirmed":true,"outputs":[]}""",
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var got = (await http.GetFromJsonAsync<FlowDto>($"/api/flows/{flow.Id}", DocumentJson.Options))!;
+
+        Assert.False(got.HasChanges);
+        Assert.Null(got.Fields.Fields[0].Check);
+    }
 }

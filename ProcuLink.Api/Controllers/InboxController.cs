@@ -149,8 +149,8 @@ public sealed class InboxController(
             return StatusCode(429, new { error = "flow_limit_reached", plan = reached.Plan, limit = reached.Cap, upgradeUrl = "/settings" });
         var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
         if (!FlowCreation.TryName(request?.Name ?? DocumentKind.FlowNameFor(read.KindLabel), out var name)) return BadRequest(new { error = "invalid_name" });
-        var fields = ReadMerge.KeysOf(read);
-        if (FlowCreation.InvalidFields(fields) is { } detail) return UnprocessableEntity(new { error = "invalid_fields", detail });
+        var (fields, detail) = await FlowCreation.CheckFieldsAsync(db, orgId, ReadMerge.KeysOf(read), ct);
+        if (detail is not null) return UnprocessableEntity(new { error = "invalid_fields", detail });
         var taken = (await db.Flows.Where(f => f.OrgId == orgId).Select(f => f.Name).ToListAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
         for (var (stem, n) = (name, 2); taken.Contains(name); n++) name = stem[..Math.Min(stem.Length, 120 - $" {n}".Length)] + $" {n}";
         // Before the flow exists: of two set-ups that read the same document, one makes the flow and the other is refused.

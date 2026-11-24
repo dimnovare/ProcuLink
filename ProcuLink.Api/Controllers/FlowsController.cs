@@ -102,7 +102,8 @@ public sealed class FlowsController(
         var orgId = tenant.OrganisationId;
         var flow = await db.Flows.PersonFlows(orgId).FirstOrDefaultAsync(f => f.Id == id, ct);
         if (flow is null) return FlowNotFound();
-        if (FlowCreation.InvalidFields(fields) is { } detail) return BadRequest(new { error = "invalid_fields", detail });
+        (fields, var detail) = await FlowCreation.CheckFieldsAsync(db, orgId, fields, ct);
+        if (detail is not null) return BadRequest(new { error = "invalid_fields", detail });
 
         flow.FieldsJson = DocumentJson.Serialize(fields);
         flow.FieldsConfirmed = true;
