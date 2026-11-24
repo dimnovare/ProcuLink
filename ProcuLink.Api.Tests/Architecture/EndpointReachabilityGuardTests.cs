@@ -800,6 +800,7 @@ public sealed class EndpointReachabilityGuardTests
         {
             Endpoint("DELETE", "api/suppliers/{id:guid}/po-mapping"),
             Endpoint("GET", "api/suppliers/{id:guid}/mapping/source-columns"),
+            Endpoint("POST", "api/documents/{id:guid}/move"),
         };
 
         var calls = Calls("""
@@ -822,6 +823,9 @@ public sealed class EndpointReachabilityGuardTests
               apiFetch<void>(`/suppliers/${id}/po-mapping`, { method: "DELETE" });
 
             export const columns = (id: string) => magicFetch(`/suppliers/${id}/mapping/source-columns`);
+
+            export const move = (id: string, flowId: string) =>
+              apiFetch<Summary & { alsoMoved?: number }>(`/documents/${id}/move`, { method: "POST", body: json({ flowId }) });
             """);
 
         Assert.Empty(Unreachable(endpoints, calls));
