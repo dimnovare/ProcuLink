@@ -102,7 +102,11 @@ public sealed class FlowsController(
         var orgId = tenant.OrganisationId;
         var flow = await db.Flows.PersonFlows(orgId).FirstOrDefaultAsync(f => f.Id == id, ct);
         if (flow is null) return FlowNotFound();
+        fields = FieldChecks.Normalise(fields);
         if (FlowCreation.InvalidFields(fields) is { } detail) return BadRequest(new { error = "invalid_fields", detail });
+        var lookupIds = FieldChecks.LookupIds(fields).ToList();
+        if (lookupIds.Count > 0 && await db.Set<Lookup>().CountAsync(l => l.OrgId == orgId && lookupIds.Contains(l.Id), ct) != lookupIds.Count)
+            return BadRequest(new { error = "invalid_fields", detail = "That lookup was not found. Choose another one." });
 
         flow.FieldsJson = DocumentJson.Serialize(fields);
         flow.FieldsConfirmed = true;

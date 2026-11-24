@@ -29,6 +29,9 @@ public static class FlowCreation
             if (f.Type is null || !FieldTypes.All.Contains(f.Type)) return $"Type '{f.Type}' is not supported.";
             if (f.Meaning is not null && !FieldMeanings.All.Contains(f.Meaning)) return $"Meaning '{f.Meaning}' is not supported.";
         }
+        if (list.Fields.Select(f => FieldChecks.Problem(f, isColumn: false))
+                .Concat(list.Tables.SelectMany(t => t.Columns).Select(c => FieldChecks.Problem(c, isColumn: true)))
+                .FirstOrDefault(p => p is not null) is { } check) return check;
         var dup = list.Fields.Select(f => f.Key).GroupBy(k => k).FirstOrDefault(g => g.Count() > 1)?.Key
             ?? list.Tables.Select(t => t.Key).GroupBy(k => k).FirstOrDefault(g => g.Count() > 1)?.Key;
         dup ??= list.Tables.SelectMany(t => t.Columns.GroupBy(c => c.Key).Where(g => g.Count() > 1).Select(g => g.Key)).FirstOrDefault();
