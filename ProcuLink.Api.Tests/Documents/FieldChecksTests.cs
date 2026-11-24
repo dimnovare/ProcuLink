@@ -27,8 +27,8 @@ public sealed class FieldChecksTests
         var check = new FieldCheck(op, ["EUR", " USD ", ""], min, max);
         var failed = FieldChecks.Run(Read("amount", "Amount", value), Checked("amount", "Amount", check), NoLookups, Today);
 
-        if (passes) failed.Should().BeEmpty();
-        else failed.Should().ContainSingle(c => c.Code == DocumentChecks.CustomCheck && c.FieldKey == "amount" && !c.Passed);
+        failed.Where(c => c.Code == DocumentChecks.CustomCheck && c.FieldKey == "amount" && !c.Passed).Should().HaveCount(passes ? 0 : 1);
+        failed.Should().HaveCount(passes ? 0 : 1);
     }
 
     [Fact]
