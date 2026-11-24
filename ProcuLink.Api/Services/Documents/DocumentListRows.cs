@@ -70,6 +70,7 @@ public static class DocumentListRows
         var duplicateOf = repeats.ToDictionary(d => d.Id,
             d => copies[d.Sha256].Where(x => x.Id != d.Id && x.CreatedAt < d.CreatedAt).Select(x => x.CreatedAt)
                 .Concat(removed[d.Sha256].Where(at => at < d.CreatedAt)).Max(at => (DateTime?)at));
+        var numbers = await EarlierNumbersAsync(db, orgId, docs.Select(r => r.Doc).ToList(), ct);
 
         return docs.Select(r =>
         {
@@ -97,10 +98,40 @@ public static class DocumentListRows
                     x.Status == FlowDeliveryStatus.Delivered,
                     x.Status == FlowDeliveryStatus.Delivered && x.DestinationId is { } to ? names.GetValueOrDefault(to) : null)).ToList() ?? [],
                 DuplicateOfAt = duplicateOf.GetValueOrDefault(d.Id),
+                DuplicateOf = numbers.GetValueOrDefault(d.Id),
                 DownloadOnly = FlowSummaries.DownloadOnly(outputs[d.FlowId]),
                 CanRemove = canRemove(deliveries[d.Id].Any(), d.Status),
                 CountsThisMonth = StripeBillingService.CountsAsUsage(d, usageSince),
             };
         }).ToList();
+    }
+
+    /// <summary>For each document whose number repeats (a failed <see cref="DocumentChecks.Duplicate"/> check), the copy that makes it one, by
+    /// <see cref="DocumentRechecker"/>'s rule: the newest live copy, so the screen can open it, else a sent copy a person removed (no id).
+    /// Two queries, none when no document repeats.</summary>
+    public static async Task<Dictionary<Guid, DuplicateOfDto>> EarlierNumbersAsync(ProcuLinkDbContext db, Guid orgId, IReadOnlyCollection<FlowDocument> docs, CancellationToken ct)
+    {
+        var repeats = docs.Where(d => d.DedupKey != null
+            && DocumentJson.Deserialize<List<DocumentCheck>>(d.ChecksJson).Any(c => c.Code == DocumentChecks.Duplicate && !c.Passed)).ToList();
+        if (repeats.Count == 0) return [];
+        var keys = repeats.Select(d => d.DedupKey!).Distinct().ToList();
+        var hashes = keys.Select(RemovedDocumentFingerprint.HashOf).ToList();
+        var flowIds = repeats.Select(d => d.FlowId).Distinct().ToList();
+        var live = (await db.FlowDocuments.Where(x => x.OrgId == orgId && flowIds.Contains(x.FlowId) && keys.Contains(x.DedupKey!) && !x.IsSample)
+                .Select(x => new { x.Id, x.FlowId, x.DedupKey, x.CreatedAt, x.Status }).ToListAsync(ct))
+            .ToLookup(x => (x.FlowId, x.DedupKey));
+        var removed = (await db.RemovedDocumentFingerprints.Where(f => f.OrgId == orgId && flowIds.Contains(f.FlowId) && hashes.Contains(f.DedupKeyHash!))
+                .Select(f => new { f.FlowId, f.DedupKeyHash, f.DocumentCreatedAt }).ToListAsync(ct))
+            .ToLookup(f => (f.FlowId, f.DedupKeyHash), f => f.DocumentCreatedAt);
+        var result = new Dictionary<Guid, DuplicateOfDto>();
+        foreach (var d in repeats)
+        {
+            var number = DocumentChecks.NumberOf(DocumentJson.Deserialize<ReadResult>(d.ReadJson));
+            var copy = live[(d.FlowId, d.DedupKey)].Where(x => x.Id != d.Id && (x.Status is DocumentStatus.Sent or DocumentStatus.Sending
+                || x.CreatedAt < d.CreatedAt || (x.CreatedAt == d.CreatedAt && x.Id.CompareTo(d.Id) < 0))).MaxBy(x => x.CreatedAt);
+            if (copy is not null) result[d.Id] = new(copy.Id, copy.CreatedAt, number);
+            else if (removed[(d.FlowId, RemovedDocumentFingerprint.HashOf(d.DedupKey!))].Max(at => (DateTime?)at) is { } at) result[d.Id] = new(null, at, number);
+        }
+        return result;
     }
 }

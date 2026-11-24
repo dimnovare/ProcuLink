@@ -122,6 +122,20 @@ public class OpenAiDocumentReaderTests
     }
 
     [Fact]
+    public void A_two_word_heading_split_into_an_empty_column_is_one_column_again()
+    {
+        static OpenAiDocumentReader.ReadDto Table(string first, string? firstValue, string next) => new("Invoice", [],
+            [new("lines", "Lines",
+                [new("unit", first, "text", null), new("price", next, "money", FieldMeanings.LineUnitPrice)],
+                [new([new("unit", firstValue, 1), new("price", "50.00", 1)])])]);
+        static List<string> Labels(OpenAiDocumentReader.ReadDto dto, string text) =>
+            OpenAiDocumentReader.Map(dto, null, text).Tables.Single().Columns.Select(c => c.Label).ToList();
+
+        Labels(Table("UNIT", null, "PRICE"), "CODE QTY UNIT PRICE AMOUNT").Should().Equal("UNIT PRICE");
+        Labels(Table("Unit", "pcs", "Unit price"), "Qty Unit Unit price").Should().Equal("Unit", "Unit price"); // a real unit column
+    }
+
+    [Fact]
     public void Absent_fields_are_dropped_unless_the_flow_lists_them()
     {
         var dto = new OpenAiDocumentReader.ReadDto("Invoice",
