@@ -25,7 +25,7 @@ public class LinkedAccountsApiTests : IClassFixture<DocumentEngineTestFactory>
     public LinkedAccountsApiTests(DocumentEngineTestFactory factory)
     {
         _factory = factory;
-        _factory.Google.Grant = new GoogleGrant("at-1", "rt-1", $"openid email {GoogleOAuthClient.DriveFileScope}");
+        _factory.Google.Grant = new OAuthGrant("at-1", "rt-1", $"openid email {GoogleOAuthClient.DriveFileScope}");
         _factory.Google.Exchanged = null;
         _factory.Google.ExchangeError = null;
     }
@@ -82,6 +82,15 @@ public class LinkedAccountsApiTests : IClassFixture<DocumentEngineTestFactory>
     }
 
     [Fact]
+    public async Task Start_UnknownProvider_IsRefused()
+    {
+        var res = await _factory.ClientFor(OrgA).PostAsJsonAsync("/api/linked-accounts/dropbox/start", new { origin = "http://localhost:8082" });
+
+        res.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString().Should().Be("native_connectors_off");
+    }
+
+    [Fact]
     public async Task Complete_StateFromOtherOrg_IsRefused()
     {
         var url = await StartAsync(_factory.ClientFor(OrgA));
@@ -97,7 +106,7 @@ public class LinkedAccountsApiTests : IClassFixture<DocumentEngineTestFactory>
     [Fact]
     public async Task Complete_WithoutDriveScope_IsRefused()
     {
-        _factory.Google.Grant = new GoogleGrant("at-1", "rt-1", "openid email");
+        _factory.Google.Grant = new OAuthGrant("at-1", "rt-1", "openid email");
         var client = _factory.ClientFor(OrgB);
 
         var res = await CompleteAsync(client, await StartAsync(client));

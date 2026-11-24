@@ -2,7 +2,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
@@ -11,7 +10,7 @@ using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
-using ProcuLink.Infrastructure.Services.Google;
+using ProcuLink.Api.Services.Google;
 using ProcuLink.Infrastructure.Services.Security;
 
 namespace ProcuLink.Api.Services.Documents;
@@ -31,7 +30,7 @@ public sealed class DestinationException(string code, string? detail = null) : E
 /// <summary>Org-level reusable destinations. Delivery itself is the existing dispatchers'; this only stores, validates and test-sends.</summary>
 public sealed class FlowDestinationService(
     ProcuLinkDbContext db, DeliveryEncryptionService encryption, IEnumerable<IDeliveryDispatcher> dispatchers,
-    DocumentEngineGate gate, IOptions<GoogleOptions> google)
+    LinkedAccountAvailability availability)
 {
     public const string TestFileName = "TEST_proculink-test.txt";
     public const string TestFileContent = "ProcuLink test send. This file is a test and contains no document data.\n";
@@ -47,7 +46,7 @@ public sealed class FlowDestinationService(
         if (!Allowed.Contains(protocol)) throw new DestinationException("unsupported_destination");
         var isGoogle = protocol is DeliveryProtocolConstants.GoogleDrive or DeliveryProtocolConstants.GoogleSheets;
         // The flag gates creation (R2), not running: an existing destination keeps delivering once it is off.
-        if (isGoogle && !(gate.NativeConnectorsOn(orgId) && google.Value.IsConfigured)) throw new DestinationException("unsupported_destination");
+        if (isGoogle && !availability.On(orgId, LinkedAccountProviders.Google)) throw new DestinationException("unsupported_destination");
         if (string.IsNullOrWhiteSpace(req.Name) || req.Config.ValueKind != JsonValueKind.Object)
             throw new DestinationException("invalid_destination", "A name and a config object are required.");
 

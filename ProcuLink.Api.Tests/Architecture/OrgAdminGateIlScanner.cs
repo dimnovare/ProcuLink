@@ -199,10 +199,10 @@ internal static class OrgAdminGateIlScanner
             "Deletes the organisation's stored Google token; nothing can be sent to that account afterwards "
           + "until someone reconnects it."),
 
-        new("ILinkedAccountTokens.GetGoogleAccessTokenAsync",
-            OnInterface<ProcuLink.Core.Services.Google.ILinkedAccountTokens>(nameof(ProcuLink.Core.Services.Google.ILinkedAccountTokens.GetGoogleAccessTokenAsync)),
-            "Hands a live Google access token to the browser: it reads and writes every Drive file ProcuLink "
-          + "can see in the organisation's connected account."),
+        new("ILinkedAccountTokens.GetAccessTokenAsync",
+            OnInterface<ProcuLink.Core.Services.Google.ILinkedAccountTokens>(nameof(ProcuLink.Core.Services.Google.ILinkedAccountTokens.GetAccessTokenAsync)),
+            "Mints a live access token for the organisation's connected account: the Picker hands it to the "
+          + "browser, and it reads and writes what that account lets ProcuLink reach."),
     ];
 
     /// <summary>

@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using ProcuLink.Api.Services.Documents;
+using ProcuLink.Api.Services.Google;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
@@ -63,6 +64,13 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
         Body(blank).Should().Be("Attached: {fileName}. Sent by ProcuLink.");
     }
 
+    /// <summary>Engine on for OrgA, native connectors off, Google configured.</summary>
+    private static LinkedAccountAvailability Availability()
+    {
+        var google = Options.Create(new GoogleOptions { ClientId = "c", ClientSecret = "s" });
+        return new(new DocumentEngineGate(Options.Create(new DocumentEngineOptions { EnabledOrgIds = [OrgA.ToString()] })), [new GoogleOAuthClient(null!, google)], google);
+    }
+
     private async Task<Guid> SeedAccountAsync(Guid org)
     {
         using var scope = factory.Services.CreateScope();
@@ -78,8 +86,7 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
     {
         await using var db = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
         var service = new FlowDestinationService(db, null!, [],
-            new DocumentEngineGate(Options.Create(new DocumentEngineOptions { EnabledOrgIds = [OrgA.ToString()] })),
-            Options.Create(new GoogleOptions { ClientId = "c", ClientSecret = "s" }));
+            Availability());
         using var config = JsonDocument.Parse("""{"accountId":"x","folderId":"f"}""");
 
         var act = () => service.SaveAsync(OrgA, null, new DestinationRequest("d", "google_drive", config.RootElement, null), default);
@@ -114,7 +121,7 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
     {
         public readonly List<(HttpMethod Method, string Url)> Requests = [];
         public HttpClient CreateClient(string name) => new(this, disposeHandler: false);
-        public Task<LinkedAccessToken> GetGoogleAccessTokenAsync(Guid orgId, Guid accountId, CancellationToken ct) => Task.FromResult(new LinkedAccessToken("at-1", null));
+        public Task<LinkedAccessToken> GetAccessTokenAsync(Guid orgId, Guid accountId, string provider, CancellationToken ct) => Task.FromResult(new LinkedAccessToken("at-1", null));
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             Requests.Add((request.Method, request.RequestUri!.ToString()));
@@ -136,8 +143,7 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
         await db.SaveChangesAsync();
         var service = new FlowDestinationService(db, null!,
             [new GoogleSheetsDeliveryDispatcher(fake, fake, NullLogger<GoogleSheetsDeliveryDispatcher>.Instance)],
-            new DocumentEngineGate(Options.Create(new DocumentEngineOptions { EnabledOrgIds = [OrgA.ToString()] })),
-            Options.Create(new GoogleOptions { ClientId = "c", ClientSecret = "s" }));
+            Availability());
 
         var result = await service.TestAsync(OrgA, d.Id, default);
 

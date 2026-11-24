@@ -38,7 +38,7 @@ public sealed class GoogleDriveDeliveryDispatcher(
             if (!Guid.TryParse(Text(cfg, "accountId"), out var accountId) || folderId is null)
                 return Permanent("Google Drive delivery configuration is invalid: a Google account and a folder are required.");
 
-            var token = await tokens.GetGoogleAccessTokenAsync(config.OrgId, accountId, ct);
+            var token = await tokens.GetAccessTokenAsync(config.OrgId, accountId, ProcuLink.Core.Entities.LinkedAccountProviders.Google, ct);
             if (token.Failure is { } failure) return failure;
 
             using var client = http.CreateClient(GoogleOAuthClient.HttpClientName);

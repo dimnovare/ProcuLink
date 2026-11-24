@@ -25,31 +25,32 @@ public sealed class FakeStandardValidator : ProcuLink.Core.Documents.IStandardVa
     public Task<ProcuLink.Core.Documents.ValidationOutcome> ValidateAsync(string vesid, byte[] xml, CancellationToken ct) => Task.FromResult(Outcome);
 }
 
-/// <summary>Replaces <see cref="IGoogleOAuthClient"/>: the real (pure) authorize URL, a canned grant and user, no network.</summary>
-public sealed class FakeGoogleOAuthClient : IGoogleOAuthClient
+/// <summary>Wraps one real <see cref="ILinkedAccountOAuth"/>: its (pure) provider, config, authorize URL and scope rule; a canned grant and user; no network.</summary>
+public sealed class FakeOAuthClient(ILinkedAccountOAuth real, OAuthGrant grant) : ILinkedAccountOAuth
 {
-    // BuildAuthorizeUrl never touches HTTP, so the real client needs no factory here.
-    private readonly GoogleOAuthClient _real = new(null!, Microsoft.Extensions.Options.Options.Create(new GoogleOptions { ClientId = "test-client-id" }));
+    public OAuthGrant Grant { get; set; } = grant;
+    public OAuthUser User { get; set; } = new("sub-1", "user@example.com");
 
-    public GoogleGrant Grant { get; set; } = new("at-1", "rt-1", $"openid email {GoogleOAuthClient.DriveFileScope}");
-    public GoogleUser User { get; set; } = new("sub-1", "user@example.com");
+    public string Provider => real.Provider;
+    public bool IsConfigured => real.IsConfigured;
+    public bool HasRequiredScope(string grantedScope) => real.HasRequiredScope(grantedScope);
 
     /// <summary>The last code exchange, i.e. what reached "Google".</summary>
     public (string Code, string RedirectUri, string Verifier)? Exchanged { get; set; }
 
-    public string BuildAuthorizeUrl(string redirectUri, string state, string codeChallenge) => _real.BuildAuthorizeUrl(redirectUri, state, codeChallenge);
+    public string BuildAuthorizeUrl(string redirectUri, string state, string codeChallenge) => real.BuildAuthorizeUrl(redirectUri, state, codeChallenge);
 
     /// <summary>When set, the exchange fails with this Google error, as a used or expired code does with <c>invalid_grant</c>.</summary>
     public string? ExchangeError { get; set; }
 
-    public Task<GoogleGrant> ExchangeCodeAsync(string code, string redirectUri, string codeVerifier, CancellationToken ct)
+    public Task<OAuthGrant> ExchangeCodeAsync(string code, string redirectUri, string codeVerifier, CancellationToken ct)
     {
         Exchanged = (code, redirectUri, codeVerifier);
-        return ExchangeError is { } error ? throw new GoogleAuthException(error) : Task.FromResult(Grant);
+        return ExchangeError is { } error ? throw new OAuthException(error) : Task.FromResult(Grant);
     }
 
-    public Task<GoogleUser> GetUserAsync(string accessToken, CancellationToken ct) => Task.FromResult(User);
-    public Task<GoogleRefresh> RefreshAsync(string refreshToken, CancellationToken ct) => Task.FromResult(new GoogleRefresh("at-2", Revoked: false));
+    public Task<OAuthUser> GetUserAsync(string accessToken, CancellationToken ct) => Task.FromResult(User);
+    public Task<OAuthRefresh> RefreshAsync(string refreshToken, CancellationToken ct) => Task.FromResult(new OAuthRefresh("at-2", Revoked: false));
 }
 
 /// <summary>
@@ -82,8 +83,16 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
     /// <summary>Replaces <see cref="ProcuLink.Core.Documents.IStandardValidator"/>; tests set the outcome.</summary>
     public FakeStandardValidator Validator { get; } = new();
 
-    /// <summary>Replaces <see cref="IGoogleOAuthClient"/>; tests set the grant and user.</summary>
-    public FakeGoogleOAuthClient Google { get; } = new();
+    /// <summary>Replaces the Google <see cref="ILinkedAccountOAuth"/>; tests set the grant and user. BuildAuthorizeUrl never touches HTTP, so the real client needs no factory.</summary>
+    public FakeOAuthClient Google { get; } = new(
+        new GoogleOAuthClient(null!, Microsoft.Extensions.Options.Options.Create(new GoogleOptions { ClientId = "test-client-id", ClientSecret = "test-client-secret" })),
+        new("at-1", "rt-1", $"openid email {GoogleOAuthClient.DriveFileScope}"));
+
+    /// <summary>Replaces the Microsoft mailbox <see cref="ILinkedAccountOAuth"/> (provider <c>outlook</c>).</summary>
+    public FakeOAuthClient Outlook { get; } = new(
+        new ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOAuthClient(ProcuLink.Infrastructure.Services.Microsoft.MicrosoftProfile.Mailbox, null!,
+            Microsoft.Extensions.Options.Options.Create(new ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOptions { ClientId = "test-client", ClientSecret = "test-secret" })),
+        new("at-1", "rt-1", "https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/User.Read"));
 
     /// <summary>Replaces <see cref="IBackgroundJobClient"/>; tests count the jobs created.</summary>
     public Mock<IBackgroundJobClient> Jobs { get; } = new();
@@ -127,6 +136,8 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             ["Google:ClientSecret"] = "test-client-secret",
             ["Google:PickerApiKey"] = "test-picker-key",
             ["Google:ProjectNumber"] = "123456",
+            ["Microsoft:ClientId"] = "test-client",
+            ["Microsoft:ClientSecret"] = "test-secret",
         }));
 
         builder.ConfigureServices(services =>
@@ -164,9 +175,10 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             foreach (var d in services.Where(d => d.ServiceType == typeof(ProcuLink.Core.Documents.IStandardValidator)).ToList())
                 services.Remove(d);
             services.AddSingleton<ProcuLink.Core.Documents.IStandardValidator>(Validator);
-            foreach (var d in services.Where(d => d.ServiceType == typeof(IGoogleOAuthClient)).ToList())
+            foreach (var d in services.Where(d => d.ServiceType == typeof(ILinkedAccountOAuth)).ToList())
                 services.Remove(d);
-            services.AddSingleton<IGoogleOAuthClient>(Google);
+            services.AddSingleton<ILinkedAccountOAuth>(Google);
+            services.AddSingleton<ILinkedAccountOAuth>(Outlook);
             services.AddSingleton(Storage.Object);
             services.AddSingleton(Jobs.Object);
 

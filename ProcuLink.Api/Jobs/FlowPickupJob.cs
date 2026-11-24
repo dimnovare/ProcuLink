@@ -67,11 +67,13 @@ public class FlowPickupJob(
     private static string? ConnectionMessage(Exception ex, FlowIntake intake)
     {
         if (ex is CredentialUnbindableException) return "The saved password or key can't be read. Enter it again.";
+        if (ex is PickupRefusedException) return ex.Message;
         if (ex is not (SshHostKeyRejectedException or RemoteFailure)) return null;
         var config = JsonNode.Parse(intake.ConfigJson);
         var serviceUrl = config?["serviceUrl"]?.GetValue<string>();
         var host = config?["host"]?.GetValue<string>()
                    ?? (Uri.TryCreate(serviceUrl, UriKind.Absolute, out var uri) ? uri.Host : config?["bucket"]?.GetValue<string>());
+        if (intake.Kind == IntakeKind.Outlook) host ??= "Outlook";
         if (ex is SshHostKeyRejectedException)
             return $"Couldn't connect to {host}: the server's identity changed. Check with the server's owner, then clear the saved fingerprint.";
         var reason = ex.InnerException?.Message ?? "";
@@ -128,7 +130,7 @@ public class FlowPickupJob(
     private static async Task<T> Remote<T>(Func<Task<T>> call)
     {
         try { return await call(); }
-        catch (Exception e) when (e is not (OperationCanceledException or SshHostKeyRejectedException or CatalogFileTooLargeException))
+        catch (Exception e) when (e is not (OperationCanceledException or SshHostKeyRejectedException or CatalogFileTooLargeException or PickupRefusedException))
         {
             throw new RemoteFailure(e);
         }

@@ -581,7 +581,14 @@ builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.DocumentEngineGat
 // register it: the Worker refreshes tokens during delivery.
 builder.Services.Configure<ProcuLink.Infrastructure.Services.Google.GoogleOptions>(builder.Configuration.GetSection(ProcuLink.Infrastructure.Services.Google.GoogleOptions.Section));
 builder.Services.AddHttpClient(ProcuLink.Infrastructure.Services.Google.GoogleOAuthClient.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(30)); // fixed Google hosts: no OutboundRequestGuard
-builder.Services.AddScoped<ProcuLink.Core.Services.Google.IGoogleOAuthClient, ProcuLink.Infrastructure.Services.Google.GoogleOAuthClient>();
+builder.Services.AddScoped<ProcuLink.Core.Services.Google.ILinkedAccountOAuth, ProcuLink.Infrastructure.Services.Google.GoogleOAuthClient>();
+// Microsoft accounts (plan 30). Blank Microsoft config = feature invisible. One app, one provider key per consent: outlook (mail).
+builder.Services.Configure<ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOptions>(builder.Configuration.GetSection(ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOptions.Section));
+builder.Services.AddHttpClient(ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOAuthClient.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(30)); // fixed Microsoft hosts: no OutboundRequestGuard
+builder.Services.AddScoped<ProcuLink.Core.Services.Google.ILinkedAccountOAuth>(sp => new ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOAuthClient(
+    ProcuLink.Infrastructure.Services.Microsoft.MicrosoftProfile.Mailbox, sp.GetRequiredService<IHttpClientFactory>(),
+    sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOptions>>()));
+builder.Services.AddScoped<ProcuLink.Api.Services.Google.LinkedAccountAvailability>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Google.ILinkedAccountTokens, ProcuLink.Infrastructure.Services.Google.LinkedAccountTokens>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Google.GoogleConnectService>(); // Api only: the Worker never connects
 builder.Services.Configure<ProcuLink.Api.Services.Documents.ValidatorOptions>(builder.Configuration.GetSection("Validator"));
@@ -605,6 +612,8 @@ builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSou
 builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSource>(sp => new ProcuLink.Api.Services.Documents.Intake.ImapPickupSource(
     sp.GetRequiredService<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>(),
     sp.GetRequiredService<ProcuLink.Api.Services.Documents.DocumentEngineGate>()));
+// Scoped, unlike the others: it reads the scoped token store. The pickup jobs resolve sources per Hangfire scope.
+builder.Services.AddScoped<ProcuLink.Api.Services.Documents.Intake.IPickupSource, ProcuLink.Api.Services.Documents.Intake.OutlookPickupSource>();
 builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowPickupJob>();
 builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowWebhookJob>();
 builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowPickupDispatchJob>();

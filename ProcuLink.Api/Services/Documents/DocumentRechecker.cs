@@ -49,13 +49,13 @@ public sealed class DocumentRechecker(ProcuLinkDbContext db, DocumentEngineGate 
         // Anyone who knows a workspace's address can email it: on a flow that sends by itself, the first emailed document from an address
         // the workspace never sent a document from waits for a person. Once a person sends it, the address is trusted.
         // A From the receiving side did not confirm always waits, and sending it trusts nothing: a forger is never one click from trusted.
-        var emailed = FlowAutomation.SendsByItself(flow.Automation) && !doc.IsSample && doc.Source is IntakeKind.Email or IntakeKind.Imap;
+        var emailed = FlowAutomation.SendsByItself(flow.Automation) && !doc.IsSample && IntakeKind.Mail.Contains(doc.Source);
         var sender = doc.SourceRef?.Trim().ToLowerInvariant();
         var unconfirmedFrom = emailed && doc.SenderUnconfirmed && sender is { Length: > 0 } ? doc.SourceRef!.Trim() : null;
         var newSender = emailed && unconfirmedFrom is null
             && (sender is not { Length: > 0 }
                 || !await db.FlowDocuments.AnyAsync(d => d.OrgId == doc.OrgId && d.Id != doc.Id && !d.IsSample && !d.SenderUnconfirmed
-                    && (d.Source == IntakeKind.Email || d.Source == IntakeKind.Imap) && d.Status == DocumentStatus.Sent && d.SourceRef != null && d.SourceRef.Trim().ToLower() == sender, ct));
+                    && IntakeKind.Mail.Contains(d.Source) && d.Status == DocumentStatus.Sent && d.SourceRef != null && d.SourceRef.Trim().ToLower() == sender, ct));
 
         config ??= await FlowConfigLoader.CurrentAsync(db, flow, ct);
         doc.FlowVersion = config.VersionNo;
