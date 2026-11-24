@@ -106,6 +106,7 @@ public sealed class DocumentsController(
             CanRemove = DocumentRemoval.CanRemove(HttpContext, await DocumentRemoval.HasDeliveryAsync(db, doc, ct), doc.Status),
             CountsThisMonth = StripeBillingService.CountsAsUsage(doc, await UsageSinceAsync(ct)),
             IsSample = doc.IsSample,
+            DuplicateOf = (await DocumentListRows.EarlierNumbersAsync(db, doc.OrgId, [doc], ct)).GetValueOrDefault(doc.Id),
         };
 
     [HttpGet]

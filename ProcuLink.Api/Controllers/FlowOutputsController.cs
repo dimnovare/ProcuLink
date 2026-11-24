@@ -26,8 +26,9 @@ public sealed record OutputDto(
     OutputNodeTemplate Template, DateTime CreatedAt, SendWhen? SendWhen, OutputLayout? Layout, bool HasLogo,
     string? Standard = null, IReadOnlyList<string>? Needs = null);
 
-/// <summary>A body with <paramref name="Format"/> or <paramref name="Standard"/> is a proposed file: rendered as that type, nothing saved.</summary>
-public sealed record PreviewRequest(OutputNodeTemplate? Template, string? Format = null, string? Standard = null, string? TableKey = null);
+/// <summary>A body with <paramref name="Format"/> or <paramref name="Standard"/> is a proposed file: rendered as that type, nothing saved.
+/// <paramref name="CsvSeparator"/> makes a proposed CSV for the user's Excel, as on a create.</summary>
+public sealed record PreviewRequest(OutputNodeTemplate? Template, string? Format = null, string? Standard = null, string? TableKey = null, string? CsvSeparator = null);
 
 public sealed record TestOutputRequest(string Format, string? TableKey, Guid DestinationId, OutputNodeTemplate Template, OutputLayout? Layout = null, string? Standard = null);
 
@@ -284,7 +285,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         {
             if (proposed && !FlowOutputFormats.All.Contains(format)) return UnprocessableEntity(new { error = "unsupported_format" });
             var template = body?.Template ?? (proposed
-                ? DefaultOutputTemplate.For(config.Fields, format, tableKey)
+                ? DefaultOutputTemplate.For(config.Fields, format, tableKey, body!.CsvSeparator)
                 : DocumentJson.Deserialize<OutputNodeTemplate>(output.TemplateJson));
             if (body?.Template is not null && !FitsFormat(template, format)) return WrongFormat();
             if (HasNullHole(template.Root)) return Invalid("template");

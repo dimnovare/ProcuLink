@@ -330,4 +330,36 @@ public class DocumentListApiTests(DocumentEngineTestFactory factory) : IClassFix
         Assert.False(Row("again.pdf").GetProperty("countsThisMonth").GetBoolean());
         Assert.False(Row("sample.pdf").GetProperty("countsThisMonth").GetBoolean());
     }
+
+    [Fact]
+    public async Task A_repeated_number_names_the_earlier_copy_and_a_removed_one_gives_no_id()
+    {
+        var flow = await Flow(Org);
+        var t0 = DateTime.UtcNow.AddHours(-2);
+        var checks = DocumentJson.Serialize(new[] { new DocumentCheck(DocumentChecks.Duplicate, false, null, "A document with this number was already received.") });
+        var first = await Doc(Org, flow, "inv-first.pdf", dedupKey: "INV1001", createdAt: t0);
+        var again = await Doc(Org, flow, "inv-again.pdf", dedupKey: "INV1001", status: DocumentStatus.NeedsReview);
+        var orphan = await Doc(Org, flow, "inv-orphan.pdf", dedupKey: "INV2002", status: DocumentStatus.NeedsReview);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            foreach (var id in new[] { again.Id, orphan.Id }) (await db.FlowDocuments.FindAsync(id))!.ChecksJson = checks;
+            db.RemovedDocumentFingerprints.Add(new RemovedDocumentFingerprint
+            {
+                Id = Guid.NewGuid(), OrgId = Org, FlowId = flow, Sha256 = "", DedupKeyHash = RemovedDocumentFingerprint.HashOf("INV2002"),
+                DocumentCreatedAt = t0, RemovedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var page = await factory.ClientFor(Org).GetFromJsonAsync<JsonElement>($"/api/documents?flowId={flow}&page=1&pageSize=50");
+        JsonElement Row(string name) => page.GetProperty("items").EnumerateArray().Single(r => r.GetProperty("fileName").GetString() == name);
+        Assert.Equal(first.Id, Row("inv-again.pdf").GetProperty("duplicateOf").GetProperty("id").GetGuid());
+        Assert.Equal(t0, Row("inv-again.pdf").GetProperty("duplicateOf").GetProperty("receivedAt").GetDateTime(), TimeSpan.FromMilliseconds(1));
+        Assert.Equal(JsonValueKind.Null, Row("inv-first.pdf").GetProperty("duplicateOf").ValueKind);
+        Assert.Equal(JsonValueKind.Null, Row("inv-orphan.pdf").GetProperty("duplicateOf").GetProperty("id").ValueKind);   // removed: no link
+
+        var detail = await factory.ClientFor(Org).GetFromJsonAsync<JsonElement>($"/api/documents/{again.Id}");
+        Assert.Equal(first.Id, detail.GetProperty("duplicateOf").GetProperty("id").GetGuid());
+    }
 }
