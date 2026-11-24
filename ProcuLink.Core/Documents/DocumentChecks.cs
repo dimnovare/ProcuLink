@@ -18,6 +18,7 @@ public static class DocumentChecks
     public const string TextTruncated = "text_truncated";
     public const string ArithmeticMismatch = "arithmetic_mismatch";
     public const string OutputRules = "output_rules";
+    public const string CustomCheck = "custom_check";
 
     /// <summary>Failed checks only; an empty list means the document passed.</summary>
     public static IReadOnlyList<DocumentCheck> Run(ReadResult read, FlowFieldList fields, bool fieldsConfirmed, bool duplicate, bool newSender = false, string? unconfirmedFrom = null)

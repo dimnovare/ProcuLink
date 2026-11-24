@@ -30,7 +30,7 @@ public static class FieldKey
     }
 }
 
-public sealed record FlowField(string Key, string Label, string Type, string? Meaning, bool Required);
+public sealed record FlowField(string Key, string Label, string Type, string? Meaning, bool Required, FieldCheck? Check = null);
 
 public sealed record FlowTable(string Key, string Label, IReadOnlyList<FlowField> Columns);
 
