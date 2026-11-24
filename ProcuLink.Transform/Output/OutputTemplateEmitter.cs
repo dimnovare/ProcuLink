@@ -35,10 +35,16 @@ public sealed class OutputTemplateEmitter
     {
         RequireRenderable(template);
         // Repeated sibling names would be duplicate JSON properties (a reader keeps one value): number them as the CSV header does.
-        // XML keeps repeats: sibling elements of one name are legal there, and a template inferred from a sample relies on them.
-        if (template.Format == OutputFormat.Json) template = template with { Root = Distinct(template.Root) };
+        // XML numbers them only in a file we made from the flow's fields; a customer's own XML (from a sample or their
+        // documentation) keeps repeats, as sibling elements of one name are legal there and their system may rely on them.
+        if (template.Format == OutputFormat.Json || (template.Format == OutputFormat.Xml && IsOurOwnXml(template)))
+            template = template with { Root = Distinct(template.Root) };
         return Render(template, headerRow, r => r, lineRows);
     }
+
+    /// <summary>The shape ProcuLink writes from a flow's fields (the app's simple editor keeps it): a "document" root, no namespaces, no envelope.</summary>
+    private static bool IsOurOwnXml(OutputNodeTemplate t) =>
+        t.Root.Name == "document" && t.Namespaces is not { Count: > 0 } && t.Envelope is null && !AnyNamespacedNode(t.Root);
 
     /// <summary>The raw CSV grid for <see cref="EmitRows"/>' inputs, before delimiter escaping.</summary>
     public CsvGrid GridRows(
