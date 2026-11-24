@@ -233,6 +233,18 @@ public class OutputTemplateEmitterTests
     }
 
     [Fact]
+    public void Xml_numbers_repeated_names_only_in_a_file_we_made()
+    {
+        static List<string> Names(OutputNodeTemplate t) =>
+            System.Xml.Linq.XDocument.Parse(EmitterRows.Emit(t).Text()).Root!.Elements().Select(e => e.Name.LocalName).ToList();
+        var customers = RepeatedNames(OutputFormat.Xml);
+        var ours = customers with { Root = customers.Root with { Name = "document" } };
+
+        Assert.Equal(["Müüja", "Müüja2", "Summa", "Summa2"], Names(ours));
+        Assert.Equal(["Müüja", "Müüja", "Summa", "Summa"], Names(customers)); // a customer's own XML is left as it is
+    }
+
+    [Fact]
     public void IncludeWhen_NullOrBlank_IsByteIdentical_NoBehaviourChange()
     {
         // Regression guard: a tree with IncludeWhen left null must render the EXACT bytes as before.

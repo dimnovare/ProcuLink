@@ -27,7 +27,9 @@ public sealed class OpenAiDocumentReader : IDocumentReader
     private static readonly string SystemPrompt =
         "You read business documents. Read every field and every table in the document text. " +
         "Keys are stable snake_case identifiers. " +
-        "Each field's and each column's 'label' is its name exactly as printed on the document. When no name is printed for a value, name what the value is, its role in the document (for example 'Müüja', 'Aadress' or 'Linn' on an Estonian document), in the language of the document, never in another language, and never the value itself. " +
+        "Each field's and each column's 'label' is its name exactly as printed on the document. When no name is printed for a value, name what the value is, its role in the document, in the language of the document, never in another language, and never the value itself: for example 'Seller', 'Address' or 'City' on an English document, 'Müüja', 'Aadress' or 'Linn' on an Estonian one. The language of the document is the language of its printed headings and labels ('Invoice', 'Total' or 'Arve', 'Kokku'), not of company names, addresses or these instructions, and a name you give is in that language even though keys and meanings are English (on an Estonian document 'sender_street' is 'Müüja tänav', never 'Sender street'). " +
+        "No two fields share a label. When one printed name covers several values you read separately (an 'Address' line read as street, city and postcode), name each part by what it is ('Street', 'City', 'Postcode', 'Country'); when two parties each have that part, put the party first, named as the document names it ('Supplier postcode', 'Bill-to street'). " +
+        "A column heading printed as several words ('UNIT PRICE', 'Unit price') is one column: never split one heading into several columns. " +
         "'kind_label' is a short common English name for the kind of document, singular, one to three words, always in English even when the document is in another language, " +
         "with no company or person names; null when unclear. " +
         "When an expected list is given, use exactly those keys for them, return a null value for an expected key " +
@@ -149,7 +151,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
 
             var dto = JsonSerializer.Deserialize<ReadDto>(completion.Content.FirstOrDefault()?.Text ?? "", JsonOptions)
                       ?? throw new JsonException("Empty AI response.");
-            return new DocumentReadOutcome(true, Map(dto, input.Expected), null, usage,
+            return new DocumentReadOutcome(true, Map(dto, input.Expected, input.Text), null, usage,
                 (dto.Documents ?? []).Select(d => new DocumentSpan(d.FirstPage, d.Number, d.IsCopy)).ToList());
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -198,7 +200,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
         return $"{part}{expected}{hints}File: {input.FileName} ({input.ContentType})\n\nDocument text:\n{input.Text}";
     }
 
-    internal static ReadResult Map(ReadDto dto, FlowFieldList? expected)
+    internal static ReadResult Map(ReadDto dto, FlowFieldList? expected, string? text = null)
     {
         var fieldKeys = expected?.Fields.Select(f => f.Key).ToHashSet();
         var tableKeys = expected?.Tables.Select(t => t.Key).ToHashSet();
@@ -237,6 +239,21 @@ public sealed class OpenAiDocumentReader : IDocumentReader
                 columnKeys.TryAdd(c.Key, columnKey);
                 return new ReadColumn(columnKey, c.Label, Type(c.Type), Pinned(expected?.Tables.FirstOrDefault(x => x.Key == key)?.Columns.FirstOrDefault(x => x.Key == columnKey)?.Meaning, c.Meaning));
             }).ToList();
+            // A heading printed as two words ("UNIT PRICE") split into an empty "UNIT" column and "PRICE": one column, named as printed.
+            // A real "Unit" column has values, so a "Unit | Unit price" table is left alone.
+            for (var i = columns.Count - 2; i >= 0; i--)
+            {
+                var (first, next) = (columns[i], columns[i + 1]);
+                var joined = $"{first.Label} {next.Label}";
+                if (text?.Contains(joined, StringComparison.OrdinalIgnoreCase) == true
+                    && !next.Label.StartsWith(first.Label, StringComparison.OrdinalIgnoreCase)
+                    && expected?.Tables.FirstOrDefault(x => x.Key == key)?.Columns.Any(x => x.Key == first.Key) != true
+                    && (t.Rows ?? []).All(r => (r.Cells ?? []).All(c => columnKeys.GetValueOrDefault(c.Column) != first.Key || string.IsNullOrWhiteSpace(c.Value))))
+                {
+                    columns[i + 1] = next with { Label = joined };
+                    columns.RemoveAt(i);
+                }
+            }
             var figures = columns.Where(c => c.Meaning is FieldMeanings.LineQuantity or FieldMeanings.LineUnitPrice or FieldMeanings.LineAmount)
                 .Select(c => c.Key).ToHashSet();
             var rows = (t.Rows ?? []).Select(r => new ReadRow((r.Cells ?? [])
