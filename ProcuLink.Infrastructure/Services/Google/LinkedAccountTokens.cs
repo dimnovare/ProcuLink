@@ -10,11 +10,13 @@ namespace ProcuLink.Infrastructure.Services.Google;
 
 /// <summary>R7: refreshes on every call. The only write is flipping a revoked account to <c>reconnect</c>.</summary>
 public sealed class LinkedAccountTokens(
-    ProcuLinkDbContext db, DeliveryEncryptionService encryption, IGoogleOAuthClient google, ILogger<LinkedAccountTokens> logger)
+    ProcuLinkDbContext db, DeliveryEncryptionService encryption, IEnumerable<ILinkedAccountOAuth> oauth, ILogger<LinkedAccountTokens> logger)
     : ILinkedAccountTokens
 {
-    public const string ReconnectMessage = "Google access was removed. Reconnect the Google account.";
-    public const string UnavailableMessage = "Google could not be reached.";
+    public static string ReconnectMessage(string provider) =>
+        $"{LinkedAccountProviders.DisplayName(provider)} access was removed. Reconnect the {LinkedAccountProviders.DisplayName(provider)} account.";
+
+    public static string UnavailableMessage(string provider) => $"{LinkedAccountProviders.DisplayName(provider)} could not be reached.";
 
     private static CredentialScope Scope(LinkedAccount a) => new(a.OrgId, CredentialPurpose.LinkedAccountTokens, a.Id);
 
@@ -28,27 +30,29 @@ public sealed class LinkedAccountTokens(
         return doc.RootElement.GetProperty("refreshToken").GetString()!;
     }
 
-    public async Task<LinkedAccessToken> GetGoogleAccessTokenAsync(Guid orgId, Guid accountId, CancellationToken ct)
+    public async Task<LinkedAccessToken> GetAccessTokenAsync(Guid orgId, Guid accountId, string provider, CancellationToken ct)
     {
         var account = await db.LinkedAccounts.FirstOrDefaultAsync(
-            a => a.OrgId == orgId && a.Id == accountId && a.Provider == LinkedAccountProviders.Google, ct);
-        if (account is null || account.Status != LinkedAccountStatus.Active) return Failed(ReconnectMessage, DeliveryOutcome.NotRetryable);
+            a => a.OrgId == orgId && a.Id == accountId && a.Provider == provider, ct);
+        var client = oauth.FirstOrDefault(o => o.Provider == provider);
+        if (account is null || client is null || account.Status != LinkedAccountStatus.Active)
+            return Failed(ReconnectMessage(provider), DeliveryOutcome.NotRetryable);
 
-        GoogleRefresh refresh;
-        try { refresh = await google.RefreshAsync(ReadRefreshToken(encryption, account), ct); }
+        OAuthRefresh refresh;
+        try { refresh = await client.RefreshAsync(ReadRefreshToken(encryption, account), ct); }
         catch (HttpRequestException ex)
         {
-            logger.LogWarning("Google token refresh failed for linked account {AccountId} (HTTP {Status}).", accountId, (int?)ex.StatusCode);
-            return Failed(UnavailableMessage, DeliveryOutcome.Dispatched, (int?)ex.StatusCode);
+            logger.LogWarning("{Provider} token refresh failed for linked account {AccountId} (HTTP {Status}).", provider, accountId, (int?)ex.StatusCode);
+            return Failed(UnavailableMessage(provider), DeliveryOutcome.Dispatched, (int?)ex.StatusCode);
         }
-        catch (CredentialUnbindableException) { refresh = new GoogleRefresh(null, Revoked: true); } // only a reconnect re-seals it
+        catch (CredentialUnbindableException) { refresh = new OAuthRefresh(null, Revoked: true); } // only a reconnect re-seals it
         if (refresh.AccessToken is { } token) return new LinkedAccessToken(token, null);
 
         // Delivery dispatches with no pending changes on this scoped context, so this saves only the status.
         account.Status = LinkedAccountStatus.Reconnect;
         account.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
-        return Failed(ReconnectMessage, DeliveryOutcome.NotRetryable);
+        return Failed(ReconnectMessage(provider), DeliveryOutcome.NotRetryable);
     }
 
     private static LinkedAccessToken Failed(string message, DeliveryOutcome outcome, int? code = null) =>

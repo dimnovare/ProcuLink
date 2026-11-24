@@ -28,15 +28,15 @@ public sealed class GoogleConnectException(int status, string code) : Exception(
 /// is anonymous and the verifier never reaches the browser in clear.
 /// </summary>
 public sealed class GoogleConnectService(
-    ProcuLinkDbContext db, DeliveryEncryptionService encryption, IGoogleOAuthClient google,
+    ProcuLinkDbContext db, DeliveryEncryptionService encryption, IEnumerable<ILinkedAccountOAuth> oauth,
     IDataProtectionProvider protection, IConfiguration config)
 {
     private static readonly TimeSpan StateLifetime = TimeSpan.FromMinutes(10);
 
     private sealed record State(Guid OrgId, string UserId, string Verifier, string RedirectUri, string? ReturnTo);
 
-    private ITimeLimitedDataProtector Protector() =>
-        protection.CreateProtector("linked-accounts.google.state").ToTimeLimitedDataProtector();
+    private ITimeLimitedDataProtector Protector(string provider) =>
+        protection.CreateProtector($"linked-accounts.{provider}.state").ToTimeLimitedDataProtector();
 
     private static LinkedAccountDto ToDto(LinkedAccount a) =>
         new(a.Id, a.Provider, a.Email, a.Status, new DateTimeOffset(DateTime.SpecifyKind(a.CreatedAt, DateTimeKind.Utc)));
@@ -44,8 +44,8 @@ public sealed class GoogleConnectService(
     public async Task<List<LinkedAccountDto>> ListAsync(Guid orgId, CancellationToken ct) =>
         (await db.LinkedAccounts.Where(a => a.OrgId == orgId).OrderBy(a => a.Email).ToListAsync(ct)).Select(ToDto).ToList();
 
-    /// <summary>The Google authorize URL. <paramref name="origin"/> must be one of <c>Frontend:Url</c>'s entries (R5).</summary>
-    public string Start(Guid orgId, string userId, string origin, string? returnTo)
+    /// <summary>The provider's authorize URL; the caller has checked the provider is available. <paramref name="origin"/> must be one of <c>Frontend:Url</c>'s entries (R5).</summary>
+    public string Start(Guid orgId, string userId, string provider, string origin, string? returnTo)
     {
         var allowed = (config["Frontend:Url"] ?? "")
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -57,32 +57,32 @@ public sealed class GoogleConnectService(
         if (returnTo is null || !returnTo.StartsWith('/') || returnTo.StartsWith("//") || returnTo.StartsWith("/\\") || returnTo.Any(char.IsControl))
             returnTo = null;
         var verifier = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
-        var redirectUri = origin + "/settings/google-callback";
-        var state = Protector().Protect(JsonSerializer.Serialize(new State(orgId, userId, verifier, redirectUri, returnTo)), StateLifetime);
-        return google.BuildAuthorizeUrl(redirectUri, state, WebEncoders.Base64UrlEncode(SHA256.HashData(Encoding.ASCII.GetBytes(verifier))));
+        var redirectUri = origin + $"/settings/{provider}-callback";
+        var state = Protector(provider).Protect(JsonSerializer.Serialize(new State(orgId, userId, verifier, redirectUri, returnTo)), StateLifetime);
+        return Client(provider).BuildAuthorizeUrl(redirectUri, state, WebEncoders.Base64UrlEncode(SHA256.HashData(Encoding.ASCII.GetBytes(verifier))));
     }
 
-    /// <exception cref="GoogleConnectException">400 <c>invalid_state</c>, 422 <c>google_scope_missing</c>.</exception>
-    /// <exception cref="GoogleAuthException">Google refused the exchange or could not be reached.</exception>
+    /// <exception cref="GoogleConnectException">400 <c>invalid_state</c>, 422 <c>{provider}_scope_missing</c>.</exception>
+    /// <exception cref="OAuthException">The provider refused the exchange or could not be reached.</exception>
     public async Task<(LinkedAccountDto Account, string? ReturnTo)> CompleteAsync(
-        Guid orgId, string userId, string code, string state, CancellationToken ct)
+        Guid orgId, string userId, string provider, string code, string state, CancellationToken ct)
     {
-        var s = ReadState(state);
+        var s = ReadState(provider, state);
         if (s is null || s.OrgId != orgId || s.UserId != userId) throw new GoogleConnectException(400, "invalid_state");
 
-        var grant = await google.ExchangeCodeAsync(code, s.RedirectUri, s.Verifier, ct);
-        // Granular consent lets the user untick Drive; without it no destination could work, so nothing is saved.
-        if (!grant.Scope.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains(GoogleOAuthClient.DriveFileScope))
-            throw new GoogleConnectException(422, "google_scope_missing");
-        var user = await google.GetUserAsync(grant.AccessToken, ct);
+        var client = Client(provider);
+        var grant = await client.ExchangeCodeAsync(code, s.RedirectUri, s.Verifier, ct);
+        // Granular consent lets the user untick a permission; without it nothing could work, so nothing is saved.
+        if (!client.HasRequiredScope(grant.Scope)) throw new GoogleConnectException(422, $"{provider}_scope_missing");
+        var user = await client.GetUserAsync(grant.AccessToken, ct);
 
         var account = await db.LinkedAccounts.FirstOrDefaultAsync(
-            a => a.OrgId == orgId && a.Provider == LinkedAccountProviders.Google && a.Subject == user.Subject, ct);
+            a => a.OrgId == orgId && a.Provider == provider && a.Subject == user.Subject, ct);
         if (account is null)
         {
-            // prompt=consent always returns one; a new account without it would have nothing to refresh with.
-            if (grant.RefreshToken is null) throw new GoogleAuthException(GoogleAuthException.Unavailable);
-            account = new LinkedAccount { Id = Guid.NewGuid(), OrgId = orgId, Subject = user.Subject, CreatedByUserId = userId, CreatedAt = DateTime.UtcNow };
+            // Google's prompt=consent and Microsoft's offline_access always return one; a new account without it would have nothing to refresh with.
+            if (grant.RefreshToken is null) throw new OAuthException(OAuthException.Unavailable);
+            account = new LinkedAccount { Id = Guid.NewGuid(), OrgId = orgId, Provider = provider, Subject = user.Subject, CreatedByUserId = userId, CreatedAt = DateTime.UtcNow };
             db.LinkedAccounts.Add(account);
         }
         // A reconnect that returns no refresh token keeps the stored one (R6: reconnect heals the row).
@@ -105,7 +105,7 @@ public sealed class GoogleConnectService(
         if (account is null) return null;
 
         var configs = await db.Set<FlowDestination>()
-            .Where(d => d.OrgId == orgId && (d.Protocol == DeliveryProtocolConstants.GoogleDrive || d.Protocol == DeliveryProtocolConstants.GoogleSheets))
+            .Where(d => d.OrgId == orgId && LinkedAccountProviders.ByProtocol.Keys.Contains(d.Protocol))
             .Select(d => d.ConfigJson)
             .ToListAsync(ct);
         if (configs.Any(c => NamesAccount(c, accountId))) return false;
@@ -116,9 +116,11 @@ public sealed class GoogleConnectService(
         return true;
     }
 
-    private State? ReadState(string state)
+    private ILinkedAccountOAuth Client(string provider) => oauth.First(o => o.Provider == provider);
+
+    private State? ReadState(string provider, string state)
     {
-        try { return JsonSerializer.Deserialize<State>(Protector().Unprotect(state)); }
+        try { return JsonSerializer.Deserialize<State>(Protector(provider).Unprotect(state)); }
         catch (Exception ex) when (ex is CryptographicException or FormatException or JsonException) { return null; }
     }
 

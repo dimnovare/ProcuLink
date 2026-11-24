@@ -26,6 +26,25 @@ public class LinkedAccount
 public static class LinkedAccountProviders
 {
     public const string Google = "google";
+    /// <summary>A Microsoft account connected for files (OneDrive).</summary>
+    public const string Microsoft = "microsoft";
+    /// <summary>A Microsoft account connected for its mailbox; a separate consent from <see cref="Microsoft"/>.</summary>
+    public const string Outlook = "outlook";
+
+    /// <summary>Destination protocol → the provider whose account it sends through.</summary>
+    public static readonly IReadOnlyDictionary<string, string> ByProtocol = new Dictionary<string, string>
+    {
+        [Constants.DeliveryProtocolConstants.GoogleDrive] = Google,
+        [Constants.DeliveryProtocolConstants.GoogleSheets] = Google,
+    };
+
+    /// <summary>The name people know the provider by, for copy.</summary>
+    public static string DisplayName(string provider) => provider switch
+    {
+        Google => "Google",
+        Microsoft or Outlook => "Microsoft",
+        _ => provider,
+    };
 }
 
 /// <summary>Persisted values: never rename.</summary>

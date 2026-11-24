@@ -45,7 +45,7 @@ public class LinkedAccountTokensTests
         await db.SaveChangesAsync();
 
         var client = new GoogleOAuthClient(google, Options.Create(new GoogleOptions { ClientId = "cid", ClientSecret = "secret" }));
-        return (new LinkedAccountTokens(db, encryption, client, NullLogger<LinkedAccountTokens>.Instance), db, account);
+        return (new LinkedAccountTokens(db, encryption, [client], NullLogger<LinkedAccountTokens>.Instance), db, account);
     }
 
     [Fact]
@@ -54,7 +54,7 @@ public class LinkedAccountTokensTests
         var google = new FakeGoogle(HttpStatusCode.OK, """{"access_token":"at-1","expires_in":3599}""");
         var (tokens, _, account) = await Build(google);
 
-        var result = await tokens.GetGoogleAccessTokenAsync(account.OrgId, account.Id, default);
+        var result = await tokens.GetAccessTokenAsync(account.OrgId, account.Id, "google", default);
 
         result.Token.Should().Be("at-1");
         result.Failure.Should().BeNull();
@@ -66,7 +66,7 @@ public class LinkedAccountTokensTests
     {
         var (tokens, db, account) = await Build(new FakeGoogle(HttpStatusCode.BadRequest, """{"error":"invalid_grant"}"""));
 
-        var result = await tokens.GetGoogleAccessTokenAsync(account.OrgId, account.Id, default);
+        var result = await tokens.GetAccessTokenAsync(account.OrgId, account.Id, "google", default);
 
         result.Token.Should().BeNull();
         result.Failure!.Outcome.Should().Be(DeliveryOutcome.NotRetryable);

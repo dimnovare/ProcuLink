@@ -33,7 +33,7 @@ public class GoogleSheetsDeliveryDispatcherTests
 
     private sealed class FakeTokens : ILinkedAccountTokens
     {
-        public Task<LinkedAccessToken> GetGoogleAccessTokenAsync(Guid orgId, Guid accountId, CancellationToken ct) =>
+        public Task<LinkedAccessToken> GetAccessTokenAsync(Guid orgId, Guid accountId, string provider, CancellationToken ct) =>
             Task.FromResult(new LinkedAccessToken("at-1", null));
     }
 

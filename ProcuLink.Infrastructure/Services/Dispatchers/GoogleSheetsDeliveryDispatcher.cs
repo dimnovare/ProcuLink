@@ -52,7 +52,7 @@ public sealed class GoogleSheetsDeliveryDispatcher(
 
             var rows = ReadCsv(content);
 
-            var token = await tokens.GetGoogleAccessTokenAsync(config.OrgId, accountId, ct);
+            var token = await tokens.GetAccessTokenAsync(config.OrgId, accountId, ProcuLink.Core.Entities.LinkedAccountProviders.Google, ct);
             if (token.Failure is { } failure) return failure;
 
             using var client = http.CreateClient(GoogleOAuthClient.HttpClientName);
