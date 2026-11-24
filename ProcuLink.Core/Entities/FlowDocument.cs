@@ -38,6 +38,8 @@ public class FlowDocument
     public string? SenderKey { get; set; }
     /// <summary>Sorted into this flow without a person confirming it.</summary>
     public bool SortUnconfirmed { get; set; }
+    /// <summary>Emailed, and the receiving side did not confirm the From address (<c>SenderAuthentication</c>).</summary>
+    public bool SenderUnconfirmed { get; set; }
 
     /// <summary>The flow version this document was processed under; null if the flow was never published.</summary>
     public int? FlowVersion { get; set; }

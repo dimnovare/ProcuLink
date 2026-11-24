@@ -20,7 +20,7 @@ public static class DocumentChecks
     public const string OutputRules = "output_rules";
 
     /// <summary>Failed checks only; an empty list means the document passed.</summary>
-    public static IReadOnlyList<DocumentCheck> Run(ReadResult read, FlowFieldList fields, bool fieldsConfirmed, bool duplicate, bool newSender = false)
+    public static IReadOnlyList<DocumentCheck> Run(ReadResult read, FlowFieldList fields, bool fieldsConfirmed, bool duplicate, bool newSender = false, string? unconfirmedFrom = null)
     {
         var failed = new List<DocumentCheck>();
         void Fail(string code, string? key, string message) => failed.Add(new DocumentCheck(code, false, key, message));
@@ -54,7 +54,9 @@ public static class DocumentChecks
         }
 
         if (duplicate) Fail(Duplicate, null, "A document with this number was already received.");
-        if (newSender) Fail(NewSender, null, "First document from this email address. Check it before sending.");
+        // The same hold as a new address, so it blocks an automatic send and alerts the same way.
+        if (unconfirmedFrom is not null) Fail(NewSender, null, $"We couldn't confirm this email really came from {unconfirmedFrom}. Check it before sending.");
+        else if (newSender) Fail(NewSender, null, "First document from this email address. Check it before sending.");
         if (read.Truncated) Fail(TextTruncated, null, "The document was too long to read in full.");
         return failed;
     }

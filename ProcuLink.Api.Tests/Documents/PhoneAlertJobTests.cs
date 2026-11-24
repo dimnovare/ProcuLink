@@ -97,7 +97,7 @@ public class PhoneAlertJobTests(DocumentEngineTestFactory factory) : IClassFixtu
         var a1 = sender.Sent.Where(s => s.Endpoint == Endpoint("a1")).ToList();
         a1.Select(s => s.Topic).Should().BeEquivalentTo("needs-you", "new-address", "send-failed");
         a1.Select(s => Parse(s.Json).GetProperty("body").GetString())
-            .Should().BeEquivalentTo("2 documents need you", "A first document from a new email address waits for you.", "1 document couldn't be sent");
+            .Should().BeEquivalentTo("2 documents need you", "A document from an email address we haven't confirmed waits for you.", "1 document couldn't be sent");
         foreach (var (_, json, _) in sender.Sent)
         {
             var alert = Parse(json);

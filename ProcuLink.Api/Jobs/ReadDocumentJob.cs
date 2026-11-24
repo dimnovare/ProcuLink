@@ -361,7 +361,7 @@ public class ReadDocumentJob(
         for (var i = 1; i < ranges.Count; i++)
             if (!done.Contains(Name(ranges[i])))
                 await intake!.AcceptAsync(doc.OrgId, doc.FlowId, new MemoryStream(files[i]), Name(ranges[i]),
-                    doc.ContentType, doc.Source, doc.SourceRef, null, ct, partOf: doc.Id, splitFileKey: doc.SourceFileKey);
+                    doc.ContentType, doc.Source, doc.SourceRef, null, ct, partOf: doc.Id, splitFileKey: doc.SourceFileKey, senderUnconfirmed: doc.SenderUnconfirmed);
 
         var (first, file) = (ranges[0], doc.FileName);
         var key = $"{doc.OrgId}/documents/{doc.Id}/{Name(first)}";

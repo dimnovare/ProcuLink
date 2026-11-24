@@ -6,7 +6,8 @@ namespace ProcuLink.Api.Services.Documents.Intake;
 
 /// <param name="Key">The ledger key; unique within the intake.</param>
 /// <param name="SourceRef">The remote path (SFTP, FTP, FTPS), the object key (S3) or the sender (IMAP).</param>
-public sealed record PickupFile(string Key, string FileName, string? SourceRef)
+/// <param name="SenderUnconfirmed">IMAP only: the mailbox provider did not confirm the sender.</param>
+public sealed record PickupFile(string Key, string FileName, string? SourceRef, bool SenderUnconfirmed = false)
 {
     /// <summary>A server file, keyed on path, size and modified time, so a rewritten fixed-name file is taken again.</summary>
     public static PickupFile At(RemoteFile f) =>

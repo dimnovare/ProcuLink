@@ -85,10 +85,12 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard, DocumentEngineG
             var uids = await folder.SearchAsync(SearchQuery.NotSeen, ct);
             if (uids.Count == 0) return files;
 
-            foreach (var m in await folder.FetchAsync(uids, MessageSummaryItems.UniqueId | MessageSummaryItems.Envelope | MessageSummaryItems.BodyStructure, ct))
+            foreach (var m in await folder.FetchAsync(uids, MessageSummaryItems.UniqueId | MessageSummaryItems.Envelope | MessageSummaryItems.BodyStructure | MessageSummaryItems.Headers, ct))
             {
                 var senders = m.Envelope.From.Mailboxes.Select(b => b.Address).ToList();
                 if (!Matches(fromFilter, subjectFilter, senders, m.Envelope.Subject)) continue;
+                // MimeKit's HeaderList keeps the message's order, so the first Authentication-Results is the topmost.
+                var unconfirmed = !SenderAuthentication.Mailbox(m.Headers?.Select(h => (h.Field, h.Value)) ?? [], senders.FirstOrDefault());
 
                 var readable = m.Attachments.Where(a => Readable(a.FileName, accepted)).ToList();
                 var bodyOnly = readable.Count == 0 && accepted.Contains("txt");
@@ -101,7 +103,7 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard, DocumentEngineG
                     _bodies[key] = body;
                     _parts[key] = (m.UniqueId, (m.TextBody ?? m.HtmlBody)!);
                     _open[m.UniqueId] = 1;
-                    files.Add(new PickupFile(key, "email.txt", senders.FirstOrDefault()));
+                    files.Add(new PickupFile(key, "email.txt", senders.FirstOrDefault(), unconfirmed));
                     continue;
                 }
 
@@ -117,7 +119,7 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard, DocumentEngineG
                     // The server's ids, not the sender's Message-ID: a sender can reuse that to suppress or swap a file.
                     var key = $"imap:{uidValidity}:{m.UniqueId.Id}#{part.PartSpecifier}";
                     _parts[key] = (m.UniqueId, part);
-                    files.Add(new PickupFile(key, part.FileName!, senders.FirstOrDefault()));
+                    files.Add(new PickupFile(key, part.FileName!, senders.FirstOrDefault(), unconfirmed));
                 }
             }
 

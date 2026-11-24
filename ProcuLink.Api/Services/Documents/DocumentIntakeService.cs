@@ -30,7 +30,7 @@ public sealed class DocumentIntakeService(
     /// <summary>The one way a file enters a flow: engine gate, flow, plan limit, then <see cref="AcceptAsync"/>.</summary>
     public async Task<FlowSubmitResult> SubmitAsync(
         Guid orgId, Guid flowId, Stream content, string fileName, string contentType,
-        string source, string? sourceRef, string? userId, CancellationToken ct)
+        string source, string? sourceRef, string? userId, CancellationToken ct, bool senderUnconfirmed = false)
     {
         if (!gate.IsEnabled(orgId)) return new(null, "document_engine_not_enabled", null);
         if (!await db.Flows.AnyAsync(f => f.OrgId == orgId && f.Id == flowId, ct)) return new(null, "flow_not_found", null);
@@ -40,7 +40,7 @@ public sealed class DocumentIntakeService(
 
         try
         {
-            return new(await AcceptAsync(orgId, flowId, content, fileName, contentType, source, sourceRef, userId, ct), null, null);
+            return new(await AcceptAsync(orgId, flowId, content, fileName, contentType, source, sourceRef, userId, ct, senderUnconfirmed: senderUnconfirmed), null, null);
         }
         catch (DocumentRejectedException e)
         {
@@ -60,7 +60,7 @@ public sealed class DocumentIntakeService(
 
     public async Task<FlowDocument> AcceptAsync(
         Guid orgId, Guid flowId, Stream content, string fileName, string contentType,
-        string source, string? sourceRef, string? userId, CancellationToken ct, Guid? partOf = null, string? splitFileKey = null)
+        string source, string? sourceRef, string? userId, CancellationToken ct, Guid? partOf = null, string? splitFileKey = null, bool senderUnconfirmed = false)
     {
         var safeName = FileNameSanitiser.Sanitise(fileName);
         var ext = FileNameSanitiser.GetExtension(fileName).TrimStart('.');
@@ -87,7 +87,7 @@ public sealed class DocumentIntakeService(
             Id = id, OrgId = orgId, FlowId = flowId, FileName = safeName, ContentType = contentType,
             SourceFileKey = key, Sha256 = sha, PageCount = pages, BillingUnits = units,
             Source = source, SourceRef = sourceRef, Status = DocumentStatus.Received, CreatedAt = now, UpdatedAt = now,
-            PartOfId = partOf, SplitFileKey = splitFileKey,
+            PartOfId = partOf, SplitFileKey = splitFileKey, SenderUnconfirmed = senderUnconfirmed,
         };
 
         // The inbox sorts documents on into flows, so a file the workspace already holds anywhere is held at the door.

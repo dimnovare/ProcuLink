@@ -2224,6 +2224,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(d => d.Kind).HasColumnName("kind").HasMaxLength(80);
             b.Property(d => d.SenderKey).HasColumnName("sender_key").HasMaxLength(200);
             b.Property(d => d.SortUnconfirmed).HasColumnName("sort_unconfirmed").HasDefaultValue(false);
+            b.Property(d => d.SenderUnconfirmed).HasColumnName("sender_unconfirmed").HasDefaultValue(false);
             b.Property(d => d.FlowVersion).HasColumnName("flow_version");
             b.Property(d => d.PartOfId).HasColumnName("part_of_id");
             b.Property(d => d.SplitFileKey).HasColumnName("split_file_key");

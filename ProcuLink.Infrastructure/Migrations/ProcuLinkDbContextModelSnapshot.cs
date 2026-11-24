@@ -1065,6 +1065,12 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("sender_key");
 
+                    b.Property<bool>("SenderUnconfirmed")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("sender_unconfirmed");
+
                     b.Property<string>("Sha256")
                         .IsRequired()
                         .HasColumnType("text")
