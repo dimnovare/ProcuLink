@@ -38,6 +38,17 @@ public static class FlowCreation
         return dup is null ? null : $"Key '{dup}' is used more than once.";
     }
 
+    /// <summary>A field list as it is saved: checks tidied, then its first problem, a lookup that is not this organisation's included.</summary>
+    public static async Task<(FlowFieldList Fields, string? Problem)> CheckFieldsAsync(ProcuLinkDbContext db, Guid orgId, FlowFieldList fields, CancellationToken ct)
+    {
+        fields = FieldChecks.Normalise(fields);
+        if (InvalidFields(fields) is { } detail) return (fields, detail);
+        var lookupIds = FieldChecks.LookupIds(fields).ToList();
+        return lookupIds.Count > 0 && await db.Set<Lookup>().CountAsync(l => l.OrgId == orgId && lookupIds.Contains(l.Id), ct) != lookupIds.Count
+            ? (fields, "That lookup was not found. Choose another one.")
+            : (fields, null);
+    }
+
     /// <summary>The plan and its cap when this organisation's person flows already fill it; null when another flow fits.</summary>
     public static async Task<(string Plan, int Cap)?> LimitReachedAsync(ProcuLinkDbContext db, Guid orgId, CancellationToken ct)
     {

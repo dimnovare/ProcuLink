@@ -22,6 +22,8 @@ public sealed class FieldChecksTests
     [InlineData("between", "1.500", "0", "1000", false)] // ambiguous: marked, never passed
     [InlineData("between", "abc", null, "1000", false)]
     [InlineData("between", "-5", "0", null, false)]
+    [InlineData("between", "€ 2,500", "0", "10000", true)]   // 2.5 or 2500: both in range
+    [InlineData("between", "1,500", "0", "1000", false)]     // 1.5 in, 1500 out: marked
     public void Run_MarksAFailingValue_AndOnlyThat(string op, string value, string? min, string? max, bool passes)
     {
         var check = new FieldCheck(op, ["EUR", " USD ", ""], min, max);
@@ -40,6 +42,8 @@ public sealed class FieldChecksTests
         Run("2026-11-25").Should().BeEmpty();
         Run("2026-11-26").Should().ContainSingle().Which.Message.Should().Be("Invoice date should be a date no later than today.");
         Run("31/02/2026").Should().ContainSingle().Which.Message.Should().Be("Invoice date should be a date no later than today.");
+        Run("12/01/2026").Should().ContainSingle("a US sender means 1 December").Which.Message.Should().Be("Invoice date should be a date no later than today.");
+        Run("01/11/2026").Should().BeEmpty();
     }
 
     [Fact]

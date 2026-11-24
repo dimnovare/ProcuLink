@@ -24,6 +24,8 @@ public static class FieldChecks
     public const int MaxValues = 100;
 
     private static readonly Regex LimitShape = new(@"^-?\d+(\.\d+)?$", RegexOptions.Compiled);
+    // A date whose first two parts can trade places: 12/01/2026 is 12 January in Europe and 1 December in the US.
+    private static readonly Regex DayMonth = new(@"^(\d{1,2})([/-])(\d{1,2})\2(\d{2,4})\b", RegexOptions.Compiled);
 
     /// <summary>A limit as the customer writes it in our form: invariant "-?digits[.digits]". Empty is no limit.</summary>
     public static bool TryLimit(string? s, out decimal? limit)
@@ -65,7 +67,9 @@ public static class FieldChecks
                     : $"{label} should be one of: {string.Join(", ", allowed.Take(3))}{(allowed.Count > 3 ? $" or {allowed.Count - 3} more" : "")}.";
             case FieldCheckOps.Between:
                 var readable = TryLimit(c.Min, out var min) & TryLimit(c.Max, out var max);
-                if (readable && FieldValueParser.Number(value) is { } n && (min is null || n >= min) && (max is null || n <= max)) return null;
+                // "2,500" reads as 2.5 or 2500: it passes only when every reading is in range.
+                var readings = FieldValueParser.NumberCandidates(value);
+                if (readable && readings.Count > 0 && readings.All(n => (min is null || n >= min) && (max is null || n <= max))) return null;
                 return (Blank(c.Min), Blank(c.Max)) switch
                 {
                     ({ } lo, { } hi) => $"{label} should be a number between {lo} and {hi}.",
@@ -77,8 +81,12 @@ public static class FieldChecks
                 if (c.LookupId is not { } id || !lookups.TryGetValue(id, out var lookup)) return $"{label} couldn't be checked: its lookup was removed.";
                 return lookup.Values.Contains(value) ? null : $"{label} isn't in the lookup \"{lookup.Name}\".";
             case FieldCheckOps.NotAfterToday:
-                // The server knows only UTC: an org ahead of UTC reaches "today" early, so UTC tomorrow still passes.
-                return FieldValueParser.TryDate(value, out var date) && date <= today.AddDays(1) ? null : $"{label} should be a date no later than today.";
+                // Server UTC plus one day covers zones ahead of UTC; west of UTC it allows up to two local days ahead, accepted for an EU product.
+                var limit = today.AddDays(1);
+                // Every reading must be within the limit: day first and, when the parts can swap, month first too.
+                var swapped = DayMonth.Match(value) is { Success: true } m
+                    && FieldValueParser.TryDate($"{m.Groups[3].Value}{m.Groups[2].Value}{m.Groups[1].Value}{m.Groups[2].Value}{m.Groups[4].Value}", out var other) && other > limit;
+                return FieldValueParser.TryDate(value, out var date) && date <= limit && !swapped ? null : $"{label} should be a date no later than today.";
             default:
                 return $"{label} has a check this version doesn't know.";
         }
