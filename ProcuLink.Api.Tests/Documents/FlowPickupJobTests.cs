@@ -140,6 +140,22 @@ public sealed class FlowPickupJobTests(PostgresContainerFixture postgres)
     }
 
     [DockerRequiredFact]
+    public async Task A_refused_pickup_says_its_own_words()
+    {
+        var h = await SeedAsync();
+        const string removed = "Microsoft access was removed. Reconnect the Microsoft account.";
+        h.Source.Setup(s => s.OpenAsync(It.IsAny<FlowIntake>(), It.IsAny<JsonElement>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new PickupRefusedException(removed));
+
+        await h.RunAsync();
+
+        var intake = await h.IntakeAsync();
+        intake.LastStatus.Should().Be("failed");
+        intake.LastMessage.Should().Be(removed);
+        (await h.LedgerAsync()).Should().Be(0);
+    }
+
+    [DockerRequiredFact]
     public async Task A_paused_plan_takes_nothing_and_says_why()
     {
         var h = await SeedAsync();

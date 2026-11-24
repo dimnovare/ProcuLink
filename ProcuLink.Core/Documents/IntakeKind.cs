@@ -10,6 +10,11 @@ public static class IntakeKind
     public const string Ftp = "ftp";
     public const string Ftps = "ftps";
     public const string S3 = "s3";
+    /// <summary>An Outlook or Microsoft 365 mailbox, read through Microsoft Graph with a connected account (plan 30).</summary>
+    public const string Outlook = "outlook";
 
-    public static readonly string[] Pickups = [Imap, Sftp, Ftp, Ftps, S3];
+    public static readonly string[] Pickups = [Imap, Sftp, Ftp, Ftps, S3, Outlook];
+
+    /// <summary>Sources whose <c>SourceRef</c> is the sender's email address.</summary>
+    public static readonly string[] Mail = [Email, Imap, Outlook];
 }

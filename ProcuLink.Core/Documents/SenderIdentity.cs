@@ -38,7 +38,7 @@ public sealed record SenderIdentity(string Key, string Label)
 
     private static string? EmailDomain(string source, string? sourceRef)
     {
-        if (source != IntakeKind.Email && source != IntakeKind.Imap || sourceRef is null) return null;
+        if (!IntakeKind.Mail.Contains(source) || sourceRef is null) return null;
         var at = sourceRef.LastIndexOf('@');
         if (at < 0) return null;
         var domain = sourceRef[(at + 1)..].Trim().TrimEnd('>').ToLowerInvariant();

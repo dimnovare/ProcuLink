@@ -41,6 +41,8 @@ public sealed class SenderIdentityTests
             .Should().Be(SenderIdentity.Of(Read((FieldMeanings.SenderName, "Acme")), "upload", null)!.Key);
         SenderIdentity.Of(Read(), "imap", "Orders@Mail.Shop.EXAMPLE")
             .Should().Be(new SenderIdentity("email:mail.shop.example", "mail.shop.example"));
+        SenderIdentity.Of(Read(), "outlook", "billing@example.com")
+            .Should().Be(new SenderIdentity("email:example.com", "example.com"));
     }
 
     [Fact]

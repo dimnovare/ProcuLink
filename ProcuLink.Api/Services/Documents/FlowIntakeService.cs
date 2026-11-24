@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Controllers;
+using ProcuLink.Api.Services.Google;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
@@ -28,7 +29,8 @@ public sealed class IntakeException(string code, string? detail = null) : Except
 
 /// <summary>A flow's intakes: its own email address (always there), the file API's webhook, and server or mailbox pickups.</summary>
 public sealed class FlowIntakeService(
-    ProcuLinkDbContext db, DeliveryEncryptionService encryption, IInboundAddressService addresses, IConfiguration config)
+    ProcuLinkDbContext db, DeliveryEncryptionService encryption, IInboundAddressService addresses, IConfiguration config,
+    LinkedAccountAvailability availability)
 {
     private const string Purpose = CredentialPurpose.FlowIntakeCredentials;
 
@@ -42,6 +44,7 @@ public sealed class FlowIntakeService(
         [IntakeKind.Ftps] = [("host", 's', ""), ("port", 'p', 21), ("username", 's', ""), ("directory", 's', "/")],
         [IntakeKind.S3] = [("bucket", 's', ""), ("prefix", 's', ""), ("region", 's', "us-east-1"), ("serviceUrl", 's', ""), ("accessKeyId", 's', "")],
         [IntakeKind.Api] = [("webhookUrl", 's', "")],
+        [IntakeKind.Outlook] = [("accountId", 's', ""), ("folder", 's', "Inbox"), ("fromFilter", 's', ""), ("subjectFilter", 's', "")],
     };
 
     /// <summary>Config keys that decide which server a saved password is sent to, and as whom.</summary>
@@ -51,7 +54,7 @@ public sealed class FlowIntakeService(
     {
         [IntakeKind.Imap] = ["host", "username"], [IntakeKind.Sftp] = ["host", "username"],
         [IntakeKind.Ftp] = ["host", "username"], [IntakeKind.Ftps] = ["host", "username"],
-        [IntakeKind.S3] = ["bucket", "accessKeyId"],
+        [IntakeKind.S3] = ["bucket", "accessKeyId"], // Outlook's accountId is checked against the org's accounts instead
     };
 
     private IQueryable<FlowIntake> Intakes(Guid orgId, Guid flowId) =>
@@ -130,6 +133,7 @@ public sealed class FlowIntakeService(
         }
 
         var configJson = kind == IntakeKind.Email ? null : Normalize(kind, req.Config, existing?.ConfigJson ?? "{}");
+        if (kind == IntakeKind.Outlook) await CheckOutlookAccountAsync(orgId, configJson!, ct);
         var newCredentials = req.Credentials is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) };
         if (existing is not null && configJson is not null)
         {
@@ -173,6 +177,15 @@ public sealed class FlowIntakeService(
         }
 
         return existing;
+    }
+
+    /// <summary>Before anything is added or changed: the flag is on, and the account is this org's Outlook mailbox account (never a Google one).</summary>
+    private async Task CheckOutlookAccountAsync(Guid orgId, string configJson, CancellationToken ct)
+    {
+        if (!availability.On(orgId, LinkedAccountProviders.Outlook)) throw new IntakeException("unsupported_intake");
+        if (!Guid.TryParse(JsonNode.Parse(configJson)!["accountId"]!.GetValue<string>(), out var accountId)
+            || !await db.LinkedAccounts.AnyAsync(a => a.OrgId == orgId && a.Id == accountId && a.Provider == LinkedAccountProviders.Outlook, ct))
+            throw new IntakeException("invalid_intake", "Choose a connected Microsoft account.");
     }
 
     /// <summary>Keeps the kind's known keys, fills defaults, falls back to the saved value for a key left out.</summary>

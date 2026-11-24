@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Google;
 using ProcuLink.Infrastructure;
@@ -96,7 +97,7 @@ public sealed class GoogleConnectService(
     }
 
     /// <summary>
-    /// Null: no such account in this org. False: a destination still names it (R8). True: deleted. Google is
+    /// Null: no such account in this org. False: a destination or a mailbox pickup still names it (R8). True: deleted. Google is
     /// not called: its revoke ends the grant for that Google user everywhere, including another org's link.
     /// </summary>
     public async Task<bool?> DeleteAsync(Guid orgId, string userId, Guid accountId, CancellationToken ct)
@@ -104,10 +105,12 @@ public sealed class GoogleConnectService(
         var account = await db.LinkedAccounts.FirstOrDefaultAsync(a => a.OrgId == orgId && a.Id == accountId, ct);
         if (account is null) return null;
 
+        var protocols = LinkedAccountProviders.ByProtocol.Keys.ToArray();
         var configs = await db.Set<FlowDestination>()
-            .Where(d => d.OrgId == orgId && LinkedAccountProviders.ByProtocol.Keys.Contains(d.Protocol))
+            .Where(d => d.OrgId == orgId && protocols.Contains(d.Protocol))
             .Select(d => d.ConfigJson)
             .ToListAsync(ct);
+        configs.AddRange(await db.FlowIntakes.Where(i => i.OrgId == orgId && i.Kind == IntakeKind.Outlook).Select(i => i.ConfigJson).ToListAsync(ct));
         if (configs.Any(c => NamesAccount(c, accountId))) return false;
 
         db.LinkedAccounts.Remove(account);

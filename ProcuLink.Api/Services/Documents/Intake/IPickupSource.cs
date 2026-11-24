@@ -5,14 +5,17 @@ using ProcuLink.Infrastructure.Services.Ingress;
 namespace ProcuLink.Api.Services.Documents.Intake;
 
 /// <param name="Key">The ledger key; unique within the intake.</param>
-/// <param name="SourceRef">The remote path (SFTP, FTP, FTPS), the object key (S3) or the sender (IMAP).</param>
-/// <param name="SenderUnconfirmed">IMAP only: the mailbox provider did not confirm the sender.</param>
+/// <param name="SourceRef">The remote path (SFTP, FTP, FTPS), the object key (S3) or the sender (IMAP, Outlook).</param>
+/// <param name="SenderUnconfirmed">Mailboxes only: the mailbox provider did not confirm the sender.</param>
 public sealed record PickupFile(string Key, string FileName, string? SourceRef, bool SenderUnconfirmed = false)
 {
     /// <summary>A server file, keyed on path, size and modified time, so a rewritten fixed-name file is taken again.</summary>
     public static PickupFile At(RemoteFile f) =>
         new($"path:{f.Path}:{f.Size}:{f.ModifiedUtc.Ticks}", System.IO.Path.GetFileName(f.Path), f.Path);
 }
+
+/// <summary>A pickup refused for a reason it can say in its own words; the job shows <c>Message</c> as it is.</summary>
+public sealed class PickupRefusedException(string message) : Exception(message);
 
 /// <summary>A server or mailbox a flow intake picks files up from.</summary>
 public interface IPickupSource
@@ -31,9 +34,9 @@ public interface IPickupSession : IDisposable
     /// <exception cref="ProcuLink.Core.Services.Catalog.CatalogFileTooLargeException">The file is over <paramref name="maxBytes"/>.</exception>
     Task<MemoryStream> DownloadAsync(PickupFile file, long maxBytes, CancellationToken ct);
 
-    /// <summary>Does nothing except on IMAP, which marks the message seen.</summary>
+    /// <summary>Does nothing except on a mailbox, which marks the message seen (IMAP) or read (Outlook).</summary>
     Task MarkDoneAsync(PickupFile file, CancellationToken ct);
 
-    /// <summary>Called once after a real run. IMAP marks matching messages with nothing readable seen and returns a note for each; nothing else has any.</summary>
+    /// <summary>Called once after a real run. A mailbox marks matching messages with nothing readable seen and returns a note for each; nothing else has any.</summary>
     Task<IReadOnlyList<string>> SettleAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>([]);
 }

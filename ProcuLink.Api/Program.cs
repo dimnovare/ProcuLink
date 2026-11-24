@@ -612,6 +612,8 @@ builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSou
 builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.Intake.IPickupSource>(sp => new ProcuLink.Api.Services.Documents.Intake.ImapPickupSource(
     sp.GetRequiredService<ProcuLink.Infrastructure.Services.Security.OutboundRequestGuard>(),
     sp.GetRequiredService<ProcuLink.Api.Services.Documents.DocumentEngineGate>()));
+// Scoped, unlike the others: it reads the scoped token store. The pickup jobs resolve sources per Hangfire scope.
+builder.Services.AddScoped<ProcuLink.Api.Services.Documents.Intake.IPickupSource, ProcuLink.Api.Services.Documents.Intake.OutlookPickupSource>();
 builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowPickupJob>();
 builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowWebhookJob>();
 builder.Services.AddScoped<ProcuLink.Api.Jobs.FlowPickupDispatchJob>();

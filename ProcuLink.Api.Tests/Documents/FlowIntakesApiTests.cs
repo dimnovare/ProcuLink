@@ -159,4 +159,36 @@ public class FlowIntakesApiTests(DocumentEngineTestFactory factory) : IClassFixt
         var email = (await Body(await http.GetAsync(url))).EnumerateArray().Single(i => i.GetProperty("kind").GetString() == "email").GetProperty("id").GetGuid();
         (await http.PostAsync($"{url}/{email}/test", null)).StatusCode.Should().Be((HttpStatusCode)422);
     }
+
+    [Fact]
+    public async Task Outlook_pickup_needs_its_own_account_and_holds_it()
+    {
+        var (http, flowId) = await NewFlow();
+        Guid google = Guid.NewGuid(), outlook = Guid.NewGuid();
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.LinkedAccounts.AddRange(
+                new LinkedAccount { Id = google, OrgId = Org, Provider = "google", Subject = "g-" + google, Email = "user@example.com", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow },
+                new LinkedAccount { Id = outlook, OrgId = Org, Provider = "outlook", Subject = "m-" + outlook, Email = "user@example.com", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+            await db.SaveChangesAsync();
+        }
+        var url = $"/api/flows/{flowId}/intakes";
+
+        var wrong = await http.PostAsJsonAsync(url, new { kind = "outlook", config = new { accountId = google } });
+        wrong.StatusCode.Should().Be((HttpStatusCode)422);
+        (await Body(wrong)).GetProperty("detail").GetString().Should().Be("Choose a connected Microsoft account.");
+
+        var created = await http.PostAsJsonAsync(url, new { kind = "outlook", config = new { accountId = outlook } });
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        var config = (await Body(created)).GetProperty("config");
+        config.GetProperty("accountId").GetString().Should().Be(outlook.ToString());
+        config.GetProperty("folder").GetString().Should().Be("Inbox");
+        config.GetProperty("fromFilter").GetString().Should().BeEmpty();
+        config.GetProperty("subjectFilter").GetString().Should().BeEmpty();
+
+        var inUse = await http.DeleteAsync($"/api/linked-accounts/{outlook}");
+        inUse.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await inUse.Content.ReadAsStringAsync()).Should().Contain("account_in_use");
+    }
 }
