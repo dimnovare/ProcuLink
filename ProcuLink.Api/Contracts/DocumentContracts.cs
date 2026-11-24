@@ -54,6 +54,10 @@ public sealed record DocumentFileDto(Guid DeliveryId, string FileName, bool Deli
 /// <summary>Where sending stopped. Destination is null when it has no name left to give (deleted, or not this workspace's).</summary>
 public sealed record DocumentStopDto(Guid? DestinationId, string? Destination, string? Error);
 
+/// <summary>The copy that makes a document's number a repeat: <paramref name="Id"/> is null when only a removed copy is left,
+/// <paramref name="ReceivedAt"/> is when that copy arrived, and <paramref name="Number"/> is the number as read on this document.</summary>
+public sealed record DuplicateOfDto(Guid? Id, DateTime ReceivedAt, string? Number);
+
 /// <summary>A row of the app's paged documents list: the summary plus what only the app shows. Never returned by the file API.</summary>
 public sealed record DocumentRowDto : DocumentSummaryDto
 {
@@ -72,6 +76,8 @@ public sealed record DocumentRowDto : DocumentSummaryDto
     public IReadOnlyList<DocumentFileDto> Files { get; init; } = [];
     /// <summary>For a repeated file (<c>duplicate_file</c>): when the newest earlier copy arrived.</summary>
     public DateTime? DuplicateOfAt { get; init; }
+    /// <summary>For a repeated number (a failed <c>duplicate</c> check): the earlier copy.</summary>
+    public DuplicateOfDto? DuplicateOf { get; init; }
     /// <summary>The flow's current answer: no file it makes goes to a destination.</summary>
     public bool DownloadOnly { get; init; }
     /// <summary>Whether the caller may remove it: an org admin always; a member only when nothing was made or sent from it.</summary>
@@ -93,6 +99,8 @@ public sealed record DocumentDetailDto : DocumentDto
     public bool CountsThisMonth { get; init; }
     /// <summary>Our built-in sample: the screen offers no Send for it.</summary>
     public bool IsSample { get; init; }
+    /// <summary>For a repeated number (a failed <c>duplicate</c> check): the earlier copy.</summary>
+    public DuplicateOfDto? DuplicateOf { get; init; }
 }
 
 /// <summary>What the file API returns for a document: the read result and the sends made from it.</summary>
