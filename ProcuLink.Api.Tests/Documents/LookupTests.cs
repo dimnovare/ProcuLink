@@ -196,4 +196,28 @@ public class LookupTests(DocumentEngineTestFactory factory) : IClassFixture<Docu
         var unused = (await Create(http, "Pallet types")).Id;
         (await http.GetFromJsonAsync<List<LookupSummaryDto>>("/api/lookups", DocumentJson.Options))!.Single(l => l.Id == unused).UsedBy.Should().BeEmpty();
     }
+
+    [Fact]
+    public async Task Lookup_DeleteRefusedWhileAFieldCheckUsesIt()
+    {
+        var http = factory.ClientFor(Org);
+        var id = (await Create(http, "Cost centres", ("CC-10", "CC-10"))).Id;
+        var flowId = Guid.NewGuid();
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.Flows.Add(new Flow
+            {
+                Id = flowId, OrgId = Org, Name = "Checked flow", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+                FieldsJson = DocumentJson.Serialize(new FlowFieldList([new FlowField("cost_centre", "Cost centre", FieldTypes.Text, null, false, new FieldCheck(FieldCheckOps.InLookup, LookupId: id))])),
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var refused = await http.DeleteAsync($"/api/lookups/{id}");
+        refused.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await refused.Content.ReadAsStringAsync()).Should().Contain("lookup_in_use");
+        (await http.GetFromJsonAsync<List<LookupSummaryDto>>("/api/lookups", DocumentJson.Options))!
+            .Single(l => l.Id == id).UsedBy.Select(u => u.FlowId).Should().Equal(flowId);
+    }
 }

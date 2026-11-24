@@ -561,4 +561,44 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
             .Where(j => j.Type == typeof(FlowWebhookJob)).Select(j => ((Guid)j.Args[1], (string)j.Args[2]))
             .Should().Equal((stuckDoc.Id, FlowWebhookEvent.SendFailed));
     }
+
+    [Fact]
+    public async Task A_failed_own_check_waits_on_a_marked_flow_and_still_sends_on_an_automatic_one()
+    {
+        var now = DateTime.UtcNow;
+        var fields = DocumentJson.Serialize(new FlowFieldList([new FlowField("amount", "Amount", FieldTypes.Money, null, false, new FieldCheck(FieldCheckOps.Between, Max: "1000"))]));
+        Flow FlowOn(string automation) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = Org, Name = "Synthetic flow", FieldsConfirmed = true, Automation = automation, CreatedAt = now, UpdatedAt = now, FieldsJson = fields,
+        };
+        var (marked, auto) = (FlowOn(FlowAutomation.Marked), FlowOn(FlowAutomation.Auto));
+        FlowDocument DocOf(Flow f) => new()
+        {
+            Id = Guid.NewGuid(), OrgId = Org, FlowId = f.Id, FileName = "synthetic.csv", ContentType = "text/csv",
+            SourceFileKey = "k", Status = DocumentStatus.Received, CreatedAt = now, UpdatedAt = now,
+        };
+        var (markedDoc, autoDoc) = (DocOf(marked), DocOf(auto));
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+            db.Flows.AddRange(marked, auto);
+            db.FlowDocuments.AddRange(markedDoc, autoDoc);
+            await db.SaveChangesAsync();
+        }
+        var read = new ReadResult("Invoice", [new ReadField("amount", "Amount", "5000", FieldTypes.Money, null, 0.99, null, false, true, false)]);
+        var before = factory.Enqueued<SendDocumentJob>();
+
+        await ReadAsync(markedDoc.Id, read);
+        factory.Enqueued<SendDocumentJob>().Should().Be(before);
+        await ReadAsync(autoDoc.Id, read);
+        factory.Enqueued<SendDocumentJob>().Should().Be(before + 1);
+
+        using var check = factory.Services.CreateScope();
+        foreach (var doc in await check.ServiceProvider.GetRequiredService<ProcuLinkDbContext>().FlowDocuments.AsNoTracking()
+                     .Where(d => d.Id == markedDoc.Id || d.Id == autoDoc.Id).ToListAsync())
+        {
+            doc.Status.Should().Be(DocumentStatus.NeedsReview);
+            DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson!).Should().ContainSingle(c => c.Code == DocumentChecks.CustomCheck && c.FieldKey == "amount");
+        }
+    }
 }
