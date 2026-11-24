@@ -1,50 +1,54 @@
 # ProcuLink — Claude Code Project Memory
 
-> **Current source of truth:** read `STATUS.md` (repo root) before planning — it overrides
-> anything stale here. The active work plan + verified capability ground truth is
-> [`docs/prompts/2026-07-02-fable5-production-push-master-prompt.md`](docs/prompts/2026-07-02-fable5-production-push-master-prompt.md).
-> Implementation history (phases, groups, waves): see `git log` and STATUS.md — do not
-> re-execute old checklists.
+> **Code wins over this file.** Every claim here was checked against the tree on 2026-11-24; where
+> you find a disagreement, trust the code and fix the doc. The frontend repo's `CLAUDE.md` carries
+> the UI rules, the shell and the billing summary. `STATUS.md` and
+> `docs/prompts/2026-07-02-fable5-production-push-master-prompt.md` are order-era history: read them
+> for the correction log, never as the current plan. History is `git log` — do not re-execute old
+> checklists.
 
 ## What this project is
 
-ProcuLink is a **B2B procurement bridge**: it moves purchase orders between buyers and
-suppliers in each counterparty's required format and delivery channel.
+A simple document tool: **any document in → read → checked → transformed → sent**, for
+bookkeepers and people who are not good with computers. Benchmark (founder): DocParser — be
+better, clearer, simpler, smarter, cheaper, quicker.
 
-**A document arrives in a flow → is read → is reviewed (teach a field once) → renders its
-outputs → is delivered to destinations.** Flows, intakes, outputs, destinations and lookups
-are the product (`FlowsController`, `FlowIntakesController`, `FlowOutputsController`,
-`DestinationsController`, `LookupsController`, `DocumentsController`; jobs `ReadDocumentJob`,
-`SendDocumentJob`, `DeliverDocumentJob`, `FlowPickupJob`).
+- **One way in.** `POST /api/documents` (`InboxController`) takes any file with no flow chosen; it
+  lands in the workspace inbox flow (`InboxFlow`) and is read with no setup, then sorted into the
+  flow it resembles (`DocumentSort`, remembered in `FlowSortMemory`). A first-of-its-kind document
+  asks the person one question (`sort-flows` / `move` / `set-up` / `download` on the same controller).
+- **Flows** are the repeat setup: intakes, fields, outputs, destinations, lookups
+  (`FlowsController`, `FlowIntakesController`, `FlowOutputsController`, `DestinationsController`,
+  `LookupsController`, `DocumentsController`, `FlowFilesController`; jobs `ReadDocumentJob`,
+  `SendDocumentJob`, `DeliverDocumentJob`, `FlowPickupJob`, `DocumentDeliverySweepJob`).
+- **No document kinds as product structure** (founder, 2026-11-05): no orders-vs-invoices split.
+- **Checks never block a send** (founder, 2026-11-06). The one founder-approved exception: on an
+  automatic flow a failed `duplicate` check holds the document for a person
+  (`SendDocumentJob.ShouldSend`). Values are sent as read.
+- **Phone alerts** over Web Push (`PushDevicesController`, `WebPushAlertSender`, `PhoneAlertJob`).
 
-The data model is **direction-agnostic** (buyer = document issuer, supplier = recipient).
+The data model is **direction-agnostic** (sender = document issuer, receiver = recipient).
 
-**Plan 13b (2026-11-13) removed the old order pipeline.** Every workspace runs on the document
-engine, so the purchase-order path was deleted: `OrdersController` is a read-only archive (three
-GETs: list, detail, artifact download) and the old order write path, parse / transform / retry
-jobs and the SFTP / S3 / IMAP order-polling and stuck-order / SLA sweeps are gone, as are the
-order-event integration webhooks, the supplier catalog sync, the acceptance gate, the
-connection-revision / revision-authority machinery and eight `BillingFeature` members (only `Sso` remains;
-plan 14 removed `AdvancedAudit`, so the workspace-wide activity list is open on every plan). Every old table, entity and migration stays — no drop
-migration — so old orders remain readable and exportable. `DocumentEngineGate` stays as the
-flow-side gate. Do not write code against the deleted names; `git log` has them.
+**Plan 13b (2026-11-13) removed the old purchase-order pipeline.** `OrdersController` is a
+read-only archive (list, detail, artifact download); the order write path, its jobs, polling and
+sweeps, the order webhooks, the supplier catalog sync, the acceptance gate, the connection-revision
+machinery and eight `BillingFeature` members are gone (only `Sso` remains). Every old table,
+entity and migration stays — no drop migration — so old orders remain readable. Do not write code
+against the deleted names; `git log` has them.
 
-## Current direction (2026-07)
+## Current state
 
-- **Production is LIVE** (launched 2026-06-09): `proculink.eu` (Vercel) + `api.proculink.eu`
-  (Railway API service `ProcuLink` + single Worker `aware-amazement` — the Worker is mandatory;
-  nothing parses/delivers without it), Neon Postgres, Cloudflare R2, Clerk production instance
-  (`clerk.proculink.eu`). **Stripe is LIVE** (verified 2026-07-02 via API: `sk_live` key,
-  all 8 monthly+yearly price IDs active) — treat billing as real-money infrastructure:
-  never complete real checkouts in testing and never create/edit live Stripe objects
-  without the founder.
-- **Active work:** the production-hardening push in
-  `docs/prompts/2026-07-02-fable5-production-push-master-prompt.md` — prove every advertised
-  capability live, click-audit the UI, consolidate design drift, make marketing truthful.
-- **Product shape:** flows → outputs → destinations (see "What this project is"). The versioned
-  Supplier Connection (`SupplierConnection` / `SupplierConnectionRevision`) no longer has a
-  service or endpoint since plan 13b; its entities and tables stay. Keep Scriban as the power-user
-  escape hatch (not the default), and never equate HTTP 200 with supplier business acceptance.
+- **Production is LIVE**: `proculink.eu` (Vercel) + `api.proculink.eu` (Railway API service
+  `ProcuLink` + Worker `aware-amazement` — the Worker is mandatory; nothing is read or delivered
+  without it), Neon Postgres, Cloudflare R2, Clerk production instance (`clerk.proculink.eu`).
+  Relaunched as the document tool 2026-11-14.
+- **Stripe is LIVE** — treat billing as real-money infrastructure: never complete real checkouts in
+  testing and never create/edit live Stripe objects without the founder.
+- Switches on `DocumentEngineGate` (`DocumentEngine:` options, API **and** Worker):
+  `EnabledForAll` / `EnabledOrgIds`, `ScansForAll` / `ScanOrgIds` (photos and scanned PDFs),
+  `PeppolForAll` / `PeppolOrgIds` (the Peppol / EN 16931 / XRechnung outputs).
+- Plans and specs are written to `docs/superpowers/plans|specs/` in the frontend repo and are not
+  committed.
 
 ## Repository layout
 
@@ -55,8 +59,8 @@ flow-side gate. Do not write code against the deleted names; `git log` has them.
 ├── ProcuLink.Api\                   ← ASP.NET Core 8 — dev :5223
 ├── ProcuLink.Core\                  ← Domain models + service interfaces
 ├── ProcuLink.Infrastructure\        ← EF Core, Postgres, R2/Local storage, delivery
-├── ProcuLink.Transform\             ← Format parsers + output transforms
-├── ProcuLink.Worker\                ← Hangfire jobs host (document read/deliver, flow pickups, sweeps)
+├── ProcuLink.Transform\             ← Readers, output writers, standards, conformance
+├── ProcuLink.Worker\                ← Hangfire jobs host (read, send, deliver, pickups, sweeps)
 ├── ProcuLink.Transform.Tests\
 ├── ProcuLink.Infrastructure.Tests\
 └── ProcuLink.Api.Tests\
@@ -73,7 +77,7 @@ Package manager: bun · Framework: Next.js 15 (App Router)
 | Frontend | **Next.js 15 (App Router)** + TypeScript + Tailwind + shadcn/ui |
 | Package manager | **bun** — never npm or yarn |
 | Auth | **`@clerk/nextjs`** (NOT `@clerk/clerk-react` — different package for Next.js) |
-| Clerk middleware | `middleware.ts` in project root — protects `(app)` routes |
+| Clerk middleware | `src/middleware.ts` in the frontend — protects `(app)` routes |
 | Frontend data | TanStack Query v5 — in Client Components only |
 | API | ASP.NET Core 8 — dev :5223 |
 | ORM | EF Core 8 + Npgsql |
@@ -83,31 +87,38 @@ Package manager: bun · Framework: Next.js 15 (App Router)
 | Error tracking | Sentry (backend `Sentry.AspNetCore`, frontend `@sentry/nextjs`) |
 | Deployment | Railway (API + Worker) + Vercel (frontend) |
 
-## Key capabilities (verified; detail in the master prompt Appendix A)
+## Key capabilities (verified 2026-11-24)
 
-- **Input formats:** CSV, XLSX, PDF (text→LLM primary; vision fallback for scanned; regex +
-  self-hosted no-egress OCR fallbacks), UBL 2.1 Order (a Peppol BIS Order 3 file IS a UBL 2.1
-  Order, so it parses on the same pipeline — `UblOrderParser` has no BIS-specific branch), cXML 1.2,
-  EDIFACT ORDERS (D96A/D01B, hand-rolled), X12 850, SAP IDoc ORDERS05. Invoice and despatch
-  parsers (UBL Invoice, EDIFACT INVOIC/DESADV) were deleted in plan 13b.
-- **Output formats:** XML, CSV, JSON, cXML, UBL 2.1 Order, X12 850 — listed in
-  `OutputTransformRegistry.All` — plus the `OutputNode` AST emitter (`OutputTemplateEmitter`)
-  and the Scriban escape hatch.
-  **Outbound Peppol BIS Order 3 is NOT offered and must not be advertised.** The UBL emitter
-  produces a plain OASIS UBL 2.1 Order and deliberately declares no `cbc:CustomizationID` and no
-  `cbc:ProfileID` — both are `minOccurs="0"` in the UBL 2.1 Order-2 schema, and a receiving access
-  point routes and validates on them, so writing the Peppol values claimed a conformance nothing
-  here verifies. There is no Schematron in this repo; `PeppolBisValidator` is invoice-only. Pinned
-  by `ProcuLink.Transform.Tests/Output/UblOrderDeclaresNoPeppolProfileTests.cs`.
-- **Delivery channels:** `http` (+OAuth2), `sftp`, `ftps`, `email` (Postmark HTTPS is the
-  canonical email path; SMTP retired on Railway), `erp_erply`, `erp_directo` — all with
-  AES-GCM credentials, SSRF guard (`OutboundRequestGuard`), test-fire, retry/dead-letter.
-- **Intake channels (per flow):** browser upload (`POST /api/flows/{flowId}/documents`), the file
-  API (`/api/v1/flows/{flowId}/documents`, `plk_` API keys), inbound email (Postmark webhook
-  → `InboundEmailRouter`), and pickups (`FlowPickupJob`: IMAP, SFTP, FTP(S), S3).
-- AI lookup suggestions (provider-neutral `IAiMappingService`, OpenAI structured outputs,
-  never auto-applied, confidence + provenance shown), admin area, billing with soft caps +
-  €0.50/order overage (never hard-blocks paid).
+- **Ways in** (`IntakeKind`): browser upload (`POST /api/documents`, or
+  `POST /api/flows/{flowId}/documents` into a chosen flow), the file API
+  (`/api/v1/flows/{flowId}/documents`, `plk_` API keys), inbound email (Postmark webhook →
+  `InboundEmailRouter`), and pickups (`FlowPickupJob`: IMAP, SFTP, FTP, FTPS, S3).
+- **Files read** (`DocumentFormats`): PDF, CSV, XLSX always; DOCX, TXT, XML, cXML, JSON, EDI, X12
+  in `More`; photos and scans behind the scan switch (self-hosted no-egress OCR on the Worker).
+  A document is one file of up to 10 pages (`ReadLimits`).
+- **Outputs** (`FlowOutputFormats`): CSV, JSON, XML, XLSX, PDF, text, fixed-width; plus the
+  standards in `ProcuLink.Transform/Documents/StandardOutputs.cs` — cXML 1.2, UBL 2.1 Order,
+  X12 850, EDIFACT ORDERS, and (behind the Peppol switch) Peppol BIS Billing 3 invoice / credit note,
+  EN 16931 CII and XRechnung UBL. Rule checks for those run on demand through `PhormValidator`
+  (the phive sidecar, `Validator:BaseUrl`); an outage never stops a send.
+- **Destinations** (`FlowDestination.Protocol`, `DeliveryProtocolConstants`): email, SFTP, FTPS, S3,
+  web address (`http`, + OAuth2), Google Drive, Google Sheets — encrypted credentials, SSRF guard
+  (`OutboundRequestGuard`), test send, retry. Postmark HTTPS is the email path; SMTP is retired on
+  Railway.
+- **AI** suggestions through the provider-neutral `IAiMappingService` (OpenAI structured outputs),
+  never auto-applied, confidence shown. One AI token allowance per org (`PlanConstants`).
+- **Billing**: two ladders in `PlanConstants.cs`, mirrored by the frontend's `src/lib/plans.ts`
+  (diffed by `src/test/backendMirror.test.ts` there). The **document ladder** (`DocumentLadder`) is
+  the one sold: 30-day trial (`PilotDuration`, 20 documents, 2 flows), Starter €35 / Pro €69 /
+  Business €149 / Scale €399 (150 / 400 / 1,500 / 5,000 documents a month; 5 / 20 / 100 /
+  unlimited flows; extra documents €0.24 / €0.18 / €0.10 / €0.08, capped by
+  `BestPriceOverageOrders`). The **legacy ladder** (Growth / Operations / Integration / Distributor,
+  €0.50/order overage) is kept for existing payers only. Paid caps are soft; only the trial's is
+  hard. `MinimumPlan` holds one presentation-only row (`Sso` = Enterprise), so nothing is refused by
+  plan; `BillingGateEnforcementIsRealTests` (compiled IL) keeps that table honest.
+- **Refusals**: intake answers 429 `{ error, plan, limit, upgradeUrl }` with `pilot_expired`,
+  `order_limit_reached` or `processing_paused` (`IntakeResults.cs`); flow creation answers
+  `flow_limit_reached` (`FlowsController`, `InboxController` set-up).
 
 ## Durable coding conventions
 
@@ -115,7 +126,7 @@ Package manager: bun · Framework: Next.js 15 (App Router)
 - **App Router only** — no Pages Router. Server Components by default; `'use client'` only
   when hooks/events/browser APIs are needed.
 - **TanStack Query** for all server state, in Client Components only. No `useEffect` fetching.
-- All API calls via `src/lib/api-client.ts`.
+- All API calls via `src/lib/api-client.ts` (and the `src/lib/api/` modules it re-exports).
 - `@clerk/nextjs`: `auth()` in Server Components, `useAuth()`/`useUser()` in Client Components.
 - `next/link` + `next/navigation` — never `react-router-dom`. SEO via `generateMetadata()`.
 - Env: `NEXT_PUBLIC_*` prefix for client-visible values, nothing else.
@@ -127,26 +138,27 @@ Package manager: bun · Framework: Next.js 15 (App Router)
 - Hangfire jobs idempotent.
 - No raw SQL — EF Core only.
 - Billing, tenancy, and security code are high-care areas: extra review before merge.
+- Every new endpoint needs a frontend caller in the same pair of PRs:
+  `EndpointReachabilityGuardTests` fails an endpoint nothing calls.
 
 ### One great experience rule
 ProcuLink ships ONE great UX — smart defaults + progressive disclosure + Command Palette
 (Cmd+K) for power features. No novice/expert mode toggles, no `localStorage` user-mode flags.
-Density and power affordances (raw envelopes, hotkeys, standards mappings) surface via the
-palette, per-table column selectors, and contextual disclosure.
+Density and power affordances (raw files, hotkeys, standards mappings) surface via the
+palette and contextual disclosure (a flow's Advanced view).
 
 ### Standards-visibility rule
 Any field in a transform/mapping context must be able to surface its standards mapping
 (UBL / EDIFACT / X12 / cXML / Peppol BIS) on demand — via info-icon popover, Command Palette,
-or a per-screen disclosure. Source of truth: the in-app **`/library/standards`** catalog,
-backed by `src/lib/standards/catalog.ts` in the frontend repo (the conservative,
-honest capability matrix). Standards visibility is what earns 30-year procurement veterans'
-trust — don't hide it.
+or a per-screen disclosure. Source of truth: `src/lib/standards/catalog.ts` in the frontend repo
+(the conservative, honest capability matrix; the old `/library/standards` page is retired and
+308s). Standards visibility is what earns procurement veterans' trust — don't hide it.
 
 ## Durable product rules
 
 - **Offer ⇔ works.** Never let UI or marketing offer a channel/format/capability that is not
   a real, tested capability. When in doubt, soften the copy — never over-claim.
-  `/library/standards` + `src/lib/standards/catalog.ts` are the conservative source of truth.
+  `src/lib/standards/catalog.ts` is the conservative source of truth.
 - **No commercial EDI licences** (EdiFabric rejected, ~€1,500/yr). EDIFACT is hand-rolled or
   MIT open-source only.
 - **The old Order Workshop is gone** (plan 13b). Old orders are read at `/archive`; the field
@@ -155,7 +167,7 @@ trust — don't hide it.
   bridge/dock/crossing VOCABULARY is purged from user-facing copy. Only propose a visual-direction
   change with demonstrated superiority + founder sign-off.
 - **Plain-language user-facing copy.** No internal jargon (revisions, spine, crossings, dev-rule
-  strings) in the UI; validation errors are one human sentence with actual-vs-expected + fix.
+  strings) in the UI; errors are one human sentence with what happened + what to do.
 - **Legal identity:** the operating entity is **Diip Solutions OÜ** (registry 17527757, Tallinn);
   frontend source of truth `project-proculink/src/lib/legal-entity.ts`. Never restore the
   fabricated "ProcuLink OÜ" identity or invent a VAT number.
@@ -170,52 +182,17 @@ trust — don't hide it.
 
 ## Environment variables
 
-### `ProcuLink.Api\appsettings.Development.json`
-```json
-{
-  "ConnectionStrings": {
-    "DefaultConnection": "Host=localhost;Port=5435;Database=proculink_dev;Username=postgres;Password=postgres"
-  },
-  "Clerk": { "Authority": "https://golden-alpaca-43.clerk.accounts.dev" },
-  "Storage": {
-    "R2AccessKeyId": "",
-    "R2SecretAccessKey": "",
-    "R2BucketName": "proculink-dev",
-    "R2Endpoint": "https://<accountid>.r2.cloudflarestorage.com"
-  },
-  "Stripe": {
-    "SecretKey": "",
-    "WebhookSecret": "",
-    "GrowthPriceId": "",
-    "OperationsPriceId": "",
-    "IntegrationPriceId": ""
-  },
-  "Ai": {
-    "Provider": "openai",
-    "OpenAI": {
-      "ApiKey": "",
-      "MappingModel": "gpt-5-mini"
-    }
-  },
-  "Sentry": { "Dsn": "" },
-  "Frontend": { "Url": "" }
-}
-```
+`ProcuLink.Api/appsettings.Development.json` holds the dev shape (local Postgres on `:5435`, the dev
+Clerk authority, empty R2/Stripe/AI/Postmark secrets, `Validator:BaseUrl`). Secrets never go in it.
+Stripe price ids are `Stripe:<Plan>PriceId` / `Stripe:<Plan>YearlyPriceId` for every checkout plan
+(`StripeBillingMapping.cs`). On Railway, read variable NAMES only.
 
-Local live QA needs `PROCULINK_QA_BYPASS_AUTH=true` (Development only) + a valid
-`Delivery__EncryptionKey` (32-byte base64), and the Worker running.
+Local live QA needs `PROCULINK_QA_BYPASS_AUTH=true` (Development only), a valid
+`Delivery__EncryptionKey` (32-byte base64), `DocumentEngine__EnabledForAll=true`, and the Worker
+running (`DOTNET_ENVIRONMENT=Development` for the Worker).
 
-### `project-proculink\.env` (committed, Next.js)
-```
-NEXT_PUBLIC_API_BASE_URL=http://localhost:5223
-NEXT_PUBLIC_USE_MOCK=false
-```
-
-### `project-proculink\.env.local` (gitignored)
-```
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
-NEXT_PUBLIC_SENTRY_DSN=
-```
+Frontend: `project-proculink/.env` (committed: `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_USE_MOCK=false`,
+…) and `.env.local` (gitignored: Clerk keys, Sentry DSN).
 
 ## Key links
 - Frontend: https://github.com/dimnovare/project-proculink
