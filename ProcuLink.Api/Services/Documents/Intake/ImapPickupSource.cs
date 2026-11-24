@@ -89,7 +89,8 @@ public sealed class ImapPickupSource(OutboundRequestGuard guard, DocumentEngineG
             {
                 var senders = m.Envelope.From.Mailboxes.Select(b => b.Address).ToList();
                 if (!Matches(fromFilter, subjectFilter, senders, m.Envelope.Subject)) continue;
-                var unconfirmed = !SenderAuthentication.Mailbox(m.Headers?.Select(h => (h.Field, h.Value)) ?? []);
+                // MimeKit's HeaderList keeps the message's order, so the first Authentication-Results is the topmost.
+                var unconfirmed = !SenderAuthentication.Mailbox(m.Headers?.Select(h => (h.Field, h.Value)) ?? [], senders.FirstOrDefault());
 
                 var readable = m.Attachments.Where(a => Readable(a.FileName, accepted)).ToList();
                 var bodyOnly = readable.Count == 0 && accepted.Contains("txt");

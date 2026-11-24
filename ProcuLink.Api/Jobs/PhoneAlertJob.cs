@@ -123,7 +123,7 @@ public class PhoneAlertJob(ProcuLinkDbContext db, IPhoneAlertSender sender, Docu
     {
         "needs-you" => n == 1 ? "1 document needs you" : $"{n} documents need you",
         "send-failed" => n == 1 ? "1 document couldn't be sent" : $"{n} documents couldn't be sent",
-        "new-address" => n == 1 ? "A first document from a new email address waits for you." : $"{n} first documents from new email addresses wait for you.",
+        "new-address" => n == 1 ? "A document from an email address we haven't confirmed waits for you." : $"{n} documents from email addresses we haven't confirmed wait for you.",
         _ => $"{(today == 1 ? "1 document today" : $"{today} documents today")}, {n switch { 0 => "none need you", 1 => "1 needs you", _ => $"{n} need you" }}",
     };
 }

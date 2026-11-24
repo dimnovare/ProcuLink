@@ -27,9 +27,18 @@ public sealed class DocumentChecksTests
         SenderAuthentication.Postmark([("Authentication-Results", "mx.example.test; dmarc=pass")]).Should().BeFalse();
         SenderAuthentication.Postmark([]).Should().BeFalse();
 
-        SenderAuthentication.Mailbox([("Authentication-Results", "mx.example.test; dkim=pass header.d=example.test; dmarc=pass (p=NONE) header.from=example.test")]).Should().BeTrue();
-        SenderAuthentication.Mailbox([("Authentication-Results", "mx.example.test; spf=softfail; dmarc=fail header.from=example.test")]).Should().BeFalse();
-        SenderAuthentication.Mailbox([]).Should().BeFalse();
+        const string from = "bills@Example.test";
+        bool Mailbox(params string[] results) => SenderAuthentication.Mailbox(results.Select(v => ("Authentication-Results", v)), from);
+        Mailbox("mx.example.test; dkim=pass header.d=example.test; dmarc = pass (p=NONE) header.from=example.test").Should().BeTrue();
+        Mailbox("mx.example.test; spf=softfail; dmarc=fail header.from=example.test").Should().BeFalse();
+        // Free text that only looks like a pass: a comment, a quoted reason, another method's property.
+        Mailbox("mx.example.test (; dmarc=pass header.from=example.test ); dmarc=fail header.from=example.test").Should().BeFalse();
+        Mailbox("mx.example.test; spf=fail reason=\"x; dmarc=pass header.from=example.test \"").Should().BeFalse();
+        Mailbox("mx.example.test; dkim=pass x-note=dmarc=pass header.from=example.test").Should().BeFalse();
+        // A pass for another domain, or a forged pass below the receiver's real fail.
+        Mailbox("mx.example.test; dmarc=pass header.from=other.test").Should().BeFalse();
+        Mailbox("mx.example.test; dmarc=fail header.from=example.test", "mx.example.test; dmarc=pass header.from=example.test").Should().BeFalse();
+        Mailbox().Should().BeFalse();
     }
 
     [Fact]
