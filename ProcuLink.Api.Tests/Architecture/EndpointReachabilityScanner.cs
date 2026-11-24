@@ -226,7 +226,8 @@ public static class EndpointReachabilityScanner
 
         foreach (var wrapper in Wrappers(joined))
         {
-            var use = new Regex(@"\b" + Regex.Escape(wrapper) + @"\s*(?:<[^;{}]*?>)?\s*\(\s*[`""'](/[^`""'\s\\]*)");
+            // The type argument may hold one level of braces: apiFetch<Summary & { alsoMoved?: number }>(…).
+            var use = new Regex(@"\b" + Regex.Escape(wrapper) + @"\s*(?:<(?:[^;{}]|\{[^;{}]*\})*?>)?\s*\(\s*[`""'](/[^`""'\s\\]*)");
             foreach (Match m in use.Matches(joined)) hits.Add((m.Index, "/api" + m.Groups[1].Value));
         }
 
