@@ -19,7 +19,7 @@ public class OutlookPickupSourceTests
 {
 
     /// <summary>Stands in for Graph: answers by method and path, and records every request.</summary>
-    private sealed class FakeGraph : HttpMessageHandler, IHttpClientFactory
+    private sealed class FakeGraph(Dictionary<string, Func<HttpResponseMessage>>? routes = null) : HttpMessageHandler, IHttpClientFactory
     {
         public readonly List<(HttpMethod Method, string Url, string? Auth, string Prefer, string? Body)> Requests = [];
 
@@ -34,11 +34,14 @@ public class OutlookPickupSourceTests
                 request.Content is null ? null : await request.Content.ReadAsStringAsync(ct)));
             if (request.Method == HttpMethod.Patch) return new HttpResponseMessage(HttpStatusCode.OK);
             var path = request.RequestUri.AbsolutePath;
+            if (routes?.GetValueOrDefault(path) is { } route) return route();
+            // m-1 carries a lower, older Authentication-Results that fails: Graph lists headers top down, and the topmost decides.
             return path switch
             {
                 "/v1.0/me/mailFolders/inbox/messages" when url.Contains("$skip=50") => Json("""
                     {"value":[{"id":"m-1","subject":"Invoice","hasAttachments":true,"from":{"emailAddress":{"address":"billing@example.com"}},
-                      "internetMessageHeaders":[{"name":"Authentication-Results","value":"spf=pass smtp.mailfrom=example.com; dmarc=pass action=none header.from=example.com"}]}]}
+                      "internetMessageHeaders":[{"name":"Authentication-Results","value":"spf=pass smtp.mailfrom=example.com; dmarc=pass action=none header.from=example.com"},
+                        {"name":"Authentication-Results","value":"spf=fail smtp.mailfrom=example.com; dmarc=fail header.from=example.com"}]}]}
                     """),
                 "/v1.0/me/mailFolders/inbox/messages" => Json("""
                     {"value":[{"id":"m-0","subject":"News","hasAttachments":true,"from":{"emailAddress":{"address":"news@other.test"}}}],
@@ -64,13 +67,11 @@ public class OutlookPickupSourceTests
             Task.FromResult(new LinkedAccessToken(provider == LinkedAccountProviders.Outlook ? "at-1" : null, null));
     }
 
-    [Fact]
-    public async Task Outlook_session_lists_matching_unread_mail_across_pages_and_marks_only_done_mail_read()
+    private static Task<IPickupSession> Open(FakeGraph graph)
     {
         var org = Guid.NewGuid();
         var gate = new DocumentEngineGate(Options.Create(new DocumentEngineOptions { EnabledOrgIds = [org.ToString()], NativeConnectorOrgIds = [org.ToString()] }));
         var outlook = new MicrosoftOAuthClient(MicrosoftProfile.Mailbox, null!, Options.Create(new MicrosoftOptions { ClientId = "c", ClientSecret = "s" }));
-        var graph = new FakeGraph();
         var source = new OutlookPickupSource(graph, new FakeTokens(), new LinkedAccountAvailability(gate, [outlook], Options.Create(new GoogleOptions())), gate);
         var intake = new FlowIntake
         {
@@ -78,7 +79,14 @@ public class OutlookPickupSourceTests
             ConfigJson = $$"""{"accountId":"{{Guid.NewGuid()}}","folder":"Inbox","fromFilter":"example.com","subjectFilter":""}""",
         };
 
-        using var session = await source.OpenAsync(intake, JsonDocument.Parse("{}").RootElement, default);
+        return source.OpenAsync(intake, JsonDocument.Parse("{}").RootElement, default);
+    }
+
+    [Fact]
+    public async Task Outlook_session_lists_matching_unread_mail_across_pages_and_marks_only_done_mail_read()
+    {
+        var graph = new FakeGraph();
+        using var session = await Open(graph);
         var files = await session.ListAsync(default);
 
         graph.Requests[0].Url.Should().Contain("$filter=isRead eq false");
@@ -91,5 +99,34 @@ public class OutlookPickupSourceTests
             .Which.Should().Match<(HttpMethod, string Url, string?, string, string? Body)>(r =>
                 r.Url == "https://graph.microsoft.com/v1.0/me/messages/m-1" && r.Body == """{"isRead":true}""");
         graph.Requests.Should().NotContain(r => r.Url.Contains("m-0"), "a mail the filters skip is never opened or marked read");
+    }
+
+    [Fact]
+    public async Task A_message_Graph_cannot_open_stays_unread_and_the_rest_are_picked_up()
+    {
+        static HttpResponseMessage Json(string json) => new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+        var graph = new FakeGraph(new()
+        {
+            // m-3 comes without headers, so they are fetched for it alone.
+            ["/v1.0/me/mailFolders/inbox/messages"] = () => Json("""
+                {"value":[{"id":"m-2","subject":"Broken","hasAttachments":true,"from":{"emailAddress":{"address":"broken@example.com"}},"internetMessageHeaders":[]},
+                          {"id":"m-3","subject":"Order","hasAttachments":true,"from":{"emailAddress":{"address":"orders@example.com"}}}]}
+                """),
+            ["/v1.0/me/messages/m-2/attachments"] = () => new HttpResponseMessage(HttpStatusCode.InternalServerError),
+            ["/v1.0/me/messages/m-3"] = () => Json("""
+                {"internetMessageHeaders":[{"name":"Authentication-Results","value":"spf=pass smtp.mailfrom=example.com; dmarc=pass header.from=example.com"}]}
+                """),
+            ["/v1.0/me/messages/m-3/attachments"] = () => Json("""
+                {"value":[{"@odata.type":"#microsoft.graph.fileAttachment","id":"a-9","name":"order.pdf","isInline":false}]}
+                """),
+        });
+        using var session = await Open(graph);
+
+        var files = await session.ListAsync(default);
+        await session.MarkDoneAsync(files.Single(), default);
+
+        files.Should().Equal(new PickupFile("outlook:m-3#a-9", "order.pdf", "orders@example.com"));
+        (await session.SettleAsync(default)).Should().Equal("An email from broken@example.com couldn't be opened, so it stays unread for the next try.");
+        graph.Requests.Where(r => r.Method == HttpMethod.Patch).Select(r => r.Url).Should().Equal("https://graph.microsoft.com/v1.0/me/messages/m-3");
     }
 }

@@ -133,7 +133,9 @@ public sealed class FlowIntakeService(
         }
 
         var configJson = kind == IntakeKind.Email ? null : Normalize(kind, req.Config, existing?.ConfigJson ?? "{}");
-        if (kind == IntakeKind.Outlook) await CheckOutlookAccountAsync(orgId, configJson!, ct);
+        // Checked on create and when the account changes, so a saved pickup can still be switched off while Microsoft is off.
+        if (kind == IntakeKind.Outlook && (existing is null || AccountOf(existing.ConfigJson) != AccountOf(configJson!)))
+            await CheckOutlookAccountAsync(orgId, configJson!, ct);
         var newCredentials = req.Credentials is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) };
         if (existing is not null && configJson is not null)
         {
@@ -179,11 +181,13 @@ public sealed class FlowIntakeService(
         return existing;
     }
 
-    /// <summary>Before anything is added or changed: the flag is on, and the account is this org's Outlook mailbox account (never a Google one).</summary>
+    private static string? AccountOf(string configJson) => JsonNode.Parse(configJson)?["accountId"]?.GetValue<string>();
+
+    /// <summary>On create or a new account: the flag is on, and the account is this org's Outlook mailbox account (never a Google one).</summary>
     private async Task CheckOutlookAccountAsync(Guid orgId, string configJson, CancellationToken ct)
     {
         if (!availability.On(orgId, LinkedAccountProviders.Outlook)) throw new IntakeException("unsupported_intake");
-        if (!Guid.TryParse(JsonNode.Parse(configJson)!["accountId"]!.GetValue<string>(), out var accountId)
+        if (!Guid.TryParse(AccountOf(configJson), out var accountId)
             || !await db.LinkedAccounts.AnyAsync(a => a.OrgId == orgId && a.Id == accountId && a.Provider == LinkedAccountProviders.Outlook, ct))
             throw new IntakeException("invalid_intake", "Choose a connected Microsoft account.");
     }

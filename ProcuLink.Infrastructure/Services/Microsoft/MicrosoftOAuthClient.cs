@@ -72,7 +72,7 @@ public sealed class MicrosoftOAuthClient(MicrosoftProfile profile, IHttpClientFa
         return new OAuthGrant(
             Str(body, "access_token") ?? throw new OAuthException(OAuthException.Unavailable),
             Str(body, "refresh_token"),
-            Str(body, "scope") ?? profile.Scopes); // no scope in the answer means what was asked for
+            Str(body, "scope") ?? ""); // no scope in the answer is no permission, never everything asked for
     }
 
     public async Task<OAuthUser> GetUserAsync(string accessToken, CancellationToken ct)
