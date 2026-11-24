@@ -8,7 +8,10 @@ using ProcuLink.Core.Services.Security;
 
 namespace ProcuLink.Infrastructure.Services.Google;
 
-/// <summary>R7: refreshes on every call. The only write is flipping a revoked account to <c>reconnect</c>.</summary>
+/// <summary>
+/// R7: refreshes on every call. It writes only a revoked account's <c>reconnect</c> status and a rotated refresh token,
+/// and saves when it does, so callers resolve a token before they change any entity on the same context.
+/// </summary>
 public sealed class LinkedAccountTokens(
     ProcuLinkDbContext db, DeliveryEncryptionService encryption, IEnumerable<ILinkedAccountOAuth> oauth, ILogger<LinkedAccountTokens> logger)
     : ILinkedAccountTokens
@@ -39,16 +42,27 @@ public sealed class LinkedAccountTokens(
             return Failed(ReconnectMessage(provider), DeliveryOutcome.NotRetryable);
 
         OAuthRefresh refresh;
-        try { refresh = await client.RefreshAsync(ReadRefreshToken(encryption, account), ct); }
+        string stored = "";
+        try { refresh = await client.RefreshAsync(stored = ReadRefreshToken(encryption, account), ct); }
         catch (HttpRequestException ex)
         {
             logger.LogWarning("{Provider} token refresh failed for linked account {AccountId} (HTTP {Status}).", provider, accountId, (int?)ex.StatusCode);
             return Failed(UnavailableMessage(provider), DeliveryOutcome.Dispatched, (int?)ex.StatusCode);
         }
         catch (CredentialUnbindableException) { refresh = new OAuthRefresh(null, Revoked: true); } // only a reconnect re-seals it
-        if (refresh.AccessToken is { } token) return new LinkedAccessToken(token, null);
+        if (refresh.AccessToken is { } token)
+        {
+            // Microsoft rotates the refresh token on every refresh (R7); losing it would let the account die silently in 90 days.
+            if (!string.IsNullOrWhiteSpace(refresh.RefreshToken) && refresh.RefreshToken != stored)
+            {
+                SealRefreshToken(encryption, account, refresh.RefreshToken);
+                account.UpdatedAt = DateTime.UtcNow;
+                await db.SaveChangesAsync(ct);
+            }
+            return new LinkedAccessToken(token, null);
+        }
 
-        // Delivery dispatches with no pending changes on this scoped context, so this saves only the status.
+        // Callers resolve a token before they change anything on this scoped context, so this saves only the account.
         account.Status = LinkedAccountStatus.Reconnect;
         account.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);

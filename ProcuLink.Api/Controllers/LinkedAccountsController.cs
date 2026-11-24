@@ -35,7 +35,12 @@ public sealed class LinkedAccountsController(
     public async Task<IActionResult> List(CancellationToken ct)
     {
         if (Refuse() is { } refused) return refused;
-        return Ok(new { available = availability.On(tenant.OrganisationId, LinkedAccountProviders.Google), accounts = await connect.ListAsync(tenant.OrganisationId, ct) });
+        return Ok(new
+        {
+            available = availability.On(tenant.OrganisationId, LinkedAccountProviders.Google),
+            microsoftAvailable = availability.On(tenant.OrganisationId, LinkedAccountProviders.Outlook),
+            accounts = await connect.ListAsync(tenant.OrganisationId, ct),
+        });
     }
 
     [HttpPost("{provider}/start")]

@@ -88,6 +88,12 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
         new GoogleOAuthClient(null!, Microsoft.Extensions.Options.Options.Create(new GoogleOptions { ClientId = "test-client-id", ClientSecret = "test-client-secret" })),
         new("at-1", "rt-1", $"openid email {GoogleOAuthClient.DriveFileScope}"));
 
+    /// <summary>Replaces the Microsoft mailbox <see cref="ILinkedAccountOAuth"/> (provider <c>outlook</c>).</summary>
+    public FakeOAuthClient Outlook { get; } = new(
+        new ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOAuthClient(ProcuLink.Infrastructure.Services.Microsoft.MicrosoftProfile.Mailbox, null!,
+            Microsoft.Extensions.Options.Options.Create(new ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOptions { ClientId = "test-client", ClientSecret = "test-secret" })),
+        new("at-1", "rt-1", "https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/User.Read"));
+
     /// <summary>Replaces <see cref="IBackgroundJobClient"/>; tests count the jobs created.</summary>
     public Mock<IBackgroundJobClient> Jobs { get; } = new();
 
@@ -130,6 +136,8 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             ["Google:ClientSecret"] = "test-client-secret",
             ["Google:PickerApiKey"] = "test-picker-key",
             ["Google:ProjectNumber"] = "123456",
+            ["Microsoft:ClientId"] = "test-client",
+            ["Microsoft:ClientSecret"] = "test-secret",
         }));
 
         builder.ConfigureServices(services =>
@@ -170,6 +178,7 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             foreach (var d in services.Where(d => d.ServiceType == typeof(ILinkedAccountOAuth)).ToList())
                 services.Remove(d);
             services.AddSingleton<ILinkedAccountOAuth>(Google);
+            services.AddSingleton<ILinkedAccountOAuth>(Outlook);
             services.AddSingleton(Storage.Object);
             services.AddSingleton(Jobs.Object);
 
