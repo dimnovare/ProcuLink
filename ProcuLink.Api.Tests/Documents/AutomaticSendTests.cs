@@ -263,6 +263,47 @@ public sealed class AutomaticSendTests(DocumentEngineTestFactory factory, Postgr
         Held(await CheckAsync(auto, IntakeKind.Email, "pickup@example.test")).Should().BeTrue();
     }
 
+    [Fact]
+    public async Task An_unconfirmed_sender_waits_even_when_known_and_sending_it_trusts_nobody()
+    {
+        var now = DateTime.UtcNow;
+        var (from, stranger) = ($"signed-{Guid.NewGuid():N}@example.test", $"forged-{Guid.NewGuid():N}@example.test");
+        var auto = new Flow
+        {
+            Id = Guid.NewGuid(), OrgId = Org, Name = "Synthetic flow", FieldsConfirmed = true, Automation = FlowAutomation.Auto, CreatedAt = now, UpdatedAt = now,
+            FieldsJson = DocumentJson.Serialize(FlowFieldList.Empty),
+        };
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        db.Flows.Add(auto);
+        var rechecker = new DocumentRechecker(db, new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), Mock.Of<IStandardValidator>());
+
+        async Task<FlowDocument> CheckAsync(string sender, bool unconfirmed, string status = DocumentStatus.Received)
+        {
+            var doc = new FlowDocument
+            {
+                Id = Guid.NewGuid(), OrgId = Org, FlowId = auto.Id, FileName = "synthetic.csv", ContentType = "text/csv", SourceFileKey = "k",
+                Source = IntakeKind.Email, SourceRef = sender, SenderUnconfirmed = unconfirmed, Status = status, CreatedAt = now, UpdatedAt = now,
+            };
+            db.FlowDocuments.Add(doc);
+            if (status == DocumentStatus.Received) await rechecker.ApplyAsync(doc, auto, new ReadResult("Invoice", []), CancellationToken.None);
+            await db.SaveChangesAsync();
+            return doc;
+        }
+        string? Hold(FlowDocument doc) => DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).SingleOrDefault(c => c.Code == DocumentChecks.NewSender && !c.Passed)?.Message;
+
+        // A known address: confirmed passes, unconfirmed (a forged From of it) waits with its own sentence.
+        await CheckAsync(from, unconfirmed: false, DocumentStatus.Sent);
+        Hold(await CheckAsync(from, unconfirmed: false)).Should().BeNull();
+        var forged = await CheckAsync(from, unconfirmed: true);
+        Hold(forged).Should().Be($"We couldn't confirm this email really came from {from}. Check it before sending.");
+        forged.Status.Should().Be(DocumentStatus.NeedsReview);
+
+        // An unconfirmed document a person sent makes nobody trusted.
+        await CheckAsync(stranger, unconfirmed: true, DocumentStatus.Sent);
+        Hold(await CheckAsync(stranger, unconfirmed: false)).Should().StartWith("First document from this email address");
+    }
+
     /// <summary>
     /// An automatic flow with one output, holding one earlier document of a kind no other test uses (the class shares OrgA's data),
     /// and an inbox document of that kind from a new sender. Reads it twice: in the inbox, then in the flow it was sorted into.

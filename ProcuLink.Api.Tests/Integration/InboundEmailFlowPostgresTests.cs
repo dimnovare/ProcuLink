@@ -188,7 +188,7 @@ public sealed class InboundEmailFlowPostgresTests(PostgresContainerFixture postg
     {
         public Task<FlowSubmitResult> SubmitAsync(
             Guid orgId, Guid flowId, Stream content, string fileName, string contentType,
-            string source, string? sourceRef, string? userId, CancellationToken ct) => throw new IOException("storage down");
+            string source, string? sourceRef, string? userId, CancellationToken ct, bool senderUnconfirmed) => throw new IOException("storage down");
 
         public IReadOnlyList<string> AcceptedFormats(Guid orgId) => DocumentFormats.Base;
     }
@@ -200,7 +200,7 @@ public sealed class InboundEmailFlowPostgresTests(PostgresContainerFixture postg
 
         public async Task<FlowSubmitResult> SubmitAsync(
             Guid orgId, Guid flowId, Stream content, string fileName, string contentType,
-            string source, string? sourceRef, string? userId, CancellationToken ct)
+            string source, string? sourceRef, string? userId, CancellationToken ct, bool senderUnconfirmed)
         {
             await using var db = new ProcuLinkDbContext(options);
             var now = DateTime.UtcNow;

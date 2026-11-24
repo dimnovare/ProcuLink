@@ -172,7 +172,8 @@ public sealed class InboundEmailController : ControllerBase
             // Postmark's own MessageID is stable across its retry schedule (ten attempts over
             // ~10.5 hours), which is exactly what makes it the dedupe key for this channel: a
             // re-delivery of the message that already produced an order carries the same value.
-            ProviderMessageId: body.MessageID);
+            ProviderMessageId: body.MessageID,
+            SenderConfirmed: SenderAuthentication.Postmark(body.Headers?.Select(h => (h.Name ?? "", h.Value ?? "")) ?? []));
 
         // ── 4. Delegate to router ────────────────────────────────────────────
         var result = await _router.RouteAsync(payload, ct);
@@ -497,7 +498,7 @@ public sealed class InboundEmailController : ControllerBase
 
     /// <summary>
     /// Subset of the Postmark Inbound JSON we actually consume. Postmark sends
-    /// many more fields (Headers, MessageStream, Tag, etc.) — we ignore them.
+    /// many more fields (MessageStream, Tag, etc.) — we ignore them.
     /// JsonNumberHandling allows the size field to be a number-or-string.
     /// </summary>
     public sealed class PostmarkInboundPayload
@@ -513,6 +514,14 @@ public sealed class InboundEmailController : ControllerBase
         [JsonPropertyName("TextBody")] public string? TextBody { get; set; }
         [JsonPropertyName("HtmlBody")] public string? HtmlBody { get; set; }
         [JsonPropertyName("Attachments")] public List<PostmarkInboundAttachment>? Attachments { get; set; }
+        /// <summary>The message headers, Postmark's spam check results among them.</summary>
+        [JsonPropertyName("Headers")] public List<PostmarkHeader>? Headers { get; set; }
+    }
+
+    public sealed class PostmarkHeader
+    {
+        [JsonPropertyName("Name")] public string? Name { get; set; }
+        [JsonPropertyName("Value")] public string? Value { get; set; }
     }
 
     public sealed class PostmarkAddress

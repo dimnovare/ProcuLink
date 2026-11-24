@@ -14,6 +14,25 @@ public sealed class DocumentChecksTests
         new(f.Select(x => new FlowField(x.Key, x.Label, x.Type, null, true)).ToList());
 
     [Fact]
+    public void Only_the_receiving_sides_signature_check_confirms_a_sender()
+    {
+        // Postmark's inbound JSON, synthetic: its spam check says the DKIM signature is the From domain's.
+        var body = System.Text.Json.JsonSerializer.Deserialize<ProcuLink.Api.Controllers.InboundEmailController.PostmarkInboundPayload>(
+            """{"From":"bills@example.test","Headers":[{"Name":"X-Spam-Status","Value":"No"},{"Name":"X-Spam-Tests","Value":"DKIM_SIGNED,DKIM_VALID,DKIM_VALID_AU,SPF_PASS"}]}""")!;
+        SenderAuthentication.Postmark(body.Headers!.Select(h => (h.Name!, h.Value!))).Should().BeTrue();
+
+        // A forger adds a passing copy, but cannot remove Postmark's own, which found no From-domain signature.
+        SenderAuthentication.Postmark([("X-Spam-Tests", "DKIM_VALID_AU"), ("X-Spam-Tests", "DKIM_SIGNED,DKIM_VALID,SPF_PASS")]).Should().BeFalse();
+        // Postmark writes no Authentication-Results, so one there was written by the sender.
+        SenderAuthentication.Postmark([("Authentication-Results", "mx.example.test; dmarc=pass")]).Should().BeFalse();
+        SenderAuthentication.Postmark([]).Should().BeFalse();
+
+        SenderAuthentication.Mailbox([("Authentication-Results", "mx.example.test; dkim=pass header.d=example.test; dmarc=pass (p=NONE) header.from=example.test")]).Should().BeTrue();
+        SenderAuthentication.Mailbox([("Authentication-Results", "mx.example.test; spf=softfail; dmarc=fail header.from=example.test")]).Should().BeFalse();
+        SenderAuthentication.Mailbox([]).Should().BeFalse();
+    }
+
+    [Fact]
     public void Parser_accepts_locale_numbers_and_dates()
     {
         foreach (var (text, expected) in new[]

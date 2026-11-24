@@ -38,13 +38,15 @@ public interface IInboundEmailRouter
 /// re-delivery apart from a genuinely new message. Null/blank when a provider does not supply one;
 /// the per-attachment content hash then carries the dedupe on its own.
 /// </param>
+/// <param name="SenderConfirmed">The provider's signature check confirmed the From address; false when it did not or said nothing.</param>
 public sealed record InboundEmailPayload(
     string FromEmail,
     string ToEmail,
     string Subject,
     IReadOnlyList<InboundAttachment> Attachments,
     string? Body = null,
-    string? ProviderMessageId = null);
+    string? ProviderMessageId = null,
+    bool SenderConfirmed = false);
 
 /// <summary>
 /// Whether the webhook adapter could turn this attachment's wire encoding into bytes.
