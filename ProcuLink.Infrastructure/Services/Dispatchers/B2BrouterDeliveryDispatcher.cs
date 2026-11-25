@@ -80,7 +80,7 @@ public sealed class B2BrouterDeliveryDispatcher(IHttpClientFactory http, ILogger
 
         var type = contentType.Split(';')[0].Trim().ToLowerInvariant();
         if (!EInvoiceTypes.Contains(type))
-            return Final("This destination takes e-invoice files only: Peppol BIS, EN 16931 CII, XRechnung or Factur-X. Choose an e-invoice output for it.");
+            return Final("This destination takes e-invoice files only: Peppol BIS, EN 16931 CII, XRechnung or Factur-X. Choose an e-invoice file for it.");
 
         HttpResponseMessage imported;
         try

@@ -105,6 +105,9 @@ public class TrackedSourceOperationalDataGuardTests
         "google_drive", "google_sheets", "microsoft_onedrive",
         // A national e-invoicing system run by a public authority (plan 33): a channel every Polish issuer uses, not a party.
         "ksef",
+        // An e-invoicing provider's API used as a destination through the customer's own account (plan 35): a platform, like
+        // "google_drive", not a trading party. Production rows will carry it, so it is approved on purpose.
+        "b2brouter",
         // Auth mechanisms that earn a dedicated vendor fetcher.
         "aes2fa",
         // TLS/transport version tokens, which share the word in an unrelated sense.
