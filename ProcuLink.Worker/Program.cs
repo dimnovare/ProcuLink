@@ -182,7 +182,7 @@ builder.Services.AddHttpClient(ProcuLink.Infrastructure.Services.Google.GoogleOA
 builder.Services.AddScoped<ProcuLink.Core.Services.Google.ILinkedAccountOAuth, ProcuLink.Infrastructure.Services.Google.GoogleOAuthClient>();
 // Microsoft accounts (plan 30). Blank Microsoft config = feature invisible. One app, one provider key per consent: outlook (mail), microsoft (files).
 builder.Services.Configure<ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOptions>(builder.Configuration.GetSection(ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOptions.Section));
-builder.Services.AddHttpClient(ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOAuthClient.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(30)); // fixed Microsoft hosts: no OutboundRequestGuard
+builder.Services.AddHttpClient(ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOAuthClient.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(30)).RemoveAllLoggers(); // fixed Microsoft hosts: no OutboundRequestGuard. No request logging: a /shares URI carries the pasted sharing link
 builder.Services.AddScoped<ProcuLink.Core.Services.Google.ILinkedAccountOAuth>(sp => new ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOAuthClient(
     ProcuLink.Infrastructure.Services.Microsoft.MicrosoftProfile.Mailbox, sp.GetRequiredService<IHttpClientFactory>(),
     sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOptions>>()));
