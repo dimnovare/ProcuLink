@@ -203,7 +203,7 @@ public class ReadDocumentJob(
         // A ZUGFeRD / Factur-X / XRechnung PDF carries the invoice as data: that is the read, exact, with no AI call. Data can differ from
         // what is printed (an IBAN, a total, a seller), so a header value the page does not show is not taken: the page is read instead.
         var embedded = isPdf && EmbeddedInvoice.Read(bytes, expected) is { } data ? Located(data, words) : null;
-        if (embedded?.Fields.Any(f => !string.IsNullOrWhiteSpace(f.Value) && f.Location is null && EmbeddedInvoice.PrintedAsIs(f.Type)) == true)
+        if (embedded?.Fields.Any(f => !string.IsNullOrWhiteSpace(f.Value) && f.Location is null && EmbeddedInvoice.PrintedAsIs(f.Meaning)) == true)
         {
             logger.LogWarning("Document {DocumentId} carries invoice data the page does not show; the page is read instead.", doc.Id);
             embedded = null;
@@ -294,15 +294,15 @@ public class ReadDocumentJob(
         var anyLocated = onWords && results.Any(r => r.Fields.Any(f => f.Location is not null)
             || r.Tables.Any(t => t.Rows.Any(row => row.Cells.Values.Any(c => c.Location is not null))));
         // Embedded invoice data writes dates and codes in its own form, which the page need not print.
-        bool Miss(string? value, SourceLocation? loc, string type) => anyLocated && !string.IsNullOrWhiteSpace(value) && loc is null
-            && (embedded is null || EmbeddedInvoice.PrintedAsIs(type));
+        bool Miss(string? value, SourceLocation? loc, string? meaning) => anyLocated && !string.IsNullOrWhiteSpace(value) && loc is null
+            && (embedded is null || EmbeddedInvoice.PrintedAsIs(meaning));
 
         var merged = ReadMerge.Merge(results, expected);
         var read = new ReadResult(merged.KindLabel,
-            merged.Fields.Select(f => f with { NotOnPage = Miss(f.Value, f.Location, f.Type) }).ToList(),
+            merged.Fields.Select(f => f with { NotOnPage = Miss(f.Value, f.Location, f.Meaning) }).ToList(),
             merged.Tables.Select(t => t with
             {
-                Rows = t.Rows.Select(row => new ReadRow(row.Cells.ToDictionary(c => c.Key, c => c.Value with { NotOnPage = Miss(c.Value.Value, c.Value.Location, t.Columns.FirstOrDefault(x => x.Key == c.Key)?.Type ?? FieldTypes.Text) }))).ToList(),
+                Rows = t.Rows.Select(row => new ReadRow(row.Cells.ToDictionary(c => c.Key, c => c.Value with { NotOnPage = Miss(c.Value.Value, c.Value.Location, t.Columns.FirstOrDefault(x => x.Key == c.Key)?.Meaning) }))).ToList(),
             }).ToList(),
             truncated || merged.Truncated);
 

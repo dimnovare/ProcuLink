@@ -139,11 +139,14 @@ public static class EmbeddedInvoice
     }
 
     /// <summary>
-    /// Whether a value of this type is printed as the data writes it, so it must be found on the page. A date (ISO here), a code
-    /// (country, unit, scheme) and a currency code need not be printed in that form. An amount is compared as a number, but only
-    /// when the page prints it as one word: "1 500,00" is not found, and the page is then read instead (the safe side).
+    /// Whether a value with this meaning is printed as the data writes it, so it must be found on the page. Decided by the meaning the
+    /// value was read under (its spec above), never by a flow field's configurable type. Only dates (ISO here), the currency code,
+    /// country codes and the line unit code need not be printed in that form; every other value, endpoint ids included, must be.
+    /// An amount is compared as a number, but only when the page prints it as one word: "1 500,00" is not found, and the page is
+    /// then read instead (the safe side).
     /// </summary>
-    public static bool PrintedAsIs(string type) => type is not (T.Date or T.Code or T.Currency);
+    public static bool PrintedAsIs(string? meaning) => meaning is not (M.IssueDate or M.DueDate or M.DeliveryDate or M.Currency
+        or M.SenderCountry or M.ReceiverCountry or M.DeliveryCountry or M.LineUnit);
 
     /// <summary>
     /// A listed field or column takes the value of its meaning, or else of the meaning its key or label names (FieldMeanings.Aliases).
