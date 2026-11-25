@@ -112,20 +112,21 @@ public sealed class FlowDestinationService(
     private static string KsefConfig(string configJson, FlowDestination? existing, string? credentials, string? userId)
     {
         var json = (JsonObject)JsonNode.Parse(configJson)!;
+        // A destination changed to KSeF from another protocol is new to KSeF: it starts on Test or Demo and needs its own token.
+        var before = existing?.Protocol == DeliveryProtocolConstants.Ksef ? JsonNode.Parse(existing.ConfigJson) as JsonObject : null;
         var environment = Text(json, "environment");
         if (environment is not ("test" or "demo" or "production"))
             throw new DestinationException("invalid_destination", "Choose the KSeF environment: Test, Demo or Production.");
         if (!PolishNip.IsValid(Text(json, "nip"))) throw new DestinationException("invalid_destination", "Enter a valid Polish NIP (10 digits).");
         json["nip"] = PolishNip.Normalize(Text(json, "nip"));
-        if (existing is null && credentials is null) throw new DestinationException("invalid_destination", "Paste a KSeF token.");
+        if (before is null && credentials is null) throw new DestinationException("invalid_destination", "Paste a KSeF token.");
         var accepted = json["acceptedIssuerTerms"] is JsonValue a && a.TryGetValue<bool>(out var yes) && yes;
         foreach (var key in new[] { "acceptedIssuerTerms", "checkOnly", "productionConfirmedBy", "productionConfirmedAt" }) json.Remove(key);
         if (environment != "production") return json.ToJsonString();
 
-        if (existing is null)
+        if (before is null)
             throw new DestinationException("invalid_destination", "A new KSeF destination starts on Test or Demo. Switch it to Production once you have checked a test invoice.");
-        var before = existing.Protocol == DeliveryProtocolConstants.Ksef ? JsonNode.Parse(existing.ConfigJson) as JsonObject : null;
-        if (before is not null && Text(before, "environment") == "production" && Text(before, "nip") == json["nip"]!.GetValue<string>() && !accepted)
+        if (Text(before, "environment") == "production" && Text(before, "nip") == json["nip"]!.GetValue<string>() && !accepted)
         {
             json["productionConfirmedBy"] = before["productionConfirmedBy"]?.DeepClone();
             json["productionConfirmedAt"] = before["productionConfirmedAt"]?.DeepClone();

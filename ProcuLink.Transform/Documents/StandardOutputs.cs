@@ -61,6 +61,8 @@ public static class StandardOutputs
         FieldMeanings.SenderCountry, FieldMeanings.SenderStreet, FieldMeanings.SenderPostcode, FieldMeanings.SenderCity,
         FieldMeanings.ReceiverName, FieldMeanings.ReceiverVatId, FieldMeanings.TotalNet, FieldMeanings.TotalTax, FieldMeanings.TotalGross,
         FieldMeanings.LineDescription, FieldMeanings.LineQuantity, FieldMeanings.LineUnitPrice, FieldMeanings.LineAmount,
+        // Each line's own rate, read as a percent: a header rate (tax ÷ net) may be a blend of several, so it is never used here.
+        FieldMeanings.LineTaxRate,
     ];
 
     private const string XRechnungCustomization = "urn:cen.eu:en16931:2017#compliant#urn:xeinkauf.de:kosit:xrechnung_3.0";

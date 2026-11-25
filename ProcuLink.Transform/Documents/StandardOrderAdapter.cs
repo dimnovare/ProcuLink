@@ -141,6 +141,7 @@ public static partial class StandardOrderAdapter
         FieldMeanings.TotalNet or FieldMeanings.TotalTax or FieldMeanings.TotalGross or FieldMeanings.LineAmount
             => FieldValueParser.Number(value) is not null,
         FieldMeanings.SenderEndpointId or FieldMeanings.ReceiverEndpointId => ElectronicAddress().IsMatch(value),
+        FieldMeanings.LineTaxRate => FieldValueParser.Percent(value) is not null,
         _ => true,
     };
 

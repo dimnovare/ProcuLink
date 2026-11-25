@@ -41,7 +41,7 @@ public class KsefSendTests(DocumentEngineTestFactory factory) : IClassFixture<Do
     private static ProcuLinkDbContext Db(IServiceScope scope) => scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
 
     /// <summary>A flow whose KSeF invoice file output goes to a KSeF destination in <paramref name="environment"/>, and one read document.</summary>
-    private async Task<(Guid DocId, Guid OutputId)> Seed(string environment)
+    private async Task<(Guid DocId, Guid OutputId, Guid DestinationId)> Seed(string environment)
     {
         var flow = new Flow
         {
@@ -67,7 +67,7 @@ public class KsefSendTests(DocumentEngineTestFactory factory) : IClassFixture<Do
         var db = Db(scope);
         db.AddRange(flow, destination, output, doc);
         await db.SaveChangesAsync();
-        return (doc.Id, output.Id);
+        return (doc.Id, output.Id, destination.Id);
     }
 
     private Task<HttpResponseMessage> Send(Guid docId, string? confirm = null) =>
@@ -107,12 +107,18 @@ public class KsefSendTests(DocumentEngineTestFactory factory) : IClassFixture<Do
         }
         (await Detail(await http.PutAsJsonAsync($"/api/destinations/{id}", Body(new { environment = "prod", nip = "1111111111" }))))
             .Should().Be("Choose the KSeF environment: Test, Demo or Production.");
+
+        // An existing destination changed to KSeF from another protocol is new to KSeF: it cannot go straight to Production.
+        var hook = await http.PostAsJsonAsync("/api/destinations", new { name = "Hook", protocol = "http", config = new { url = "https://hooks.example.test/in" } });
+        var hookId = (await hook.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        (await Detail(await http.PutAsJsonAsync($"/api/destinations/{hookId}", Body(new { environment = "production", nip = "1111111111", acceptedIssuerTerms = true }))))
+            .Should().Be("A new KSeF destination starts on Test or Demo. Switch it to Production once you have checked a test invoice.");
     }
 
     [Fact]
     public async Task Production_send_needs_a_person_who_saw_this_file()
     {
-        var (docId, _) = await Seed("production");
+        var (docId, _, _) = await Seed("production");
         using (var scope = factory.Services.CreateScope())
         {
             var doc = await Db(scope).FlowDocuments.SingleAsync(d => d.Id == docId);
@@ -156,13 +162,68 @@ public class KsefSendTests(DocumentEngineTestFactory factory) : IClassFixture<Do
             (await Db(scope).AuditEvents.CountAsync(a => a.EntityId == docId && a.Action == "document.ksef_issue_confirmed")).Should().Be(1);
     }
 
+    [Fact]
+    public async Task A_production_reference_survives_a_test_send_and_still_blocks_production()
+    {
+        var (docId, outputId, destinationId) = await Seed("test");
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = Db(scope);
+            db.Set<FlowDelivery>().Add(new FlowDelivery
+            {
+                Id = Guid.NewGuid(), OrgId = Org, DocumentId = docId, OutputId = outputId, OutputName = "KSeF invoice file", Protocol = "ksef",
+                Status = FlowDeliveryStatus.DeadLetter, RemoteReference = "INV-1", RemoteEnvironment = "production", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        (await Send(docId)).StatusCode.Should().Be(HttpStatusCode.OK);   // a Test send needs no confirm, and queues a fresh row
+        var rows = await Deliveries(docId);
+        rows.Should().HaveCount(2).And.ContainSingle(d => d.RemoteReference == "INV-1" && d.RemoteEnvironment == "production");
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = Db(scope);
+            (await db.Set<FlowDestination>().SingleAsync(d => d.Id == destinationId)).ConfigJson = "{\"environment\":\"production\",\"nip\":\"1111111111\"}";
+            var doc = await db.FlowDocuments.SingleAsync(d => d.Id == docId);
+            doc.Status = DocumentStatus.Ready;
+            db.RemoveRange(await db.Set<FlowDelivery>().Where(d => d.DocumentId == docId && d.RemoteReference == null).ToListAsync());   // the Test row went
+            await db.SaveChangesAsync();
+        }
+        (await (await Send(docId)).Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString().Should().Be("ksef_already_issued");
+    }
+
+    [Fact]
+    public async Task Two_KSeF_files_never_go_to_Production_from_one_document()
+    {
+        var (docId, outputId, destinationId) = await Seed("production");
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = Db(scope);
+            var first = await db.Set<FlowOutput>().AsNoTracking().SingleAsync(o => o.Id == outputId);
+            db.Add(new FlowOutput
+            {
+                Id = Guid.NewGuid(), OrgId = Org, FlowId = first.FlowId, Name = "Second KSeF file", Format = FlowOutputFormats.Xml,
+                Standard = "ksef-fa-3", TableKey = "lines", TemplateJson = "{}", DestinationId = destinationId, CreatedAt = DateTime.UtcNow.AddSeconds(1),
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var answer = await Send(docId);
+
+        answer.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        (await answer.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("detail").GetString()
+            .Should().Be("Only one KSeF invoice file can go to KSeF Production from a document.");
+        (await Deliveries(docId)).Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData("production", Issued, "ksef_already_issued")]
     [InlineData("production", "INV-1", "ksef_already_issued")]   // KSeF took it, outcome unknown: maybe issued
     [InlineData("test", Issued, "ksef_confirm")]                 // a TEST issue does not block production
     public async Task A_document_issued_in_production_is_never_issued_again(string issuedIn, string reference, string expected)
     {
-        var (docId, outputId) = await Seed("production");
+        var (docId, outputId, _) = await Seed("production");
         using (var scope = factory.Services.CreateScope())
         {
             var db = Db(scope);

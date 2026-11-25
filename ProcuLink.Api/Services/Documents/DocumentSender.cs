@@ -159,6 +159,9 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
             var delivery = existing.FirstOrDefault(d => d.OutputId == r.Output.Id);
             if (delivery?.Status is FlowDeliveryStatus.Delivered or FlowDeliveryStatus.Stored or FlowDeliveryStatus.Queued or FlowDeliveryStatus.Delivering)
                 continue;
+            // A row KSeF Production may already hold is kept as history, never reused: its reference keeps the document from Production.
+            if (delivery is { RemoteEnvironment: "production", RemoteReference: not null })
+                (delivery.OutputId, delivery) = (null, null);
             if (delivery is null)
             {
                 delivery = new FlowDelivery
@@ -227,6 +230,8 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
             .Where(d => FlowDestinationService.KsefEnvironment(d) == "production").Select(d => d.Id).ToHashSet();
         var files = rendered.Where(r => r.Output.DestinationId is { } id && production.Contains(id)).ToList();
         if (files.Count == 0) return null;
+        if (files.Count > 1)
+            return new(Refuse("output_invalid", new OutputFailure(files[1].Output.Name, "Only one KSeF invoice file can go to KSeF Production from a document.")), [], null);
 
         var issued = await db.Set<FlowDelivery>().AsNoTracking()
             .Where(d => d.OrgId == doc.OrgId && d.DocumentId == doc.Id && d.RemoteEnvironment == "production" && d.RemoteReference != null)

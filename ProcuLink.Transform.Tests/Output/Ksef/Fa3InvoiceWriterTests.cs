@@ -87,6 +87,9 @@ public class Fa3InvoiceWriterTests
         "The line amounts add up to 273.00, but the document's net total is 250.00. Check the lines and totals before making the KSeF file.")]
     [InlineData("line1.Amount", "101.00", "Line 1: 2 × 50.00 is 100.00, but the line amount is 101.00. Check the line before making the KSeF file.")]
     [InlineData("VAT", "51.00", "The VAT worked out from the lines is 50.00, but the document's VAT total is 51.00.")]
+    // No line has a readable rate, and the totals blend to exactly 8 %: never issued as P_12=8 from the header.
+    [InlineData("line1.VAT rate|line2.VAT rate|line3.VAT rate|VAT|Gross", "zw|zw|zw|20.00|270.00",
+        "This standard needs VAT rate (line 1).")]
     public async Task KSeF_file_refuses_what_it_cannot_prove(string keys, string values, string expectedDetail)
     {
         var render = await Render(Fixture([.. keys.Split('|').Zip(values.Split('|'))]));

@@ -64,7 +64,9 @@ public class DeliverDocumentJob(
             // Queued for one KSeF environment (and confirmed for Production only there): never sent to another.
             deadLetter = "This KSeF destination was switched to another environment after this invoice was queued. Nothing was sent. Send the document again to check and confirm it.";
         else if (reclaimed && (dispatcher.ResendSafety == ResendSafety.Unsafe || DeliveryRepair.CannotRepairItsOwnFile(config!)))
-            deadLetter = "This may already have been sent. Check with the recipient before sending again.";
+            deadLetter = destination.Protocol == DeliveryProtocolConstants.Ksef
+                ? "KSeF may have received the invoice, but we couldn't confirm the result. Check it in Aplikacja Podatnika KSeF before sending again; sending again may issue it twice."
+                : "This may already have been sent. Check with the recipient before sending again.";
         else
             try { credentials = destinations.DecryptCredentials(destination); }
             catch (CredentialUnbindableException) { deadLetter = "Destination credentials could not be decrypted."; }
