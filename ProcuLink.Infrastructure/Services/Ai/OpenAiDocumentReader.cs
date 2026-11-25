@@ -240,7 +240,9 @@ public sealed class OpenAiDocumentReader : IDocumentReader
                 return new ReadColumn(columnKey, c.Label, Type(c.Type), Pinned(expected?.Tables.FirstOrDefault(x => x.Key == key)?.Columns.FirstOrDefault(x => x.Key == columnKey)?.Meaning, c.Meaning));
             }).ToList();
             // A heading printed as two words ("UNIT PRICE") split into an empty "UNIT" column and "PRICE": one column, named as printed.
-            // A real "Unit" column has values, so a "Unit | Unit price" table is left alone.
+            // A real "Unit" column has values, so a "Unit | Unit price" table is left alone. Only a column with values takes in its
+            // empty neighbour: when no cell lands in any column, the whole printed header line must not fold into one column.
+            bool Filled(string column) => (t.Rows ?? []).Any(r => (r.Cells ?? []).Any(c => columnKeys.GetValueOrDefault(c.Column) == column && !string.IsNullOrWhiteSpace(c.Value)));
             for (var i = columns.Count - 2; i >= 0; i--)
             {
                 var (first, next) = (columns[i], columns[i + 1]);
@@ -248,7 +250,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
                 if (text?.Contains(joined, StringComparison.OrdinalIgnoreCase) == true
                     && !next.Label.StartsWith(first.Label, StringComparison.OrdinalIgnoreCase)
                     && expected?.Tables.FirstOrDefault(x => x.Key == key)?.Columns.Any(x => x.Key == first.Key) != true
-                    && (t.Rows ?? []).All(r => (r.Cells ?? []).All(c => columnKeys.GetValueOrDefault(c.Column) != first.Key || string.IsNullOrWhiteSpace(c.Value))))
+                    && !Filled(first.Key) && Filled(next.Key))
                 {
                     columns[i + 1] = next with { Label = joined };
                     columns.RemoveAt(i);

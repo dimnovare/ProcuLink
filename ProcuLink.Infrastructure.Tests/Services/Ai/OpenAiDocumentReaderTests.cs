@@ -124,15 +124,17 @@ public class OpenAiDocumentReaderTests
     [Fact]
     public void A_two_word_heading_split_into_an_empty_column_is_one_column_again()
     {
-        static OpenAiDocumentReader.ReadDto Table(string first, string? firstValue, string next) => new("Invoice", [],
+        static OpenAiDocumentReader.ReadDto Table(string first, string? firstValue, string next, string? nextValue = "50.00") => new("Invoice", [],
             [new("lines", "Lines",
                 [new("unit", first, "text", null), new("price", next, "money", FieldMeanings.LineUnitPrice)],
-                [new([new("unit", firstValue, 1), new("price", "50.00", 1)])])]);
+                [new([new("unit", firstValue, 1), new("price", nextValue, 1)])])]);
         static List<string> Labels(OpenAiDocumentReader.ReadDto dto, string text) =>
             OpenAiDocumentReader.Map(dto, null, text).Tables.Single().Columns.Select(c => c.Label).ToList();
 
         Labels(Table("UNIT", null, "PRICE"), "CODE QTY UNIT PRICE AMOUNT").Should().Equal("UNIT PRICE");
         Labels(Table("Unit", "pcs", "Unit price"), "Qty Unit Unit price").Should().Equal("Unit", "Unit price"); // a real unit column
+        // Live 2026-11-25: cells that land in no column left every column empty, and the whole header line folded into one.
+        Labels(Table("Kood", null, "Hind", null), "Kood Hind").Should().Equal("Kood", "Hind");
     }
 
     [Fact]
