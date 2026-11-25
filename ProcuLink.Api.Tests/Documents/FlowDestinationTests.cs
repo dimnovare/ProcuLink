@@ -86,7 +86,7 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
     {
         await using var db = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
         var service = new FlowDestinationService(db, null!, [],
-            Availability());
+            Availability(), null!);
         using var config = JsonDocument.Parse("""{"accountId":"x","folderId":"f"}""");
 
         var act = () => service.SaveAsync(OrgA, null, new DestinationRequest("d", "google_drive", config.RootElement, null), default);
@@ -117,6 +117,51 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
         (await inUse.Content.ReadAsStringAsync()).Should().Contain("account_in_use");
     }
 
+    private sealed class FakeLinks : ProcuLink.Core.Services.Microsoft.IMicrosoftDriveLinks
+    {
+        public int Calls;
+        public Task<ProcuLink.Core.Services.Microsoft.DriveItemRef> ResolveAsync(Guid orgId, Guid accountId, string link, CancellationToken ct)
+        {
+            Calls++;
+            return Task.FromResult(new ProcuLink.Core.Services.Microsoft.DriveItemRef("drive-1", "item-1", "Orders"));
+        }
+    }
+
+    [Fact]
+    public async Task Microsoft_destination_resolves_its_link_and_refuses_other_accounts()
+    {
+        await using var db = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        Guid Seed(string provider)
+        {
+            var account = new LinkedAccount { Id = Guid.NewGuid(), OrgId = OrgA, Provider = provider, Subject = "sub-" + provider, Email = "user@example.com" };
+            db.LinkedAccounts.Add(account);
+            return account.Id;
+        }
+        var (ms, google, outlook) = (Seed("microsoft"), Seed("google"), Seed("outlook"));
+        await db.SaveChangesAsync();
+        var files = new ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOAuthClient(ProcuLink.Infrastructure.Services.Microsoft.MicrosoftProfile.Files, null!,
+            Options.Create(new ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOptions { ClientId = "c", ClientSecret = "s" }));
+        var gate = new DocumentEngineGate(Options.Create(new DocumentEngineOptions { EnabledOrgIds = [OrgA.ToString()], NativeConnectorOrgIds = [OrgA.ToString()] }));
+        var links = new FakeLinks();
+        var service = new FlowDestinationService(db, null!, [], new LinkedAccountAvailability(gate, [files], Options.Create(new GoogleOptions())), links);
+        DestinationRequest Req(object config) =>
+            new("OneDrive", "microsoft_onedrive", JsonSerializer.SerializeToElement(config), null);
+
+        var saved = await service.SaveAsync(OrgA, null, Req(new { accountId = ms, link = "https://contoso.sharepoint.com/:f:/s/team/EaBc1", driveId = "forged" }), default);
+        var stored = JsonDocument.Parse(saved.ConfigJson).RootElement;
+        stored.GetProperty("driveId").GetString().Should().Be("drive-1");
+        stored.GetProperty("itemName").GetString().Should().Be("Orders");
+        stored.TryGetProperty("link", out _).Should().BeFalse();
+
+        var kept = await service.SaveAsync(OrgA, saved.Id, Req(new { accountId = ms }), default);
+        JsonDocument.Parse(kept.ConfigJson).RootElement.GetProperty("itemId").GetString().Should().Be("item-1");
+
+        foreach (var wrong in new[] { google, outlook }) // the mailbox account must not save files either
+            (await FluentActions.Awaiting(() => service.SaveAsync(OrgA, saved.Id, Req(new { accountId = wrong, link = "https://1drv.ms/f/s!x" }), default))
+                .Should().ThrowAsync<DestinationException>()).Which.Message.Should().Be("Choose a connected Microsoft account.");
+        links.Calls.Should().Be(1);
+    }
+
     private sealed class SheetsFake : HttpMessageHandler, IHttpClientFactory, ILinkedAccountTokens
     {
         public readonly List<(HttpMethod Method, string Url)> Requests = [];
@@ -143,7 +188,7 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
         await db.SaveChangesAsync();
         var service = new FlowDestinationService(db, null!,
             [new GoogleSheetsDeliveryDispatcher(fake, fake, NullLogger<GoogleSheetsDeliveryDispatcher>.Instance)],
-            Availability());
+            Availability(), null!);
 
         var result = await service.TestAsync(OrgA, d.Id, default);
 

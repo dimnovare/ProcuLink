@@ -42,6 +42,9 @@ public static class DeliveryProtocolConstants
     /// <summary>Google Sheets append (plan 9b), through a <c>LinkedAccount</c>. Flow destinations only.</summary>
     public const string GoogleSheets = "google_sheets";
 
+    /// <summary>OneDrive folder (plan 30), through a Microsoft <c>LinkedAccount</c>. Flow destinations only.</summary>
+    public const string MicrosoftOneDrive = "microsoft_onedrive";
+
     public static readonly string[] All =
     [
         Http,
@@ -55,7 +58,8 @@ public static class DeliveryProtocolConstants
         ErpDirecto,
         Manual,
         GoogleDrive,
-        GoogleSheets
+        GoogleSheets,
+        MicrosoftOneDrive
     ];
 
     /// <summary>
