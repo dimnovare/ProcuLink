@@ -157,9 +157,10 @@ public class KsefSendTests(DocumentEngineTestFactory factory) : IClassFixture<Do
     }
 
     [Theory]
-    [InlineData("production", "ksef_already_issued")]
-    [InlineData("test", "ksef_confirm")]   // a TEST issue does not block production
-    public async Task A_document_issued_in_production_is_never_issued_again(string issuedIn, string expected)
+    [InlineData("production", Issued, "ksef_already_issued")]
+    [InlineData("production", "INV-1", "ksef_already_issued")]   // KSeF took it, outcome unknown: maybe issued
+    [InlineData("test", Issued, "ksef_confirm")]                 // a TEST issue does not block production
+    public async Task A_document_issued_in_production_is_never_issued_again(string issuedIn, string reference, string expected)
     {
         var (docId, outputId) = await Seed("production");
         using (var scope = factory.Services.CreateScope())
@@ -168,7 +169,7 @@ public class KsefSendTests(DocumentEngineTestFactory factory) : IClassFixture<Do
             db.Set<FlowDelivery>().Add(new FlowDelivery
             {
                 Id = Guid.NewGuid(), OrgId = Org, DocumentId = docId, OutputId = outputId, OutputName = "KSeF invoice file", Protocol = "ksef",
-                Status = FlowDeliveryStatus.Delivered, RemoteReference = Issued, RemoteEnvironment = issuedIn, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+                Status = FlowDeliveryStatus.Delivered, RemoteReference = reference, RemoteEnvironment = issuedIn, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
             });
             await db.SaveChangesAsync();
         }
@@ -176,7 +177,7 @@ public class KsefSendTests(DocumentEngineTestFactory factory) : IClassFixture<Do
         var answer = await (await Send(docId)).Content.ReadFromJsonAsync<JsonElement>();
 
         answer.GetProperty("error").GetString().Should().Be(expected);
-        if (expected == "ksef_already_issued") answer.GetProperty("ksefNumber").GetString().Should().Be(Issued);
+        if (expected == "ksef_already_issued") answer.GetProperty("ksefNumber").GetString().Should().Be(reference == Issued ? Issued : null);
         (await Deliveries(docId)).Should().ContainSingle();
     }
 }

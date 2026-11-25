@@ -21,7 +21,7 @@ public sealed record OutputFailure(string Output, string? Detail);
 public sealed record KsefConfirmDetail(IReadOnlyList<KsefSummary> Summaries, string Confirm);
 
 /// <summary>The document already has this production KSeF number, so it is never issued again.</summary>
-public sealed record KsefIssuedDetail(string KsefNumber);
+public sealed record KsefIssuedDetail(string? KsefNumber);
 
 public sealed record SendOutcome(string? Error, object? Detail, IReadOnlyList<FlowDelivery> Deliveries)
 {
@@ -173,6 +173,9 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
             delivery.OutputName = r.Output.Name;
             delivery.DestinationId = destination?.Id;
             delivery.Protocol = destination?.Protocol ?? "";
+            // A KSeF delivery is bound to the environment it was checked (and, for Production, confirmed) for.
+            (delivery.RemoteEnvironment, delivery.RemoteReference, delivery.ReceiptKey) =
+                (destination?.Protocol == Core.Constants.DeliveryProtocolConstants.Ksef ? FlowDestinationService.KsefEnvironment(destination) : null, null, null);
             delivery.DispatchKey = Guid.NewGuid();
             delivery.ArtifactKey = $"{doc.OrgId}/documents/{doc.Id}/outputs/{delivery.DispatchKey}{r.Extension}";
             delivery.ContentType = r.ContentType;
@@ -209,6 +212,8 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
 
     private sealed record KsefIssue(SendOutcome? Refusal, IReadOnlyList<KsefSummary> Summaries, string? Confirm);
 
+    private static readonly System.Text.RegularExpressions.Regex KsefNumber = new(@"^\d{10}-\d{8}-[0-9A-F]{12}-[0-9A-F]{2}$");
+
     /// <summary>
     /// For outputs routed to a KSeF Production destination: refused when the document already has a production KSeF number, or when
     /// such an output is not the KSeF invoice file; otherwise the preview and the hash a person must confirm (one file's hash, or the
@@ -219,14 +224,16 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
         var ids = rendered.Select(r => r.Output.DestinationId).OfType<Guid>().Distinct().ToList();
         var production = (await db.Set<FlowDestination>().AsNoTracking()
                 .Where(d => d.OrgId == doc.OrgId && ids.Contains(d.Id) && d.Protocol == Core.Constants.DeliveryProtocolConstants.Ksef).ToListAsync(ct))
-            .Where(d => System.Text.Json.Nodes.JsonNode.Parse(d.ConfigJson)?["environment"]?.ToString() == "production").Select(d => d.Id).ToHashSet();
+            .Where(d => FlowDestinationService.KsefEnvironment(d) == "production").Select(d => d.Id).ToHashSet();
         var files = rendered.Where(r => r.Output.DestinationId is { } id && production.Contains(id)).ToList();
         if (files.Count == 0) return null;
 
         var issued = await db.Set<FlowDelivery>().AsNoTracking()
             .Where(d => d.OrgId == doc.OrgId && d.DocumentId == doc.Id && d.RemoteEnvironment == "production" && d.RemoteReference != null)
             .Select(d => d.RemoteReference).FirstOrDefaultAsync(ct);
-        if (issued is not null) return new(Refuse("ksef_already_issued", new KsefIssuedDetail(issued)), [], null);
+        // Issued, or possibly issued (a reference KSeF gave before the outcome was known): never sent to Production again.
+        if (issued is not null)
+            return new(Refuse("ksef_already_issued", new KsefIssuedDetail(KsefNumber.IsMatch(issued) ? issued : null)), [], null);
         if (files.FirstOrDefault(r => r.Output.Standard != "ksef-fa-3") is { } other)
             return new(Refuse("output_invalid", new OutputFailure(other.Output.Name, "A KSeF destination can only send the KSeF invoice file.")), [], null);
 

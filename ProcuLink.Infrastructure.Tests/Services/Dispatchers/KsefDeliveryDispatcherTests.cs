@@ -23,7 +23,7 @@ public class KsefDeliveryDispatcherTests
     private const string AccessToken = "fake-access-token-SECRET";
 
     /// <summary>Stands in for KSeF behind the "ksef" client; serves one self-signed RSA certificate for both usages and records every request.</summary>
-    private sealed class FakeKsef(int invoiceStatus = 200, int authStatus = 200) : HttpMessageHandler, IHttpClientFactory
+    private sealed class FakeKsef(int invoiceStatus = 200, int authStatus = 200, string invoiceAnswer = """{"referenceNumber":"INV-1"}""") : HttpMessageHandler, IHttpClientFactory
     {
         public readonly RSA Key = RSA.Create(2048);
         public readonly List<(HttpMethod Method, string Path, string Body)> Requests = [];
@@ -48,7 +48,7 @@ public class KsefDeliveryDispatcherTests
                 _ when path.EndsWith("/auth/AUTH-1") => Json("{\"status\":{\"code\":" + authStatus + ",\"description\":\"status\"}}"),
                 _ when path.EndsWith("/auth/token/redeem") => Json("{\"accessToken\":{\"token\":\"" + AccessToken + "\"},\"refreshToken\":{\"token\":\"r\"}}"),
                 _ when path.EndsWith("/sessions/online") => Json("""{"referenceNumber":"SES-1","validUntil":"2026-11-25T11:00:00Z"}""", HttpStatusCode.Created),
-                _ when path.EndsWith("/sessions/online/SES-1/invoices") => Json("""{"referenceNumber":"INV-1"}""", HttpStatusCode.Accepted),
+                _ when path.EndsWith("/sessions/online/SES-1/invoices") => Json(invoiceAnswer, HttpStatusCode.Accepted),
                 _ when path.EndsWith("/invoices/INV-1/upo") => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("<UPO/>", Encoding.UTF8, "application/xml") },
                 _ when path.EndsWith("/invoices/INV-1") => Json(invoiceStatus switch
                 {
@@ -111,14 +111,16 @@ public class KsefDeliveryDispatcherTests
             .Should().Be($"{Token}|1764064800000");
     }
 
-    [Fact]
-    public async Task Accepted_invoice_is_never_resubmitted()
+    [Theory]
+    [InlineData("""{"referenceNumber":"INV-1"}""", "INV-1")]   // still working when the poll budget ends
+    [InlineData("{}", "SES-1")]                                // accepted with no usable reference
+    public async Task Accepted_invoice_is_never_resubmitted(string answer, string reference)
     {
-        var ksef = new FakeKsef(invoiceStatus: 150);   // still working when the poll budget ends
+        var ksef = new FakeKsef(invoiceStatus: 150, invoiceAnswer: answer);
         var result = await Send(ksef, """{"environment":"test","nip":"1111111111"}""");
 
-        result.Outcome.Should().Be(DeliveryOutcome.NotRetryable);
-        result.ErrorMessage.Should().Contain("INV-1").And.Contain("sending again may issue it twice")
+        (result.Outcome, result.RemoteReference).Should().Be((DeliveryOutcome.NotRetryable, reference));
+        result.ErrorMessage.Should().Contain(reference).And.Contain("sending again may issue it twice")
             .And.NotContain(Token).And.NotContain(AccessToken);
         ksef.Requests.Count(r => r.Method == HttpMethod.Post && r.Path.EndsWith("/invoices")).Should().Be(1);
     }
@@ -142,6 +144,7 @@ public class KsefDeliveryDispatcherTests
             case "440":
                 result.Outcome.Should().Be(DeliveryOutcome.NotRetryable);
                 result.ErrorMessage.Should().Contain("KSeF number 1111111111-20261120-000000000000-01");
+                result.RemoteReference.Should().Be("1111111111-20261120-000000000000-01");
                 break;
             default:
                 (result.Success, result.RemoteReference, result.RemoteEnvironment).Should().Be((true, "1111111111-20261125-ABCDEF123456-7A", "test"));

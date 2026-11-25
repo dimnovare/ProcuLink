@@ -91,12 +91,12 @@ public sealed class KsefDeliveryDispatcher(KsefClient ksef, ILogger<KsefDelivery
             if (r.StatusCode == 200 && r.KsefNumber is { } number)
                 return new DeliveryResult(true, null, 200, RemoteReference: number, RemoteEnvironment: environment, Receipt: r.Upo);
             if (r.StatusCode == 440)
-                return Final($"KSeF already has an invoice with this number from this seller (KSeF number {r.OriginalKsefNumber}). Nothing new was issued.");
+                return Final($"KSeF already has an invoice with this number from this seller (KSeF number {r.OriginalKsefNumber}). Nothing new was issued.", r.OriginalKsefNumber);
             if (r.StatusCode is { } code && code != 200)
                 return Final($"KSeF rejected the invoice: {r.StatusText}");
             // Submitted, outcome unknown (or a 200 without a number): never sent again.
             return Final($"KSeF received the invoice (reference {r.InvoiceReference ?? r.SessionReference}) but we couldn't confirm the result. " +
-                "Check it in Aplikacja Podatnika KSeF before sending again; sending again may issue it twice.");
+                "Check it in Aplikacja Podatnika KSeF before sending again; sending again may issue it twice.", r.InvoiceReference ?? r.SessionReference);
         }
         catch (KsefRefusedException r)
         {
@@ -112,7 +112,9 @@ public sealed class KsefDeliveryDispatcher(KsefClient ksef, ILogger<KsefDelivery
     private static string BadToken(string nip) =>
         $"KSeF didn't accept the token. It may have expired or been revoked, or it isn't for NIP {nip}. Make a new token in Aplikacja Podatnika KSeF and save it on this destination.";
 
-    private static DeliveryResult Final(string message) => new(false, message, Outcome: DeliveryOutcome.NotRetryable);
+    /// <summary>A final failure. <paramref name="reference"/> is what KSeF may already hold, kept on the delivery so the document is never sent again.</summary>
+    private static DeliveryResult Final(string message, string? reference = null) =>
+        new(false, message, Outcome: DeliveryOutcome.NotRetryable, RemoteReference: reference);
 
     private DeliveryResult Transient(Exception ex)
     {

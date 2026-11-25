@@ -150,7 +150,10 @@ public sealed class KsefClient(IHttpClientFactory http, IOptions<KsefOptions> op
                 // Only a 4xx refusal or a 429 is certain not to have been taken.
                 return new KsefSendResult(true, null, null, null, null, session, null);
             }
-            invoiceRef = sent["referenceNumber"]!.GetValue<string>();
+            // Taken: from here nothing may throw into a retry. An answer with no usable reference is still taken.
+            if (sent?["referenceNumber"] is not JsonValue v || !v.TryGetValue<string>(out var r) || string.IsNullOrEmpty(r))
+                return new KsefSendResult(true, null, null, null, null, session, null);
+            invoiceRef = r;
             result = await StatusAsync(client, s, session, invoiceRef, ct);
         }
         catch (Exception) when (invoiceRef is not null)

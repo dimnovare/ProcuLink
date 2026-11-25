@@ -245,6 +245,13 @@ public sealed class FlowDestinationService(
         return last;
     }
 
+    /// <summary>A KSeF destination's environment as saved ("test", "demo", "production"), or null.</summary>
+    public static string? KsefEnvironment(FlowDestination d)
+    {
+        try { return JsonNode.Parse(d.ConfigJson)?["environment"] is JsonValue v && v.TryGetValue<string>(out var e) ? e : null; }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+
     public static SupplierDeliveryConfig ToDeliveryConfig(FlowDestination d, string flowName, bool test)
     {
         var json = JsonNode.Parse(d.ConfigJson) as JsonObject ?? new JsonObject();

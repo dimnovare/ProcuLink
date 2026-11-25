@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Services.Documents;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -59,6 +60,9 @@ public class DeliverDocumentJob(
         var credentials = "";
         if (destination is null) deadLetter = "The destination was removed.";
         else if (dispatcher is null) deadLetter = "No dispatcher for this destination.";
+        else if (destination.Protocol == DeliveryProtocolConstants.Ksef && FlowDestinationService.KsefEnvironment(destination) != delivery.RemoteEnvironment)
+            // Queued for one KSeF environment (and confirmed for Production only there): never sent to another.
+            deadLetter = "This KSeF destination was switched to another environment after this invoice was queued. Nothing was sent. Send the document again to check and confirm it.";
         else if (reclaimed && (dispatcher.ResendSafety == ResendSafety.Unsafe || DeliveryRepair.CannotRepairItsOwnFile(config!)))
             deadLetter = "This may already have been sent. Check with the recipient before sending again.";
         else
@@ -114,6 +118,7 @@ public class DeliverDocumentJob(
         else
         {
             delivery.LastError = result.ErrorMessage;
+            delivery.RemoteReference = result.RemoteReference ?? delivery.RemoteReference;   // what KSeF may already hold
             if (result.Outcome == DeliveryOutcome.NotRetryable || delivery.Attempts >= reliability.MaxAttempts)
                 delivery.Status = FlowDeliveryStatus.DeadLetter;
             else

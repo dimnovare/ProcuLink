@@ -28,7 +28,7 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
 
     private sealed class FakeDispatcher : IDeliveryDispatcher
     {
-        public string Protocol => "http";
+        public string Protocol { get; set; } = "http";
         public ResendSafety ResendSafety { get; set; } = ResendSafety.Safe;
         public List<Call> Calls { get; } = [];
         public DeliveryResult Result { get; set; } = new(true, null, 200);
@@ -112,6 +112,18 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
             .Where(i => i.Method.Name == nameof(IBackgroundJobClient.Create) && i.Arguments[0] is Job j && j.Type == typeof(FlowWebhookJob))
             .Select(i => (string)((Job)i.Arguments[0]).Args[2]);
 
+        /// <summary>Turns the seeded delivery into a KSeF one queued for <paramref name="queuedFor"/>, its destination now on <paramref name="destinationEnvironment"/>.</summary>
+        public async Task KsefAsync(string destinationEnvironment, string queuedFor)
+        {
+            Dispatcher.Protocol = "ksef";
+            await using var db = NewDb();
+            var d = await db.Set<FlowDelivery>().SingleAsync(x => x.Id == DeliveryId);
+            (d.Protocol, d.RemoteEnvironment) = ("ksef", queuedFor);
+            var dest = await db.Set<FlowDestination>().SingleAsync(x => x.Id == d.DestinationId);
+            (dest.Protocol, dest.ConfigJson) = ("ksef", "{\"environment\":\"" + destinationEnvironment + "\",\"nip\":\"1111111111\"}");
+            await db.SaveChangesAsync();
+        }
+
         /// <summary>Makes a failed delivery's backoff elapse.</summary>
         public async Task DueAsync() { await using var db = NewDb(); await db.Set<FlowDelivery>().Where(d => d.Id == DeliveryId).ExecuteUpdateAsync(s => s.SetProperty(d => d.NextAttemptAt, DateTime.UtcNow.AddSeconds(-1))); }
 
@@ -136,6 +148,33 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
         (d.Status, d.RemoteReference, d.RemoteEnvironment).Should().Be((FlowDeliveryStatus.Delivered, "1111111111-20261126-ABCDEF123456-7A", "test"));
         d.ReceiptKey.Should().NotBeNull();
         System.Text.Encoding.UTF8.GetString(h.Stored[d.ReceiptKey!]).Should().Be("<UPO/>");
+    }
+
+    [DockerRequiredFact]
+    public async Task A_ksef_delivery_is_not_sent_to_an_environment_it_was_not_queued_for()
+    {
+        var h = await SeedAsync();
+        await h.KsefAsync(destinationEnvironment: "production", queuedFor: "test");
+
+        await h.RunAsync();
+
+        h.Dispatcher.Calls.Should().BeEmpty();
+        var d = await h.DeliveryAsync();
+        (d.Status, d.LastError).Should().Be((FlowDeliveryStatus.DeadLetter,
+            "This KSeF destination was switched to another environment after this invoice was queued. Nothing was sent. Send the document again to check and confirm it."));
+    }
+
+    [DockerRequiredFact]
+    public async Task A_ksef_reference_is_kept_when_the_outcome_is_unknown()
+    {
+        var h = await SeedAsync();
+        await h.KsefAsync(destinationEnvironment: "production", queuedFor: "production");
+        h.Dispatcher.Result = new DeliveryResult(false, "unconfirmed", Outcome: DeliveryOutcome.NotRetryable, RemoteReference: "INV-1");
+
+        await h.RunAsync();
+
+        var d = await h.DeliveryAsync();
+        (d.Status, d.RemoteReference, d.RemoteEnvironment).Should().Be((FlowDeliveryStatus.DeadLetter, "INV-1", "production"));
     }
 
     [DockerRequiredFact]
