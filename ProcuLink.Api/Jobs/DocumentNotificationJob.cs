@@ -52,7 +52,7 @@ public class DocumentNotificationJob(ProcuLinkDbContext db, IEmailSender email, 
                     if (failed.Count(d => d.FlowName == name) is > 0 and var f) parts.Add($"{f} couldn't be read or sent");
                     return $"{name}: {string.Join(", ", parts)}";
                 });
-                var body = $"{string.Join("\n", lines)}\n\nOpen ProcuLink: {AppUrl()}\n\nYou get these emails because you switched them on in Settings → Notifications.";
+                var body = $"{string.Join("\n", lines)}\n\nOpen ProcuLink: {AppUrl(config)}\n\nYou get these emails because you switched them on in Settings → Notifications.";
                 try { await email.SendAsync(s.Email, total == 1 ? "ProcuLink: 1 document needs you" : $"ProcuLink: {total} documents need you", body, ct); }
                 catch (Exception ex) { log.LogError(ex, "Notification email failed for setting {SettingId}", s.Id); continue; }
             }
@@ -62,6 +62,6 @@ public class DocumentNotificationJob(ProcuLinkDbContext db, IEmailSender email, 
         await db.SaveChangesAsync(ct);
     }
 
-    private string AppUrl() =>
+    internal static string AppUrl(IConfiguration config) =>
         (config["Frontend:Url"] ?? "http://localhost:8082").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault()?.TrimEnd('/') ?? "http://localhost:8082";
 }

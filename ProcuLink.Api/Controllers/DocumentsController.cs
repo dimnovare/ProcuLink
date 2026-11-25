@@ -117,13 +117,7 @@ public sealed class DocumentsController(
         var orgId = tenant.OrganisationId;
         var docs = db.FlowDocuments.Where(d => d.OrgId == orgId);
         if (flowId is { } f) docs = docs.Where(d => d.FlowId == f);
-        if (status is not null)
-        {
-            var statuses = status.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-            docs = docs.Where(d => statuses.Contains(d.Status));
-            // The sample is never sent, so it never waits in Needs you; All still lists it.
-            if (statuses.Contains(DocumentStatus.NeedsReview) || statuses.Contains(DocumentStatus.Ready)) docs = docs.Where(d => !d.IsSample);
-        }
+        if (status is not null) docs = DocumentListRows.WithStatus(docs, status.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries));
         if (DocumentSearch.Matches(q) is { } match) docs = docs.Where(match);
         // The documents "Send it now" sends: stopped after their retries at this destination, with an output that still exists.
         if (waitingOnDestination is { } dest)
@@ -396,30 +390,15 @@ public sealed class DocumentsController(
         if (Refuse() is { } refused) return refused;
         var doc = await FindAsync(id, ct);
         if (doc is null) return NotFound(NotFoundBody);
-        if (doc.IsSample)
-            return Conflict(new { error = "sample_document", message = "This is our sample invoice, so it can't be sent. Add one of your own to send it." });
-        var outcome = await sender.SendAsync(doc, SendMode.Person, tenant.ClerkUserId, ct, body?.KsefConfirm);
-        if (outcome.Ok)
-        {
-            // A person sent it: its sort is confirmed. Best effort: the send is committed and is never answered as a failure.
-            try
-            {
-                await DocumentSort.ConfirmAsync(db, doc, CancellationToken.None);
-                await DocumentSort.SaveRememberedAsync(db, doc, CancellationToken.None);
-            }
-            catch (Exception)
-            {
-                // An id and a code only: the exception text can carry the sender and kind.
-                logger.LogWarning("Sort not confirmed after send for {DocumentId}: {Reason}", id, "confirm_failed");
-            }
-            return Ok(outcome.Deliveries.OrderBy(d => d.CreatedAt).Select(ToDeliveryDto));
-        }
+        var outcome = await sender.SendByHandAsync(doc, SendMode.Person, tenant.ClerkUserId, ct, body?.KsefConfirm);
+        if (outcome.Ok) return Ok(outcome.Deliveries.OrderBy(d => d.CreatedAt).Select(ToDeliveryDto));
         return outcome.Error switch
         {
             "output_invalid" when outcome.Detail is OutputFailure f => UnprocessableEntity(new { error = outcome.Error, output = f.Output, detail = f.Detail }),
             "output_invalid" => UnprocessableEntity(new { error = outcome.Error }),
             _ when outcome.Detail is KsefConfirmDetail k => Conflict(new { error = outcome.Error, summaries = k.Summaries, confirm = k.Confirm }),
             _ when outcome.Detail is KsefIssuedDetail i => Conflict(new { error = outcome.Error, ksefNumber = i.KsefNumber }),
+            "sample_document" => Conflict(new { error = outcome.Error, message = DocumentSender.SampleMessage }),
             _ => Conflict(new { error = outcome.Error }),
         };
     }

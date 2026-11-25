@@ -268,6 +268,10 @@ public sealed class EndpointReachabilityGuardTests
             ["MapScalarApiReference"] =
                 "The API reference UI, registered only in the non-production branch of Program.cs. "
                 + "Reached by a developer with a browser.",
+            ["MapMcp"] =
+                "2026-11-25 — MCP endpoint for AI assistants (ProcuLink.Api/Mcp/McpSetup.cs). The caller is the customer's AI "
+                + "client (Claude, ChatGPT, Cursor, VS Code) with an org API key or a Clerk OAuth token; the browser never calls "
+                + "it. Its tools call the same services as DocumentsController and FlowFilesController (McpToolsTests).",
         };
 
     /// <summary>
