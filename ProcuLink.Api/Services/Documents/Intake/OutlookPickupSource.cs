@@ -107,7 +107,7 @@ public sealed class OutlookPickupSource(
         {
             var files = new List<PickupFile>();
             var url = $"{Graph}me/mailFolders/{Uri.EscapeDataString(folder)}/messages?$filter={Uri.EscapeDataString("isRead eq false")}"
-                      + "&$select=id,subject,from,hasAttachments,internetMessageHeaders&$top=50";
+                      + "&$select=id,subject,from,hasAttachments&$top=50";
             for (var page = 0; page < MaxPages && url is not null; page++)
             {
                 var body = await graph.GetAsync(url, ct);
@@ -130,9 +130,8 @@ public sealed class OutlookPickupSource(
             var sender = m["from"]?["emailAddress"]?["address"]?.GetValue<string>();
             if (!ImapPickupSource.Matches(fromFilter, subjectFilter, new[] { sender }.OfType<string>(), m["subject"]?.GetValue<string>())) return;
             // Graph lists headers in the message's order (top down), so the first Authentication-Results is the topmost.
-            // A list item without them is asked again on its own; still none means unconfirmed, so the document waits.
-            var listed = m["internetMessageHeaders"]?.AsArray()
-                ?? (await graph.GetAsync($"{Graph}me/messages/{Uri.EscapeDataString(id)}?$select=internetMessageHeaders", ct))["internetMessageHeaders"]?.AsArray();
+            // The list leaves headers out (they made a large folder slow), so only a matching mail is asked for them; none means unconfirmed, so the document waits.
+            var listed = (await graph.GetAsync($"{Graph}me/messages/{Uri.EscapeDataString(id)}?$select=internetMessageHeaders", ct))["internetMessageHeaders"]?.AsArray();
             var headers = (listed ?? new JsonArray())
                 .Select(h => (h?["name"]?.GetValue<string>() ?? "", h?["value"]?.GetValue<string>() ?? ""));
             var unconfirmed = !SenderAuthentication.Mailbox(headers, sender);

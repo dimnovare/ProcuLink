@@ -293,7 +293,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
             var lookups = await DocumentLookups.LoadAsync(db, orgId, [template], ct);
             // A workbook is binary; its preview is the CSV text of the same grid (xlsx renders from the csv template).
             render = DocumentOutputRenderer.Render(format == FlowOutputFormats.Xlsx ? FlowOutputFormats.Csv : format,
-                template, read, tableKey, lookups, LayoutOf(output), output.Logo);
+                template, read, tableKey, lookups, LayoutOf(output), output.Logo, config.Fields.Tables);
         }
         if (!render.Ok) return UnprocessableEntity(new { error = render.Error, detail = render.Detail });
 
@@ -337,14 +337,14 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         var doc = await db.FlowDocuments.AsNoTracking().FirstOrDefaultAsync(d => d.OrgId == orgId && d.Id == documentId, ct);
         if (doc is null) return NotFound(new { error = "document_not_found" });
         var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
+        var flow = await db.Flows.AsNoTracking().FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == doc.FlowId, ct);
+        if (flow is null) return FlowNotFound();
         DocumentRender render;
         // A standard is filled by meaning from the live fields: the request's format, template and layout are ignored.
         if (request.Standard is { } standard)
         {
             var known = StandardOutputs.Find(standard);
             if (known is { Flagged: true } && !gate.PeppolOn(orgId)) return StatusCode(403, new { error = "peppol_off" });
-            var flow = await db.Flows.AsNoTracking().FirstOrDefaultAsync(f => f.OrgId == orgId && f.Id == doc.FlowId, ct);
-            if (flow is null) return FlowNotFound();
             if (request.Template?.Envelope is { } e && !PartnerIdsFit(e)) return Invalid("partner_ids");
             // A test reaches the partner's system too, and its duplicate check runs on tests: a fresh interchange number.
             var controlNumber = known?.NeedsControlNumber == true ? await InterchangeNumbers.NextAsync(db, ct) : (long?)null;
@@ -357,7 +357,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
 
             var lookups = await DocumentLookups.LoadAsync(db, orgId, [request.Template], ct);
             render = DocumentOutputRenderer.Render(request.Format,
-                request.Template, read, request.TableKey, lookups, request.Layout);
+                request.Template, read, request.TableKey, lookups, request.Layout, tables: (await FlowConfigLoader.LiveAsync(db, flow, ct)).Fields.Tables);
         }
         if (!render.Ok) return UnprocessableEntity(new { error = render.Error, detail = render.Detail });
 
