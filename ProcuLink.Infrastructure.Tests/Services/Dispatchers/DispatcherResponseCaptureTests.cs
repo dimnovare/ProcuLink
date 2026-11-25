@@ -51,6 +51,8 @@ public class DispatcherResponseCaptureTests
         { "microsoft_onedrive", false },
         // KSeF's own rejection text goes into the message verbatim; every refusal is final, never classified (plan 33).
         { "ksef", false },
+        // B2Brouter answers a refusal with a JSON error body; it is kept, truncated, for the person (plan 35).
+        { "b2brouter", true },
         { "smtp", false },
     };
 
@@ -195,6 +197,7 @@ public class DispatcherResponseCaptureTests
         new ErplyDeliveryDispatcher(new IErpConnector[] { new StubErpConnector("erp_erply") }),
         new DirectoDeliveryDispatcher(new IErpConnector[] { new StubErpConnector("erp_directo") }),
         new KsefDeliveryDispatcher(new ProcuLink.Infrastructure.Services.Ksef.KsefClient(new StubHttpClientFactory(), Microsoft.Extensions.Options.Options.Create(new ProcuLink.Infrastructure.Services.Ksef.KsefOptions())), NullLogger<KsefDeliveryDispatcher>.Instance),
+        new B2BrouterDeliveryDispatcher(new StubHttpClientFactory(), NullLogger<B2BrouterDeliveryDispatcher>.Instance),
     };
 
     /// <summary>A dispatcher that declares nothing — i.e. the one someone writes next.</summary>

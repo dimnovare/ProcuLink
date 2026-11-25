@@ -304,6 +304,7 @@ builder.Services.Configure<ProcuLink.Infrastructure.Services.Ksef.KsefOptions>(b
 builder.Services.AddHttpClient(ProcuLink.Infrastructure.Services.Ksef.KsefOptions.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(30)).RemoveAllLoggers();
 builder.Services.AddScoped<ProcuLink.Infrastructure.Services.Ksef.KsefClient>();
 builder.Services.AddScoped<IDeliveryDispatcher, KsefDeliveryDispatcher>();
+builder.Services.AddScoped<IDeliveryDispatcher, B2BrouterDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, OneDriveDeliveryDispatcher>();
 // Email delivery via HTTP email API — works where outbound SMTP is blocked.
 builder.Services.AddScoped<IDeliveryDispatcher, EmailApiDeliveryDispatcher>();

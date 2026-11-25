@@ -21,4 +21,7 @@ public sealed class LinkedAccountAvailability(DocumentEngineGate gate, IEnumerab
 
     /// <summary>Whether the org may create a KSeF destination (plan 33): the KSeF switch, like the destination's output.</summary>
     public bool KsefOn(Guid orgId) => gate.KsefOn(orgId);
+
+    /// <summary>Whether the org may create a B2Brouter destination (plan 35): the Peppol switch.</summary>
+    public bool PeppolOn(Guid orgId) => gate.PeppolOn(orgId);
 }

@@ -41,6 +41,8 @@ public class DispatcherResendSafetyTests
         { "erp_directo", ResendSafety.Unsafe },
         // Every send issues an invoice; KSeF's duplicate rule (440) is a backstop, not a dedupe (plan 33).
         { "ksef", ResendSafety.Unsafe },
+        // Whether B2Brouter refuses a re-import of the same number is unverified until the sandbox test (plan 35).
+        { "b2brouter", ResendSafety.Unsafe },
     };
 
     [Theory]
@@ -84,6 +86,7 @@ public class DispatcherResendSafetyTests
         new ErplyDeliveryDispatcher(new IErpConnector[] { new FakeErpConnector("erp_erply") }),
         new DirectoDeliveryDispatcher(new IErpConnector[] { new FakeErpConnector("erp_directo") }),
         new KsefDeliveryDispatcher(new ProcuLink.Infrastructure.Services.Ksef.KsefClient(new FakeHttpClientFactory(), Microsoft.Extensions.Options.Options.Create(new ProcuLink.Infrastructure.Services.Ksef.KsefOptions())), NullLogger<KsefDeliveryDispatcher>.Instance),
+        new B2BrouterDeliveryDispatcher(new FakeHttpClientFactory(), NullLogger<B2BrouterDeliveryDispatcher>.Instance),
     };
 
     // Minimal IHttpClientFactory double — HttpDeliveryDispatcher's constructor requires one but

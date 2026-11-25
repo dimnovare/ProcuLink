@@ -41,6 +41,7 @@ public sealed class LinkedAccountsController(
             microsoftAvailable = availability.On(tenant.OrganisationId, LinkedAccountProviders.Outlook),
             // The KSeF destination needs no linked account, only its switch; the destination form reads it here with the others.
             ksefAvailable = gate.KsefOn(tenant.OrganisationId),
+            peppolAvailable = gate.PeppolOn(tenant.OrganisationId),
             accounts = await connect.ListAsync(tenant.OrganisationId, ct),
         });
     }

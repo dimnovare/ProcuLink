@@ -150,11 +150,11 @@ public class DeliverDocumentJob(
                 .SetProperty(d => d.UpdatedAt, now), ct);
 
     /// <summary>
-    /// A KSeF dead letter that kept a reference: KSeF holds the invoice (a duplicate) or may (an unconfirmed outcome). Fixing the
+    /// A KSeF or B2Brouter dead letter that kept a reference: the network holds the invoice (a duplicate, or one it refused) or may (an unconfirmed outcome). Fixing the
     /// destination is the wrong advice for it, so it names no destination to fix.
     /// </summary>
     public static bool RemoteMayHold(string protocol, string status, string? remoteReference) =>
-        protocol == DeliveryProtocolConstants.Ksef && status == FlowDeliveryStatus.DeadLetter && remoteReference != null;
+        protocol is DeliveryProtocolConstants.Ksef or DeliveryProtocolConstants.B2Brouter && status == FlowDeliveryStatus.DeadLetter && remoteReference != null;
 
     public static void Enqueue(IBackgroundJobClient jobs, Guid deliveryId, Guid organisationId) =>
         jobs.Enqueue<DeliverDocumentJob>(j => j.ExecuteAsync(deliveryId, organisationId, CancellationToken.None));

@@ -228,6 +228,25 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
         (await s3.Content.ReadAsStringAsync()).Should().Contain("url_requires_tls");
     }
 
+    [Fact]
+    public async Task B2Brouter_destination_is_gated_and_never_echoes_the_key()
+    {
+        object Body(object? credentials) => new { name = "E-invoices", protocol = "b2brouter", config = new { account = "acc-1", sandbox = false }, credentials };
+        var off = await factory.ClientFor(OrgB).PostAsJsonAsync("/api/destinations", Body(new { apiKey = "test_k" })); // engine on, Peppol off
+        off.StatusCode.Should().Be((HttpStatusCode)422);
+        (await off.Content.ReadAsStringAsync()).Should().Contain("unsupported_destination");
+
+        var http = factory.ClientFor(OrgA);
+        var created = await http.PostAsJsonAsync("/api/destinations", Body(new { apiKey = "test_k" }));
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        var json = await created.Content.ReadAsStringAsync();
+        json.Should().NotContain("test_k").And.Contain("\"hasCredentials\":true").And.Contain("\"sandbox\":true");
+
+        (await (await http.PostAsJsonAsync("/api/destinations", Body(null))).Content.ReadAsStringAsync()).Should().Contain("invalid_destination");
+        (await (await http.PostAsJsonAsync("/api/destinations", Body(new { apiKey = "live_k" }))).Content.ReadAsStringAsync())
+            .Should().Contain("sandbox API key"); // sandbox keys only, for now
+    }
+
     private const string HeaderConfig = """{"url":"https://supplier.example/in","headers":{"Authorization":"Bearer t0ps3cret"}}""";
 
     /// <summary>The destination save path is the only caller of the delivery-config rules: each refusal is a 422 and writes nothing.</summary>
