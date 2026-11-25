@@ -682,8 +682,10 @@ public sealed class ReadDocumentJobTests
         VerifyTimeLimitLogged(log3, Times.Never());
     }
 
+    private const string PrintedIban = "DE00 1111 2222 3333 4444";
+
     // Made-up EN 16931 invoice: two lines, one VAT rate; the seller's tax number comes before its VAT id, as German invoices often have it.
-    private const string FacturX = """
+    private static string FacturXml(string iban) => $"""
         <rsm:CrossIndustryInvoice xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100" xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100" xmlns:udt="urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100">
         <rsm:ExchangedDocumentContext><ram:GuidelineSpecifiedDocumentContextParameter><ram:ID>urn:cen.eu:en16931:2017</ram:ID></ram:GuidelineSpecifiedDocumentContextParameter></rsm:ExchangedDocumentContext>
         <rsm:ExchangedDocument><ram:ID>FX-2026-0042</ram:ID><ram:TypeCode>380</ram:TypeCode><ram:IssueDateTime><udt:DateTimeString format="102">20261101</udt:DateTimeString></ram:IssueDateTime></rsm:ExchangedDocument>
@@ -692,36 +694,45 @@ public sealed class ReadDocumentJobTests
         <ram:IncludedSupplyChainTradeLineItem><ram:AssociatedDocumentLineDocument><ram:LineID>2</ram:LineID></ram:AssociatedDocumentLineDocument><ram:SpecifiedTradeProduct><ram:SellerAssignedID>BLT-3</ram:SellerAssignedID><ram:Name>Bolt</ram:Name></ram:SpecifiedTradeProduct><ram:SpecifiedLineTradeAgreement><ram:NetPriceProductTradePrice><ram:ChargeAmount>0.25</ram:ChargeAmount></ram:NetPriceProductTradePrice></ram:SpecifiedLineTradeAgreement><ram:SpecifiedLineTradeDelivery><ram:BilledQuantity unitCode="H87">400</ram:BilledQuantity></ram:SpecifiedLineTradeDelivery><ram:SpecifiedLineTradeSettlement><ram:ApplicableTradeTax><ram:TypeCode>VAT</ram:TypeCode><ram:CategoryCode>S</ram:CategoryCode><ram:RateApplicablePercent>19</ram:RateApplicablePercent></ram:ApplicableTradeTax><ram:SpecifiedTradeSettlementLineMonetarySummation><ram:LineTotalAmount>100.00</ram:LineTotalAmount></ram:SpecifiedTradeSettlementLineMonetarySummation></ram:SpecifiedLineTradeSettlement></ram:IncludedSupplyChainTradeLineItem>
         <ram:ApplicableHeaderTradeAgreement><ram:SellerTradeParty><ram:Name>Imaginary Seller GmbH</ram:Name><ram:PostalTradeAddress><ram:PostcodeCode>10115</ram:PostcodeCode><ram:LineOne>Example Street 1</ram:LineOne><ram:CityName>Berlin</ram:CityName><ram:CountryID>DE</ram:CountryID></ram:PostalTradeAddress><ram:SpecifiedTaxRegistration><ram:ID schemeID="FC">00/000/00000</ram:ID></ram:SpecifiedTaxRegistration><ram:SpecifiedTaxRegistration><ram:ID schemeID="VA">DE000000001</ram:ID></ram:SpecifiedTaxRegistration></ram:SellerTradeParty><ram:BuyerTradeParty><ram:Name>Fictional Buyer AG</ram:Name></ram:BuyerTradeParty></ram:ApplicableHeaderTradeAgreement>
         <ram:ApplicableHeaderTradeDelivery/>
-        <ram:ApplicableHeaderTradeSettlement><ram:InvoiceCurrencyCode>EUR</ram:InvoiceCurrencyCode><ram:ApplicableTradeTax><ram:CalculatedAmount>38.00</ram:CalculatedAmount><ram:TypeCode>VAT</ram:TypeCode><ram:BasisAmount>200.00</ram:BasisAmount><ram:CategoryCode>S</ram:CategoryCode><ram:RateApplicablePercent>19.00</ram:RateApplicablePercent></ram:ApplicableTradeTax><ram:SpecifiedTradePaymentTerms><ram:DueDateDateTime><udt:DateTimeString format="102">20261201</udt:DateTimeString></ram:DueDateDateTime></ram:SpecifiedTradePaymentTerms><ram:SpecifiedTradeSettlementHeaderMonetarySummation><ram:LineTotalAmount>200.00</ram:LineTotalAmount><ram:TaxBasisTotalAmount>200.00</ram:TaxBasisTotalAmount><ram:TaxTotalAmount currencyID="EUR">38.00</ram:TaxTotalAmount><ram:GrandTotalAmount>238.00</ram:GrandTotalAmount><ram:DuePayableAmount>238.00</ram:DuePayableAmount></ram:SpecifiedTradeSettlementHeaderMonetarySummation></ram:ApplicableHeaderTradeSettlement>
+        <ram:ApplicableHeaderTradeSettlement><ram:InvoiceCurrencyCode>EUR</ram:InvoiceCurrencyCode><ram:SpecifiedTradeSettlementPaymentMeans><ram:TypeCode>58</ram:TypeCode><ram:PayeePartyCreditorFinancialAccount><ram:IBANID>{iban}</ram:IBANID></ram:PayeePartyCreditorFinancialAccount></ram:SpecifiedTradeSettlementPaymentMeans><ram:ApplicableTradeTax><ram:CalculatedAmount>38.00</ram:CalculatedAmount><ram:TypeCode>VAT</ram:TypeCode><ram:BasisAmount>200.00</ram:BasisAmount><ram:CategoryCode>S</ram:CategoryCode><ram:RateApplicablePercent>19.00</ram:RateApplicablePercent></ram:ApplicableTradeTax><ram:SpecifiedTradePaymentTerms><ram:DueDateDateTime><udt:DateTimeString format="102">20261201</udt:DateTimeString></ram:DueDateDateTime></ram:SpecifiedTradePaymentTerms><ram:SpecifiedTradeSettlementHeaderMonetarySummation><ram:LineTotalAmount>200.00</ram:LineTotalAmount><ram:TaxBasisTotalAmount>200.00</ram:TaxBasisTotalAmount><ram:TaxTotalAmount currencyID="EUR">38.00</ram:TaxTotalAmount><ram:GrandTotalAmount>238.00</ram:GrandTotalAmount><ram:DuePayableAmount>238.00</ram:DuePayableAmount></ram:SpecifiedTradeSettlementHeaderMonetarySummation></ram:ApplicableHeaderTradeSettlement>
         </rsm:SupplyChainTradeTransaction></rsm:CrossIndustryInvoice>
         """;
 
-    /// <summary>A one-page text PDF, written by hand; with <paramref name="xml"/> it carries it as an attached factur-x.xml, as a Factur-X PDF/A-3 does.</summary>
+    /// <summary>A one-page text PDF printing the invoice above, written by hand; with <paramref name="xml"/> it carries it compressed as an attached factur-x.xml, as a Factur-X PDF/A-3 does.</summary>
     private static byte[] FacturXPdf(string? xml)
     {
-        const string content = "BT /F1 12 Tf 50 780 Td (Invoice FX-2026-0042 from Imaginary Seller GmbH total 238.00 EUR) Tj ET";
-        string[] objects =
+        static byte[] L(string s) => System.Text.Encoding.Latin1.GetBytes(s);
+        var content = string.Join(" 0 -16 Td ", new[]
+        {
+            "Invoice FX-2026-0042", "Imaginary Seller GmbH, Example Street 1, 10115 Berlin, VAT DE000000001", "Bill to Fictional Buyer AG",
+            "1 WID-7 Widget 2 x 50.00 19.00 100.00", "2 BLT-3 Bolt 400 x 0.25 19.00 100.00", "Net 200.00 VAT 38.00 Total 238.00 EUR", $"IBAN {PrintedIban}",
+        }.Select(line => $"({line}) Tj"));
+        content = $"BT /F1 10 Tf 50 800 Td {content} ET";
+        using var packed = new MemoryStream();
+        using (var z = new System.IO.Compression.ZLibStream(packed, System.IO.Compression.CompressionLevel.Optimal)) z.Write(System.Text.Encoding.UTF8.GetBytes(xml ?? ""));
+        var file = packed.ToArray();
+        byte[][] objects =
         [
-            "<< /Type /Catalog /Pages 2 0 R" + (xml is null ? "" : " /Names << /EmbeddedFiles << /Names [(factur-x.xml) 5 0 R] >> >> /AF [5 0 R]") + " >>",
-            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 6 0 R >>",
-            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-            "<< /Type /Filespec /F (factur-x.xml) /UF (factur-x.xml) /AFRelationship /Data /EF << /F 7 0 R >> >>",
-            $"<< /Length {content.Length} >>\nstream\n{content}\nendstream",
-            $"<< /Type /EmbeddedFile /Subtype /text#2Fxml /Length {(xml ?? "").Length} >>\nstream\n{xml}\nendstream",
+            L("<< /Type /Catalog /Pages 2 0 R" + (xml is null ? "" : " /Names << /EmbeddedFiles << /Names [(factur-x.xml) 5 0 R] >> >> /AF [5 0 R]") + " >>"),
+            L("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+            L("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 6 0 R >>"),
+            L("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+            L("<< /Type /Filespec /F (factur-x.xml) /UF (factur-x.xml) /AFRelationship /Data /EF << /F 7 0 R >> >>"),
+            L($"<< /Length {content.Length} >>\nstream\n{content}\nendstream"),
+            [.. L($"<< /Type /EmbeddedFile /Subtype /text#2Fxml /Filter /FlateDecode /Length {file.Length} >>\nstream\n"), .. file, .. L("\nendstream")],
         ];
-        var pdf = new System.Text.StringBuilder("%PDF-1.7\n");
-        var offsets = new List<int>();
+        using var pdf = new MemoryStream();
+        pdf.Write(L("%PDF-1.7\n"));
+        var offsets = new List<long>();
         for (var i = 0; i < objects.Length; i++)
         {
-            offsets.Add(pdf.Length);
-            pdf.Append($"{i + 1} 0 obj\n{objects[i]}\nendobj\n");
+            offsets.Add(pdf.Position);
+            pdf.Write([.. L($"{i + 1} 0 obj\n"), .. objects[i], .. L("\nendobj\n")]);
         }
-        var xref = pdf.Length;
-        pdf.Append($"xref\n0 {objects.Length + 1}\n0000000000 65535 f \n");
-        foreach (var o in offsets) pdf.Append($"{o:D10} 00000 n \n");
-        pdf.Append($"trailer\n<< /Size {objects.Length + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF");
-        return System.Text.Encoding.ASCII.GetBytes(pdf.ToString());
+        var xref = pdf.Position;
+        pdf.Write(L($"xref\n0 {objects.Length + 1}\n0000000000 65535 f \n" + string.Concat(offsets.Select(o => $"{o:D10} 00000 n \n"))
+            + $"trailer\n<< /Size {objects.Length + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF"));
+        return pdf.ToArray();
     }
 
     [Theory]
@@ -729,16 +740,15 @@ public sealed class ReadDocumentJobTests
     [InlineData(true)]
     public async Task A_factur_x_pdf_is_read_from_its_embedded_invoice_data_not_by_the_reader(bool fieldsConfirmed)
     {
-        var (job, db, reader, id) = Arrange(FacturXPdf(FacturX), fieldsConfirmed: fieldsConfirmed);
+        var (job, db, reader, id) = Arrange(FacturXPdf(FacturXml(PrintedIban.Replace(" ", ""))), fieldsConfirmed: fieldsConfirmed);
 
         await job.ExecuteAsync(id, Org, null, CancellationToken.None);
 
         reader.Verify(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
         var read = DocumentJson.Deserialize<ReadResult>((await db.FlowDocuments.AsNoTracking().SingleAsync()).ReadJson);
         string? V(string key) => read.Fields.Single(f => f.Key == key).Value;
-        // The confirmed flow's fields carry no meaning: they bind by key. The number is also found on the page.
+        // The confirmed flow's fields carry no meaning: they bind by key. Every value the page prints is found there.
         (V("document_number"), V("sender_name")).Should().Be(("FX-2026-0042", "Imaginary Seller GmbH"));
-        read.Fields.Single(f => f.Key == "document_number").Location.Should().NotBeNull();
         read.Fields.Should().OnlyContain(f => f.Confidence == 1.0 && !f.NotOnPage);
         if (fieldsConfirmed)
         {
@@ -746,25 +756,34 @@ public sealed class ReadDocumentJobTests
             return;
         }
         read.KindLabel.Should().Be("Invoice");
-        new[] { V("issue_date"), V("due_date"), V("sender_vat_id"), V("receiver_name"), V("currency"), V("total_net"), V("total_tax"), V("total_gross") }
-            .Should().Equal("2026-11-01", "2026-12-01", "DE000000001", "Fictional Buyer AG", "EUR", "200.00", "38.00", "238.00");
+        new[] { V("issue_date"), V("due_date"), V("sender_vat_id"), V("receiver_name"), V("currency"), V("iban"), V("total_net"), V("total_tax"), V("total_gross") }
+            .Should().Equal("2026-11-01", "2026-12-01", "DE000000001", "Fictional Buyer AG", "EUR", PrintedIban, "200.00", "38.00", "238.00");
         read.Tables.Single(t => t.Key == "lines").Rows.Select(r => string.Join('|', new[] { "line_number", "line_item_code", "line_description", "line_quantity", "line_unit", "line_unit_price", "line_tax_rate", "line_amount" }.Select(k => r.Cells[k].Value)))
             .Should().Equal("1|WID-7|Widget|2.00|C62|50.00|19.00|100.00", "2|BLT-3|Bolt|400.00|H87|0.25|19.00|100.00");
         read.Tables.Single(t => t.Key == "vat_breakdown").Rows.Single().Cells.Values.Select(c => c.Value).Should().Equal("S", "19.00", "200.00", "38.00");
     }
 
     [Theory]
-    [InlineData(null)]
-    [InlineData("<rsm:CrossIndustryInvoice xmlns:rsm=\"urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100\"><rsm:ExchangedDocument>")]
-    [InlineData("<!DOCTYPE x [<!ENTITY e SYSTEM \"file:///nonexistent\">]><x>&e;</x>")]
-    public async Task A_pdf_without_readable_invoice_data_is_read_from_its_page_as_before(string? xml)
+    [InlineData("none")]
+    [InlineData("broken")]
+    [InlineData("dtd")]
+    [InlineData("hidden_iban")]
+    public async Task A_pdf_without_readable_or_printed_invoice_data_is_read_from_its_page_as_before(string attachment)
     {
-        var (job, db, reader, id) = Arrange(FacturXPdf(xml));
+        var (job, db, reader, id) = Arrange(FacturXPdf(attachment switch
+        {
+            "broken" => "<rsm:CrossIndustryInvoice xmlns:rsm=\"urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100\"><rsm:ExchangedDocument>",
+            "dtd" => "<!DOCTYPE x [<!ENTITY e SYSTEM \"file:///nonexistent\">]><x>&e;</x>",
+            // The data's IBAN is not the one the page prints: the hidden one must never be taken. (An unconfirmed flow takes every field.)
+            "hidden_iban" => FacturXml("DE00999922223333 4444"),
+            _ => null,
+        }), fieldsConfirmed: false);
 
         await job.ExecuteAsync(id, Org, null, CancellationToken.None);
 
-        reader.Verify(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()), Times.Once);
         var doc = await db.FlowDocuments.AsNoTracking().SingleAsync();
+        reader.Verify(r => r.ReadAsync(It.IsAny<DocumentReadInput>(), Org, It.IsAny<CancellationToken>()), Times.Once);
+        doc.ReadJson.Should().NotContain("9999");
         DocumentJson.Deserialize<ReadResult>(doc.ReadJson).Fields.Single(f => f.Key == "document_number").Value.Should().Be("4471");
     }
 }

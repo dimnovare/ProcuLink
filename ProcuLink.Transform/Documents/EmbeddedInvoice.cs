@@ -19,6 +19,8 @@ namespace ProcuLink.Transform.Documents;
 public static class EmbeddedInvoice
 {
     public const int MaxXmlBytes = 5 * 1024 * 1024;
+    /// <summary>The most rows a table takes; past it the read is marked truncated, as a page read past its limits is.</summary>
+    public const int MaxRows = 1000;
     private static readonly string[] StandardNames = ["factur-x.xml", "zugferd-invoice.xml", "xrechnung.xml"];
 
     private static readonly XmlReaderSettings Safe = new() { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = MaxXmlBytes };
@@ -118,16 +120,30 @@ public static class EmbeddedInvoice
 
     private static ReadResult Full(XElement root)
     {
-        static ReadTable Table(string key, string label, Spec[] columns, IEnumerable<XElement> items) => new(key, label,
-            columns.Select(c => new ReadColumn(c.Key, c.Label, c.Type, M.All.Contains(c.Key) ? c.Key : null)).ToList(),
-            items.Select(i => new ReadRow(columns.ToDictionary(c => c.Key, c => new ReadCell(c.Value(i), 1.0, null, false, false)))).ToList(), Listed: true);
+        var truncated = false;
+        ReadTable Table(string key, string label, Spec[] columns, IEnumerable<XElement> items)
+        {
+            var rows = items.Take(MaxRows + 1).ToList();
+            truncated |= rows.Count > MaxRows;
+            return new(key, label, columns.Select(c => new ReadColumn(c.Key, c.Label, c.Type, M.All.Contains(c.Key) ? c.Key : null)).ToList(),
+                rows.Take(MaxRows).Select(i => new ReadRow(columns.ToDictionary(c => c.Key, c => new ReadCell(c.Value(i), 1.0, null, false, false)))).ToList(), Listed: true);
+        }
+        ReadTable[] tables =
+        [
+            Table("lines", "Invoice lines", LineColumns, All(root, Tx + "IncludedSupplyChainTradeLineItem")),
+            Table("vat_breakdown", "VAT breakdown", VatColumns, All(root, Settlement + "ApplicableTradeTax")),
+        ];
         return new ReadResult(Text(root, Doc + "TypeCode") == "381" ? "Credit note" : "Invoice",
             Header.Select(s => new ReadField(s.Key, s.Label, s.Value(root), s.Type, s.Key, 1.0, null, false, true, false)).Where(f => f.Value is not null).ToList(),
-            [
-                Table("lines", "Invoice lines", LineColumns, All(root, Tx + "IncludedSupplyChainTradeLineItem")),
-                Table("vat_breakdown", "VAT breakdown", VatColumns, All(root, Settlement + "ApplicableTradeTax")),
-            ]);
+            tables, truncated);
     }
+
+    /// <summary>
+    /// Whether a value of this type is printed as the data writes it, so it must be found on the page. A date (ISO here), a code
+    /// (country, unit, scheme) and a currency code need not be printed in that form. An amount is compared as a number, but only
+    /// when the page prints it as one word: "1 500,00" is not found, and the page is then read instead (the safe side).
+    /// </summary>
+    public static bool PrintedAsIs(string type) => type is not (T.Date or T.Code or T.Currency);
 
     /// <summary>
     /// A listed field or column takes the value of its meaning, or else of the meaning its key or label names (FieldMeanings.Aliases).
@@ -152,7 +168,7 @@ public static class EmbeddedInvoice
                     : [],
                 Listed: true);
         }).ToList();
-        return new ReadResult(full.KindLabel, fields, tables);
+        return new ReadResult(full.KindLabel, fields, tables, full.Truncated);
     }
 
     private static IEnumerable<XElement> All(XElement e, string path) =>
@@ -175,9 +191,11 @@ public static class EmbeddedInvoice
         All(e, party + "URIUniversalCommunication/URIID").FirstOrDefault() is { } x && (string?)x.Attribute("schemeID") is { } scheme
         && Regex.IsMatch(scheme, @"^\d{4}$") && x.Value.Trim() is { Length: > 0 } id ? $"{scheme}:{id}" : null;
 
-    /// <summary>A format-102 date as yyyy-MM-dd; an amount with at least two decimals, so "1.500" is never read as fifteen hundred.</summary>
+    /// <summary>A format-102 date as yyyy-MM-dd; an amount with at least two decimals, so "1.500" is never read as fifteen hundred;
+    /// an IBAN in groups of four, as it is printed, so the page check can find it.</summary>
     private static string? Format(string? v, string type) => v is null ? null : type switch
     {
+        T.Iban => Regex.Replace(v.Replace(" ", ""), ".{4}(?!$)", "$0 "),
         T.Date when DateOnly.TryParseExact(v, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d) => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
         T.Money or T.Number when decimal.TryParse(v, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var n) => n.ToString("0.00##########", CultureInfo.InvariantCulture),
         _ => v,
