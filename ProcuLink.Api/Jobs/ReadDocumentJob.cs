@@ -190,10 +190,25 @@ public class ReadDocumentJob(
         var onWords = isPdf || isImage;
         SourceLocation? Find(string? value, IReadOnlyList<PageWord> partWords) => onWords ? ValueLocator.Locate(value, partWords)
             : spans is not null ? ValueLocator.LocateInSpans(value, spans) : ValueLocator.LocateInCells(value, cells);
+        ReadResult Located(ReadResult r, IReadOnlyList<PageWord> partWords) => new(r.KindLabel,
+            r.Fields.Select(f => f with { Location = Find(f.Value, partWords) }).ToList(),
+            r.Tables.Select(t => t with
+            {
+                Rows = t.Rows.Select(row => new ReadRow(row.Cells.ToDictionary(c => c.Key, c => c.Value with { Location = Find(c.Value.Value, partWords) }))).ToList(),
+            }).ToList(),
+            r.Truncated);
 
         var results = new List<ReadResult>();
         var starts = new List<DocumentSpan>();
-        var partCount = scanPdf ? ReadLimits.UnitsFor(pdfPages) : parts.Count;
+        // A ZUGFeRD / Factur-X / XRechnung PDF carries the invoice as data: that is the read, whole and certain, with no AI call.
+        var embedded = isPdf ? EmbeddedInvoice.Read(bytes, expected) : null;
+        if (embedded is not null)
+        {
+            logger.LogInformation("Document {DocumentId} read from its embedded invoice data.", doc.Id);
+            truncated = false;
+            results.Add(Located(embedded, words));
+        }
+        var partCount = embedded is not null ? 0 : scanPdf ? ReadLimits.UnitsFor(pdfPages) : parts.Count;
         static string? Failure(DocumentReadOutcome o) => o.Success && o.Result is not null ? null : o.FailureReason ?? "ai_error";
         for (var part = 1; part <= partCount; part++)
         {
@@ -266,20 +281,15 @@ public class ReadDocumentJob(
             var (winFrom, winTo) = textWindows.Count > 0 ? textWindows[part - 1]
                 : ((part - 1) * ReadLimits.PagesPerUnit + 1, Math.Min(part * ReadLimits.PagesPerUnit, pdfPages));
             starts.AddRange((outcome.Documents ?? []).Where(s => s.FirstPage >= winFrom && s.FirstPage <= winTo));
-            results.Add(new ReadResult(r.KindLabel,
-                r.Fields.Select(f => f with { Location = Find(f.Value, partWords) }).ToList(),
-                r.Tables.Select(t => t with
-                {
-                    Rows = t.Rows.Select(row => new ReadRow(row.Cells.ToDictionary(c => c.Key, c => c.Value with { Location = Find(c.Value.Value, partWords) }))).ToList(),
-                }).ToList(),
-                r.Truncated));
+            results.Add(Located(r, partWords));
             _partsRead = results.Count;
         }
 
         // OCR words but nothing located (sideways photo, non-Latin scan, noise): flagging every value would be noise.
         var anyLocated = onWords && results.Any(r => r.Fields.Any(f => f.Location is not null)
             || r.Tables.Any(t => t.Rows.Any(row => row.Cells.Values.Any(c => c.Location is not null))));
-        bool Miss(string? value, SourceLocation? loc) => anyLocated && !string.IsNullOrWhiteSpace(value) && loc is null;
+        // A value from embedded invoice data is not a reading of the page (its date is ISO, the page's may not be): never "not on the page".
+        bool Miss(string? value, SourceLocation? loc) => embedded is null && anyLocated && !string.IsNullOrWhiteSpace(value) && loc is null;
 
         var merged = ReadMerge.Merge(results, expected);
         var read = new ReadResult(merged.KindLabel,

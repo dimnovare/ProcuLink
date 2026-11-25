@@ -109,7 +109,7 @@ public static class DraftBinder
         return new OutputDraft(name, format, tableKey, template, draftLeaves, notes);
     }
 
-    private static string Plain(string s) => new(s.ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());
+    internal static string Plain(string s) => new(s.ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());
     private static bool IsColumn(string key) => key.Contains('.');
     private static string TableOf(string key) => key[..key.IndexOf('.')];
     private static string Unqualified(string key) => key[(key.IndexOf('.') + 1)..];
