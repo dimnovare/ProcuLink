@@ -63,7 +63,7 @@ public sealed class DocumentTools(
     }
 
     [McpServerTool(Name = "add_document", Title = "Add a document", Destructive = false, OpenWorld = false)]
-    [Description("Adds a file to ProcuLink. Pass the file name and its content as base64 (10 MB at most). Leave out flowId and ProcuLink sorts it into the right flow after reading it. Returns the new document's id. Reading takes a few seconds, so check it with get_document. A key that can't send doesn't send it itself, but a flow set to send automatically still sends what's added to it.")]
+    [Description("Adds a file to ProcuLink. Pass the file name and its content as base64 (10 MB at most). Leave out flowId and ProcuLink sorts it into the right flow after reading it. Returns the new document's id. Reading takes a few seconds, so check it with get_document. A key that can't send doesn't send it itself, but a flow set to Check nothing sends by itself, so it still sends what's added to it.")]
     public async Task<CallToolResult> AddDocument(
         IFlowDocumentSubmitter submitter,
         [Description("The file's name with its extension, for example invoice-1001.pdf.")] string fileName,
