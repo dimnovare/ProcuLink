@@ -115,7 +115,7 @@ public sealed class ApiKeyAuthHandler : AuthenticationHandler<ApiKeyAuthOptions>
         if (apiKey.LastUsedAt is null || now - apiKey.LastUsedAt.Value >= LastUsedThrottle)
             TouchLastUsedAsync(apiKey.Id, now);
 
-        var claims = new[]
+        var claims = new List<Claim>
         {
             new Claim("org_id",      apiKey.OrganisationId.ToString()),
             new Claim("org_slug",    apiKey.Organisation.Slug),
@@ -132,6 +132,8 @@ public sealed class ApiKeyAuthHandler : AuthenticationHandler<ApiKeyAuthOptions>
             // another key, cancel the subscription, repoint a supplier's deliveries, or override
             // the acceptance gate. The ingest surface it exists for (/api/ingress/*) is ungated.
         };
+        // Only a key made to send may send documents (the MCP send_document tool).
+        if (apiKey.CanSend) claims.Add(new Claim("key_can_send", "true"));
         var identity  = new ClaimsIdentity(claims, Scheme.Name);
         var principal = new ClaimsPrincipal(identity);
         var ticket    = new AuthenticationTicket(principal, Scheme.Name);

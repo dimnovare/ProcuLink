@@ -12,6 +12,13 @@ namespace ProcuLink.Api.Services.Documents;
 /// None for an empty page.</summary>
 public static class DocumentListRows
 {
+    /// <summary>Documents in one of <paramref name="statuses"/>. The sample is never sent, so it never waits in Needs you; All still lists it.</summary>
+    public static IQueryable<FlowDocument> WithStatus(IQueryable<FlowDocument> docs, IReadOnlyCollection<string> statuses)
+    {
+        docs = docs.Where(d => statuses.Contains(d.Status));
+        return statuses.Contains(DocumentStatus.NeedsReview) || statuses.Contains(DocumentStatus.Ready) ? docs.Where(d => !d.IsSample) : docs;
+    }
+
     /// <summary>Sent documents whose last output landed in [from, to). Both null: no filter.</summary>
     public static IQueryable<FlowDocument> SentBetween(ProcuLinkDbContext db, Guid orgId, IQueryable<FlowDocument> docs, DateTime? from, DateTime? to)
     {

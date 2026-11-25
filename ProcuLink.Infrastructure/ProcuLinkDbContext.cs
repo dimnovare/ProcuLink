@@ -1905,6 +1905,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             e.Property(k => k.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
             e.Property(k => k.LastUsedAt).HasColumnName("last_used_at").HasColumnType("timestamptz");
             e.Property(k => k.ExpiresAt).HasColumnName("expires_at").HasColumnType("timestamptz");
+            e.Property(k => k.CanSend).HasColumnName("can_send").HasDefaultValue(false);
             e.HasIndex(k => k.KeyHash).IsUnique();
             e.HasIndex(k => k.OrganisationId);
             e.HasOne(k => k.Organisation)

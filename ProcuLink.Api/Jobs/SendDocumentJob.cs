@@ -29,7 +29,7 @@ public class SendDocumentJob(ProcuLinkDbContext db, DocumentSender sender)
     }
 
     // A sample is invented, and a sort that was not certain is unconfirmed: neither is sent by itself, only by a person (DocumentsController.Send, which does not come here).
-    private static bool ShouldSend(FlowDocument doc, Flow flow) =>
+    internal static bool ShouldSend(FlowDocument doc, Flow flow) =>
         !doc.IsSample && !doc.SortUnconfirmed && DocumentStatus.IsEditable(doc.Status, doc.StatusReason) && flow.Automation switch
         {
             FlowAutomation.Auto => doc.Status is DocumentStatus.NeedsReview or DocumentStatus.Ready

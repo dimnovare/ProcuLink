@@ -70,7 +70,7 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
     public static readonly Guid OrgB = Guid.Parse("b0000000-0000-0000-0000-00000000000b");
     public static readonly Guid OrgOff = Guid.Parse("c0000000-0000-0000-0000-0000000000c0");
 
-    private static string ClerkId(Guid org) => $"org_DOC_{org.ToString("N")[..4]}";
+    internal static string ClerkId(Guid org) => $"org_DOC_{org.ToString("N")[..4]}";
 
     private readonly string _dbName = Guid.NewGuid().ToString("N");
 
@@ -119,7 +119,7 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
     {
         builder.UseEnvironment("Testing");
 
-        builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+        var settings = new Dictionary<string, string?>
         {
             ["Delivery:EncryptionKey"] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE=",
             ["ConnectionStrings:DefaultConnection"] = "Host=test;Database=test",
@@ -145,7 +145,9 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             ["Google:ProjectNumber"] = "123456",
             ["Microsoft:ClientId"] = "test-client",
             ["Microsoft:ClientSecret"] = "test-secret",
-        }));
+        };
+        if (McpOAuthKey is not null) (settings["Mcp:OAuth"], settings["Mcp:ResourceUrl"]) = ("true", McpResourceUrl);
+        builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(settings));
 
         builder.ConfigureServices(services =>
         {
@@ -192,14 +194,37 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             foreach (var d in services.Where(d => d.ServiceType.FullName?.Contains("Authentication") == true
                                                || d.ServiceType.FullName?.Contains("JwtBearer") == true).ToList())
                 services.Remove(d);
-            services.AddAuthentication(o =>
+            var auth = services.AddAuthentication(o =>
                 {
-                    o.DefaultAuthenticateScheme = RbacTestAuthHandler.SchemeName;
+                    o.DefaultAuthenticateScheme = McpOAuthKey is null ? RbacTestAuthHandler.SchemeName : ProcuLink.Api.Mcp.McpSetup.PolicyScheme;
                     o.DefaultChallengeScheme = RbacTestAuthHandler.SchemeName;
                 })
                 .AddScheme<AuthenticationSchemeOptions, RbacTestAuthHandler>(RbacTestAuthHandler.SchemeName, _ => { })
                 .AddScheme<ProcuLink.Api.Auth.ApiKeyAuthOptions, ProcuLink.Api.Auth.ApiKeyAuthHandler>("ApiKey", _ => { });
+            if (McpOAuthKey is not null)
+                ProcuLink.Api.Mcp.McpSetup.AddProcuLinkMcpAuth(auth, new ConfigurationBuilder().AddInMemoryCollection(settings).Build(), RbacTestAuthHandler.SchemeName, McpOAuthKey);
         });
+    }
+
+    /// <summary>Set before the host first boots to turn on MCP sign-in (<c>Mcp:OAuth</c>), with tokens signed by this key.</summary>
+    public Microsoft.IdentityModel.Tokens.SecurityKey? McpOAuthKey { get; init; }
+
+    public const string McpResourceUrl = "http://localhost/mcp";
+
+    /// <summary>A Clerk-shaped OAuth access token for <paramref name="org"/>; <paramref name="shape"/> bends it into what must be refused.</summary>
+    public string McpToken(Guid org, string? audience = null, Action<Microsoft.IdentityModel.Tokens.SecurityTokenDescriptor>? shape = null)
+    {
+        var token = new Microsoft.IdentityModel.Tokens.SecurityTokenDescriptor
+        {
+            Issuer = Services.GetRequiredService<IConfiguration>()["Clerk:Authority"], Audience = audience ?? McpResourceUrl, TokenType = "at+jwt",
+            Claims = new Dictionary<string, object>
+            {
+                ["sub"] = "user_MCP_TEST", ["org_id"] = ClerkId(org), ["client_id"] = "client_test", ["scope"] = "profile user:org:read",
+            },
+            SigningCredentials = new Microsoft.IdentityModel.Tokens.SigningCredentials(McpOAuthKey, Microsoft.IdentityModel.Tokens.SecurityAlgorithms.RsaSha256),
+        };
+        shape?.Invoke(token);
+        return new Microsoft.IdentityModel.JsonWebTokens.JsonWebTokenHandler().CreateToken(token);
     }
 
     /// <summary>A client acting as an admin of <paramref name="org"/>; the organisation is created on first use.</summary>
@@ -227,7 +252,7 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
     }
 
     /// <summary>A client holding an org API key (the real ApiKey handler), as a customer's own system would.</summary>
-    public HttpClient ApiKeyClientFor(Guid org)
+    public HttpClient ApiKeyClientFor(Guid org, bool canSend = false)
     {
         ClientFor(org).Dispose();
         var raw = "plk_" + Guid.NewGuid().ToString("N");
@@ -236,7 +261,7 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
             db.TenantApiKeys.Add(new TenantApiKey
             {
-                Id = Guid.NewGuid(), OrganisationId = org, Label = "Test", KeyPrefix = raw[..8], IsActive = true,
+                Id = Guid.NewGuid(), OrganisationId = org, Label = "Test", KeyPrefix = raw[..8], IsActive = true, CanSend = canSend,
                 KeyHash = ProcuLink.Core.Security.ApiKeyHasher.ComputeHash(raw, "test-api-key-hash-secret-not-a-real-one"),
                 CreatedAt = DateTime.UtcNow,
             });

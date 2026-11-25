@@ -21,7 +21,7 @@ public sealed class ApiKeyService : IApiKeyService
     }
 
     public async Task<(TenantApiKey Key, string RawKey)> CreateAsync(
-        Guid organisationId, string label, DateTime? expiresAt, CancellationToken ct)
+        Guid organisationId, string label, DateTime? expiresAt, bool canSend, CancellationToken ct)
     {
         // plk_ prefix + 48 URL-safe base64 chars = ~52 chars total
         var rawBytes = new byte[36];
@@ -42,6 +42,7 @@ public sealed class ApiKeyService : IApiKeyService
             IsActive       = true,
             CreatedAt      = DateTime.UtcNow,
             ExpiresAt      = expiresAt,
+            CanSend        = canSend,
         };
 
         _db.TenantApiKeys.Add(entity);

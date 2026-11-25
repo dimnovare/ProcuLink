@@ -12,7 +12,8 @@ using ProcuLink.Transform.Output.Ksef;
 
 namespace ProcuLink.Api.Services.Documents;
 
-public enum SendMode { Person, Automatic }
+/// <summary><c>Assistant</c>: asked for through the MCP endpoint. Like <c>Person</c>, it never holds the document.</summary>
+public enum SendMode { Person, Automatic, Assistant }
 
 /// <summary>Which output could not be rendered, and why.</summary>
 public sealed record OutputFailure(string Output, string? Detail);
@@ -47,6 +48,40 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
     }
 
     private static SendOutcome Refuse(string error, object? detail = null) => new(error, detail, []);
+
+    public const string SampleMessage = "This is our sample invoice, so it can't be sent. Add one of your own to send it.";
+
+    /// <summary>Why the automatic sender leaves this document for a person, or null: the sample, an unsure sort, a repeated number, a new sender.
+    /// The same holds <see cref="SendDocumentJob"/>'s ShouldSend applies; ShouldSend keeps its own copy because the frontend's help mirror
+    /// (helpContent.test.ts) reads the two check codes from it; DocumentSenderByHandTests pins that the two agree.</summary>
+    public static string? HeldForPerson(FlowDocument doc)
+    {
+        if (doc.IsSample) return "sample";
+        if (doc.SortUnconfirmed) return "check_sort";
+        var failed = DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).Where(c => !c.Passed).Select(c => c.Code).ToList();
+        return failed.Contains(DocumentChecks.Duplicate) ? DocumentChecks.Duplicate
+            : failed.Contains(DocumentChecks.NewSender) ? DocumentChecks.NewSender : null;
+    }
+
+    /// <summary>A send someone asked for (the app's Send button, or an assistant): never the sample, and on success the sort is confirmed.</summary>
+    public async Task<SendOutcome> SendByHandAsync(FlowDocument doc, SendMode mode, string? userId, CancellationToken ct, string? ksefConfirm = null)
+    {
+        if (doc.IsSample) return Refuse("sample_document");
+        var outcome = await SendAsync(doc, mode, userId, ct, ksefConfirm);
+        if (!outcome.Ok) return outcome;
+        // Someone sent it: its sort is confirmed. Best effort: the send is committed and is never answered as a failure.
+        try
+        {
+            await DocumentSort.ConfirmAsync(db, doc, CancellationToken.None);
+            await DocumentSort.SaveRememberedAsync(db, doc, CancellationToken.None);
+        }
+        catch (Exception)
+        {
+            // An id and a code only: the exception text can carry the sender and kind.
+            logger.LogWarning("Sort not confirmed after send for {DocumentId}: {Reason}", doc.Id, "confirm_failed");
+        }
+        return outcome;
+    }
 
     /// <param name="ksefConfirm">
     /// The confirmation a person gives for an invoice going to KSeF Production: the hash of exactly the file they were shown

@@ -13,6 +13,8 @@ public class TenantApiKey
     public DateTime  CreatedAt      { get; set; }
     public DateTime? LastUsedAt     { get; set; }
     public DateTime? ExpiresAt      { get; set; }
+    /// <summary>Whether the key may send documents (the MCP send_document tool). Off unless chosen when the key is made.</summary>
+    public bool      CanSend        { get; set; }
     // Navigation
     public Organisation Organisation { get; set; } = null!;
 }

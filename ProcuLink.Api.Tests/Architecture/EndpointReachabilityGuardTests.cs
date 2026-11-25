@@ -268,7 +268,19 @@ public sealed class EndpointReachabilityGuardTests
             ["MapScalarApiReference"] =
                 "The API reference UI, registered only in the non-production branch of Program.cs. "
                 + "Reached by a developer with a browser.",
+            ["MapMcp"] =
+                "2026-11-25 — MCP endpoint for AI assistants (ProcuLink.Api/Mcp/McpSetup.cs). The caller is the customer's AI "
+                + "client (Claude, ChatGPT, Cursor, VS Code) with an org API key or a Clerk OAuth token; the browser never calls "
+                + "it. Its tools call the same services as DocumentsController and FlowFilesController (McpToolsTests).",
+            ["MapGet"] =
+                "2026-11-25 — only in ProcuLink.Api/Mcp/McpSetup.cs (OneFileMechanisms), for GET /mcp beside MapMcp: the stateless transport maps no GET, so "
+                + "without it a client's first GET (and Clerk's connection check) got 405 instead of the sign-in challenge. Same "
+                + "callers and authorization as MapMcp; pinned by McpOAuthTests.WrongAudience_Is401_WithResourceMetadataChallenge.",
         };
+
+    /// <summary>Mechanisms declared above for one file only: the same call anywhere else is undeclared.</summary>
+    private static readonly IReadOnlyDictionary<string, string> OneFileMechanisms =
+        new Dictionary<string, string>(StringComparer.Ordinal) { ["MapGet"] = "ProcuLink.Api/Mcp/McpSetup.cs" };
 
     /// <summary>
     /// Identifiers an <c>IEndpointRouteBuilder</c> is held in. A <c>Map*</c> call on one of these
@@ -430,7 +442,9 @@ public sealed class EndpointReachabilityGuardTests
 
                 if (EndpointRouteBuilderReceivers.Contains(receiver) || KnownEndpointMapMethods.Contains(method))
                 {
-                    found.TryAdd(method, relative);
+                    // A mechanism declared for one file only is undeclared anywhere else.
+                    var only = OneFileMechanisms.GetValueOrDefault(method);
+                    found.TryAdd(only is null || relative.Replace('\\', '/') == only ? method : $"{method} outside {only}", relative);
                 }
             }
         }

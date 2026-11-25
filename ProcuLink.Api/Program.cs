@@ -186,10 +186,11 @@ var enableQaAuthBypass =
 
 var authBuilder = builder.Services.AddAuthentication(options =>
 {
-    options.DefaultAuthenticateScheme = enableQaAuthBypass
+    options.DefaultChallengeScheme = enableQaAuthBypass
         ? QaBypassAuthenticationHandler.SchemeName
         : JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = options.DefaultAuthenticateScheme;
+    // Off /mcp the policy scheme forwards to Jwt, so the app API authenticates exactly as before.
+    options.DefaultAuthenticateScheme = enableQaAuthBypass ? options.DefaultChallengeScheme : ProcuLink.Api.Mcp.McpSetup.PolicyScheme;
 });
 
 if (enableQaAuthBypass)
@@ -225,9 +226,11 @@ else
             },
         };
     });
+    ProcuLink.Api.Mcp.McpSetup.AddProcuLinkMcpAuth(authBuilder, builder.Configuration, JwtBearerDefaults.AuthenticationScheme);
 }
 
 authBuilder.AddScheme<ApiKeyAuthOptions, ApiKeyAuthHandler>("ApiKey", _ => { });
+ProcuLink.Api.Mcp.McpSetup.AddProcuLinkMcp(builder.Services);
 
 builder.Services.AddAuthorization();
 
@@ -907,6 +910,7 @@ app.UseRateLimiter();
 app.UseAuthorization();
 
 app.MapControllers();
+ProcuLink.Api.Mcp.McpSetup.MapProcuLinkMcp(app);
 
 // Liveness (/health) is served by HealthController (fast, dependency-free 200) so
 // Railway's container probe is never blocked by a slow dependency. Readiness
