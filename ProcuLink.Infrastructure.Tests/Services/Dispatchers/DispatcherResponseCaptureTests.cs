@@ -48,6 +48,7 @@ public class DispatcherResponseCaptureTests
         // Drive answers are reduced to a fixed message; no body is captured (plan 9b, 2026-11-13).
         { "google_drive", false },
         { "google_sheets", false },
+        { "microsoft_onedrive", false },
         { "smtp", false },
     };
 
@@ -185,6 +186,7 @@ public class DispatcherResponseCaptureTests
         new S3DeliveryDispatcher(new Moq.Mock<ProcuLink.Core.Services.Ingress.IAmazonS3ClientFactory>().Object, Guard(), NullLogger<S3DeliveryDispatcher>.Instance),
         new GoogleDriveDeliveryDispatcher(new StubHttpClientFactory(), new Moq.Mock<ProcuLink.Core.Services.Google.ILinkedAccountTokens>().Object, NullLogger<GoogleDriveDeliveryDispatcher>.Instance),
         new GoogleSheetsDeliveryDispatcher(new StubHttpClientFactory(), new Moq.Mock<ProcuLink.Core.Services.Google.ILinkedAccountTokens>().Object, NullLogger<GoogleSheetsDeliveryDispatcher>.Instance),
+        new OneDriveDeliveryDispatcher(new StubHttpClientFactory(), new Moq.Mock<ProcuLink.Core.Services.Google.ILinkedAccountTokens>().Object, NullLogger<OneDriveDeliveryDispatcher>.Instance),
         new HttpDeliveryDispatcher(new StubHttpClientFactory(), Guard(), NullLogger<HttpDeliveryDispatcher>.Instance),
         new EmailApiDeliveryDispatcher(new FakeEmailApiClient(), NullLogger<EmailApiDeliveryDispatcher>.Instance),
         new SmtpDeliveryDispatcher(NullLogger<SmtpDeliveryDispatcher>.Instance, Guard()),
