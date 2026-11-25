@@ -169,7 +169,7 @@ public class KsefSendTests(DocumentEngineTestFactory factory) : IClassFixture<Do
             db.Set<FlowDelivery>().Add(new FlowDelivery
             {
                 Id = Guid.NewGuid(), OrgId = Org, DocumentId = docId, OutputId = outputId, OutputName = "KSeF invoice file", Protocol = "ksef",
-                Status = FlowDeliveryStatus.Delivered, RemoteReference = reference, RemoteEnvironment = issuedIn, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+                Status = reference == Issued ? FlowDeliveryStatus.Delivered : FlowDeliveryStatus.DeadLetter, RemoteReference = reference, RemoteEnvironment = issuedIn, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
             });
             await db.SaveChangesAsync();
         }
@@ -179,5 +179,8 @@ public class KsefSendTests(DocumentEngineTestFactory factory) : IClassFixture<Do
         answer.GetProperty("error").GetString().Should().Be(expected);
         if (expected == "ksef_already_issued") answer.GetProperty("ksefNumber").GetString().Should().Be(reference == Issued ? Issued : null);
         (await Deliveries(docId)).Should().ContainSingle();
+        // Only an issued invoice shows a KSeF number; an unconfirmed reference stays in the delivery's message.
+        var listed = (await factory.ClientFor(Org).GetFromJsonAsync<JsonElement>($"/api/documents/{docId}/deliveries"))[0];
+        listed.GetProperty("remoteReference").GetString().Should().Be(reference == Issued ? Issued : null);
     }
 }
