@@ -41,11 +41,18 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
         }
     }
 
-    private sealed class MemoryStorage : IFileStorageService
+    private sealed class MemoryStorage(Dictionary<string, byte[]> stored) : IFileStorageService
     {
-        public Task<string> UploadAsync(Stream content, string key, string contentType, CancellationToken ct) => Task.FromResult(key);
+        public async Task<string> UploadAsync(Stream content, string key, string contentType, CancellationToken ct)
+        {
+            using var ms = new MemoryStream();
+            await content.CopyToAsync(ms, ct);
+            stored[key] = ms.ToArray();
+            return key;
+        }
         public Task<string> GetSignedDownloadUrlAsync(string key, TimeSpan expiry, CancellationToken ct) => Task.FromResult(key);
-        public Task<Stream> DownloadAsync(string key, CancellationToken ct) => Task.FromResult<Stream>(new MemoryStream("a,b\r\n1,2\r\n"u8.ToArray()));
+        public Task<Stream> DownloadAsync(string key, CancellationToken ct) =>
+            Task.FromResult<Stream>(new MemoryStream(stored.GetValueOrDefault(key) ?? "a,b\r\n1,2\r\n"u8.ToArray()));
         public Task DeleteAsync(string key, CancellationToken ct) => Task.CompletedTask;
     }
 
@@ -57,6 +64,7 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
         public required Guid DeliveryId { get; init; }
         public required Guid FlowId { get; init; }
         public FakeDispatcher Dispatcher { get; } = new();
+        public Dictionary<string, byte[]> Stored { get; } = [];
         public Mock<IBackgroundJobClient> Jobs { get; } = new();
         public Mock<ILogger<DeliverDocumentJob>> Log { get; } = new();
 
@@ -69,7 +77,7 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
             await using var db = NewDb();
             var encryption = new DeliveryEncryptionService(new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?> { ["Delivery:EncryptionKey"] = Convert.ToBase64String(new byte[32]) }).Build());
-            var job = new DeliverDocumentJob(db, new MemoryStorage(), new FlowDestinationService(db, encryption, [], new ProcuLink.Api.Services.Google.LinkedAccountAvailability(new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), [], Microsoft.Extensions.Options.Options.Create(new ProcuLink.Infrastructure.Services.Google.GoogleOptions())), null!), [Dispatcher],
+            var job = new DeliverDocumentJob(db, new MemoryStorage(Stored), new FlowDestinationService(db, encryption, [], new ProcuLink.Api.Services.Google.LinkedAccountAvailability(new DocumentEngineGate(Microsoft.Extensions.Options.Options.Create(new DocumentEngineOptions())), [], Microsoft.Extensions.Options.Options.Create(new ProcuLink.Infrastructure.Services.Google.GoogleOptions())), null!), [Dispatcher],
                 Jobs.Object, new DeliveryReliabilityOptions { MaxAttempts = 3 }, Log.Object);
             await job.ExecuteAsync(DeliveryId, Org, CancellationToken.None);
         }
@@ -113,6 +121,21 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
             await db.Set<FlowDelivery>().Where(d => d.Id == DeliveryId)
                 .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, status).SetProperty(d => d.ClaimedAt, claimedAt).SetProperty(d => d.Attempts, attempts));
         }
+    }
+
+    [DockerRequiredFact]
+    public async Task Ksef_number_and_receipt_are_kept_on_the_delivery()
+    {
+        var h = await SeedAsync();
+        h.Dispatcher.Result = new DeliveryResult(true, null, 200, RemoteReference: "1111111111-20261126-ABCDEF123456-7A",
+            RemoteEnvironment: "test", Receipt: "<UPO/>"u8.ToArray());
+
+        await h.RunAsync();
+
+        var d = await h.DeliveryAsync();
+        (d.Status, d.RemoteReference, d.RemoteEnvironment).Should().Be((FlowDeliveryStatus.Delivered, "1111111111-20261126-ABCDEF123456-7A", "test"));
+        d.ReceiptKey.Should().NotBeNull();
+        System.Text.Encoding.UTF8.GetString(h.Stored[d.ReceiptKey!]).Should().Be("<UPO/>");
     }
 
     [DockerRequiredFact]

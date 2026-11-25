@@ -420,11 +420,11 @@ public sealed class DocumentsController(
     }
 
     internal static object ToDeliveryDto(FlowDelivery d) =>
-        new { d.Id, d.OutputName, d.Protocol, d.Status, d.Attempts, d.LastError, d.FileName, d.DeliveredAt };
+        new { d.Id, d.OutputName, d.Protocol, d.Status, d.Attempts, d.LastError, d.FileName, d.DeliveredAt, d.RemoteReference, hasReceipt = d.ReceiptKey != null };
 
     /// <summary>As above, plus where it went: the destination's name, null when stored for download or the destination is gone.</summary>
     internal static object ToDeliveryDto(FlowDelivery d, string? destination) =>
-        new { d.Id, d.OutputName, d.Protocol, d.Status, d.Attempts, d.LastError, d.FileName, d.DeliveredAt, destination };
+        new { d.Id, d.OutputName, d.Protocol, d.Status, d.Attempts, d.LastError, d.FileName, d.DeliveredAt, destination, d.RemoteReference, hasReceipt = d.ReceiptKey != null };
 
     [HttpGet("{id:guid}/deliveries")]
     public async Task<IActionResult> Deliveries(Guid id, CancellationToken ct)
@@ -441,14 +441,17 @@ public sealed class DocumentsController(
 
     [HttpGet("{id:guid}/deliveries/{deliveryId:guid}/file")]
     [EnableRateLimiting("signed-url")]
-    public async Task<IActionResult> DeliveryFile(Guid id, Guid deliveryId, CancellationToken ct)
+    public async Task<IActionResult> DeliveryFile(Guid id, Guid deliveryId, CancellationToken ct, [FromQuery] bool receipt = false)
     {
         if (Refuse() is { } refused) return refused;
         var delivery = await db.Set<FlowDelivery>().AsNoTracking()
             .FirstOrDefaultAsync(d => d.OrgId == tenant.OrganisationId && d.DocumentId == id && d.Id == deliveryId, ct);
-        if (delivery?.ArtifactKey is null) return NotFound(new { error = "delivery_not_found" });
+        // ?receipt=true: the receipt the receiving system returned (a KSeF UPO) instead of the file sent.
+        if ((receipt ? delivery?.ReceiptKey : delivery?.ArtifactKey) is not { } key) return NotFound(new { error = "delivery_not_found" });
         Response.Headers[HeaderNames.CacheControl] = "no-store";
         Response.Headers["X-Content-Type-Options"] = "nosniff";
-        return File(await storage.DownloadAsync(delivery.ArtifactKey, ct), delivery.ContentType, delivery.FileName);
+        return receipt
+            ? File(await storage.DownloadAsync(key, ct), "application/xml", $"UPO-{delivery!.RemoteReference}.xml")
+            : File(await storage.DownloadAsync(key, ct), delivery!.ContentType, delivery.FileName);
     }
 }

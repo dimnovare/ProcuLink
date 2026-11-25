@@ -86,6 +86,12 @@ public class DeliverDocumentJob(
 
         if (destination is not null) FlowDestinationService.RecordLearnedHostKey(destination, result);
 
+        // A receipt (a KSeF UPO) is stored before the transaction; failing to keep it never fails what was delivered.
+        string? receiptKey = null;
+        if (result is { Success: true, Receipt: { } receipt })
+            try { receiptKey = await storage.UploadAsync(new MemoryStream(receipt, writable: false), $"{delivery.ArtifactKey}.upo.xml", "application/xml", CancellationToken.None); }
+            catch (Exception) { logger.LogWarning("DeliverDocumentJob could not store the receipt of delivery {DeliveryId}", deliveryId); }
+
         // Sibling deliveries finish concurrently: take the document row's lock first so each roll-up sees the others' committed result.
         // The dispatch is done and its result known: a shutdown must not roll that back.
         var save = CancellationToken.None;
@@ -103,6 +109,7 @@ public class DeliverDocumentJob(
             delivery.Status = FlowDeliveryStatus.Delivered;
             delivery.DeliveredAt = finishedAt;
             delivery.LastError = null;
+            (delivery.RemoteReference, delivery.RemoteEnvironment, delivery.ReceiptKey) = (result.RemoteReference, result.RemoteEnvironment, receiptKey);
         }
         else
         {
