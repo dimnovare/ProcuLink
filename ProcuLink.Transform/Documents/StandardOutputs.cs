@@ -22,7 +22,7 @@ public sealed record StandardOutput(string Id, OutputFormat Writer, string Forma
 }
 
 /// <summary>The XML syntax an invoice-model standard is written in.</summary>
-public enum InvoiceSyntax { Ubl, Cii }
+public enum InvoiceSyntax { Ubl, Cii, Fa3 }
 
 /// <summary>The standard order files a flow output can be, filled by meaning and written by the existing writers.</summary>
 public static class StandardOutputs

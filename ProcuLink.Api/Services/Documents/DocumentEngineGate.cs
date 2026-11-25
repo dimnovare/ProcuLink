@@ -17,6 +17,8 @@ public sealed class DocumentEngineOptions
     public bool DocsOutputsForAll { get; set; }
     public string[] PeppolOrgIds { get; set; } = [];
     public bool PeppolForAll { get; set; }
+    public string[] KsefOrgIds { get; set; } = [];
+    public bool KsefForAll { get; set; }
     public string[] NativeConnectorOrgIds { get; set; } = [];
     public bool NativeConnectorsForAll { get; set; }
     /// <summary>A text PDF is read with its page images too. A kill switch: on unless set false.</summary>
@@ -50,6 +52,14 @@ public sealed class DocumentEngineGate(IOptions<DocumentEngineOptions> options)
     /// <summary>Peppol BIS Billing outputs and their rule checks: the engine must be on, then the org is listed or all are on.</summary>
     public bool PeppolOn(Guid orgId) =>
         IsEnabled(orgId) && (options.Value.PeppolForAll || Listed(options.Value.PeppolOrgIds, orgId));
+
+    /// <summary>The Polish KSeF invoice file and the KSeF destination: the engine must be on, then the org is listed or all are on.</summary>
+    public bool KsefOn(Guid orgId) =>
+        IsEnabled(orgId) && (options.Value.KsefForAll || Listed(options.Value.KsefOrgIds, orgId));
+
+    /// <summary>Whether a standard output is offered to the org: the KSeF file behind its switch, a flagged standard behind Peppol's.</summary>
+    public bool StandardOn(Guid orgId, ProcuLink.Transform.Documents.StandardOutput s) =>
+        s.Syntax == ProcuLink.Transform.Documents.InvoiceSyntax.Fa3 ? KsefOn(orgId) : !s.Flagged || PeppolOn(orgId);
 
     /// <summary>Google Drive and Google Sheets destinations: the engine must be on, then the org is listed or all are on.</summary>
     public bool NativeConnectorsOn(Guid orgId) =>
