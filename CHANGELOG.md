@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **ZUGFeRD / Factur-X invoice released** — the `factur-x-en16931` standard
+  output is no longer behind the Peppol switch: every workspace can add and send
+  it. Its credit note and the other e-invoice outputs stay switched.
 - **OneDrive destination** (#351) — `microsoft_onedrive` protocol. A pasted
   folder sharing link is resolved through Graph `/shares` at save and dropped;
   only the drive id, item id and folder name are stored. Uploads by file name

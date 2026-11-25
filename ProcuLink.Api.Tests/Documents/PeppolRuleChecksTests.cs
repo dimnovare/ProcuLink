@@ -207,8 +207,11 @@ public class PeppolRuleChecksTests(DocumentEngineTestFactory factory) : IClassFi
         checks.Should().ContainSingle(c => c.Code == DocumentChecks.OutputRules);
         factory.Validator.LastBytes![..xml.Length].Should().Equal(xml);
 
+        // Released: the Factur-X invoice is open to a workspace with the e-invoice switch off; its credit note is not.
         var (offFlow, _) = await SeedDocument(DocumentEngineTestFactory.OrgB);
-        var off = await factory.ClientFor(DocumentEngineTestFactory.OrgB).PostAsJsonAsync($"/api/flows/{offFlow}/outputs", new { name = "PDF", format = "", standard = "factur-x-en16931" });
+        var offClient = factory.ClientFor(DocumentEngineTestFactory.OrgB);
+        (await offClient.PostAsJsonAsync($"/api/flows/{offFlow}/outputs", new { name = "PDF", format = "", standard = "factur-x-en16931" })).IsSuccessStatusCode.Should().BeTrue();
+        var off = await offClient.PostAsJsonAsync($"/api/flows/{offFlow}/outputs", new { name = "PDF", format = "", standard = "factur-x-en16931-credit-note" });
         off.StatusCode.Should().Be(HttpStatusCode.Forbidden);
         (await off.Content.ReadAsStringAsync()).Should().Contain("peppol_off");
     }
