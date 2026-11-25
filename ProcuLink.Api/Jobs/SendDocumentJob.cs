@@ -28,12 +28,12 @@ public class SendDocumentJob(ProcuLinkDbContext db, DocumentSender sender)
         await sender.SendAsync(doc, SendMode.Automatic, null, ct);
     }
 
-    // The sample, an unsure sort, a repeated number and a new sender wait for a person (DocumentSender.HeldForPerson). On marked,
-    // ready means no check failed, so the last two never reach it there.
+    // A sample is invented, and a sort that was not certain is unconfirmed: neither is sent by itself, only by a person (DocumentsController.Send, which does not come here).
     private static bool ShouldSend(FlowDocument doc, Flow flow) =>
-        DocumentSender.HeldForPerson(doc) is null && DocumentStatus.IsEditable(doc.Status, doc.StatusReason) && flow.Automation switch
+        !doc.IsSample && !doc.SortUnconfirmed && DocumentStatus.IsEditable(doc.Status, doc.StatusReason) && flow.Automation switch
         {
-            FlowAutomation.Auto => doc.Status is DocumentStatus.NeedsReview or DocumentStatus.Ready,
+            FlowAutomation.Auto => doc.Status is DocumentStatus.NeedsReview or DocumentStatus.Ready
+                && !DocumentJson.Deserialize<List<DocumentCheck>>(doc.ChecksJson).Any(c => c.Code is DocumentChecks.Duplicate or DocumentChecks.NewSender && !c.Passed),
             FlowAutomation.Marked => doc.Status == DocumentStatus.Ready,
             _ => false,
         };
