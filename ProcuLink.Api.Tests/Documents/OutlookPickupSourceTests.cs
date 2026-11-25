@@ -39,9 +39,11 @@ public class OutlookPickupSourceTests
             return path switch
             {
                 "/v1.0/me/mailFolders/inbox/messages" when url.Contains("$skip=50") => Json("""
-                    {"value":[{"id":"m-1","subject":"Invoice","hasAttachments":true,"from":{"emailAddress":{"address":"billing@example.com"}},
-                      "internetMessageHeaders":[{"name":"Authentication-Results","value":"spf=pass smtp.mailfrom=example.com; dmarc=pass action=none header.from=example.com"},
-                        {"name":"Authentication-Results","value":"spf=fail smtp.mailfrom=example.com; dmarc=fail header.from=example.com"}]}]}
+                    {"value":[{"id":"m-1","subject":"Invoice","hasAttachments":true,"from":{"emailAddress":{"address":"billing@example.com"}}}]}
+                    """),
+                "/v1.0/me/messages/m-1" => Json("""
+                    {"internetMessageHeaders":[{"name":"Authentication-Results","value":"spf=pass smtp.mailfrom=example.com; dmarc=pass action=none header.from=example.com"},
+                      {"name":"Authentication-Results","value":"spf=fail smtp.mailfrom=example.com; dmarc=fail header.from=example.com"}]}
                     """),
                 "/v1.0/me/mailFolders/inbox/messages" => Json("""
                     {"value":[{"id":"m-0","subject":"News","hasAttachments":true,"from":{"emailAddress":{"address":"news@other.test"}}}],
@@ -89,7 +91,10 @@ public class OutlookPickupSourceTests
         using var session = await Open(graph);
         var files = await session.ListAsync(default);
 
-        graph.Requests[0].Url.Should().Contain("$filter=isRead eq false");
+        graph.Requests[0].Url.Should().Contain("$filter=isRead eq false").And.NotContain("internetMessageHeaders");
+        // Only the matching mail is asked for headers, and its topmost passing Authentication-Results confirms the sender.
+        graph.Requests.Where(r => r.Url.Contains("$select=internetMessageHeaders")).Select(r => r.Url)
+            .Should().Equal("https://graph.microsoft.com/v1.0/me/messages/m-1?$select=internetMessageHeaders");
         files.Should().Equal(new PickupFile("outlook:m-1#a-1", "invoice.pdf", "billing@example.com"));
         (await session.DownloadAsync(files[0], 1024, default)).ToArray().Should().Equal("%PDF-1"u8.ToArray());
         await session.MarkDoneAsync(files[0], default);
@@ -107,11 +112,12 @@ public class OutlookPickupSourceTests
         static HttpResponseMessage Json(string json) => new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
         var graph = new FakeGraph(new()
         {
-            // m-3 comes without headers, so they are fetched for it alone.
+            // The list carries no headers, so each matching mail is asked for its own.
             ["/v1.0/me/mailFolders/inbox/messages"] = () => Json("""
-                {"value":[{"id":"m-2","subject":"Broken","hasAttachments":true,"from":{"emailAddress":{"address":"broken@example.com"}},"internetMessageHeaders":[]},
+                {"value":[{"id":"m-2","subject":"Broken","hasAttachments":true,"from":{"emailAddress":{"address":"broken@example.com"}}},
                           {"id":"m-3","subject":"Order","hasAttachments":true,"from":{"emailAddress":{"address":"orders@example.com"}}}]}
                 """),
+            ["/v1.0/me/messages/m-2"] = () => Json("""{"internetMessageHeaders":[]}"""),
             ["/v1.0/me/messages/m-2/attachments"] = () => new HttpResponseMessage(HttpStatusCode.InternalServerError),
             ["/v1.0/me/messages/m-3"] = () => Json("""
                 {"internetMessageHeaders":[{"name":"Authentication-Results","value":"spf=pass smtp.mailfrom=example.com; dmarc=pass header.from=example.com"}]}
