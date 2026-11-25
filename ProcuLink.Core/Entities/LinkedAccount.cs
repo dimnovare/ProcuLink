@@ -36,6 +36,7 @@ public static class LinkedAccountProviders
     {
         [Constants.DeliveryProtocolConstants.GoogleDrive] = Google,
         [Constants.DeliveryProtocolConstants.GoogleSheets] = Google,
+        [Constants.DeliveryProtocolConstants.MicrosoftOneDrive] = Microsoft,
     };
 
     /// <summary>The name people know the provider by, for copy.</summary>

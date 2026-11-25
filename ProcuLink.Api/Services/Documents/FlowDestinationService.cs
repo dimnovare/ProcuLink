@@ -7,6 +7,7 @@ using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Security;
 using ProcuLink.Core.Services.Delivery;
+using ProcuLink.Core.Services.Microsoft;
 using ProcuLink.Core.Services.Security;
 using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
@@ -30,7 +31,7 @@ public sealed class DestinationException(string code, string? detail = null) : E
 /// <summary>Org-level reusable destinations. Delivery itself is the existing dispatchers'; this only stores, validates and test-sends.</summary>
 public sealed class FlowDestinationService(
     ProcuLinkDbContext db, DeliveryEncryptionService encryption, IEnumerable<IDeliveryDispatcher> dispatchers,
-    LinkedAccountAvailability availability)
+    LinkedAccountAvailability availability, IMicrosoftDriveLinks links)
 {
     public const string TestFileName = "TEST_proculink-test.txt";
     public const string TestFileContent = "ProcuLink test send. This file is a test and contains no document data.\n";
@@ -38,15 +39,16 @@ public sealed class FlowDestinationService(
 
     private static readonly string[] Allowed =
         [DeliveryProtocolConstants.Http, DeliveryProtocolConstants.Sftp, DeliveryProtocolConstants.Ftps, DeliveryProtocolConstants.S3, DeliveryProtocolConstants.Email,
-         DeliveryProtocolConstants.GoogleDrive, DeliveryProtocolConstants.GoogleSheets];
+         DeliveryProtocolConstants.GoogleDrive, DeliveryProtocolConstants.GoogleSheets, DeliveryProtocolConstants.MicrosoftOneDrive];
 
     public async Task<FlowDestination> SaveAsync(Guid orgId, Guid? id, DestinationRequest req, CancellationToken ct)
     {
         var protocol = req.Protocol?.Trim().ToLowerInvariant() ?? "";
         if (!Allowed.Contains(protocol)) throw new DestinationException("unsupported_destination");
-        var isGoogle = protocol is DeliveryProtocolConstants.GoogleDrive or DeliveryProtocolConstants.GoogleSheets;
+        var provider = LinkedAccountProviders.ByProtocol.GetValueOrDefault(protocol);
+        var isLinked = provider is not null;
         // The flag gates creation (R2), not running: an existing destination keeps delivering once it is off.
-        if (isGoogle && !availability.On(orgId, LinkedAccountProviders.Google)) throw new DestinationException("unsupported_destination");
+        if (isLinked && !availability.On(orgId, provider!)) throw new DestinationException("unsupported_destination");
         if (string.IsNullOrWhiteSpace(req.Name) || req.Config.ValueKind != JsonValueKind.Object)
             throw new DestinationException("invalid_destination", "A name and a config object are required.");
 
@@ -56,7 +58,7 @@ public sealed class FlowDestinationService(
         if (id is not null && existing is null) throw new KeyNotFoundException();
 
         var configJson = req.Config.GetRawText();
-        var credentials = !isGoogle && req.Credentials is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) } c ? c.GetRawText() : null;
+        var credentials = !isLinked && req.Credentials is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) } c ? c.GetRawText() : null;
         try
         {
             DeliveryConfigRules.ValidateConfigJson(configJson);
@@ -69,7 +71,9 @@ public sealed class FlowDestinationService(
             throw new DestinationException("invalid_destination", ex.Message);
         }
 
-        if (isGoogle) await ValidateGoogleAsync(orgId, protocol, req.Config, ct);
+        if (provider == LinkedAccountProviders.Google) await ValidateGoogleAsync(orgId, protocol, req.Config, ct);
+        // Resolved before the entity is touched: the token store may save on this context.
+        if (provider == LinkedAccountProviders.Microsoft) configJson = await ResolveOneDriveAsync(orgId, existing, configJson, ct);
 
         // An S3 endpoint is a tenant-supplied URL outside the url-bearing protocols, so it is policed here (and again at dispatch).
         if (protocol == DeliveryProtocolConstants.S3 && req.Config.TryGetProperty("serviceUrl", out var endpoint)
@@ -108,6 +112,36 @@ public sealed class FlowDestinationService(
             throw new DestinationException("invalid_destination", "Choose a connected Google account.");
         if (Prop(target) is null)
             throw new DestinationException("invalid_destination", protocol == DeliveryProtocolConstants.GoogleDrive ? "Choose a Google Drive folder." : "Choose a Google spreadsheet.");
+    }
+
+    /// <summary>
+    /// The account must be this org's Microsoft files account. A pasted <c>link</c> is resolved into the folder's ids and
+    /// dropped; without one, the stored folder is kept only for the same account on a OneDrive destination. Sent ids are ignored.
+    /// </summary>
+    private async Task<string> ResolveOneDriveAsync(Guid orgId, FlowDestination? existing, string configJson, CancellationToken ct)
+    {
+        var json = (JsonObject)JsonNode.Parse(configJson)!;
+        if (!Guid.TryParse(Text(json, "accountId"), out var accountId)
+            || !await db.Set<LinkedAccount>().AnyAsync(a => a.OrgId == orgId && a.Id == accountId && a.Provider == LinkedAccountProviders.Microsoft, ct))
+            throw new DestinationException("invalid_destination", "Choose a connected Microsoft account.");
+
+        var link = Text(json, "link");
+        json.Remove("link"); // a sharing link is a capability URL: never stored
+        DriveItemRef target;
+        if (link is not null)
+            try { target = await links.ResolveAsync(orgId, accountId, link, ct); }
+            catch (DriveLinkException ex) { throw ex.Unavailable ? new DestinationException("microsoft_unavailable") : new DestinationException("invalid_destination", ex.Message); }
+        else if (existing?.Protocol == DeliveryProtocolConstants.MicrosoftOneDrive && JsonNode.Parse(existing.ConfigJson) is JsonObject old
+                 && Guid.TryParse(Text(old, "accountId"), out var oldAccount) && oldAccount == accountId
+                 && Text(old, "driveId") is { } driveId && Text(old, "itemId") is { } itemId)
+            target = new DriveItemRef(driveId, itemId, Text(old, "itemName") ?? "");
+        else
+            throw new DestinationException("invalid_destination", "Paste the folder's link.");
+
+        json["driveId"] = target.DriveId;
+        json["itemId"] = target.ItemId;
+        json["itemName"] = target.Name;
+        return json.ToJsonString();
     }
 
     /// <summary>Null when not this org's; false while an output still sends to it.</summary>

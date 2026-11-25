@@ -50,6 +50,8 @@ public sealed class OrgAdminGateIsRealTests
     // 22 -> 19 on 2026-11-13 (plan 13b Task 6b): IAcceptanceGate.RecordOverrideAsync,
     // OrderIngestionService.ApplyInvoiceProblemsAsync and IOrderService.ResolveAsync left the declared
     // set with the three endpoints above, their only gated callers.
+    // Unchanged by plan 30 Part B (2026-11-25): the OneDrive link is resolved inside FlowDestinationService.SaveAsync, already
+    // a primitive. A separate IMicrosoftDriveLinks.ResolveAsync entry is reached by no action at depth one, so it would be an orphan.
     private const int ExpectedDestructivePrimitiveCount = 26; // 19 + 4, one per Google endpoint (plan 9b) + flow delete (plan 21) + FlowCreation.New and DocumentRemoval.RemoveAsync (plan 25a)
 
     /// <summary>

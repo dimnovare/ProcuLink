@@ -99,7 +99,8 @@ internal static class OrgAdminGateIlScanner
         new("FlowDestinationService.SaveAsync",
             OnInterface<ProcuLink.Api.Services.Documents.FlowDestinationService>(nameof(ProcuLink.Api.Services.Documents.FlowDestinationService.SaveAsync)),
             "Writes where a flow's documents are sent, and the credentials used: a redirection of where "
-          + "an organisation's documents go."),
+          + "an organisation's documents go. For OneDrive it also opens the pasted link with the organisation's "
+          + "Microsoft account, which gives that account lasting access to the folder (plan 30)."),
 
         new("FlowDestinationService.DeleteAsync",
             OnInterface<ProcuLink.Api.Services.Documents.FlowDestinationService>(nameof(ProcuLink.Api.Services.Documents.FlowDestinationService.DeleteAsync)),

@@ -14,7 +14,7 @@ public sealed record MicrosoftProfile(string Provider, string Scopes, string Req
     public static readonly MicrosoftProfile Mailbox = new(LinkedAccountProviders.Outlook,
         "offline_access https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadWrite", "Mail.ReadWrite");
 
-    /// <summary>OneDrive delivery. Declared for plan 30 Part B; not registered yet.</summary>
+    /// <summary>OneDrive delivery (plan 30 Part B): add files to a folder the user pastes a link to.</summary>
     public static readonly MicrosoftProfile Files = new(LinkedAccountProviders.Microsoft,
         "offline_access https://graph.microsoft.com/User.Read https://graph.microsoft.com/Files.ReadWrite", "Files.ReadWrite");
 }

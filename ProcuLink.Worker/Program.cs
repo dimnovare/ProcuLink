@@ -180,12 +180,16 @@ builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.DocumentEngineGat
 builder.Services.Configure<ProcuLink.Infrastructure.Services.Google.GoogleOptions>(builder.Configuration.GetSection(ProcuLink.Infrastructure.Services.Google.GoogleOptions.Section));
 builder.Services.AddHttpClient(ProcuLink.Infrastructure.Services.Google.GoogleOAuthClient.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(30)); // fixed Google hosts: no OutboundRequestGuard
 builder.Services.AddScoped<ProcuLink.Core.Services.Google.ILinkedAccountOAuth, ProcuLink.Infrastructure.Services.Google.GoogleOAuthClient>();
-// Microsoft accounts (plan 30). Blank Microsoft config = feature invisible. One app, one provider key per consent: outlook (mail).
+// Microsoft accounts (plan 30). Blank Microsoft config = feature invisible. One app, one provider key per consent: outlook (mail), microsoft (files).
 builder.Services.Configure<ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOptions>(builder.Configuration.GetSection(ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOptions.Section));
-builder.Services.AddHttpClient(ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOAuthClient.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(30)); // fixed Microsoft hosts: no OutboundRequestGuard
+builder.Services.AddHttpClient(ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOAuthClient.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(30)).RemoveAllLoggers(); // fixed Microsoft hosts: no OutboundRequestGuard. No request logging: a /shares URI carries the pasted sharing link
 builder.Services.AddScoped<ProcuLink.Core.Services.Google.ILinkedAccountOAuth>(sp => new ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOAuthClient(
     ProcuLink.Infrastructure.Services.Microsoft.MicrosoftProfile.Mailbox, sp.GetRequiredService<IHttpClientFactory>(),
     sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOptions>>()));
+builder.Services.AddScoped<ProcuLink.Core.Services.Google.ILinkedAccountOAuth>(sp => new ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOAuthClient( // microsoft (OneDrive files)
+    ProcuLink.Infrastructure.Services.Microsoft.MicrosoftProfile.Files, sp.GetRequiredService<IHttpClientFactory>(),
+    sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ProcuLink.Infrastructure.Services.Microsoft.MicrosoftOptions>>()));
+builder.Services.AddScoped<ProcuLink.Core.Services.Microsoft.IMicrosoftDriveLinks, ProcuLink.Infrastructure.Services.Microsoft.MicrosoftDriveLinks>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Google.LinkedAccountAvailability>();
 builder.Services.AddScoped<ProcuLink.Core.Services.Google.ILinkedAccountTokens, ProcuLink.Infrastructure.Services.Google.LinkedAccountTokens>();
 builder.Services.Configure<ProcuLink.Api.Services.Documents.ValidatorOptions>(builder.Configuration.GetSection("Validator"));
@@ -295,6 +299,7 @@ builder.Services.AddScoped<IDeliveryDispatcher, FtpsDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, S3DeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, GoogleDriveDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, GoogleSheetsDeliveryDispatcher>();
+builder.Services.AddScoped<IDeliveryDispatcher, OneDriveDeliveryDispatcher>();
 // Email delivery via HTTP email API — works where outbound SMTP is blocked.
 builder.Services.AddScoped<IDeliveryDispatcher, EmailApiDeliveryDispatcher>();
 // Legacy raw-SMTP dispatcher: retired from offered channels; self-host opt-in only.
