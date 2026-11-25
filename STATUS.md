@@ -38,6 +38,8 @@ and the Worker is mandatory).
 
 - PDF, CSV, XLSX always; Word, text, XML, JSON and EDI behind the formats switch (#284); scanned
   PDFs and photos behind the scan switch (#281).
+- **ZUGFeRD / Factur-X** PDFs (#350): the embedded CII invoice is the read, with no AI call, when every
+  header value it keeps (a flow's saved fields only) and prints as written is also on the page (`EmbeddedInvoice`); otherwise the page is read.
 - **Checks never block a send.** On an automatic flow a failed `duplicate` or new-sender check holds
   the document for a person (`SendDocumentJob.ShouldSend`); a sample and an unconfirmed sort are
   never sent by themselves.
@@ -59,8 +61,9 @@ and the Worker is mandatory).
   interchange number per sent file, #330); behind the Peppol switch, Peppol BIS Billing 3, EN 16931
   CII and XRechnung, with on-demand rule checks that never stop a send.
 - Destinations (`DeliveryProtocolConstants`): email (Postmark), SFTP, FTP, FTPS, S3, web address
-  (+ OAuth2), Google Drive, Google Sheets (CSV only). Delivery sweep, ops alert, dead-letter log and
-  bounce handling (#307).
+  (+ OAuth2), Google Drive, Google Sheets (CSV only), OneDrive (a pasted folder sharing link; a
+  file of the same name is replaced, #351). Delivery sweep, ops alert, dead-letter log and bounce
+  handling (#307).
 
 ## Account, billing, alerts
 
@@ -74,7 +77,7 @@ and the Worker is mandatory).
 
 `EnabledForAll` / `EnabledOrgIds` turn the engine on; inside it, scans, formats, lookup AI
 suggestions, outputs designed from documentation, Peppol outputs, and native connectors (Google
-Drive / Sheets). Each is a `…ForAll` flag or a list of org ids.
+Drive / Sheets, the Outlook pickup, OneDrive). Each is a `…ForAll` flag or a list of org ids.
 
 ## Open
 
