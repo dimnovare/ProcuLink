@@ -263,6 +263,8 @@ public class DocsOperationalDataGuardTests
         // published convention — which is #179's platform-vs-counterparty rule, not an exception
         // to it.
         "microsoft.com", "schemastore.org", "json.schemastore.org", "keepachangelog.com",
+        // The Polish Ministry of Finance's form-schema registry: the FA(3) namespace and the vendored XSDs' home (plan 33).
+        "crd.gov.pl",
 
         // Hosting / runtime the product is deployed on.
         "vercel.com", "vercel.app", "railway.app", "up.railway.app", "neon.tech", "cloudflare.com",

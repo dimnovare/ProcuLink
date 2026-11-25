@@ -38,6 +38,7 @@
                       LogicalName="ubl-2.1/common/%(Filename)%(Extension)" />
     <EmbeddedResource Include="Conformance\Schemas\ubl-2.1\PROVENANCE.md"
                       LogicalName="ubl-2.1/PROVENANCE.md" />
+    <EmbeddedResource Include="Output\Ksef\Schema\*.xsd" LogicalName="ksef-fa3/%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

@@ -23,7 +23,7 @@ public sealed class FlowsController(
     private static IActionResult FlowNotFound() => new NotFoundObjectResult(new { error = "flow_not_found" });
 
     private FlowDto ToDto(Flow f, int documentCount, bool hasChanges = false, int? streak = null, FlowSummaryDto? summary = null, bool canDelete = false, bool downloadOnly = false) =>
-        new(f.Id, f.Name, f.FieldsConfirmed, DocumentJson.Deserialize<FlowFieldList>(f.FieldsJson), documentCount, f.CreatedAt, f.Automation, gate.ScansOn(f.OrgId), gate.FormatsOn(f.OrgId), gate.DocsOutputsOn(f.OrgId), gate.PeppolOn(f.OrgId), f.PublishedVersionNo, hasChanges, streak, summary, canDelete, downloadOnly);
+        new(f.Id, f.Name, f.FieldsConfirmed, DocumentJson.Deserialize<FlowFieldList>(f.FieldsJson), documentCount, f.CreatedAt, f.Automation, gate.ScansOn(f.OrgId), gate.FormatsOn(f.OrgId), gate.DocsOutputsOn(f.OrgId), gate.PeppolOn(f.OrgId), f.PublishedVersionNo, hasChanges, streak, summary, canDelete, downloadOnly, gate.KsefOn(f.OrgId));
 
     /// <summary>Every single-flow response: the web app caches each one whole, so none may drop a field.</summary>
     private async Task<FlowDto> SingleAsync(Flow flow, Guid orgId, CancellationToken ct) =>

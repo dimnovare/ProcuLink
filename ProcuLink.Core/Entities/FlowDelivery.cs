@@ -25,6 +25,11 @@ public class FlowDelivery
     public DateTime? ClaimedAt { get; set; }
     public DateTime? NextAttemptAt { get; set; }
     public DateTime? DeliveredAt { get; set; }
+    /// <summary>The receiving system's own number for what was sent (a KSeF number), with the environment it was issued in.</summary>
+    public string? RemoteReference { get; set; }
+    public string? RemoteEnvironment { get; set; }
+    /// <summary>Storage key of the receipt the receiving system returned (a KSeF UPO), when there is one.</summary>
+    public string? ReceiptKey { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }

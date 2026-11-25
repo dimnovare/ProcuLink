@@ -274,7 +274,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         if (standardId is not null)
         {
             if (proposed && known is null) return UnprocessableEntity(new { error = "unsupported_format" });
-            if (proposed && known!.Flagged && !gate.PeppolOn(orgId)) return StatusCode(403, new { error = "peppol_off" });
+            if (proposed && !gate.StandardOn(orgId, known!)) return StatusCode(403, new { error = "peppol_off" });
             if (body?.Template?.Envelope is { } draft && !PartnerIdsFit(draft)) return Invalid("partner_ids");
             // A proposed standard uses only the envelope sent in the body, by design: it starts with no saved partner IDs.
             render = proposed || body?.Template?.Envelope is not null
@@ -344,7 +344,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         if (request.Standard is { } standard)
         {
             var known = StandardOutputs.Find(standard);
-            if (known is { Flagged: true } && !gate.PeppolOn(orgId)) return StatusCode(403, new { error = "peppol_off" });
+            if (known is not null && !gate.StandardOn(orgId, known)) return StatusCode(403, new { error = "peppol_off" });
             if (request.Template?.Envelope is { } e && !PartnerIdsFit(e)) return Invalid("partner_ids");
             // A test reaches the partner's system too, and its duplicate check runs on tests: a fresh interchange number.
             var controlNumber = known?.NeedsControlNumber == true ? await InterchangeNumbers.NextAsync(db, ct) : (long?)null;
@@ -381,7 +381,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         if (name.Length is < 1 or > 120) return BadRequest(new { error = "invalid_name" });
         // A standard decides its own format and has no template or layout: the request's are ignored.
         var standard = StandardOutputs.Find(output.Standard);
-        if (standard is { Flagged: true } && !gate.PeppolOn(orgId)) return StatusCode(403, new { error = "peppol_off" });
+        if (standard is not null && !gate.StandardOn(orgId, standard)) return StatusCode(403, new { error = "peppol_off" });
         var format = output.Standard is null ? request.Format : standard?.Format;
         if (format is null || !FlowOutputFormats.All.Contains(format)) return UnprocessableEntity(new { error = "unsupported_format" });
         if (!flow.FieldsConfirmed) return Conflict(new { error = "fields_unconfirmed" });

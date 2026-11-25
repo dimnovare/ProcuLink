@@ -18,4 +18,7 @@ public sealed class LinkedAccountAvailability(DocumentEngineGate gate, IEnumerab
         // The Google destinations pick their target in Google's Picker, which needs both.
         && (provider != LinkedAccountProviders.Google
             || (!string.IsNullOrWhiteSpace(google.Value.PickerApiKey) && !string.IsNullOrWhiteSpace(google.Value.ProjectNumber)));
+
+    /// <summary>Whether the org may create a KSeF destination (plan 33): the KSeF switch, like the destination's output.</summary>
+    public bool KsefOn(Guid orgId) => gate.KsefOn(orgId);
 }

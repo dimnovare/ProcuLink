@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Services.Documents;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -59,8 +60,13 @@ public class DeliverDocumentJob(
         var credentials = "";
         if (destination is null) deadLetter = "The destination was removed.";
         else if (dispatcher is null) deadLetter = "No dispatcher for this destination.";
+        else if (destination.Protocol == DeliveryProtocolConstants.Ksef && FlowDestinationService.KsefEnvironment(destination) != delivery.RemoteEnvironment)
+            // Queued for one KSeF environment (and confirmed for Production only there): never sent to another.
+            deadLetter = "This KSeF destination was switched to another environment after this invoice was queued. Nothing was sent. Send the document again to check and confirm it.";
         else if (reclaimed && (dispatcher.ResendSafety == ResendSafety.Unsafe || DeliveryRepair.CannotRepairItsOwnFile(config!)))
-            deadLetter = "This may already have been sent. Check with the recipient before sending again.";
+            deadLetter = destination.Protocol == DeliveryProtocolConstants.Ksef
+                ? "KSeF may have received the invoice, but we couldn't confirm the result. Check it in Aplikacja Podatnika KSeF before sending again; sending again may issue it twice."
+                : "This may already have been sent. Check with the recipient before sending again.";
         else
             try { credentials = destinations.DecryptCredentials(destination); }
             catch (CredentialUnbindableException) { deadLetter = "Destination credentials could not be decrypted."; }
@@ -86,6 +92,12 @@ public class DeliverDocumentJob(
 
         if (destination is not null) FlowDestinationService.RecordLearnedHostKey(destination, result);
 
+        // A receipt (a KSeF UPO) is stored before the transaction; failing to keep it never fails what was delivered.
+        string? receiptKey = null;
+        if (result is { Success: true, Receipt: { } receipt })
+            try { receiptKey = await storage.UploadAsync(new MemoryStream(receipt, writable: false), $"{delivery.ArtifactKey}.upo.xml", "application/xml", CancellationToken.None); }
+            catch (Exception) { logger.LogWarning("DeliverDocumentJob could not store the receipt of delivery {DeliveryId}", deliveryId); }
+
         // Sibling deliveries finish concurrently: take the document row's lock first so each roll-up sees the others' committed result.
         // The dispatch is done and its result known: a shutdown must not roll that back.
         var save = CancellationToken.None;
@@ -103,10 +115,12 @@ public class DeliverDocumentJob(
             delivery.Status = FlowDeliveryStatus.Delivered;
             delivery.DeliveredAt = finishedAt;
             delivery.LastError = null;
+            (delivery.RemoteReference, delivery.RemoteEnvironment, delivery.ReceiptKey) = (result.RemoteReference, result.RemoteEnvironment, receiptKey);
         }
         else
         {
             delivery.LastError = result.ErrorMessage;
+            delivery.RemoteReference = result.RemoteReference ?? delivery.RemoteReference;   // what KSeF may already hold
             if (result.Outcome == DeliveryOutcome.NotRetryable || delivery.Attempts >= reliability.MaxAttempts)
                 delivery.Status = FlowDeliveryStatus.DeadLetter;
             else
@@ -135,6 +149,13 @@ public class DeliverDocumentJob(
                 .SetProperty(d => d.Attempts, d => d.Attempts + 1)
                 .SetProperty(d => d.UpdatedAt, now), ct);
 
+    /// <summary>
+    /// A KSeF dead letter that kept a reference: KSeF holds the invoice (a duplicate) or may (an unconfirmed outcome). Fixing the
+    /// destination is the wrong advice for it, so it names no destination to fix.
+    /// </summary>
+    public static bool RemoteMayHold(string protocol, string status, string? remoteReference) =>
+        protocol == DeliveryProtocolConstants.Ksef && status == FlowDeliveryStatus.DeadLetter && remoteReference != null;
+
     public static void Enqueue(IBackgroundJobClient jobs, Guid deliveryId, Guid organisationId) =>
         jobs.Enqueue<DeliverDocumentJob>(j => j.ExecuteAsync(deliveryId, organisationId, CancellationToken.None));
 
@@ -157,7 +178,7 @@ public class DeliverDocumentJob(
         if (finished is null ? doc.Status == DocumentStatus.SendFailed : finished.Status is FlowDeliveryStatus.Delivered or FlowDeliveryStatus.DeadLetter)
             DocumentAudit.Add(db, doc, delivered ? "document.delivered" : "document.delivery_failed",
                 new { output = finished?.OutputName, protocol = finished?.Protocol, responseCode = finished?.ResponseCode, error = finished is null ? SendStoppedError : finished.LastError,
-                    attempts = finished?.Attempts, destinationId = finished?.DestinationId, file = finished?.FileName, destination = destinationName, version = doc.FlowVersion }, null);
+                    attempts = finished?.Attempts, destinationId = finished is not null && RemoteMayHold(finished.Protocol, finished.Status, finished.RemoteReference) ? null : finished?.DestinationId, file = finished?.FileName, destination = destinationName, version = doc.FlowVersion }, null);
         return before;
     }
 

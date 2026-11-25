@@ -127,4 +127,7 @@ public record DeliveryResult(
     DeliveryOutcome Outcome = DeliveryOutcome.Dispatched,
     bool SupplierReasonObservable = false,
     TimeSpan? RetryAfter = null,
-    string? LearnedHostKeyFingerprint = null);
+    string? LearnedHostKeyFingerprint = null,
+    string? RemoteReference = null,
+    string? RemoteEnvironment = null,
+    byte[]? Receipt = null);

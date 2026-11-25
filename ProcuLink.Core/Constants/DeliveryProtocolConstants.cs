@@ -45,6 +45,9 @@ public static class DeliveryProtocolConstants
     /// <summary>OneDrive folder (plan 30), through a Microsoft <c>LinkedAccount</c>. Flow destinations only.</summary>
     public const string MicrosoftOneDrive = "microsoft_onedrive";
 
+    /// <summary>Poland's KSeF: issues a KSeF FA(3) file with the customer's own token (plan 33). Never URL-based: its hosts are fixed per environment.</summary>
+    public const string Ksef = "ksef";
+
     public static readonly string[] All =
     [
         Http,
@@ -59,7 +62,8 @@ public static class DeliveryProtocolConstants
         Manual,
         GoogleDrive,
         GoogleSheets,
-        MicrosoftOneDrive
+        MicrosoftOneDrive,
+        Ksef
     ];
 
     /// <summary>
@@ -81,5 +85,5 @@ public static class DeliveryProtocolConstants
 
     // Human-facing allowed list for validation messages: lists OFFERED protocols (smtp omitted —
     // it is accepted for legacy/self-host but no longer advertised).
-    public static string AllowedListForMessage => "http, sftp, ftp, ftps, email, erp_erply, erp_directo, or manual";
+    public static string AllowedListForMessage => "http, sftp, ftp, ftps, email, erp_erply, erp_directo, ksef, or manual";
 }

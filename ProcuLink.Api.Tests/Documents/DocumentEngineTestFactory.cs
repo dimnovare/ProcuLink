@@ -136,6 +136,7 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             ["DocumentEngine:FormatOrgIds:0"] = OrgB.ToString(),
             ["DocumentEngine:DocsOutputOrgIds:0"] = OrgA.ToString(),
             ["DocumentEngine:PeppolOrgIds:0"] = OrgA.ToString(),
+            ["DocumentEngine:KsefOrgIds:0"] = OrgA.ToString(),
             ["DocumentEngine:NativeConnectorOrgIds:0"] = OrgA.ToString(),
             ["DocumentEngine:NativeConnectorOrgIds:1"] = OrgB.ToString(),
             ["Google:ClientId"] = "test-client-id",

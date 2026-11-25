@@ -387,15 +387,18 @@ public sealed class DocumentsController(
         return Ok(await DetailAsync(doc, flow.Name, ct));
     }
 
+    /// <summary>The person's confirmation of a KSeF Production invoice: the <c>confirm</c> hash from the <c>ksef_confirm</c> refusal.</summary>
+    public sealed record SendRequest(string? KsefConfirm);
+
     [HttpPost("{id:guid}/send")]
-    public async Task<IActionResult> Send(Guid id, CancellationToken ct)
+    public async Task<IActionResult> Send(Guid id, [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] SendRequest? body, CancellationToken ct)
     {
         if (Refuse() is { } refused) return refused;
         var doc = await FindAsync(id, ct);
         if (doc is null) return NotFound(NotFoundBody);
         if (doc.IsSample)
             return Conflict(new { error = "sample_document", message = "This is our sample invoice, so it can't be sent. Add one of your own to send it." });
-        var outcome = await sender.SendAsync(doc, SendMode.Person, tenant.ClerkUserId, ct);
+        var outcome = await sender.SendAsync(doc, SendMode.Person, tenant.ClerkUserId, ct, body?.KsefConfirm);
         if (outcome.Ok)
         {
             // A person sent it: its sort is confirmed. Best effort: the send is committed and is never answered as a failure.
@@ -415,16 +418,23 @@ public sealed class DocumentsController(
         {
             "output_invalid" when outcome.Detail is OutputFailure f => UnprocessableEntity(new { error = outcome.Error, output = f.Output, detail = f.Detail }),
             "output_invalid" => UnprocessableEntity(new { error = outcome.Error }),
+            _ when outcome.Detail is KsefConfirmDetail k => Conflict(new { error = outcome.Error, summaries = k.Summaries, confirm = k.Confirm }),
+            _ when outcome.Detail is KsefIssuedDetail i => Conflict(new { error = outcome.Error, ksefNumber = i.KsefNumber }),
             _ => Conflict(new { error = outcome.Error }),
         };
     }
 
     internal static object ToDeliveryDto(FlowDelivery d) =>
-        new { d.Id, d.OutputName, d.Protocol, d.Status, d.Attempts, d.LastError, d.FileName, d.DeliveredAt };
+        new { d.Id, d.OutputName, d.Protocol, d.Status, d.Attempts, d.LastError, d.FileName, d.DeliveredAt, remoteReference = Issued(d), hasReceipt = d.ReceiptKey != null, remoteMayHold = RemoteMayHold(d) };
+
+    private static bool RemoteMayHold(FlowDelivery d) => DeliverDocumentJob.RemoteMayHold(d.Protocol, d.Status, d.RemoteReference);
+
+    /// <summary>The receiving system's number, only once delivered: an unconfirmed KSeF reference is not a KSeF number (its message names it).</summary>
+    private static string? Issued(FlowDelivery d) => d.Status == FlowDeliveryStatus.Delivered ? d.RemoteReference : null;
 
     /// <summary>As above, plus where it went: the destination's name, null when stored for download or the destination is gone.</summary>
     internal static object ToDeliveryDto(FlowDelivery d, string? destination) =>
-        new { d.Id, d.OutputName, d.Protocol, d.Status, d.Attempts, d.LastError, d.FileName, d.DeliveredAt, destination };
+        new { d.Id, d.OutputName, d.Protocol, d.Status, d.Attempts, d.LastError, d.FileName, d.DeliveredAt, destination, remoteReference = Issued(d), hasReceipt = d.ReceiptKey != null, remoteMayHold = RemoteMayHold(d) };
 
     [HttpGet("{id:guid}/deliveries")]
     public async Task<IActionResult> Deliveries(Guid id, CancellationToken ct)
@@ -441,14 +451,17 @@ public sealed class DocumentsController(
 
     [HttpGet("{id:guid}/deliveries/{deliveryId:guid}/file")]
     [EnableRateLimiting("signed-url")]
-    public async Task<IActionResult> DeliveryFile(Guid id, Guid deliveryId, CancellationToken ct)
+    public async Task<IActionResult> DeliveryFile(Guid id, Guid deliveryId, CancellationToken ct, [FromQuery] bool receipt = false)
     {
         if (Refuse() is { } refused) return refused;
         var delivery = await db.Set<FlowDelivery>().AsNoTracking()
             .FirstOrDefaultAsync(d => d.OrgId == tenant.OrganisationId && d.DocumentId == id && d.Id == deliveryId, ct);
-        if (delivery?.ArtifactKey is null) return NotFound(new { error = "delivery_not_found" });
+        // ?receipt=true: the receipt the receiving system returned (a KSeF UPO) instead of the file sent.
+        if ((receipt ? delivery?.ReceiptKey : delivery?.ArtifactKey) is not { } key) return NotFound(new { error = "delivery_not_found" });
         Response.Headers[HeaderNames.CacheControl] = "no-store";
         Response.Headers["X-Content-Type-Options"] = "nosniff";
-        return File(await storage.DownloadAsync(delivery.ArtifactKey, ct), delivery.ContentType, delivery.FileName);
+        return receipt
+            ? File(await storage.DownloadAsync(key, ct), "application/xml", $"UPO-{delivery!.RemoteReference}.xml")
+            : File(await storage.DownloadAsync(key, ct), delivery!.ContentType, delivery.FileName);
     }
 }

@@ -103,6 +103,8 @@ public class TrackedSourceOperationalDataGuardTests
         "email", "webhook", "api", "none", "silent",
         // Storage APIs used as destinations (plan 9b, 2026-11-13): a platform's API, like "s3", not a customer.
         "google_drive", "google_sheets", "microsoft_onedrive",
+        // A national e-invoicing system run by a public authority (plan 33): a channel every Polish issuer uses, not a party.
+        "ksef",
         // Auth mechanisms that earn a dedicated vendor fetcher.
         "aes2fa",
         // TLS/transport version tokens, which share the word in an unrelated sense.

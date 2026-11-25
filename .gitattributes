@@ -14,3 +14,6 @@ ProcuLink.Infrastructure/Fixtures/*.csv text eol=crlf
 #            SHA-256 digests pinned in PROVENANCE.md — would differ by platform. Exactly
 #            the split the CSV rule above exists to close.
 ProcuLink.Transform/Conformance/Schemas/ubl-2.1/**/*.xsd -text
+
+# Vendored Ministry of Finance FA(3) schemas: byte-exact from crd.gov.pl (see the README beside them).
+ProcuLink.Transform/Output/Ksef/Schema/* -text

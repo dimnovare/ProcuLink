@@ -910,6 +910,18 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("text")
                         .HasColumnName("protocol");
 
+                    b.Property<string>("ReceiptKey")
+                        .HasColumnType("text")
+                        .HasColumnName("receipt_key");
+
+                    b.Property<string>("RemoteEnvironment")
+                        .HasColumnType("text")
+                        .HasColumnName("remote_environment");
+
+                    b.Property<string>("RemoteReference")
+                        .HasColumnType("text")
+                        .HasColumnName("remote_reference");
+
                     b.Property<int?>("ResponseCode")
                         .HasColumnType("integer")
                         .HasColumnName("response_code");

@@ -29,6 +29,16 @@ public class DocumentEngineGateTests
     }
 
     [Fact]
+    public void KsefOn_needs_the_engine_and_the_list_or_for_all()
+    {
+        var org = Guid.NewGuid();
+        Gate(new() { EnabledOrgIds = [org.ToString()], KsefOrgIds = [org.ToString()] }).KsefOn(org).Should().BeTrue();
+        Gate(new() { KsefOrgIds = [org.ToString()] }).KsefOn(org).Should().BeFalse();
+        Gate(new() { EnabledOrgIds = [org.ToString()], PeppolOrgIds = [org.ToString()] }).KsefOn(org).Should().BeFalse();
+        Gate(new() { EnabledForAll = true, KsefForAll = true }).KsefOn(Guid.NewGuid()).Should().BeTrue();
+    }
+
+    [Fact]
     public void NativeConnectorsOn_needs_the_engine_and_the_org_or_ForAll()
     {
         var org = Guid.NewGuid();

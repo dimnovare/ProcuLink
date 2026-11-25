@@ -8,6 +8,7 @@ using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using ProcuLink.Transform.Documents;
+using ProcuLink.Transform.Output.Ksef;
 
 namespace ProcuLink.Api.Services.Documents;
 
@@ -15,6 +16,12 @@ public enum SendMode { Person, Automatic }
 
 /// <summary>Which output could not be rendered, and why.</summary>
 public sealed record OutputFailure(string Output, string? Detail);
+
+/// <summary>A KSeF Production send waits for a person: what the files say, and the hash to confirm them by.</summary>
+public sealed record KsefConfirmDetail(IReadOnlyList<KsefSummary> Summaries, string Confirm);
+
+/// <summary>The document already has this production KSeF number, so it is never issued again.</summary>
+public sealed record KsefIssuedDetail(string? KsefNumber);
 
 public sealed record SendOutcome(string? Error, object? Detail, IReadOnlyList<FlowDelivery> Deliveries)
 {
@@ -41,7 +48,11 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
 
     private static SendOutcome Refuse(string error, object? detail = null) => new(error, detail, []);
 
-    public async Task<SendOutcome> SendAsync(FlowDocument doc, SendMode mode, string? userId, CancellationToken ct)
+    /// <param name="ksefConfirm">
+    /// The confirmation a person gives for an invoice going to KSeF Production: the hash of exactly the file they were shown
+    /// (<see cref="Fa3Summary.ConfirmHash"/>). Without it such a send is refused with the preview; an automatic send is held.
+    /// </param>
+    public async Task<SendOutcome> SendAsync(FlowDocument doc, SendMode mode, string? userId, CancellationToken ct, string? ksefConfirm = null)
     {
         var (observed, observedAt) = (doc.Status, Micros(doc.UpdatedAt));
         if (!DocumentStatus.IsEditable(observed, doc.StatusReason)) return Refuse("not_ready");
@@ -67,11 +78,11 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
         var rendered = new List<Rendered>();
         foreach (var (o, template) in outputs.Zip(templates))
         {
-            // A flagged standard whose flag has since gone off is refused like an unknown one, never rendered.
+            // A standard whose switch (Peppol, KSeF) has since gone off is refused like an unknown one, never rendered.
             // An X12 / EDIFACT file gets a fresh interchange number; nothing is modified yet, so allocating it saves nothing else.
             var known = StandardOutputs.Find(o.Standard);
             var render = o.Standard is not null
-                ? known is { Flagged: true } && !gate.PeppolOn(doc.OrgId)
+                ? known is not null && !gate.StandardOn(doc.OrgId, known)
                     ? new DocumentRender(null, "output_invalid", null)
                     : await StandardOutputs.RenderAsync(o, read, config.Fields, doc.OrgId, ct,
                         known?.NeedsControlNumber == true ? await InterchangeNumbers.NextAsync(db, ct) : null)
@@ -87,8 +98,25 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
             rendered.Add(new(o, buffer.ToArray(), render.Result.ContentType, render.Result.FileExtension));
         }
 
+        var issue = await KsefProductionAsync(doc, rendered, ct);
+        // KSeF Production: never twice, and never without a person who saw exactly this file. An automatic send is held for one.
+        if (issue is not null)
+        {
+            var refusal = issue.Refusal
+                ?? (mode == SendMode.Automatic || ksefConfirm is null ? Refuse(KsefConfirm, new KsefConfirmDetail(issue.Summaries, issue.Confirm!))
+                    : ksefConfirm != issue.Confirm ? Refuse("ksef_changed") : null);
+            if (refusal is not null)
+            {
+                if (mode == SendMode.Automatic) await HoldAsync(doc, refusal.Error!, ct);
+                return refusal;
+            }
+        }
+
         // Claim: a double Send, a person racing an automatic send, or an edit since we rendered finds zero rows here.
         if (!await ClaimAsync(doc, observed, observedAt, DocumentStatus.Sending, ct)) return Refuse("not_ready");
+        // Saved with the send itself (StoreAsync's SaveChanges), so a confirmation is recorded exactly when it was acted on.
+        if (issue is { Confirm: { } confirmed })
+            DocumentAudit.Add(db, doc, "document.ksef_issue_confirmed", new { confirm = confirmed, environment = "production" }, userId);
         IReadOnlyList<FlowDelivery> queued;
         SendOutcome outcome;
         try
@@ -131,6 +159,9 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
             var delivery = existing.FirstOrDefault(d => d.OutputId == r.Output.Id);
             if (delivery?.Status is FlowDeliveryStatus.Delivered or FlowDeliveryStatus.Stored or FlowDeliveryStatus.Queued or FlowDeliveryStatus.Delivering)
                 continue;
+            // A row KSeF Production may already hold is kept as history, never reused: its reference keeps the document from Production.
+            if (delivery is { RemoteEnvironment: "production", RemoteReference: not null })
+                (delivery.OutputId, delivery) = (null, null);
             if (delivery is null)
             {
                 delivery = new FlowDelivery
@@ -145,6 +176,9 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
             delivery.OutputName = r.Output.Name;
             delivery.DestinationId = destination?.Id;
             delivery.Protocol = destination?.Protocol ?? "";
+            // A KSeF delivery is bound to the environment it was checked (and, for Production, confirmed) for.
+            (delivery.RemoteEnvironment, delivery.RemoteReference, delivery.ReceiptKey) =
+                (destination?.Protocol == Core.Constants.DeliveryProtocolConstants.Ksef ? FlowDestinationService.KsefEnvironment(destination) : null, null, null);
             delivery.DispatchKey = Guid.NewGuid();
             delivery.ArtifactKey = $"{doc.OrgId}/documents/{doc.Id}/outputs/{delivery.DispatchKey}{r.Extension}";
             delivery.ContentType = r.ContentType;
@@ -175,6 +209,43 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
         await db.SaveChangesAsync(ct);
 
         return (new SendOutcome(null, null, existing), sent.Where(d => d.Status == FlowDeliveryStatus.Queued).ToList());
+    }
+
+    private const string KsefConfirm = "ksef_confirm";
+
+    private sealed record KsefIssue(SendOutcome? Refusal, IReadOnlyList<KsefSummary> Summaries, string? Confirm);
+
+    private static readonly System.Text.RegularExpressions.Regex KsefNumber = new(@"^\d{10}-\d{8}-[0-9A-F]{12}-[0-9A-F]{2}$");
+
+    /// <summary>
+    /// For outputs routed to a KSeF Production destination: refused when the document already has a production KSeF number, or when
+    /// such an output is not the KSeF invoice file; otherwise the preview and the hash a person must confirm (one file's hash, or the
+    /// SHA-256 of all of them joined by newlines, in output order). Null when nothing goes to KSeF Production.
+    /// </summary>
+    private async Task<KsefIssue?> KsefProductionAsync(FlowDocument doc, List<Rendered> rendered, CancellationToken ct)
+    {
+        var ids = rendered.Select(r => r.Output.DestinationId).OfType<Guid>().Distinct().ToList();
+        var production = (await db.Set<FlowDestination>().AsNoTracking()
+                .Where(d => d.OrgId == doc.OrgId && ids.Contains(d.Id) && d.Protocol == Core.Constants.DeliveryProtocolConstants.Ksef).ToListAsync(ct))
+            .Where(d => FlowDestinationService.KsefEnvironment(d) == "production").Select(d => d.Id).ToHashSet();
+        var files = rendered.Where(r => r.Output.DestinationId is { } id && production.Contains(id)).ToList();
+        if (files.Count == 0) return null;
+        if (files.Count > 1)
+            return new(Refuse("output_invalid", new OutputFailure(files[1].Output.Name, "Only one KSeF invoice file can go to KSeF Production from a document.")), [], null);
+
+        var issued = await db.Set<FlowDelivery>().AsNoTracking()
+            .Where(d => d.OrgId == doc.OrgId && d.DocumentId == doc.Id && d.RemoteEnvironment == "production" && d.RemoteReference != null)
+            .Select(d => d.RemoteReference).FirstOrDefaultAsync(ct);
+        // Issued, or possibly issued (a reference KSeF gave before the outcome was known): never sent to Production again.
+        if (issued is not null)
+            return new(Refuse("ksef_already_issued", new KsefIssuedDetail(KsefNumber.IsMatch(issued) ? issued : null)), [], null);
+        if (files.FirstOrDefault(r => r.Output.Standard != "ksef-fa-3") is { } other)
+            return new(Refuse("output_invalid", new OutputFailure(other.Output.Name, "A KSeF destination can only send the KSeF invoice file.")), [], null);
+
+        var hashes = files.Select(r => Fa3Summary.ConfirmHash(r.Bytes)).ToList();
+        var confirm = hashes.Count == 1 ? hashes[0]
+            : Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(string.Join('\n', hashes)))).ToLowerInvariant();
+        return new(null, [.. files.Select(r => Fa3Summary.Read(r.Bytes))], confirm);
     }
 
     /// <summary>Postgres stores microseconds; a just-saved tracked entity still holds 100ns ticks. Compare at the stored precision.</summary>

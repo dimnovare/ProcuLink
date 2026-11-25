@@ -5,7 +5,7 @@ using ProcuLink.Core.Entities;
 namespace ProcuLink.Api.Contracts;
 
 public record FlowDto(Guid Id, string Name, bool FieldsConfirmed, FlowFieldList Fields, int DocumentCount, DateTime CreatedAt, string Automation = "review", bool ScansOn = false, bool FormatsOn = false, bool DocsOutputsOn = false, bool PeppolOn = false,
-    int? PublishedVersion = null, bool HasChanges = false, int? NoCorrectionStreak = null, FlowSummaryDto? Summary = null, bool CanDelete = false, bool DownloadOnly = false);
+    int? PublishedVersion = null, bool HasChanges = false, int? NoCorrectionStreak = null, FlowSummaryDto? Summary = null, bool CanDelete = false, bool DownloadOnly = false, bool KsefOn = false);
 
 /// <summary>The workspace inbox: its flow, its email address and the address's intake id, and which file kinds it reads.</summary>
 public sealed record InboxDto(Guid FlowId, string? Address, Guid? IntakeId, bool ScansOn, bool FormatsOn);
