@@ -39,6 +39,8 @@ public class DispatcherResendSafetyTests
         // No dedupe signal reaches the ERP endpoint at all.
         { "erp_erply", ResendSafety.Unsafe },
         { "erp_directo", ResendSafety.Unsafe },
+        // Every send issues an invoice; KSeF's duplicate rule (440) is a backstop, not a dedupe (plan 33).
+        { "ksef", ResendSafety.Unsafe },
     };
 
     [Theory]
@@ -81,6 +83,7 @@ public class DispatcherResendSafetyTests
         new SmtpDeliveryDispatcher(NullLogger<SmtpDeliveryDispatcher>.Instance, Guard()),
         new ErplyDeliveryDispatcher(new IErpConnector[] { new FakeErpConnector("erp_erply") }),
         new DirectoDeliveryDispatcher(new IErpConnector[] { new FakeErpConnector("erp_directo") }),
+        new KsefDeliveryDispatcher(new ProcuLink.Infrastructure.Services.Ksef.KsefClient(new FakeHttpClientFactory(), Microsoft.Extensions.Options.Options.Create(new ProcuLink.Infrastructure.Services.Ksef.KsefOptions())), NullLogger<KsefDeliveryDispatcher>.Instance),
     };
 
     // Minimal IHttpClientFactory double — HttpDeliveryDispatcher's constructor requires one but

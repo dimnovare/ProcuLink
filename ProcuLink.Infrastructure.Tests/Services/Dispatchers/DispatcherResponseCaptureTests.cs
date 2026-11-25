@@ -49,6 +49,8 @@ public class DispatcherResponseCaptureTests
         { "google_drive", false },
         { "google_sheets", false },
         { "microsoft_onedrive", false },
+        // KSeF's own rejection text goes into the message verbatim; every refusal is final, never classified (plan 33).
+        { "ksef", false },
         { "smtp", false },
     };
 
@@ -192,6 +194,7 @@ public class DispatcherResponseCaptureTests
         new SmtpDeliveryDispatcher(NullLogger<SmtpDeliveryDispatcher>.Instance, Guard()),
         new ErplyDeliveryDispatcher(new IErpConnector[] { new StubErpConnector("erp_erply") }),
         new DirectoDeliveryDispatcher(new IErpConnector[] { new StubErpConnector("erp_directo") }),
+        new KsefDeliveryDispatcher(new ProcuLink.Infrastructure.Services.Ksef.KsefClient(new StubHttpClientFactory(), Microsoft.Extensions.Options.Options.Create(new ProcuLink.Infrastructure.Services.Ksef.KsefOptions())), NullLogger<KsefDeliveryDispatcher>.Instance),
     };
 
     /// <summary>A dispatcher that declares nothing — i.e. the one someone writes next.</summary>

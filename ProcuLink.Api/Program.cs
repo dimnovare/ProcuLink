@@ -681,6 +681,11 @@ builder.Services.AddScoped<IDeliveryDispatcher, FtpsDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, S3DeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, GoogleDriveDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, GoogleSheetsDeliveryDispatcher>();
+// Plan 33: KSeF. Fixed official hosts per environment (no OutboundRequestGuard), and no request logging: bodies carry the encrypted token.
+builder.Services.Configure<ProcuLink.Infrastructure.Services.Ksef.KsefOptions>(builder.Configuration.GetSection(ProcuLink.Infrastructure.Services.Ksef.KsefOptions.Section));
+builder.Services.AddHttpClient(ProcuLink.Infrastructure.Services.Ksef.KsefOptions.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(30)).RemoveAllLoggers();
+builder.Services.AddScoped<ProcuLink.Infrastructure.Services.Ksef.KsefClient>();
+builder.Services.AddScoped<IDeliveryDispatcher, KsefDeliveryDispatcher>();
 builder.Services.AddScoped<IDeliveryDispatcher, OneDriveDeliveryDispatcher>();
 // Email delivery via HTTP email API (Postmark) — works where outbound SMTP is blocked.
 builder.Services.AddScoped<IDeliveryDispatcher, EmailApiDeliveryDispatcher>();
