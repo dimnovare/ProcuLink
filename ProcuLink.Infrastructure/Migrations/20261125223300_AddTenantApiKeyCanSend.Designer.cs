@@ -13,7 +13,7 @@ using ProcuLink.Infrastructure;
 namespace ProcuLink.Infrastructure.Migrations
 {
     [DbContext(typeof(ProcuLinkDbContext))]
-    [Migration("20261125145203_AddTenantApiKeyCanSend")]
+    [Migration("20261125223300_AddTenantApiKeyCanSend")]
     partial class AddTenantApiKeyCanSend
     {
         /// <inheritdoc />
@@ -912,6 +912,18 @@ namespace ProcuLink.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("protocol");
+
+                    b.Property<string>("ReceiptKey")
+                        .HasColumnType("text")
+                        .HasColumnName("receipt_key");
+
+                    b.Property<string>("RemoteEnvironment")
+                        .HasColumnType("text")
+                        .HasColumnName("remote_environment");
+
+                    b.Property<string>("RemoteReference")
+                        .HasColumnType("text")
+                        .HasColumnName("remote_reference");
 
                     b.Property<int?>("ResponseCode")
                         .HasColumnType("integer")
