@@ -234,7 +234,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         if (StandardOutputs.Find(output.Standard) is not { Vesid: { } vesid } standard) return NotFound(new { error = "not_a_rule_checked_output" });
         if (!gate.PeppolOn(orgId)) return StatusCode(403, new { error = "peppol_off" });
 
-        var render = await StandardOutputs.RenderAsync(standard.Id, DocumentJson.Deserialize<ReadResult>(doc.ReadJson), config.Fields, output.TableKey, orgId, ct);
+        var render = await StandardOutputs.RenderAsync(standard.Embeds ?? standard.Id, DocumentJson.Deserialize<ReadResult>(doc.ReadJson), config.Fields, output.TableKey, orgId, ct);
         if (!render.Ok) return UnprocessableEntity(new { error = render.Error, detail = render.Detail });
         using var buffer = new MemoryStream();
         await render.Result!.Content.CopyToAsync(buffer, ct);

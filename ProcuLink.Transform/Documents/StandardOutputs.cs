@@ -11,9 +11,11 @@ namespace ProcuLink.Transform.Documents;
 /// A standard file an output can be: its id (the FE catalog id), the writer that makes it, the stored format, and the meanings it needs.
 /// A <see cref="Vesid"/> marks a Peppol invoice-model standard (made by the invoice writer, not <see cref="Writer"/>, which is then
 /// unused) and names the official rule set it is checked against; <see cref="Flagged"/> standards sit behind the Peppol flag.
+/// A <see cref="Format"/> of pdf marks a Factur-X / ZUGFeRD PDF. <see cref="Embeds"/> is a PDF standard's XML twin: the PDF carries
+/// exactly that standard's file, and its rule checks check that file.
 /// </summary>
 public sealed record StandardOutput(string Id, OutputFormat Writer, string Format, IReadOnlyList<string> Needs,
-    string? Vesid = null, bool Flagged = false, bool CreditNote = false, InvoiceSyntax Syntax = InvoiceSyntax.Ubl, string RuleSet = "Peppol", string? Customization = null)
+    string? Vesid = null, bool Flagged = false, bool CreditNote = false, InvoiceSyntax Syntax = InvoiceSyntax.Ubl, string RuleSet = "Peppol", string? Customization = null, string? Embeds = null)
 {
     /// <summary>The envelope has an interchange control number a receiver checks for duplicates, so every real send needs a fresh one.</summary>
     public bool NeedsControlNumber => Writer is OutputFormat.X12 or OutputFormat.EdifactOrders;
@@ -67,6 +69,10 @@ public static class StandardOutputs
         new("xrechnung-ubl-credit-note", OutputFormat.Ubl, FlowOutputFormats.Xml, XRechnungNeeds, "de.xrechnung:ubl-creditnote:3.0.2", true, true, RuleSet: "XRechnung", Customization: XRechnungCustomization),
         new("xrechnung-cii", OutputFormat.Ubl, FlowOutputFormats.Xml, XRechnungNeeds, "de.xrechnung:cii:3.0.2", true, Syntax: InvoiceSyntax.Cii, RuleSet: "XRechnung", Customization: XRechnungCustomization),
         new("xrechnung-cii-credit-note", OutputFormat.Ubl, FlowOutputFormats.Xml, XRechnungNeeds, "de.xrechnung:cii:3.0.2", true, true, Syntax: InvoiceSyntax.Cii, RuleSet: "XRechnung", Customization: XRechnungCustomization),
+        new("factur-x-en16931", OutputFormat.Ubl, FlowOutputFormats.Pdf, CiiNeeds, "eu.cen.en16931:cii:1.3.17", true, Syntax: InvoiceSyntax.Cii, RuleSet: "EN 16931", Embeds: "en16931-cii"),
+        new("factur-x-en16931-credit-note", OutputFormat.Ubl, FlowOutputFormats.Pdf, CiiNeeds, "eu.cen.en16931:cii:1.3.17", true, true, Syntax: InvoiceSyntax.Cii, RuleSet: "EN 16931", Embeds: "en16931-cii-credit-note"),
+        new("zugferd-xrechnung", OutputFormat.Ubl, FlowOutputFormats.Pdf, XRechnungNeeds, "de.xrechnung:cii:3.0.2", true, Syntax: InvoiceSyntax.Cii, RuleSet: "XRechnung", Customization: XRechnungCustomization, Embeds: "xrechnung-cii"),
+        new("zugferd-xrechnung-credit-note", OutputFormat.Ubl, FlowOutputFormats.Pdf, XRechnungNeeds, "de.xrechnung:cii:3.0.2", true, true, Syntax: InvoiceSyntax.Cii, RuleSet: "XRechnung", Customization: XRechnungCustomization, Embeds: "xrechnung-cii-credit-note"),
     ];
 
     public static StandardOutput? Find(string? id) => All.FirstOrDefault(s => s.Id == id);
@@ -103,6 +109,9 @@ public static class StandardOutputs
                     ? CiiInvoiceWriter.Build(inv, invoice.Lines, invoice.Parties!, standard.CreditNote, standard.Customization)
                     : new PeppolBisInvoiceTransformService().BuildDocument(inv, invoice.Lines, invoice.Parties!, standard.CreditNote, standard.Customization);
                 var bytes = System.Text.Encoding.UTF8.GetBytes(doc.Declaration + Environment.NewLine + doc);
+                if (standard.Format == FlowOutputFormats.Pdf)
+                    return new(TransformResult.For(OutputFormat.Pdf, new MemoryStream(FacturXPdfWriter.Write(inv, invoice.Lines, invoice.Parties!, standard.CreditNote,
+                        standard.RuleSet == "XRechnung" ? FacturXProfile.XRechnung : FacturXProfile.En16931, bytes), writable: false)), null, null);
                 return new(TransformResult.For(OutputFormat.Xml, new MemoryStream(bytes, writable: false)), null, null);
             }
             // Not in OutputTransformRegistry: registering it would surface EDIFACT in the legacy order screens.
@@ -120,7 +129,8 @@ public static class StandardOutputs
         {
             return new(null, "output_invalid", ex.Message);
         }
-        catch (Exception ex) when (ex is TransformValidationException or ArgumentException or InvalidOperationException or XmlException or OverflowException)
+        catch (Exception ex) when (ex is TransformValidationException or ArgumentException or InvalidOperationException or XmlException or OverflowException
+            or QuestPDF.Drawing.Exceptions.DocumentLayoutException or QuestPDF.Drawing.Exceptions.DocumentComposeException)
         {
             return new(null, "output_invalid", null);
         }

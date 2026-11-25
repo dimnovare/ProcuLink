@@ -40,7 +40,7 @@ public static class OutputRuleChecks
             // The same outputs a send would render.
             if (!SendWhenOps.Matches(o.SendWhenJson is null ? null : DocumentJson.Deserialize<SendWhen>(o.SendWhenJson), header)) continue;
 
-            var render = await StandardOutputs.RenderAsync(standard.Id, read, config.Fields, o.TableKey, orgId, ct);
+            var render = await StandardOutputs.RenderAsync(standard.Embeds ?? standard.Id, read, config.Fields, o.TableKey, orgId, ct);
             if (!render.Ok) continue;
             using var buffer = new MemoryStream();
             await render.Result!.Content.CopyToAsync(buffer, ct);

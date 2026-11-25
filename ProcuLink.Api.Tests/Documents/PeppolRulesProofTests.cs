@@ -84,7 +84,7 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
     }
 
     // Every address, contact and payment meaning present: what the XRechnung rules (BR-DE-1..9) need.
-    private static ReadResult RichRead()
+    internal static ReadResult RichRead()
     {
         var read = Read();
         return new ReadResult(read.KindLabel,
