@@ -45,6 +45,8 @@ public sealed class RateLimitPolicyAppliedTests : IClassFixture<HardeningTestFac
     [InlineData(typeof(DocumentsController), nameof(DocumentsController.GetSource), "signed-url")]
     // Anonymous support form feeds an outbound email sender → "support" (5/min).
     [InlineData(typeof(SupportController), nameof(SupportController.Contact), "support")]
+    // Outbound DNS + SMP lookups to third parties → "peppol-lookup" (30/min).
+    [InlineData(typeof(PeppolReceiverController), nameof(PeppolReceiverController.Get), "peppol-lookup")]
     public void Action_HasExpectedRateLimitPolicy(Type controller, string actionName, string expectedPolicy)
     {
         var method = controller.GetMethod(actionName, BindingFlags.Public | BindingFlags.Instance)
