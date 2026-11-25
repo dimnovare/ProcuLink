@@ -254,6 +254,8 @@ public class DocsOperationalDataGuardTests
         // Source hosting, CI and the package feed the build restores from.
         "github.com", "www.github.com", "raw.githubusercontent.com", "design-tokens.github.io",
         "nuget.org", "api.nuget.org", "www.nuget.org",
+        // Maven Central: the package feed the e-invoice conformance workflow fetches its validator from.
+        "repo1.maven.org",
 
         // Schema, namespace and specification hosts reached once the fifth sibling's corpus
         // included .csproj / launchSettings.json / CHANGELOG.md, which no earlier corpus did.
