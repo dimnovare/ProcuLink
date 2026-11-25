@@ -31,6 +31,7 @@ public static partial class McpResults
         ["sample_document"] = Services.Documents.DocumentSender.SampleMessage,
         ["not_ready"] = "It can't be sent right now. It may still be reading, already be sent, or be a repeated file.",
         ["no_outputs"] = "Its flow doesn't make any files yet, so there's nothing to send. Set up what to make in the flow first.",
+        ["ksef_confirm"] = "This invoice goes to KSeF, so a person has to confirm it in ProcuLink before it is sent.",
         ["no_output_matches"] = "None of the flow's files apply to this document, so nothing was sent.",
     };
 
