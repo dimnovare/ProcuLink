@@ -1,3 +1,5 @@
+using System.Security.Claims;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
@@ -45,6 +47,21 @@ public static class McpSetup
         : ctx.Request.Headers.ContainsKey("X-ProcuLink-Key") || !oauth ? ApiKeyScheme
         : OAuthScheme;
 
+    /// <summary>The Clerk organisation an OAuth token names (<c>org_id</c>, or the v2 compact <c>o.id</c>), or null.</summary>
+    public static string? TokenOrg(ClaimsPrincipal user)
+    {
+        var id = user.FindFirst("org_id")?.Value;
+        if (string.IsNullOrEmpty(id) && user.FindFirst("o")?.Value is { } o)
+        {
+            try { using var d = JsonDocument.Parse(o); id = d.RootElement.TryGetProperty("id", out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() : null; }
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException) { }
+        }
+        return id?.StartsWith("org_", StringComparison.Ordinal) == true ? id : null;
+    }
+
+    /// <summary>Signed in through OAuth without choosing a workspace (or into a legacy one without a Clerk organisation): every tool refuses with choose_workspace.</summary>
+    public static bool SignedInWithoutWorkspace(ClaimsPrincipal user) => user.Identity?.AuthenticationType == OAuthScheme && TokenOrg(user) is null;
+
     public static AuthenticationBuilder AddProcuLinkMcpAuth(this AuthenticationBuilder auth, IConfiguration config, string fallback, SecurityKey? testSigningKey = null)
     {
         var oauth = OAuthOn(config);
@@ -52,7 +69,8 @@ public static class McpSetup
         if (!oauth) return auth;
 
         // A Clerk OAuth access token: the same instance that signs the app's sessions, issued for this resource, of type at+jwt
-        // (a session token is not), naming the workspace chosen at sign-in. Off /mcp it is never tried: the app API keeps its scheme.
+        // (a session token is not). A token without a workspace is still signed in, so the client gets a tool refusal it can explain
+        // rather than a 401 that starts its sign-in again. Off /mcp it is never tried: the app API keeps its scheme.
         var issuer = config["Clerk:Authority"]!.TrimEnd('/');
         var resource = config["Mcp:ResourceUrl"]!;
         auth.AddJwtBearer(OAuthScheme, o =>
@@ -65,17 +83,10 @@ public static class McpSetup
                     ValidAudience = resource,
                     ValidTypes = ["at+jwt", "application/at+jwt"],
                     NameClaimType = "sub",
+                    AuthenticationType = OAuthScheme,
                     IssuerSigningKey = testSigningKey,
                 };
                 o.ForwardChallenge = McpAuthenticationDefaults.AuthenticationScheme;
-                o.Events = new JwtBearerEvents
-                {
-                    OnTokenValidated = c =>
-                    {
-                        if (c.Principal?.FindFirst("org_id")?.Value?.StartsWith("org_", StringComparison.Ordinal) != true) c.Fail("choose_workspace");
-                        return Task.CompletedTask;
-                    },
-                };
             })
             .AddMcp(o => o.ResourceMetadata = new()
             {

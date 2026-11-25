@@ -14,6 +14,9 @@ public static partial class McpResults
     /// <summary>The fixed refusal sentences, by error token. A token missing here is a programming error, never a success.</summary>
     public static readonly IReadOnlyDictionary<string, string> Sentences = new Dictionary<string, string>
     {
+        ["choose_workspace"] = "You're signed in without a workspace. Sign in to ProcuLink again from your assistant and choose your workspace. A workspace that doesn't offer one connects with an API key instead.",
+        ["review_only"] = "This flow sends only after a person reviews the document. Open it in ProcuLink to send it.",
+        ["not_marked_ready"] = "This flow sends only documents a person has marked ready in ProcuLink.",
         ["document_engine_not_enabled"] = "Documents aren't switched on for this workspace yet.",
         ["flow_not_found"] = "There's no flow with that id in this workspace. Call list_flows to see them.",
         ["document_not_found"] = "There's no document with that id in this workspace.",

@@ -53,7 +53,7 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
 
     /// <summary>Why the automatic sender leaves this document for a person, or null: the sample, an unsure sort, a repeated number, a new sender.
     /// The same holds <see cref="SendDocumentJob"/>'s ShouldSend applies; ShouldSend keeps its own copy because the frontend's help mirror
-    /// (helpContent.test.ts) reads the two check codes from it.</summary>
+    /// (helpContent.test.ts) reads the two check codes from it; DocumentSenderByHandTests pins that the two agree.</summary>
     public static string? HeldForPerson(FlowDocument doc)
     {
         if (doc.IsSample) return "sample";

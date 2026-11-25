@@ -70,7 +70,7 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
     public static readonly Guid OrgB = Guid.Parse("b0000000-0000-0000-0000-00000000000b");
     public static readonly Guid OrgOff = Guid.Parse("c0000000-0000-0000-0000-0000000000c0");
 
-    private static string ClerkId(Guid org) => $"org_DOC_{org.ToString("N")[..4]}";
+    internal static string ClerkId(Guid org) => $"org_DOC_{org.ToString("N")[..4]}";
 
     private readonly string _dbName = Guid.NewGuid().ToString("N");
 
@@ -211,9 +211,10 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
 
     public const string McpResourceUrl = "http://localhost/mcp";
 
-    /// <summary>A Clerk-shaped OAuth access token for <paramref name="org"/>, issued by this host's own <c>Clerk:Authority</c>.</summary>
-    public string McpToken(Guid org, string? audience = null) =>
-        new Microsoft.IdentityModel.JsonWebTokens.JsonWebTokenHandler().CreateToken(new Microsoft.IdentityModel.Tokens.SecurityTokenDescriptor
+    /// <summary>A Clerk-shaped OAuth access token for <paramref name="org"/>; <paramref name="shape"/> bends it into what must be refused.</summary>
+    public string McpToken(Guid org, string? audience = null, Action<Microsoft.IdentityModel.Tokens.SecurityTokenDescriptor>? shape = null)
+    {
+        var token = new Microsoft.IdentityModel.Tokens.SecurityTokenDescriptor
         {
             Issuer = Services.GetRequiredService<IConfiguration>()["Clerk:Authority"], Audience = audience ?? McpResourceUrl, TokenType = "at+jwt",
             Claims = new Dictionary<string, object>
@@ -221,7 +222,10 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
                 ["sub"] = "user_MCP_TEST", ["org_id"] = ClerkId(org), ["client_id"] = "client_test", ["scope"] = "profile user:org:read",
             },
             SigningCredentials = new Microsoft.IdentityModel.Tokens.SigningCredentials(McpOAuthKey, Microsoft.IdentityModel.Tokens.SecurityAlgorithms.RsaSha256),
-        });
+        };
+        shape?.Invoke(token);
+        return new Microsoft.IdentityModel.JsonWebTokens.JsonWebTokenHandler().CreateToken(token);
+    }
 
     /// <summary>A client acting as an admin of <paramref name="org"/>; the organisation is created on first use.</summary>
     public HttpClient ClientFor(Guid org)

@@ -86,6 +86,43 @@ public class McpOAuthTests(McpOAuthFixture fixture) : IClassFixture<McpOAuthFixt
             .Should().Be(Factory.Services.GetRequiredService<IConfiguration>()["Clerk:Authority"]!.TrimEnd('/'));
     }
 
+    [Theory]
+    [InlineData("session")]
+    [InlineData("issuer")]
+    [InlineData("expired")]
+    public async Task ATokenThatIsNotOurAccessToken_Is401(string wrong)
+    {
+        var past = DateTime.UtcNow.AddHours(-2);
+        var token = Factory.McpToken(OrgA, shape: t =>
+        {
+            switch (wrong)
+            {
+                case "session": t.TokenType = "JWT"; t.Audience = null; t.Claims["azp"] = "https://app.example"; break; // a Clerk session token's shape
+                case "issuer": t.Issuer = "https://another-issuer.example"; break;
+                default: t.IssuedAt = t.NotBefore = past; t.Expires = past.AddMinutes(10); break;
+            }
+        });
+        var response = await Bearer(token).PostAsync(McpSetup.Path, new StringContent("{}", Encoding.UTF8, "application/json"));
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task ATokenWithoutAWorkspace_IsAskedToChooseOne_AndTheV2OrgClaimCounts()
+    {
+        Factory.ClientFor(OrgA).Dispose();
+        await using (var none = await McpToolsTests.Connect(Bearer(Factory.McpToken(OrgA, shape: t => t.Claims.Remove("org_id")))))
+            (await McpToolsTests.Call(none, "list_flows")).Text.Should().StartWith("choose_workspace:");
+
+        var v2 = Factory.McpToken(OrgA, shape: t =>
+        {
+            t.Claims.Remove("org_id");
+            t.Claims["o"] = new Dictionary<string, object> { ["id"] = DocumentEngineTestFactory.ClerkId(OrgA) };
+        });
+        await using var client = await McpToolsTests.Connect(Bearer(v2));
+        var (isError, text) = await McpToolsTests.Call(client, "list_flows");
+        isError.Should().BeFalse(text);
+    }
+
     [Fact]
     public void OAuthToken_IsRefusedByTheAppApi()
     {

@@ -34,12 +34,12 @@ public class McpToolsTests(DocumentEngineTestFactory factory) : IClassFixture<Do
         return (result.IsError == true, string.Concat(result.Content.OfType<TextContentBlock>().Select(b => b.Text)));
     }
 
-    private Task<Guid> NewFlow(Guid org)
+    private Task<Guid> NewFlow(Guid org, string automation = FlowAutomation.Review)
     {
         factory.ClientFor(org).Dispose();
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
-        var flow = ProcuLink.Api.Services.Documents.FlowCreation.New(org, "Synthetic flow", FlowFieldList.Empty, confirmed: true, FlowAutomation.Review);
+        var flow = ProcuLink.Api.Services.Documents.FlowCreation.New(org, "Synthetic flow", FlowFieldList.Empty, confirmed: true, automation);
         db.Flows.Add(flow);
         db.SaveChanges();
         return Task.FromResult(flow.Id);
@@ -107,25 +107,38 @@ public class McpToolsTests(DocumentEngineTestFactory factory) : IClassFixture<Do
         factory.Storage.Invocations.Count.Should().Be(uploads);
     }
 
+    private Guid SeedDoc(Guid flowId, string status, bool sample = false, string checks = "[]")
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
+        var doc = new FlowDocument
+        {
+            Id = Guid.NewGuid(), OrgId = OrgA, FlowId = flowId, FileName = "synthetic.pdf", ContentType = "application/pdf",
+            Status = status, IsSample = sample, ChecksJson = checks,
+            ReadJson = DocumentJson.Serialize(new ReadResult("Invoice")), CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        };
+        db.FlowDocuments.Add(doc);
+        db.SaveChanges();
+        return doc.Id;
+    }
+
+    [Fact]
+    public async Task SendDocument_WithAKey_SendsOnlyWhatTheFlowWouldSendByItself()
+    {
+        var review = SeedDoc(await NewFlow(OrgA), DocumentStatus.Ready);
+        var unmarked = SeedDoc(await NewFlow(OrgA, FlowAutomation.Marked), DocumentStatus.NeedsReview);
+        await using var client = await Connect(factory.ApiKeyClientFor(OrgA, canSend: true));
+
+        (await Call(client, "send_document", new() { ["documentId"] = review })).Text.Should().StartWith("review_only:");
+        (await Call(client, "send_document", new() { ["documentId"] = unmarked })).Text.Should().StartWith("not_marked_ready:");
+    }
+
     [Fact]
     public async Task SendDocument_RefusesHeldAndScopeless_AndSendsAsTheAssistant()
     {
-        var flowId = await NewFlow(OrgA);
+        var flowId = await NewFlow(OrgA, FlowAutomation.Auto);
         (await factory.ClientFor(OrgA).PostAsJsonAsync($"/api/flows/{flowId}/outputs", new { name = "JSON", format = "json" })).EnsureSuccessStatusCode();
-        Guid Seed(bool sample = false, string checks = "[]")
-        {
-            using var scope = factory.Services.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
-            var doc = new FlowDocument
-            {
-                Id = Guid.NewGuid(), OrgId = OrgA, FlowId = flowId, FileName = "synthetic.pdf", ContentType = "application/pdf",
-                Status = DocumentStatus.Ready, IsSample = sample, ChecksJson = checks,
-                ReadJson = DocumentJson.Serialize(new ReadResult("Invoice")), CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
-            };
-            db.FlowDocuments.Add(doc);
-            db.SaveChanges();
-            return doc.Id;
-        }
+        Guid Seed(bool sample = false, string checks = "[]") => SeedDoc(flowId, DocumentStatus.Ready, sample, checks);
         var (ready, sample, repeated) = (Seed(), Seed(sample: true),
             Seed(checks: DocumentJson.Serialize(new[] { new DocumentCheck(DocumentChecks.Duplicate, false, null, "synthetic") })));
 
