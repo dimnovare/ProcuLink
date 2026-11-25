@@ -105,8 +105,9 @@ public static class FieldValueParser
         return remainder == 1;
     }
 
+    // A Polish invoice prints the NIP bare, without "PL": ten digits that pass its checksum count too.
     public static bool IsVatId(string? s) =>
-        s is not null && VatShape.IsMatch(s.Replace(" ", "").ToUpperInvariant());
+        s is not null && (VatShape.IsMatch(s.Replace(" ", "").ToUpperInvariant()) || PolishNip.IsValid(s));
 
     public static bool IsCurrency(string? s) =>
         s is { Length: 3 } && s.All(char.IsAsciiLetter);

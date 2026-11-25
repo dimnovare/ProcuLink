@@ -49,9 +49,9 @@ public static class StandardInvoiceAdapter
             var parties = new PeppolPartyOptions
             {
                 SellerName = a.Text(FieldMeanings.SenderName), SellerEndpointScheme = sellerScheme, SellerEndpointId = sellerId,
-                SellerVatId = a.Text(FieldMeanings.SenderVatId), SellerCountry = a.Text(FieldMeanings.SenderCountry)?.ToUpperInvariant(),
+                SellerVatId = a.Text(FieldMeanings.SenderVatId), SellerCountry = Country(a.Text(FieldMeanings.SenderCountry), "seller"),
                 BuyerName = a.Text(FieldMeanings.ReceiverName), BuyerEndpointScheme = buyerScheme, BuyerEndpointId = buyerId,
-                BuyerVatId = a.Text(FieldMeanings.ReceiverVatId), BuyerCountry = a.Text(FieldMeanings.ReceiverCountry)?.ToUpperInvariant(),
+                BuyerVatId = a.Text(FieldMeanings.ReceiverVatId), BuyerCountry = Country(a.Text(FieldMeanings.ReceiverCountry), "buyer"),
                 OrderReference = a.Text(FieldMeanings.OrderReference),
                 DeliveryDate = a.OptionalDate(FieldMeanings.DeliveryDate),
                 SellerStreet = a.Text(FieldMeanings.SenderStreet), SellerCity = a.Text(FieldMeanings.SenderCity), SellerPostcode = a.Text(FieldMeanings.SenderPostcode),
@@ -66,6 +66,13 @@ public static class StandardInvoiceAdapter
     }
 
     private sealed record Built(InvoiceEntity Invoice, IReadOnlyList<InvoiceLineEntity> Lines, PeppolPartyOptions Parties);
+
+    // EN 16931, Peppol and FA(3) take ISO 3166 alpha-2: a code or name the table knows, else two letters as written (a code
+    // missing from the platform's regions is not proof it is wrong). Anything else ("Narnia") is refused, never written as read.
+    private static string? Country(string? value, string party) =>
+        value is null ? null
+        : StandardCodes.Country(value) ?? (value.Length == 2 && value.All(char.IsAsciiLetter) ? value.ToUpperInvariant()
+            : throw ValueTooLongException.UnknownCountry(party, value));
 
     // For CII the endpoint ids are optional, not needs, so the ^\d{4}:\S+$ presence check does not run: a value without a colon is omitted,
     // and any other scheme:id is emitted as read (the rule check reports a bad scheme).

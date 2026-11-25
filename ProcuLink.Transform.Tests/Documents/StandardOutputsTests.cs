@@ -83,7 +83,7 @@ public class StandardOutputsTests
     ];
 
     // Two lines and no line tax rate: the header's 21 / 100 is the lines' rate. Endpoints are GLN-valid test ids.
-    private static ReadResult InvoiceRead(string senderEndpoint = "0088:0000000000000", string unit = "C62")
+    private static ReadResult InvoiceRead(string senderEndpoint = "0088:0000000000000", string unit = "C62", string sellerCountry = "LV")
     {
         ReadRow Row(params string[] values) => new(InvoiceColumns.Select((c, i) => (c, i))
             .ToDictionary(x => FieldKey.Normalise(x.c.Label), x => new ReadCell(values[x.i], 1, null, false, false)));
@@ -92,7 +92,7 @@ public class StandardOutputsTests
              Field("Due date", "01.12.2026", FieldMeanings.DueDate), Field("Currency", "EUR", FieldMeanings.Currency),
              Field("Seller", "Seller Co", FieldMeanings.SenderName), Field("Buyer", "Buyer Co", FieldMeanings.ReceiverName),
              Field("Sender Peppol ID", senderEndpoint, FieldMeanings.SenderEndpointId), Field("Receiver Peppol ID", "0088:0000000000017", FieldMeanings.ReceiverEndpointId),
-             Field("Seller country", "LV", FieldMeanings.SenderCountry), Field("Buyer country", "LV", FieldMeanings.ReceiverCountry),
+             Field("Seller country", sellerCountry, FieldMeanings.SenderCountry), Field("Buyer country", "LV", FieldMeanings.ReceiverCountry),
              Field("Seller VAT", "LV00000000000", FieldMeanings.SenderVatId), Field("Buyer reference", "BUYER-REF-1", FieldMeanings.BuyerReference),
              Field("Net", "100.00", FieldMeanings.TotalNet), Field("Tax", "21.00", FieldMeanings.TotalTax), Field("Gross", "121.00", FieldMeanings.TotalGross)],
             [new ReadTable("lines", "Lines", InvoiceColumns.Select(c => new ReadColumn(FieldKey.Normalise(c.Label), c.Label, "text", c.Meaning)).ToList(),
@@ -146,6 +146,22 @@ public class StandardOutputsTests
         Values("PayableAmount", "DuePayableAmount").Should().Equal(payable);
         Values("CreditedQuantity", "InvoicedQuantity", "BilledQuantity")[0].Should().Be("3.0000");
         Values("PriceAmount", "ChargeAmount").Should().Equal("20.00", "20.00");
+    }
+
+    // EN 16931 takes ISO 3166 alpha-2; live, a read "Deutschland" went out as CountryID DEUTSCHLAND. A name no table knows is refused.
+    [Fact]
+    public async Task A_country_name_is_written_as_its_code()
+    {
+        var doc = XDocument.Parse(Text(await Render("en16931-cii", InvoiceRead(sellerCountry: "Deutschland"))));
+        doc.Descendants().Single(e => e.Name.LocalName == "SellerTradeParty").Descendants().Single(e => e.Name.LocalName == "CountryID").Value.Should().Be("DE");
+    }
+
+    [Fact]
+    public async Task A_country_no_table_knows_is_refused()
+    {
+        var render = await Render("en16931-cii", InvoiceRead(sellerCountry: "Narnia"));
+        (render.Result is null, render.Error, render.Detail).Should().Be((true, "output_invalid",
+            "We couldn't tell which country \"Narnia\" is. Write the seller's country as a two-letter code, like DE."));
     }
 
     [Fact]

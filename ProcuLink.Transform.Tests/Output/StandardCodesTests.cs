@@ -33,6 +33,9 @@ public class StandardCodesTests
     [InlineData("de", "DE")] [InlineData("Estonia", "EE")] [InlineData("UK", "GB")] [InlineData("United Kingdom", "GB")]
     [InlineData("Turkey", "TR")] [InlineData("Czech Republic", "CZ")] [InlineData("The Netherlands", "NL")] [InlineData("Holland", "NL")]
     [InlineData("South Korea", "KR")] [InlineData("United States of America", "US")] [InlineData("Great Britain", "GB")]
+    // Native names, without case or accents; Greece's VAT prefix EL is not ISO.
+    [InlineData("Polska", "PL")] [InlineData("POLSKA", "PL")] [InlineData("Ελλάδα", "GR")] [InlineData("ΕΛΛΑΔΑ", "GR")] [InlineData("EL", "GR")]
+    [InlineData("Osterreich", "AT")] [InlineData("België", "BE")] [InlineData("Éire", "IE")] [InlineData("Česko", "CZ")] [InlineData("Suisse", "CH")]
     [InlineData("Kosovo", null)] [InlineData("XK", null)]
     [InlineData("Narnia", null)] [InlineData("XX", null)] [InlineData(" ", null)] [InlineData(null, null)]
     public void Countries_become_iso_alpha2(string? written, string? iso) => StandardCodes.Country(written).Should().Be(iso);

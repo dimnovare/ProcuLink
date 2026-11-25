@@ -113,12 +113,12 @@ public static class Fa3InvoiceWriter
     }
 
     // Podmiot2's id: a checksum-valid NIP, or an EU VAT number (country code other than PL + the rest as written). Anything else is refused.
+    // Greece's VAT prefix is EL; a number written with its ISO code GR is the same prefix.
     private static object[]? BuyerId(string? raw)
     {
         if (PolishNip.IsValid(raw)) return [E("NIP", PolishNip.Normalize(raw))];
         var v = raw?.Trim().Replace(" ", "");
-        return v is { Length: > 2 } && EuCodes.Contains(v[..2].ToUpperInvariant())
-            ? [E("KodUE", v[..2].ToUpperInvariant()), E("NrVatUE", v[2..])]
-            : null;
+        var prefix = v is { Length: > 2 } ? v[..2].ToUpperInvariant() switch { "GR" => "EL", var p => p } : null;
+        return prefix is not null && EuCodes.Contains(prefix) ? [E("KodUE", prefix), E("NrVatUE", v![2..])] : null;
     }
 }

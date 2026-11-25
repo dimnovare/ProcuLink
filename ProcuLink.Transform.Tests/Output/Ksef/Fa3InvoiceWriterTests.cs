@@ -79,6 +79,16 @@ public class Fa3InvoiceWriterTests
         Fa3Summary.ConfirmHash(System.Text.Encoding.UTF8.GetBytes(text.Replace("Usługa A", "Usługa X"))).Should().NotBe(summary.Confirm);
     }
 
+    // Live, an AI read wrote the seller's country "Polska", which reached the writer as POLSKA and was refused. A Greek buyer's
+    // VAT number written with the ISO code GR goes out with FA(3)'s EU prefix EL.
+    [Fact]
+    public async Task KSeF_file_is_made_when_the_country_is_written_as_a_name()
+    {
+        var xml = XDocument.Parse(System.Text.Encoding.UTF8.GetString(Bytes(await Render(Fixture(("Seller country", "Polska"), ("Buyer NIP", "GR000000000"))))));
+        var buyer = xml.Root!.Element(Ns + "Podmiot2")!;
+        (buyer.Descendants(Ns + "KodUE").Single().Value, buyer.Descendants(Ns + "NrVatUE").Single().Value).Should().Be(("EL", "000000000"));
+    }
+
     [Theory]
     [InlineData("Seller NIP", "1111111112", "The seller's tax number 1111111112 isn't a valid Polish NIP. Check the seller's NIP on the document.")]
     [InlineData("Currency", "EUR", "The KSeF invoice file is made for invoices in PLN for now. This document is in EUR.")]

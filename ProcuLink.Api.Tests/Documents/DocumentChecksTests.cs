@@ -101,6 +101,18 @@ public sealed class DocumentChecksTests
         DocumentChecks.Run(badDate, FlowFieldList.Empty, true, false).Should().BeEmpty();
     }
 
+    // Live, a bare Polish NIP read as the seller's VAT ID was flagged as unreadable. Synthetic NIPs: 1111111111 passes the checksum.
+    [Fact]
+    public void A_bare_Polish_NIP_is_a_VAT_number_we_can_read()
+    {
+        var listed = new FlowFieldList([new FlowField("seller_vat", "Seller VAT ID", FieldTypes.VatId, null, false)]);
+        IReadOnlyList<DocumentCheck> Run(string value) =>
+            DocumentChecks.Run(new ReadResult("Invoice", [F("seller_vat", "Seller VAT ID", value, FieldTypes.VatId)]), listed, true, false);
+
+        Run("1111111111").Should().BeEmpty();
+        Run("1111111112").Single().Code.Should().Be(DocumentChecks.TypeInvalid);
+    }
+
     [Fact]
     public void Run_passes_clean_confirmed_document_and_flags_truncation_and_unconfirmed()
     {

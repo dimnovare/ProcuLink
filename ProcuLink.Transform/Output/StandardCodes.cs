@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace ProcuLink.Transform.Output;
@@ -64,7 +65,6 @@ public static partial class StandardCodes
     ];
 
     private static readonly Dictionary<string, (string Rec20, string X12)> Units = BuildUnits();
-    private static readonly Dictionary<string, string> Countries = BuildCountries();
 
     /// <summary>The Rec 20 code: the table's, else a code-shaped value as written, else <see cref="DefaultUnit"/>.</summary>
     public static string Rec20Unit(string? unit) => Unit(unit, u => u.Rec20, Rec20Shape());
@@ -74,7 +74,7 @@ public static partial class StandardCodes
 
     /// <summary>ISO 3166 alpha-2 (upper case) from a code, a 3-letter code, or an English or native name; null when unknown.</summary>
     public static string? Country(string? value) =>
-        !string.IsNullOrWhiteSpace(value) && Countries.TryGetValue(value.Trim(), out var iso) ? iso : null;
+        !string.IsNullOrWhiteSpace(value) && Countries.TryGetValue(Fold(value), out var iso) ? iso : null;
 
     private static string Unit(string? unit, Func<(string Rec20, string X12), string> pick, Regex shape)
     {
@@ -91,17 +91,38 @@ public static partial class StandardCodes
         return units;
     }
 
+    // Names fixed here rather than left to RegionInfo, whose names differ by ICU version (the Linux container's ICU is not the
+    // laptop's): every EU/EEA country, Switzerland and the UK, in English and in its own languages, and names people write
+    // that no region carries. Greece's EU VAT prefix EL is not ISO, so it is mapped to GR like any other alias.
+    private static readonly (string Iso, string[] Names)[] Named =
+    [
+        ("AT", ["Austria", "Österreich"]), ("BE", ["Belgium", "België", "Belgique", "Belgien"]), ("BG", ["Bulgaria", "България"]),
+        ("HR", ["Croatia", "Hrvatska"]), ("CY", ["Cyprus", "Κύπρος"]), ("CZ", ["Czechia", "Czech Republic", "Česko", "Česká republika"]),
+        ("DK", ["Denmark", "Danmark"]), ("EE", ["Estonia", "Eesti"]), ("FI", ["Finland", "Suomi"]), ("FR", ["France"]),
+        ("DE", ["Germany", "Deutschland"]), ("GR", ["Greece", "Ελλάδα", "Hellas", "EL"]), ("HU", ["Hungary", "Magyarország"]),
+        ("IE", ["Ireland", "Éire"]), ("IT", ["Italy", "Italia"]), ("LV", ["Latvia", "Latvija"]), ("LT", ["Lithuania", "Lietuva"]),
+        ("LU", ["Luxembourg", "Lëtzebuerg", "Luxemburg"]), ("MT", ["Malta"]), ("NL", ["Netherlands", "The Netherlands", "Nederland", "Holland"]),
+        ("PL", ["Poland", "Polska"]), ("PT", ["Portugal"]), ("RO", ["Romania"]), ("SK", ["Slovakia", "Slovensko"]),
+        ("SI", ["Slovenia", "Slovenija"]), ("ES", ["Spain", "España"]), ("SE", ["Sweden", "Sverige"]), ("IS", ["Iceland", "Ísland"]),
+        ("LI", ["Liechtenstein"]), ("NO", ["Norway", "Norge", "Noreg"]), ("CH", ["Switzerland", "Schweiz", "Suisse", "Svizzera"]),
+        ("GB", ["United Kingdom", "UK", "Great Britain", "England", "Scotland", "Wales"]),
+        ("US", ["United States", "United States of America", "USA"]),
+        ("TR", ["Turkey", "Türkiye"]), ("KR", ["South Korea", "Korea"]), ("RU", ["Russia", "Russian Federation"]),
+    ];
+
+    // After Named: static fields initialise in order.
+    private static readonly Dictionary<string, string> Countries = BuildCountries();
+
+    // Case and accents are ignored on both sides, so "POLSKA", "Osterreich" and "ΕΛΛΑΔΑ" resolve too.
+    private static string Fold(string s) => string.Concat(s.Trim().Normalize(NormalizationForm.FormD)
+        .Where(c => CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark));
+
     private static Dictionary<string, string> BuildCountries()
     {
-        // Names people write that the platform's region names may not carry (they differ by ICU version, and the
-        // Linux container's ICU is not the laptop's), so they are fixed here rather than left to RegionInfo.
-        var countries = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["UK"] = "GB", ["Great Britain"] = "GB", ["England"] = "GB", ["Scotland"] = "GB", ["Wales"] = "GB",
-            ["United States of America"] = "US", ["The Netherlands"] = "NL", ["Holland"] = "NL",
-            ["Czech Republic"] = "CZ", ["Czechia"] = "CZ", ["Turkey"] = "TR", ["Türkiye"] = "TR",
-            ["South Korea"] = "KR", ["Korea"] = "KR", ["Russia"] = "RU", ["Russian Federation"] = "RU",
-        };
+        var countries = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (iso, names) in Named)
+            foreach (var key in names.Prepend(iso)) countries.TryAdd(Fold(key), iso);
+        // The rest of the world, and 3-letter codes, from the platform's regions.
         foreach (var culture in CultureInfo.GetCultures(CultureTypes.SpecificCultures))
         {
             RegionInfo region;
@@ -110,7 +131,7 @@ public static partial class StandardCodes
             // XK (Kosovo) is a user-assigned code, not ISO 3166: a receiver would reject it, so it stays unmapped.
             if (!Alpha2().IsMatch(iso) || iso == "XK") continue;
             foreach (var key in new[] { iso, region.ThreeLetterISORegionName, region.EnglishName, region.NativeName })
-                if (!string.IsNullOrWhiteSpace(key)) countries.TryAdd(key, iso);
+                if (!string.IsNullOrWhiteSpace(key)) countries.TryAdd(Fold(key), iso);
         }
         return countries;
     }
@@ -121,11 +142,15 @@ public static partial class StandardCodes
     [GeneratedRegex("^[A-Z]{2}$")] private static partial Regex Alpha2();
 }
 
-/// <summary>An identifier too long for its standard, or with a character it can't carry; the message is approved copy, shown after "The file … couldn't be made: ".</summary>
+/// <summary>An identifier too long for its standard, with a character it can't carry, or a country it can't code; the message is approved copy, shown after "The file … couldn't be made: ".</summary>
 public sealed class ValueTooLongException(string message) : Exception(message)
 {
     public ValueTooLongException(string what, int max) : this($"The {what} is longer than this standard allows ({max} characters).") { }
 
     /// <summary>An identifier with a character the standard can't carry: it is refused, never changed.</summary>
     public static ValueTooLongException NotCarried(string what) => new($"The {what} has a character this standard can't carry.");
+
+    /// <summary>A country that is neither two letters nor a name we know: it is refused, never written as read.</summary>
+    public static ValueTooLongException UnknownCountry(string party, string value) =>
+        new($"We couldn't tell which country \"{value}\" is. Write the {party}'s country as a two-letter code, like DE.");
 }
