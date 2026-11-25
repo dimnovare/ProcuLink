@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Core.Services;
 using ProcuLink.Api.Services.Documents;
@@ -15,6 +16,7 @@ namespace ProcuLink.Api.Controllers;
 public sealed class PeppolReceiverController(ProcuLinkDbContext db, ICurrentTenantService tenant, DocumentEngineGate gate, PeppolReceiverLookup lookup) : ControllerBase
 {
     [HttpGet("{id:guid}/peppol-receiver")]
+    [EnableRateLimiting("peppol-lookup")]
     public async Task<IActionResult> Get(Guid id, CancellationToken ct)
     {
         var orgId = tenant.OrganisationId;
@@ -31,8 +33,12 @@ public sealed class PeppolReceiverController(ProcuLinkDbContext db, ICurrentTena
             return PeppolParticipant.Parse(endpoint) is { } participant
                 ? Ok(await lookup.LookupAsync(participant, derived: false, ct))
                 : Ok(new PeppolReceiver(PeppolReceiverStatus.InvalidId, endpoint.Trim()[..Math.Min(60, endpoint.Trim().Length)], false, null, null));
-        return PeppolParticipant.FromBelgianVat(Text(FieldMeanings.ReceiverVatId)) is { } fromVat
-            ? Ok(await lookup.LookupAsync(fromVat, derived: true, ct))
-            : Ok(new PeppolReceiver(PeppolReceiverStatus.NoId, null, false, null, null));
+        if (PeppolParticipant.FromBelgianVat(Text(FieldMeanings.ReceiverVatId)) is not { } fromVat)
+            return Ok(new PeppolReceiver(PeppolReceiverStatus.NoId, null, false, null, null));
+        // Some Belgian receivers are registered by VAT (9925) rather than company number: "not found" only when neither is.
+        var byNumber = await lookup.LookupAsync(fromVat, derived: true, ct);
+        if (byNumber.Status != PeppolReceiverStatus.NotFound) return Ok(byNumber);
+        var byVat = await lookup.LookupAsync(new PeppolParticipant("9925", "BE" + fromVat.Value), derived: true, ct);
+        return Ok(byVat.Status == PeppolReceiverStatus.NotFound ? byNumber : byVat);
     }
 }

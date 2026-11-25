@@ -32,6 +32,9 @@ public class PeppolParticipantTests
         PeppolParticipant.FromBelgianVat("BE 0000.000.097")!.ToString().Should().Be("0208:0000000097");
         PeppolParticipant.FromBelgianVat("BE000000097")!.ToString().Should().Be("0208:0000000097");
         PeppolParticipant.FromBelgianVat("FR00000000000").Should().BeNull();
+        PeppolParticipant.FromBelgianVat("BE0123.456.749")!.ToString().Should().Be("0208:0123456749"); // synthetic, mod-97 valid
+        PeppolParticipant.FromBelgianVat("BE0123456748").Should().BeNull();  // check digits wrong: a misread is never looked up
+        PeppolParticipant.FromBelgianVat("BE0000000098").Should().BeNull();
         PeppolParticipant.FromBelgianVat(null).Should().BeNull();
     }
 }

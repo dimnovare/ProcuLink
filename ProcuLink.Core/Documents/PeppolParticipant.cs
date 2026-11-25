@@ -32,11 +32,15 @@ public sealed partial record PeppolParticipant(string Scheme, string Value)
             ? new PeppolParticipant(scheme, value) : null;
     }
 
-    /// <summary>Belgium only: the enterprise number is the VAT digits, and <c>0208</c> is the scheme Belgium tells senders to use.</summary>
+    /// <summary>Belgium only: the enterprise number is the VAT digits, and <c>0208</c> is the scheme Belgium tells senders to use.
+    /// Null when the mod-97 check digits do not match.</summary>
     public static PeppolParticipant? FromBelgianVat(string? vatId)
     {
         var m = BelgianVat().Match((vatId ?? "").Replace(" ", "").Replace(".", "").Replace("-", "").ToUpperInvariant());
-        return m.Success ? new PeppolParticipant("0208", m.Groups[1].Value.PadLeft(10, '0')) : null;
+        if (!m.Success) return null;
+        var digits = m.Groups[1].Value.PadLeft(10, '0');
+        // The check digits: 97 - (first 8 digits mod 97). A misread number is never looked up, so it can never read as "not on Peppol".
+        return int.Parse(digits[8..]) == 97 - int.Parse(digits[..8]) % 97 ? new PeppolParticipant("0208", digits) : null;
     }
 
     public string SmlHost(string zone) =>

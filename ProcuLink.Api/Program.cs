@@ -336,6 +336,9 @@ builder.Services.AddRateLimiter(options =>
     // more than a handful of tickets a minute — keep this tight.
     options.AddPolicy("support", ctx => Window(ctx, "support", permit: 5, seconds: 60));
 
+    // The Peppol receiver lookup makes outbound DNS + SMP calls to third parties: a per-user cap so it is never a scanner.
+    options.AddPolicy("peppol-lookup", ctx => Window(ctx, "peppol-lookup", permit: 30, seconds: 60));
+
     // Global backstop: every request (including ones with no named policy) is
     // bounded per partition. Generous so it never bites normal usage, but it
     // closes the "endpoint with no [EnableRateLimiting]" gap.

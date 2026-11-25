@@ -94,6 +94,9 @@ public sealed class PeppolReceiverLookup(IPeppolSmpLocator locator, IHttpClientF
         return result;
     }
 
+    private const int MaxBodyBytes = 1024 * 1024;
+    private static readonly XName ServiceGroupName = XName.Get("ServiceGroup", "http://busdox.org/serviceMetadata/publishing/1.0/");
+
     private async Task<PeppolReceiver> FindAsync(PeppolParticipant participant, string zone, CancellationToken ct)
     {
         var id = participant.ToString();
@@ -108,11 +111,23 @@ public sealed class PeppolReceiverLookup(IPeppolSmpLocator locator, IHttpClientF
 
             // The SMP URL comes from DNS: the guarded "delivery" client checks the address at connect and refuses redirects.
             var url = $"{smp.SmpUrl.TrimEnd('/')}/iso6523-actorid-upis%3A%3A{Uri.EscapeDataString(id.ToLowerInvariant())}";
-            using var response = await http.CreateClient("delivery").GetAsync(url, deadline.Token);
+            using var response = await http.CreateClient("delivery").GetAsync(url, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
             if (response.StatusCode == HttpStatusCode.NotFound) return As(PeppolReceiverStatus.NotFound);
             if (!response.IsSuccessStatusCode) return As(PeppolReceiverStatus.Unknown);
 
-            var refs = XDocument.Parse(await response.Content.ReadAsStringAsync(deadline.Token)).Descendants()
+            // At most 1 MB; a longer answer is not a ServiceGroup we can trust.
+            var body = new byte[MaxBodyBytes + 1];
+            await using (var stream = await response.Content.ReadAsStreamAsync(deadline.Token))
+            {
+                int read = 0, n;
+                while (read < body.Length && (n = await stream.ReadAsync(body.AsMemory(read), deadline.Token)) > 0) read += n;
+                if (read > MaxBodyBytes) return As(PeppolReceiverStatus.Unknown);
+                Array.Resize(ref body, read);
+            }
+            var doc = XDocument.Load(new MemoryStream(body));
+            // Only an SMP 1.x ServiceGroup decides; an error page or another schema is unknown, never "doesn't receive invoices".
+            if (doc.Root?.Name != ServiceGroupName) return As(PeppolReceiverStatus.Unknown);
+            var refs = doc.Descendants()
                 .Where(e => e.Name.LocalName == "ServiceMetadataReference")
                 .Select(e => Uri.UnescapeDataString((string?)e.Attribute("href") ?? "")).ToList();
             return As(PeppolReceiverStatus.Found,

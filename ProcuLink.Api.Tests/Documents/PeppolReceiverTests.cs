@@ -26,10 +26,11 @@ public class PeppolReceiverTests(DocumentEngineTestFactory factory) : IClassFixt
         </ServiceGroup>
         """;
 
-    private sealed class FakeLocator(SmpLocation answer) : IPeppolSmpLocator
+    private sealed class FakeLocator(Func<string, SmpLocation> answer) : IPeppolSmpLocator
     {
+        public FakeLocator(SmpLocation answer) : this(_ => answer) { }
         public int Calls;
-        public Task<SmpLocation> LocateAsync(string host, CancellationToken ct) { Calls++; return Task.FromResult(answer); }
+        public Task<SmpLocation> LocateAsync(string host, CancellationToken ct) { Calls++; return Task.FromResult(answer(host)); }
     }
 
     private sealed class FakeHttp(Func<HttpRequestMessage, HttpResponseMessage> answer) : DelegatingHandler, IHttpClientFactory
@@ -67,6 +68,8 @@ public class PeppolReceiverTests(DocumentEngineTestFactory factory) : IClassFixt
     [InlineData("not-xml", "unknown")]
     [InlineData("timeout", "unknown")]
     [InlineData("redirect", "unknown")]
+    [InlineData("not-a-service-group", "unknown")] // well-formed, but an error document: never "doesn't receive invoices"
+    [InlineData("over-1-mb", "unknown")]
     [InlineData("not-registered", "not_found")]
     public async Task Unknown_is_never_cached_and_never_not_found(string answer, string status)
     {
@@ -80,6 +83,8 @@ public class PeppolReceiverTests(DocumentEngineTestFactory factory) : IClassFixt
         {
             "smp-500" => new HttpResponseMessage(HttpStatusCode.InternalServerError),
             "not-xml" => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("<not-xml") },
+            "not-a-service-group" => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("<Error><Message>Internal</Message></Error>") },
+            "over-1-mb" => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ServiceGroup + new string(' ', 1024 * 1024)) },
             "redirect" => new HttpResponseMessage(HttpStatusCode.Found) { Headers = { Location = new Uri("https://elsewhere.example.test/") } },
             _ => throw new TaskCanceledException(),
         });
@@ -96,7 +101,9 @@ public class PeppolReceiverTests(DocumentEngineTestFactory factory) : IClassFixt
     public async Task Endpoint_is_gated_org_scoped_and_reads_the_buyer_id()
     {
         var host = factory.WithWebHostBuilder(b => b.ConfigureServices(s =>
-            s.AddSingleton<IPeppolSmpLocator>(new FakeLocator(new(SmpLocationKind.NotRegistered, null)))));
+            // Nobody is registered, and the 9925 (VAT) registry cannot be reached.
+            s.AddSingleton<IPeppolSmpLocator>(new FakeLocator(host => new(
+                host == new PeppolParticipant("9925", "BE0000000097").SmlHost(new PeppolLookupOptions().SmlZone) ? SmpLocationKind.Unknown : SmpLocationKind.NotRegistered, null)))));
         HttpClient ClientFor(Guid org)
         {
             var client = host.CreateClient();
@@ -139,8 +146,13 @@ public class PeppolReceiverTests(DocumentEngineTestFactory factory) : IClassFixt
         (body.GetProperty("status").GetString(), body.GetProperty("participant").GetString(), body.GetProperty("derived").GetBoolean())
             .Should().Be(("not_found", "0208:0000000097", false));
 
+        // Derived from the VAT number: 0208 is not registered, the 9925 lookup could not finish, so the answer is unknown, never "not found".
         (code, body) = await Get(a, Seed(a, ("buyer_vat", "BE0000000097", FieldMeanings.ReceiverVatId)));
-        (body.GetProperty("participant").GetString(), body.GetProperty("derived").GetBoolean()).Should().Be(("0208:0000000097", true));
+        (body.GetProperty("status").GetString(), body.GetProperty("participant").GetString(), body.GetProperty("derived").GetBoolean())
+            .Should().Be(("unknown", "9925:BE0000000097", true));
+
+        (code, body) = await Get(a, Seed(a, ("buyer_vat", "BE0000000098", FieldMeanings.ReceiverVatId))); // check digits wrong
+        body.GetProperty("status").GetString().Should().Be("no_id");
 
         (code, body) = await Get(a, Seed(a, ("buyer_peppol", "BE 0000.000.097", FieldMeanings.ReceiverEndpointId)));
         (body.GetProperty("status").GetString(), body.GetProperty("participant").GetString()).Should().Be(("invalid_id", "BE 0000.000.097"));
