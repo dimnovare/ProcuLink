@@ -598,6 +598,9 @@ builder.Services.AddScoped<ProcuLink.Api.Services.Google.GoogleConnectService>()
 builder.Services.Configure<ProcuLink.Api.Services.Documents.ValidatorOptions>(builder.Configuration.GetSection("Validator"));
 builder.Services.AddHttpClient(ProcuLink.Api.Services.Documents.PhormValidator.HttpClientName, c => c.Timeout = TimeSpan.FromSeconds(4)); // under the web app's 8 s budget; the Worker keeps 10 s
 builder.Services.AddScoped<ProcuLink.Core.Documents.IStandardValidator, ProcuLink.Api.Services.Documents.PhormValidator>();
+builder.Services.Configure<ProcuLink.Api.Services.Documents.PeppolLookupOptions>(builder.Configuration.GetSection("Peppol:Lookup"));
+builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.IPeppolSmpLocator, ProcuLink.Api.Services.Documents.DnsSmpLocator>();
+builder.Services.AddSingleton<ProcuLink.Api.Services.Documents.PeppolReceiverLookup>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentRechecker>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.DocumentSender>();
 builder.Services.AddScoped<ProcuLink.Api.Services.Documents.LookupSuggester>();
