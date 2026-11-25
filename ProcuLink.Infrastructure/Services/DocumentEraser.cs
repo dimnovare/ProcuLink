@@ -75,6 +75,7 @@ public sealed class DocumentEraser(
         // A part of a split file takes the whole file with it: its pages are in there too.
         var knownKeys = docs.Select(d => d.SourceFileKey).Concat(docs.Select(d => d.SplitFileKey ?? ""))
             .Concat(await batchDeliveries.Where(x => x.ArtifactKey != null).Select(x => x.ArtifactKey!).ToListAsync(ct))
+            .Concat(await batchDeliveries.Where(x => x.ReceiptKey != null).Select(x => x.ReceiptKey!).ToListAsync(ct))
             .Where(k => k != "").Distinct().ToList();
         var prefixes = docIds.Select(id => $"{orgId}/documents/{id}/").ToList();
 
