@@ -66,7 +66,8 @@ jobs:
 
       - name: Validate
         run: |
-          pip install --quiet defusedxml==0.7.1
+          echo "defusedxml==0.7.1 --hash=sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61 --hash=sha256:1bb3032db185915b62d7c6209c5a8792be6a32ab2fedacc84e01b52c51aa3e69" > "$RUNNER_TEMP/requirements.txt"
+          pip install --quiet --require-hashes -r "$RUNNER_TEMP/requirements.txt"
           python3 - <<'PY'
           import os, pathlib, subprocess, sys
           from defusedxml import ElementTree as ET
@@ -124,10 +125,10 @@ jobs:
                                 "-o", str(kout), *[str(samples / n) for n in names]], capture_output=True, text=True)
           (reports / "kosit-console.txt").write_text(run.stdout + "\n--- stderr\n" + run.stderr)
           for n in names:
-              found = sorted(kout.glob(pathlib.Path(n).stem + "*report*.xml"))
-              if not found:
+              report = kout / f"{pathlib.Path(n).stem}-report.xml"  # exact: a glob would also match the credit note sibling
+              if not report.is_file():
                   rows.append((n, "KoSIT", "no report")); fail(f"{n}: KoSIT wrote no report"); continue
-              text = found[0].read_text()
+              text = report.read_text()
               tags = {local(e) for e in ET.fromstring(text).iter()}
               verdict = "accept" if "accept" in tags else "reject" if "reject" in tags else "unknown"
               rows.append((n, "KoSIT", verdict))

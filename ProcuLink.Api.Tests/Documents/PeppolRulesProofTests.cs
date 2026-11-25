@@ -106,6 +106,24 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
             read.Tables);
     }
 
+    // Two VAT rates read per line (21 % and 9 %): one breakdown per rate (BG-23), never a blend.
+    private static ReadResult MixedRatesRead()
+    {
+        var read = Read();
+        var t = read.Tables[0];
+        var rates = new[] { "21", "9" };
+        return new ReadResult(read.KindLabel,
+            [.. read.Fields.Select(f => f.Meaning switch
+            {
+                FieldMeanings.TotalTax => f with { Value = "16.20" }, FieldMeanings.TotalGross => f with { Value = "116.20" }, _ => f,
+            })],
+            [t with
+            {
+                Columns = [.. t.Columns, new ReadColumn("vat", "VAT %", "text", FieldMeanings.LineTaxRate)],
+                Rows = [.. t.Rows.Select((r, i) => new ReadRow(new Dictionary<string, ReadCell>(r.Cells) { ["vat"] = new(rates[i], 1, null, false, false) }))],
+            }]);
+    }
+
     private static readonly string[] Amounts = [FieldMeanings.TotalNet, FieldMeanings.TotalTax, FieldMeanings.TotalGross, FieldMeanings.LineAmount];
 
     // A credit note printed negative: each listed meaning's value carries a minus sign.
@@ -130,9 +148,10 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
             "xrechnung-ubl", "xrechnung-ubl-credit-note", "xrechnung-cii", "xrechnung-cii-credit-note" })
         {
             // The CII reads with and without electronic addresses; the Peppol ids need them.
-            var reads = id.StartsWith("en16931", StringComparison.Ordinal) ? new[] { Read(), ReadWithoutEndpoints() }
+            var reads = id == "en16931-cii" ? new[] { Read(), ReadWithoutEndpoints(), MixedRatesRead() }
+                : id.StartsWith("en16931", StringComparison.Ordinal) ? new[] { Read(), ReadWithoutEndpoints() }
                 : id is "xrechnung-ubl" or "xrechnung-cii" ? new[] { RichRead(), RichReadWithEmailSeller() }
-                : id.StartsWith("xrechnung", StringComparison.Ordinal) ? new[] { RichRead() } : id == "peppol-bis-billing-3" ? new[] { Read(), RichRead() } : new[] { Read() };
+                : id.StartsWith("xrechnung", StringComparison.Ordinal) ? new[] { RichRead() } : id == "peppol-bis-billing-3" ? new[] { Read(), RichRead(), MixedRatesRead() } : new[] { Read() };
             // Every credit note is also read printed negative (XRechnung with the rich fields it needs). The two whose rules check
             // line amount = quantity x price per syntax (Peppol UBL, XRechnung CII: R120) read only the amounts negative; the rest everything.
             string[] signed = id is "peppol-bis-billing-3-credit-note" or "xrechnung-cii-credit-note" ? Amounts : [.. Amounts, FieldMeanings.LineQuantity, FieldMeanings.LineUnitPrice];
@@ -157,6 +176,7 @@ public sealed class PeppolRulesProofTests : IAsyncLifetime
 
         // Two Peppol renders + two CII ids read with and without electronic addresses + four XRechnung ids (the UBL and CII invoices also read with an email seller address) + the Peppol invoice read with addresses too
         // + the four credit notes read printed negative (Peppol UBL and XRechnung CII with only the amounts negative, the other two with everything negative).
-        Assert.Equal(17, checkedRenders);
+        // + the Peppol invoice and the CII invoice read with two VAT rates.
+        Assert.Equal(19, checkedRenders);
     }
 }

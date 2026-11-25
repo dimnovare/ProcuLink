@@ -62,7 +62,7 @@ public static class DocumentPdfOutput
         var rows = lines.OrderBy(l => l.LineNumber).Select(l => new[]
         {
             l.LineNumber.ToString(CultureInfo.InvariantCulture), l.SupplierItemCode ?? l.BuyerItemCode ?? "", l.Description, l.Quantity.ToString(CultureInfo.InvariantCulture),
-            l.UnitCode, l.UnitPrice.ToString("0.00##", CultureInfo.InvariantCulture), l.TaxRate.ToString(CultureInfo.InvariantCulture), Money(l.LineTotal),
+            l.UnitCode, l.UnitPrice.ToString("0.00##", CultureInfo.InvariantCulture), PeppolBisInvoiceTransformService.NormalizePercent(l.TaxRate).ToString("0.##", CultureInfo.InvariantCulture), Money(l.LineTotal),
         });
         var totals = new (string, decimal?)[] { ("Net", invoice.SubTotal), ("VAT", invoice.TaxTotal), ("Total", invoice.GrandTotal) };
         var payment = new (string, string?)[] { ("IBAN", parties.PayeeIban), ("Payment reference", parties.PaymentReference) };

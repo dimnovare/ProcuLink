@@ -26,20 +26,28 @@ public static class FacturXPdfWriter
             File.WriteAllBytes(pdfPath, DocumentPdfOutput.WriteInvoice(invoice, lines, parties, creditNote));
             File.WriteAllBytes(xmlPath, ciiXml);
             var now = DateTime.UtcNow;
-            DocumentOperation.LoadFile(pdfPath)
-                .AddAttachment(new DocumentOperation.DocumentAttachment
-                {
-                    Key = fileName, FilePath = xmlPath, AttachmentName = fileName, MimeType = "text/xml",
-                    Description = profile == FacturXProfile.XRechnung ? "XRechnung invoice" : "Factur-X invoice",
-                    Relationship = DocumentOperation.DocumentAttachmentRelationship.Alternative, CreationDate = now, ModificationDate = now,
-                })
-                .ExtendMetadata(Xmp.Replace("{level}", level).Replace("{fileName}", fileName))
-                .Save(outPath);
+            try
+            {
+                DocumentOperation.LoadFile(pdfPath)
+                    .AddAttachment(new DocumentOperation.DocumentAttachment
+                    {
+                        Key = fileName, FilePath = xmlPath, AttachmentName = fileName, MimeType = "text/xml",
+                        Description = profile == FacturXProfile.XRechnung ? "XRechnung invoice" : "Factur-X invoice",
+                        Relationship = DocumentOperation.DocumentAttachmentRelationship.Alternative, CreationDate = now, ModificationDate = now,
+                    })
+                    .ExtendMetadata(Xmp.Replace("{level}", level).Replace("{fileName}", fileName))
+                    .Save(outPath);
+            }
+            // A qpdf failure surfaces as whatever QuestPDF throws: made the refusal every caller already handles (output_invalid).
+            catch (Exception ex) when (ex is not (InvalidOperationException or OperationCanceledException))
+            {
+                throw new InvalidOperationException("The Factur-X PDF could not be assembled.", ex);
+            }
             return File.ReadAllBytes(outPath);
         }
         finally
         {
-            try { Directory.Delete(dir, recursive: true); } catch (IOException) { /* temp cleanup only: never hide the real outcome */ }
+            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort temp cleanup: a finished PDF is never thrown away for it */ }
         }
     }
 

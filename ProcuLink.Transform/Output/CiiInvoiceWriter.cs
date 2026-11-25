@@ -9,7 +9,7 @@ namespace ProcuLink.Transform.Output;
 /// DECLARED BUT NOT VERIFIED: the guideline id <c>urn:cen.eu:en16931:2017</c> is the document's type, not a conformance claim.
 /// The rule check is PeppolRulesProofTests (the official rules through the validator sidecar); that is a rule check, not network acceptance.
 /// CII is an xs:sequence: element order below is the schema's. Electronic addresses are written only when given, and nothing is written empty.
-/// Tax is collapsed to one category exactly as <see cref="PeppolBisInvoiceTransformService"/> does, using its rounding helpers.
+/// VAT is broken down by <see cref="VatBreakdown"/>, as the Peppol UBL writer does.
 /// </summary>
 public static class CiiInvoiceWriter
 {
@@ -20,8 +20,7 @@ public static class CiiInvoiceWriter
     public static XDocument Build(InvoiceEntity invoice, IReadOnlyList<InvoiceLineEntity> lines, PeppolPartyOptions parties, bool creditNote, string? guidelineId = null)
     {
         var currency = string.IsNullOrWhiteSpace(invoice.Currency) ? "EUR" : invoice.Currency;
-        var category = invoice.TaxTotal > 0m ? "S" : "Z";
-        var percent = PeppolBisInvoiceTransformService.DerivePercent(invoice, lines);
+        var vat = VatBreakdown.For(invoice, lines);
 
         XElement Tax(decimal rate, string cat) => new(Ram + "ApplicableTradeTax",
             new XElement(Ram + "TypeCode", "VAT"), new XElement(Ram + "CategoryCode", cat), new XElement(Ram + "RateApplicablePercent", Num(rate)));
@@ -49,7 +48,7 @@ public static class CiiInvoiceWriter
                     new XElement(Ram + "SpecifiedLineTradeDelivery", new XElement(Ram + "BilledQuantity",
                         new XAttribute("unitCode", string.IsNullOrWhiteSpace(l.UnitCode) ? "EA" : l.UnitCode), l.Quantity.ToString("F4", CultureInfo.InvariantCulture))),
                     new XElement(Ram + "SpecifiedLineTradeSettlement",
-                        Tax(PeppolBisInvoiceTransformService.NormalizePercent(l.TaxRate), l.TaxRate > 0m ? "S" : "Z"),
+                        Tax(VatBreakdown.LineRate(vat, l), "S"),
                         new XElement(Ram + "SpecifiedTradeSettlementLineMonetarySummation", new XElement(Ram + "LineTotalAmount", Num(l.LineTotal)))))),
                 new XElement(Ram + "ApplicableHeaderTradeAgreement",
                     string.IsNullOrWhiteSpace(invoice.BuyerRef) ? null : new XElement(Ram + "BuyerReference", invoice.BuyerRef),
@@ -66,10 +65,10 @@ public static class CiiInvoiceWriter
                     string.IsNullOrWhiteSpace(parties.PayeeIban) ? null : new XElement(Ram + "SpecifiedTradeSettlementPaymentMeans",
                         new XElement(Ram + "TypeCode", PeppolBisInvoiceTransformService.PaymentMeansCode(currency)),
                         new XElement(Ram + "PayeePartyCreditorFinancialAccount", new XElement(Ram + "IBANID", parties.PayeeIban))),
-                    new XElement(Ram + "ApplicableTradeTax",
-                        new XElement(Ram + "CalculatedAmount", Num(invoice.TaxTotal)), new XElement(Ram + "TypeCode", "VAT"),
-                        new XElement(Ram + "BasisAmount", Num(invoice.SubTotal)), new XElement(Ram + "CategoryCode", category),
-                        new XElement(Ram + "RateApplicablePercent", Num(percent))),
+                    vat.Select(g => new XElement(Ram + "ApplicableTradeTax",
+                        new XElement(Ram + "CalculatedAmount", Num(g.Tax)), new XElement(Ram + "TypeCode", "VAT"),
+                        new XElement(Ram + "BasisAmount", Num(g.Basis)), new XElement(Ram + "CategoryCode", "S"),
+                        new XElement(Ram + "RateApplicablePercent", Num(g.Percent)))),
                     invoice.DueDate is { } due && !creditNote ? new XElement(Ram + "SpecifiedTradePaymentTerms", new XElement(Ram + "DueDateDateTime", Date(due))) : null,
                     new XElement(Ram + "SpecifiedTradeSettlementHeaderMonetarySummation",
                         new XElement(Ram + "LineTotalAmount", Num(invoice.SubTotal)), new XElement(Ram + "TaxBasisTotalAmount", Num(invoice.SubTotal)),
