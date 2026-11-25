@@ -1,0 +1,154 @@
+# Every e-invoice output we write, checked by free external validators, on top of the phive rule check in ci.yml:
+#   Mustang (Apache-2.0): the Factur-X / ZUGFeRD PDFs (PDF/A-3 via veraPDF, XMP, the XML inside) and the CII files.
+#   KoSIT (Apache-2.0) with the XRechnung configuration: the four XRechnung files.
+# Each validator gets a negative control (EInvoiceSamplesTests writes it): a document our emitter cannot produce.
+# If a negative passes, the job fails: a validator that cannot fail proves nothing.
+#
+# Manual dispatch only until a first run has been measured: the report shapes below are read from the tools' docs, not
+# yet from a real report. Once a dispatched run is green (and its negatives were rejected), add the pull_request and
+# push triggers on main with paths: ProcuLink.Transform/**, ProcuLink.Core/**, ProcuLink.Api.Tests/Documents/**, this file.
+name: E-invoice conformance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MUSTANG_VERSION: 2.26.0
+  # Maven Central publishes SHA-1 only for this artifact.
+  MUSTANG_SHA1: 8755fc333032f802ad7dcf3930201edfe64014e2
+  KOSIT_VERSION: 1.6.3
+  KOSIT_SHA256: 799e64befca97d4080e03608c80b85dd5a5ecc5f4ae4f35d1116ec2855b9a7c9
+  KOSIT_XR_CONFIG: 2026-08-31
+  KOSIT_XR_SHA256: 2530cd107c414511c5d0462ec10f886910395abfca820db82e83d70bf01221a8
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Cache validators
+        uses: actions/cache@v5
+        with:
+          path: ~/validators
+          key: validators-mustang-${{ env.MUSTANG_VERSION }}-kosit-${{ env.KOSIT_VERSION }}-xr-${{ env.KOSIT_XR_CONFIG }}
+
+      - name: Download and verify the validators
+        run: |
+          set -euo pipefail
+          mkdir -p ~/validators && cd ~/validators
+          M="Mustang-CLI-${MUSTANG_VERSION}.jar"
+          K="validator-${KOSIT_VERSION}-standalone.jar"
+          X="xrechnung-3.0.2-validator-configuration-${KOSIT_XR_CONFIG}.zip"
+          [ -f "$M" ] || curl -fsSL -o "$M" "https://repo1.maven.org/maven2/org/mustangproject/Mustang-CLI/${MUSTANG_VERSION}/${M}"
+          [ -f "$K" ] || curl -fsSL -o "$K" "https://github.com/itplr-kosit/validator/releases/download/v${KOSIT_VERSION}/${K}"
+          [ -f "$X" ] || curl -fsSL -o "$X" "https://github.com/itplr-kosit/validator-configuration-xrechnung/releases/download/v${KOSIT_XR_CONFIG}/${X}"
+          echo "${MUSTANG_SHA1}  ${M}" | sha1sum -c -
+          printf '%s  %s\n%s  %s\n' "${KOSIT_SHA256}" "${K}" "${KOSIT_XR_SHA256}" "${X}" | sha256sum -c -
+          echo "Mustang SHA-256 (record as the pin): $(sha256sum "$M" | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
+          rm -rf xr-config && mkdir xr-config && unzip -q "$X" -d xr-config
+
+      - name: Write every e-invoice output
+        run: EINVOICE_SAMPLE_DIR="$RUNNER_TEMP/einvoice" dotnet test ProcuLink.Api.Tests --filter "FullyQualifiedName~EInvoiceSamplesTests"
+
+      - name: Validate
+        run: |
+          pip install --quiet defusedxml==0.7.1
+          python3 - <<'PY'
+          import os, pathlib, subprocess, sys
+          from defusedxml import ElementTree as ET
+
+          samples = pathlib.Path(os.environ["RUNNER_TEMP"], "einvoice")
+          reports = pathlib.Path(os.environ["RUNNER_TEMP"], "reports"); reports.mkdir(exist_ok=True)
+          tools = pathlib.Path.home() / "validators"
+          mustang = tools / f"Mustang-CLI-{os.environ['MUSTANG_VERSION']}.jar"
+          kosit = tools / f"validator-{os.environ['KOSIT_VERSION']}-standalone.jar"
+          files = sorted(p.name for p in samples.iterdir())
+          rows, failures = [], []
+
+          # UBL files are run through Mustang and reported, but do not decide the job until a run shows Mustang really
+          # checks them (an XML section with a Schematron result). phive (ci.yml) and KoSIT (XRechnung UBL) prove them.
+          MUSTANG_UNCHECKED = {f: "UBL: not yet shown that Mustang checks it" for f in files if f.startswith(("peppol-bis-billing-3", "xrechnung-ubl"))}
+          XRECHNUNG = ["xrechnung-ubl.xml", "xrechnung-ubl-credit-note.xml", "xrechnung-cii.xml", "xrechnung-cii-credit-note.xml"]
+          NEGATIVES = {"negative-factur-x-en16931.pdf", "negative-xrechnung-cii.xml"}
+
+          def local(e): return e.tag.rsplit("}", 1)[-1]
+
+          def fail(msg):
+              failures.append(msg); print("FAIL", msg)
+
+          # The written set must hold every output kind we expect: a missing file fails the job.
+          expected = {"factur-x-en16931.pdf", "factur-x-en16931-credit-note.pdf", "zugferd-xrechnung.pdf", "zugferd-xrechnung-credit-note.pdf", "en16931-cii.xml", "en16931-cii-credit-note.xml", *XRECHNUNG, *NEGATIVES}
+          for f in sorted(expected - set(files)): fail(f"{f}: not written")
+
+          for f in files:
+              if f == "negative-xrechnung-cii.xml": continue  # KoSIT's negative
+              run = subprocess.run(["java", "-Xmx1G", "-Dfile.encoding=UTF-8", "-jar", str(mustang), "--no-notices", "--action", "validate",
+                                    "--source", str(samples / f)], capture_output=True, text=True)
+              out = run.stdout[run.stdout.find("<"):] if "<" in run.stdout else ""
+              (reports / f"mustang-{f}.xml").write_text(run.stdout + "\n<!-- stderr\n" + run.stderr + "\n-->")
+              try:
+                  root = ET.fromstring(out)
+                  top = next((local(c), c.get("status")) for c in root if local(c) == "summary")[1]
+                  sections = {local(c) for c in root}
+              except Exception as e:
+                  top, sections = f"unreadable ({type(e).__name__})", set()
+              verdict = f"{top} (exit {run.returncode}, sections: {', '.join(sorted(sections - {'summary'})) or 'none'})"
+              rows.append((f, "Mustang", verdict))
+              if f in MUSTANG_UNCHECKED: rows[-1] = (f, "Mustang", verdict + " (not gating: " + MUSTANG_UNCHECKED[f] + ")"); continue
+              if f in NEGATIVES:
+                  if top != "invalid" or "BR-CO-15" not in run.stdout: fail(f"{f}: the negative control was not rejected for BR-CO-15")
+                  continue
+              if top != "valid": fail(f"{f}: {verdict}")
+              if "xml" not in sections: fail(f"{f}: no XML section in the report")
+              if f.endswith(".pdf") and "pdf" not in sections: fail(f"{f}: no PDF section in the report")
+
+          # KoSIT reads XML only, and its XRechnung scenarios match only XRechnung CustomizationIDs: files are passed by name.
+          # The ZUGFeRD XRechnung PDFs carry xrechnung-cii's XML byte for byte (FacturXOutputTests), which is what KoSIT checks here.
+          kout = reports / "kosit"; kout.mkdir(exist_ok=True)
+          names = XRECHNUNG + ["negative-xrechnung-cii.xml"]
+          run = subprocess.run(["java", "-jar", str(kosit), "-s", str(tools / "xr-config" / "scenarios.xml"), "-r", str(tools / "xr-config"),
+                                "-o", str(kout), *[str(samples / n) for n in names]], capture_output=True, text=True)
+          (reports / "kosit-console.txt").write_text(run.stdout + "\n--- stderr\n" + run.stderr)
+          for n in names:
+              found = sorted(kout.glob(pathlib.Path(n).stem + "*report*.xml"))
+              if not found:
+                  rows.append((n, "KoSIT", "no report")); fail(f"{n}: KoSIT wrote no report"); continue
+              text = found[0].read_text()
+              tags = {local(e) for e in ET.fromstring(text).iter()}
+              verdict = "accept" if "accept" in tags else "reject" if "reject" in tags else "unknown"
+              rows.append((n, "KoSIT", verdict))
+              if n in NEGATIVES:
+                  if verdict != "reject" or "BR-CO-15" not in text: fail(f"{n}: the negative control was not rejected for BR-CO-15")
+              elif verdict != "accept": fail(f"{n}: KoSIT {verdict}")
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write("| File | Validator | Verdict |\n|---|---|---|\n")
+              s.writelines(f"| {f} | {v} | {r} |\n" for f, v, r in rows)
+              s.write("\nThe ZUGFeRD XRechnung PDFs are not given to KoSIT (XML only): their XML is xrechnung-cii's byte for byte.\n")
+              if failures: s.write("\n**Failures**\n\n" + "".join(f"- {m}\n" for m in failures))
+          sys.exit(1 if failures else 0)
+          PY
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e-invoice-reports
+          path: |
+            ${{ runner.temp }}/reports
+            ${{ runner.temp }}/einvoice
+          if-no-files-found: ignore
