@@ -4,12 +4,15 @@
 # Each validator gets a negative control (EInvoiceSamplesTests writes it): a document our emitter cannot produce.
 # If a negative passes, the job fails: a validator that cannot fail proves nothing.
 #
-# Manual dispatch only until a first run has been measured: the report shapes below are read from the tools' docs, not
-# yet from a real report. Once a dispatched run is green (and its negatives were rejected), add the pull_request and
-# push triggers on main with paths: ProcuLink.Transform/**, ProcuLink.Core/**, ProcuLink.Api.Tests/Documents/**, this file.
+# Runs on pull requests that touch the writers, the sample test or this file, and on manual dispatch.
 name: E-invoice conformance
 
 on:
+  pull_request:
+    paths:
+      - 'ProcuLink.Transform/Output/**'
+      - 'ProcuLink.Api.Tests/Documents/EInvoiceSamplesTests.cs'
+      - '.github/workflows/e-invoice-conformance.yml'
   workflow_dispatch:
 
 permissions:
@@ -17,8 +20,7 @@ permissions:
 
 env:
   MUSTANG_VERSION: 2.26.0
-  # Maven Central publishes SHA-1 only for this artifact.
-  MUSTANG_SHA1: 8755fc333032f802ad7dcf3930201edfe64014e2
+  MUSTANG_SHA256: 42d7868cb68264874a7b8cab4c3587b03b23ccc7cd72373da917f66758bb9736
   KOSIT_VERSION: 1.6.3
   KOSIT_SHA256: 799e64befca97d4080e03608c80b85dd5a5ecc5f4ae4f35d1116ec2855b9a7c9
   KOSIT_XR_CONFIG: 2026-08-31
@@ -56,9 +58,7 @@ jobs:
           [ -f "$M" ] || curl -fsSL -o "$M" "https://repo1.maven.org/maven2/org/mustangproject/Mustang-CLI/${MUSTANG_VERSION}/${M}"
           [ -f "$K" ] || curl -fsSL -o "$K" "https://github.com/itplr-kosit/validator/releases/download/v${KOSIT_VERSION}/${K}"
           [ -f "$X" ] || curl -fsSL -o "$X" "https://github.com/itplr-kosit/validator-configuration-xrechnung/releases/download/v${KOSIT_XR_CONFIG}/${X}"
-          echo "${MUSTANG_SHA1}  ${M}" | sha1sum -c -
-          printf '%s  %s\n%s  %s\n' "${KOSIT_SHA256}" "${K}" "${KOSIT_XR_SHA256}" "${X}" | sha256sum -c -
-          echo "Mustang SHA-256 (record as the pin): $(sha256sum "$M" | cut -d' ' -f1)" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s  %s\n%s  %s\n%s  %s\n' "${MUSTANG_SHA256}" "${M}" "${KOSIT_SHA256}" "${K}" "${KOSIT_XR_SHA256}" "${X}" | sha256sum -c -
           rm -rf xr-config && mkdir xr-config && unzip -q "$X" -d xr-config
 
       - name: Write every e-invoice output
@@ -122,13 +122,13 @@ jobs:
           kout = reports / "kosit"; kout.mkdir(exist_ok=True)
           names = XRECHNUNG + ["negative-xrechnung-cii.xml"]
           run = subprocess.run(["java", "-jar", str(kosit), "-s", str(tools / "xr-config" / "scenarios.xml"), "-r", str(tools / "xr-config"),
-                                "-o", str(kout), *[str(samples / n) for n in names]], capture_output=True, text=True)
+                                "-o", str(kout), *[str(samples / n) for n in names]], capture_output=True, text=True, input="")
           (reports / "kosit-console.txt").write_text(run.stdout + "\n--- stderr\n" + run.stderr)
           for n in names:
               report = kout / f"{pathlib.Path(n).stem}-report.xml"  # exact: a glob would also match the credit note sibling
               if not report.is_file():
                   rows.append((n, "KoSIT", "no report")); fail(f"{n}: KoSIT wrote no report"); continue
-              text = report.read_text()
+              text = report.read_text(encoding="utf-8")
               tags = {local(e) for e in ET.fromstring(text).iter()}
               verdict = "accept" if "accept" in tags else "reject" if "reject" in tags else "unknown"
               rows.append((n, "KoSIT", verdict))
