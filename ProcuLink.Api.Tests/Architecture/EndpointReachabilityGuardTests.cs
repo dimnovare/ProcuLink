@@ -272,6 +272,10 @@ public sealed class EndpointReachabilityGuardTests
                 "2026-11-25 — MCP endpoint for AI assistants (ProcuLink.Api/Mcp/McpSetup.cs). The caller is the customer's AI "
                 + "client (Claude, ChatGPT, Cursor, VS Code) with an org API key or a Clerk OAuth token; the browser never calls "
                 + "it. Its tools call the same services as DocumentsController and FlowFilesController (McpToolsTests).",
+            ["MapGet"] =
+                "2026-11-25 — only GET /mcp (ProcuLink.Api/Mcp/McpSetup.cs), beside MapMcp: the stateless transport maps no GET, so "
+                + "without it a client's first GET (and Clerk's connection check) got 405 instead of the sign-in challenge. Same "
+                + "callers and authorization as MapMcp; pinned by McpOAuthTests.WrongAudience_Is401_WithResourceMetadataChallenge.",
         };
 
     /// <summary>
