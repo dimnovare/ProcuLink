@@ -18,13 +18,16 @@ public static class DocumentOutputRenderer
     public const string XlsxContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
     /// <summary>Render a read through <paramref name="template"/> as csv, json, xml, xlsx, pdf, txt or fixed, with <paramref name="lookups"/> in scope for its Lookup steps. <paramref name="layout"/> frames pdf and txt; <paramref name="logo"/> is for pdf.</summary>
-    public static DocumentRender Render(string format, OutputNodeTemplate template, ReadResult read, string? tableKey, LookupTables? lookups = null, OutputLayout? layout = null, byte[]? logo = null)
+    /// <param name="tables">The flow's tables: an XML table element still named by its key takes the flow's name for it, the same in every file.</param>
+    public static DocumentRender Render(string format, OutputNodeTemplate template, ReadResult read, string? tableKey, LookupTables? lookups = null, OutputLayout? layout = null, byte[]? logo = null,
+        IReadOnlyList<FlowTable>? tables = null)
     {
         var rows = DocumentRows.Build(read, tableKey, DecimalMark(format, template));
         // A flat grid has nothing else to put the header values on: a read with no table rows is one row.
         var lines = rows.Lines.Count == 0 && FlowOutputFormats.TemplateFormat(format) == OutputFormat.Csv
             ? [rows.Header]
             : rows.Lines;
+        if (format == FlowOutputFormats.Xml && tables is { Count: > 0 }) template = template with { Root = TableNamed(template.Root, tables) };
         var emitter = new OutputTemplateEmitter();
         lookups ??= LookupTables.Empty;
         using var scope = LookupScope.Use(lookups);
@@ -64,6 +67,15 @@ public static class DocumentOutputRenderer
         FlowOutputFormats.Pdf or FlowOutputFormats.Text or FlowOutputFormats.Fixed => null,
         _ when FlowOutputFormats.TemplateFormat(format) == OutputFormat.Csv && template.CsvDialect?.Delimiter == ";" && !Computes(template.Root) => ',',
         _ => '.',
+    };
+
+    /// <summary>A table element still named by its internal key ("invoice_lines") takes the flow's name for the table ("Arve read"),
+    /// as its columns do; the XML writer makes it a valid tag. A name the user gave it, or a table with no name, stays.</summary>
+    private static OutputNode TableNamed(OutputNode n, IReadOnlyList<FlowTable> tables) => n with
+    {
+        Name = n.NodeType == OutputNodeType.Array && n.Name == n.Collection
+               && tables.FirstOrDefault(t => t.Key == n.Collection)?.Label is { Length: > 0 } label ? label : n.Name,
+        Children = n.Children.Select(c => TableNamed(c, tables)).ToList(),
     };
 
     private static bool Computes(OutputNode n) =>

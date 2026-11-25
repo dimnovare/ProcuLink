@@ -60,6 +60,26 @@ public class DocumentOutputRendererTests
     }
 
     [Fact]
+    public void Xml_names_the_table_element_by_the_flows_table_name_in_every_file()
+    {
+        ReadResult Read(string tableLabel) => new("Arve", [Field("arve_nr", "A-1")],
+            [new ReadTable("invoice_lines", tableLabel, [new ReadColumn("toode", "Toode", "text", null)],
+                [new ReadRow(new Dictionary<string, ReadCell> { ["toode"] = Cell("Kohv") })], true)]);
+        OutputNodeTemplate Xml(string tableName) => new() { Format = OutputFormat.Xml, Root = OutputNode.Obj("document", Rule("Arve nr", "arve_nr"),
+            OutputNode.Arr(tableName, OutputNode.Obj("row", Rule("Toode", "toode")), "invoice_lines")) };
+        FlowTable[] tables = [new("invoice_lines", "Arve read", [])];
+
+        // Two documents name their table differently; the file takes the flow's name for it both times.
+        foreach (var read in new[] { Read("Arve read"), Read("Invoice lines") })
+            Text(DocumentOutputRenderer.Render("xml", Xml("invoice_lines"), read, "invoice_lines", tables: tables))
+                .Should().Contain("<ArveRead>").And.Contain("<Toode>Kohv</Toode>").And.NotContain("invoice_lines").And.NotContain("InvoiceLines");
+
+        // A name the user gave the table element is kept; without the flow's tables the key stays.
+        Text(DocumentOutputRenderer.Render("xml", Xml("Read"), Read("Arve read"), "invoice_lines", tables: tables)).Should().Contain("<Read>");
+        Text(DocumentOutputRenderer.Render("xml", Xml("invoice_lines"), Read("Arve read"), "invoice_lines")).Should().Contain("<invoice_lines>");
+    }
+
+    [Fact]
     public void A_step_without_its_settings_says_what_it_needs()
     {
         var read = new ReadResult("Invoice", [Field("total", "100")]);
