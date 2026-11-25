@@ -91,7 +91,7 @@ public class ApiKeyControllerTests
         var entity = MakeKey(orgId, "CI Pipeline");
         const string rawKey = "plk_abcdEXAMPLEKEY";
 
-        keys.Setup(k => k.CreateAsync(orgId, "CI Pipeline", null, It.IsAny<CancellationToken>()))
+        keys.Setup(k => k.CreateAsync(orgId, "CI Pipeline", null, false, It.IsAny<CancellationToken>()))
             .ReturnsAsync((entity, rawKey));
 
         var result = await ctrl.Create(
@@ -119,7 +119,7 @@ public class ApiKeyControllerTests
         result.Should().BeOfType<BadRequestObjectResult>();
         keys.Verify(k => k.CreateAsync(
             It.IsAny<Guid>(), It.IsAny<string>(),
-            It.IsAny<DateTime?>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<DateTime?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     // ── Revoke ────────────────────────────────────────────────────────────────

@@ -31,11 +31,11 @@ public sealed class ApiKeyController : ControllerBase
         return Ok(list.Select(k => new
         {
             k.Id, k.Label, k.KeyPrefix, k.IsActive,
-            k.CreatedAt, k.LastUsedAt, k.ExpiresAt
+            k.CreatedAt, k.LastUsedAt, k.ExpiresAt, k.CanSend
         }));
     }
 
-    public sealed record CreateKeyRequest(string Label, DateTime? ExpiresAt);
+    public sealed record CreateKeyRequest(string Label, DateTime? ExpiresAt, bool CanSend = false);
 
     /// <summary>
     /// Mints a bearer credential with org-wide machine access, shown once and never retrievable.
@@ -53,12 +53,12 @@ public sealed class ApiKeyController : ControllerBase
             return BadRequest(new { error = "Label is required." });
 
         var orgId            = _tenant.OrganisationId;
-        var (entity, rawKey) = await _keys.CreateAsync(orgId, req.Label, req.ExpiresAt, ct);
+        var (entity, rawKey) = await _keys.CreateAsync(orgId, req.Label, req.ExpiresAt, req.CanSend, ct);
 
         return Ok(new
         {
             entity.Id, entity.Label, entity.KeyPrefix,
-            entity.IsActive, entity.CreatedAt, entity.ExpiresAt,
+            entity.IsActive, entity.CreatedAt, entity.ExpiresAt, entity.CanSend,
             // Raw key shown ONCE. Cannot be retrieved again.
             RawKey = rawKey,
         });

@@ -39,7 +39,7 @@ public class ApiKeyServiceTests
         });
         await db.SaveChangesAsync();
 
-        var (entity, rawKey) = await svc.CreateAsync(orgId, "Zapier prod", null, default);
+        var (entity, rawKey) = await svc.CreateAsync(orgId, "Zapier prod", null, false, default);
 
         rawKey.Should().StartWith("plk_");
         entity.KeyPrefix.Should().Be(rawKey[..8]);
@@ -58,7 +58,7 @@ public class ApiKeyServiceTests
         });
         await db.SaveChangesAsync();
 
-        var (entity, _) = await svc.CreateAsync(orgId, "temp", null, default);
+        var (entity, _) = await svc.CreateAsync(orgId, "temp", null, false, default);
         var ok = await svc.RevokeAsync(orgId, entity.Id, default);
 
         ok.Should().BeTrue();
@@ -77,7 +77,7 @@ public class ApiKeyServiceTests
         db.Organisations.Add(new Organisation { Id = orgId2, ClerkOrgId = "b2", Name = "B2", Slug = "b2-bbbb" });
         await db.SaveChangesAsync();
 
-        var (entity, _) = await svc.CreateAsync(orgId1, "key", null, default);
+        var (entity, _) = await svc.CreateAsync(orgId1, "key", null, false, default);
         var ok = await svc.RevokeAsync(orgId2, entity.Id, default);
 
         ok.Should().BeFalse();

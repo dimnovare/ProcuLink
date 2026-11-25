@@ -9,7 +9,7 @@ public interface IApiKeyService
     /// Raw key is shown once to the user — never stored.
     /// </summary>
     Task<(TenantApiKey Key, string RawKey)> CreateAsync(
-        Guid organisationId, string label, DateTime? expiresAt, CancellationToken ct);
+        Guid organisationId, string label, DateTime? expiresAt, bool canSend, CancellationToken ct);
 
     Task<IReadOnlyList<TenantApiKey>> ListAsync(Guid organisationId, CancellationToken ct);
 

@@ -227,7 +227,7 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
     }
 
     /// <summary>A client holding an org API key (the real ApiKey handler), as a customer's own system would.</summary>
-    public HttpClient ApiKeyClientFor(Guid org)
+    public HttpClient ApiKeyClientFor(Guid org, bool canSend = false)
     {
         ClientFor(org).Dispose();
         var raw = "plk_" + Guid.NewGuid().ToString("N");
@@ -236,7 +236,7 @@ public sealed class DocumentEngineTestFactory : WebApplicationFactory<Program>
             var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
             db.TenantApiKeys.Add(new TenantApiKey
             {
-                Id = Guid.NewGuid(), OrganisationId = org, Label = "Test", KeyPrefix = raw[..8], IsActive = true,
+                Id = Guid.NewGuid(), OrganisationId = org, Label = "Test", KeyPrefix = raw[..8], IsActive = true, CanSend = canSend,
                 KeyHash = ProcuLink.Core.Security.ApiKeyHasher.ComputeHash(raw, "test-api-key-hash-secret-not-a-real-one"),
                 CreatedAt = DateTime.UtcNow,
             });
