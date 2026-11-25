@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using ProcuLink.Api.Contracts;
+using ProcuLink.Api.Jobs;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Infrastructure;
@@ -32,7 +33,7 @@ public static class DocumentListRows
 
         var ids = docs.Select(r => r.Doc.Id).ToList();
         var deliveries = (await db.Set<FlowDelivery>().Where(x => x.OrgId == orgId && ids.Contains(x.DocumentId))
-                .Select(x => new { x.DocumentId, x.Status, x.DeliveredAt, x.UpdatedAt, x.CreatedAt, x.LastError, x.DestinationId, x.OutputId, x.Id, HasFile = x.ArtifactKey != null, x.FileName, x.OutputName })
+                .Select(x => new { x.DocumentId, x.Status, x.DeliveredAt, x.UpdatedAt, x.CreatedAt, x.LastError, x.DestinationId, x.OutputId, x.Id, x.Protocol, x.RemoteReference, HasFile = x.ArtifactKey != null, x.FileName, x.OutputName })
                 .ToListAsync(ct))
             .ToLookup(x => x.DocumentId);
 
@@ -90,7 +91,9 @@ public static class DocumentListRows
                     _ => null,
                 },
                 Stop = stop is null ? null
-                    : new DocumentStopDto(stop.DestinationId, stop.DestinationId is { } id ? names.GetValueOrDefault(id) : null, stop.LastError),
+                    : DeliverDocumentJob.RemoteMayHold(stop.Protocol, stop.Status, stop.RemoteReference)
+                        ? new DocumentStopDto(null, null, stop.LastError)
+                        : new DocumentStopDto(stop.DestinationId, stop.DestinationId is { } id ? names.GetValueOrDefault(id) : null, stop.LastError),
                 IsSample = d.IsSample,
                 Kind = read.KindLabel?.Trim() is { Length: > 0 } kind ? kind[..Math.Min(kind.Length, 80)] : null,
                 InInbox = r.IsInbox,

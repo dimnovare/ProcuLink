@@ -149,6 +149,13 @@ public class DeliverDocumentJob(
                 .SetProperty(d => d.Attempts, d => d.Attempts + 1)
                 .SetProperty(d => d.UpdatedAt, now), ct);
 
+    /// <summary>
+    /// A KSeF dead letter that kept a reference: KSeF holds the invoice (a duplicate) or may (an unconfirmed outcome). Fixing the
+    /// destination is the wrong advice for it, so it names no destination to fix.
+    /// </summary>
+    public static bool RemoteMayHold(string protocol, string status, string? remoteReference) =>
+        protocol == DeliveryProtocolConstants.Ksef && status == FlowDeliveryStatus.DeadLetter && remoteReference != null;
+
     public static void Enqueue(IBackgroundJobClient jobs, Guid deliveryId, Guid organisationId) =>
         jobs.Enqueue<DeliverDocumentJob>(j => j.ExecuteAsync(deliveryId, organisationId, CancellationToken.None));
 
@@ -171,7 +178,7 @@ public class DeliverDocumentJob(
         if (finished is null ? doc.Status == DocumentStatus.SendFailed : finished.Status is FlowDeliveryStatus.Delivered or FlowDeliveryStatus.DeadLetter)
             DocumentAudit.Add(db, doc, delivered ? "document.delivered" : "document.delivery_failed",
                 new { output = finished?.OutputName, protocol = finished?.Protocol, responseCode = finished?.ResponseCode, error = finished is null ? SendStoppedError : finished.LastError,
-                    attempts = finished?.Attempts, destinationId = finished?.DestinationId, file = finished?.FileName, destination = destinationName, version = doc.FlowVersion }, null);
+                    attempts = finished?.Attempts, destinationId = finished is not null && RemoteMayHold(finished.Protocol, finished.Status, finished.RemoteReference) ? null : finished?.DestinationId, file = finished?.FileName, destination = destinationName, version = doc.FlowVersion }, null);
         return before;
     }
 
