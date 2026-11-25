@@ -4,6 +4,32 @@ All notable changes to ProcuLink are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2026-11-25]
+
+### Added
+
+- **OneDrive destination** (#351) — `microsoft_onedrive` protocol. A pasted
+  folder sharing link is resolved through Graph `/shares` at save and dropped;
+  only the drive id, item id and folder name are stored. Uploads by file name
+  with `conflictBehavior=replace`, so a re-send overwrites the same file.
+- **ZUGFeRD / Factur-X read** (#350) — `EmbeddedInvoice` takes the embedded
+  CII invoice (2.x) as the read, with no AI call, only when every header value
+  printed as written is also on the page; otherwise the page is read as before.
+  The attachment is size-capped, DTD-prohibited and resolver-free.
+
+### Fixed
+
+- **Reader** (#349) — the two-word-heading backstop ("UNIT" + "PRICE") folds an
+  empty column only into a filled neighbour, so a table whose cells landed in no
+  column no longer collapses its whole header line into one column.
+- **Outlook pickup** (#348) — the folder list asks for no headers; they are
+  fetched only for mail matching the sender / subject filter.
+- **XML output** (#348) — a table element still named by its internal key takes
+  the flow's name for the table, the same in every file of a flow.
+
+### Docs
+
+- `STATUS.md` rewritten as a short current state (#348).
 ## [2026-06-04]
 
 Post-delivery hardening wave (multi-agent). Backend 715 tests green; frontend
