@@ -14,7 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   with `conflictBehavior=replace`, so a re-send overwrites the same file.
 - **ZUGFeRD / Factur-X read** (#350) — `EmbeddedInvoice` takes the embedded
   CII invoice (2.x) as the read, with no AI call, only when every header value
-  printed as written is also on the page; otherwise the page is read as before.
+  the read keeps (a flow with saved fields keeps only those) and prints as
+  written is also on the page; otherwise the page is read as before.
   The attachment is size-capped, DTD-prohibited and resolver-free.
 
 ### Fixed

@@ -39,7 +39,7 @@ and the Worker is mandatory).
 - PDF, CSV, XLSX always; Word, text, XML, JSON and EDI behind the formats switch (#284); scanned
   PDFs and photos behind the scan switch (#281).
 - **ZUGFeRD / Factur-X** PDFs (#350): the embedded CII invoice is the read, with no AI call, when every
-  header value printed as written is also on the page (`EmbeddedInvoice`); otherwise the page is read.
+  header value it keeps (a flow's saved fields only) and prints as written is also on the page (`EmbeddedInvoice`); otherwise the page is read.
 - **Checks never block a send.** On an automatic flow a failed `duplicate` or new-sender check holds
   the document for a person (`SendDocumentJob.ShouldSend`); a sample and an unconfirmed sort are
   never sent by themselves.
