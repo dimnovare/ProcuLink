@@ -58,8 +58,9 @@ and the Worker is mandatory).
   the XML table element takes the flow's name for the table, not its
   internal key, so every file of a flow has one shape.
 - Standards (`StandardOutputs`): cXML 1.2, UBL 2.1 Order, X12 850, EDIFACT ORDERS (a fresh
-  interchange number per sent file, #330); behind the Peppol switch, Peppol BIS Billing 3, EN 16931
-  CII and XRechnung, with on-demand rule checks that never stop a send.
+  interchange number per sent file, #330); ZUGFeRD / Factur-X EN 16931 invoice for every workspace;
+  behind the Peppol switch, its credit note, Peppol BIS Billing 3, EN 16931 CII and XRechnung, with
+  on-demand rule checks that never stop a send.
 - Destinations (`DeliveryProtocolConstants`): email (Postmark), SFTP, FTP, FTPS, S3, web address
   (+ OAuth2), Google Drive, Google Sheets (CSV only), OneDrive (a pasted folder sharing link; a
   file of the same name is replaced, #351). Delivery sweep, ops alert, dead-letter log and bounce
