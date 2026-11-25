@@ -38,12 +38,12 @@ public class PeppolRuleChecksTests(DocumentEngineTestFactory factory) : IClassFi
         return (flow.Id, doc.Id);
     }
 
-    private async Task<Guid> AddOutput(Guid org, Guid flowId)
+    private async Task<Guid> AddOutput(Guid org, Guid flowId, string standard = Standard, string format = FlowOutputFormats.Xml)
     {
         var output = new FlowOutput
         {
-            Id = Guid.NewGuid(), OrgId = org, FlowId = flowId, Name = "Peppol invoice", Format = FlowOutputFormats.Xml,
-            Standard = Standard, TableKey = "lines", TemplateJson = "{}", CreatedAt = DateTime.UtcNow,
+            Id = Guid.NewGuid(), OrgId = org, FlowId = flowId, Name = "Peppol invoice", Format = format,
+            Standard = standard, TableKey = "lines", TemplateJson = "{}", CreatedAt = DateTime.UtcNow,
         };
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ProcuLinkDbContext>();
@@ -187,5 +187,29 @@ public class PeppolRuleChecksTests(DocumentEngineTestFactory factory) : IClassFi
         (await create.Content.ReadAsStringAsync()).Should().Contain("peppol_off");
         xr.StatusCode.Should().Be(HttpStatusCode.Forbidden);
         (await xr.Content.ReadAsStringAsync()).Should().Contain("peppol_off");
+    }
+
+    [Fact]
+    public async Task A_facturx_output_is_rule_checked_by_its_xml()
+    {
+        var org = DocumentEngineTestFactory.OrgA;
+        var (flowId, docId) = await SeedDocument(org);
+        var outputId = await AddOutput(org, flowId, "factur-x-en16931", FlowOutputFormats.Pdf);
+        factory.Validator.Outcome = new(ValidationStatus.Passed, []);
+        var xml = System.Text.Encoding.UTF8.GetBytes("<?xml");
+
+        (await factory.ClientFor(org).PostAsync($"/api/flows/{flowId}/outputs/{outputId}/check?documentId={docId}", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        factory.Validator.LastVesid.Should().Be("eu.cen.en16931:cii:1.3.17");
+        factory.Validator.LastBytes![..xml.Length].Should().Equal(xml);
+
+        factory.Validator.Outcome = new(ValidationStatus.Failed, [new ValidationIssue("R-1", "error", "text")]);
+        var (checks, _) = await Recheck(flowId, docId);
+        checks.Should().ContainSingle(c => c.Code == DocumentChecks.OutputRules);
+        factory.Validator.LastBytes![..xml.Length].Should().Equal(xml);
+
+        var (offFlow, _) = await SeedDocument(DocumentEngineTestFactory.OrgB);
+        var off = await factory.ClientFor(DocumentEngineTestFactory.OrgB).PostAsJsonAsync($"/api/flows/{offFlow}/outputs", new { name = "PDF", format = "", standard = "factur-x-en16931" });
+        off.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await off.Content.ReadAsStringAsync()).Should().Contain("peppol_off");
     }
 }

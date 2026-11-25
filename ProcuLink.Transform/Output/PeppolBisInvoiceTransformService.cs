@@ -154,16 +154,9 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
         var cac = CacNs;
         var currency = string.IsNullOrWhiteSpace(invoice.Currency) ? "EUR" : invoice.Currency;
 
-        // VAT breakdown (BG-23): we model a single category from the header
-        // (Sub→Tax) ratio or the max line tax rate, since the canonical line
-        // carries a per-line TaxRate but no category code. BIS requires a category
-        // code (S/Z/E/AE/…); we emit "S" (standard) when tax > 0 else "Z" (zero).
-        // Honest simplification: mixed-rate invoices are collapsed to one subtotal
-        // — documented as a gap above.
-        var taxableAmount = invoice.SubTotal;
-        var taxAmount     = invoice.TaxTotal;
-        var categoryCode  = taxAmount > 0m ? "S" : "Z";
-        var percent       = DerivePercent(invoice, lines);
+        // VAT breakdown (BG-23): one standard-rated subtotal per line rate; a document with no VAT,
+        // or whose totals fit no single rate, is refused rather than guessed (VatBreakdown).
+        var vat = VatBreakdown.For(invoice, lines);
 
         var root = new XElement((creditNote ? CreditNoteNs : UblNs) + (creditNote ? "CreditNote" : "Invoice"),
             new XAttribute(XNamespace.Xmlns + "cbc", CbcNs.NamespaceName),
@@ -214,16 +207,16 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
 
             // ── Tax total + breakdown (BG-23) ────────────────────────────────
             new XElement(cac + "TaxTotal",
-                Amount(cbc + "TaxAmount", taxAmount, currency),                              // BT-110
-                new XElement(cac + "TaxSubtotal",
-                    Amount(cbc + "TaxableAmount", taxableAmount, currency),                  // BT-116
-                    Amount(cbc + "TaxAmount", taxAmount, currency),                          // BT-117
+                Amount(cbc + "TaxAmount", invoice.TaxTotal, currency),                       // BT-110
+                vat.Select(g => new XElement(cac + "TaxSubtotal",
+                    Amount(cbc + "TaxableAmount", g.Basis, currency),                        // BT-116
+                    Amount(cbc + "TaxAmount", g.Tax, currency),                              // BT-117
                     new XElement(cac + "TaxCategory",
-                        new XElement(cbc + "ID", categoryCode),                              // BT-118
+                        new XElement(cbc + "ID", "S"),                                       // BT-118
                         new XElement(cbc + "Percent",
-                            percent.ToString("F2", CultureInfo.InvariantCulture)),           // BT-119
+                            g.Percent.ToString("F2", CultureInfo.InvariantCulture)),         // BT-119
                         new XElement(cac + "TaxScheme",
-                            new XElement(cbc + "ID", "VAT"))))),
+                            new XElement(cbc + "ID", "VAT")))))),
 
             // ── Legal monetary total (BG-22) ─────────────────────────────────
             new XElement(cac + "LegalMonetaryTotal",
@@ -233,7 +226,7 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
                 Amount(cbc + "PayableAmount",       invoice.GrandTotal, currency)),          // BT-115
 
             // ── Invoice lines (BG-25) ────────────────────────────────────────
-            lines.OrderBy(l => l.LineNumber).Select(l => BuildLine(cac, cbc, l, currency, creditNote))
+            lines.OrderBy(l => l.LineNumber).Select(l => BuildLine(cac, cbc, l, currency, creditNote, VatBreakdown.LineRate(vat, l)))
         );
 
         return new XDocument(new XDeclaration("1.0", "UTF-8", null), root);
@@ -296,7 +289,7 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
     }
 
     private static XElement BuildLine(
-        XNamespace cac, XNamespace cbc, InvoiceLineEntity l, string currency, bool creditNote = false)
+        XNamespace cac, XNamespace cbc, InvoiceLineEntity l, string currency, bool creditNote, decimal rate)
     {
         return new XElement(cac + (creditNote ? "CreditNoteLine" : "InvoiceLine"),
             new XElement(cbc + "ID", l.LineNumber),                                          // BT-126
@@ -315,11 +308,11 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
                     ? new XElement(cac + "BuyersItemIdentification",
                         new XElement(cbc + "ID", l.BuyerItemCode))                           // BT-156
                     : null,
-                // Line-level VAT category (BT-151) — same simplification as header.
+                // Line-level VAT category (BT-151): the rate of its breakdown group.
                 new XElement(cac + "ClassifiedTaxCategory",
-                    new XElement(cbc + "ID", l.TaxRate > 0m ? "S" : "Z"),
+                    new XElement(cbc + "ID", "S"),
                     new XElement(cbc + "Percent",
-                        NormalizePercent(l.TaxRate).ToString("F2", CultureInfo.InvariantCulture)),
+                        rate.ToString("F2", CultureInfo.InvariantCulture)),
                     new XElement(cac + "TaxScheme",
                         new XElement(cbc + "ID", "VAT")))),
             new XElement(cac + "Price",
@@ -330,19 +323,6 @@ public sealed class PeppolBisInvoiceTransformService : IInvoiceTransformService
         => new(name,
             new XAttribute("currencyID", currency),
             value.ToString("F2", CultureInfo.InvariantCulture));
-
-    /// <summary>
-    /// Derive a single header VAT percent. Prefer the (Sub→Tax) ratio when both are
-    /// present and non-zero; otherwise fall back to the max line tax rate. Returned
-    /// as a whole percentage (e.g. 20.00 for 20%).
-    /// </summary>
-    internal static decimal DerivePercent(InvoiceEntity inv, IReadOnlyList<InvoiceLineEntity> lines)
-    {
-        if (inv.SubTotal > 0m && inv.TaxTotal > 0m)
-            return Math.Round(inv.TaxTotal / inv.SubTotal * 100m, 2);
-        var maxRate = lines.Count > 0 ? lines.Max(l => l.TaxRate) : 0m;
-        return NormalizePercent(maxRate);
-    }
 
     /// <summary>
     /// Line TaxRate is stored as a fraction in some paths (0.20) and as a whole

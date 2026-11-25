@@ -21,8 +21,14 @@ namespace ProcuLink.Api.Tests.Documents;
 public sealed class FakeStandardValidator : ProcuLink.Core.Documents.IStandardValidator
 {
     public ProcuLink.Core.Documents.ValidationOutcome Outcome { get; set; } = new(ProcuLink.Core.Documents.ValidationStatus.Passed, []);
+    public byte[]? LastBytes { get; private set; }
+    public string? LastVesid { get; private set; }
 
-    public Task<ProcuLink.Core.Documents.ValidationOutcome> ValidateAsync(string vesid, byte[] xml, CancellationToken ct) => Task.FromResult(Outcome);
+    public Task<ProcuLink.Core.Documents.ValidationOutcome> ValidateAsync(string vesid, byte[] xml, CancellationToken ct)
+    {
+        (LastVesid, LastBytes) = (vesid, xml);
+        return Task.FromResult(Outcome);
+    }
 }
 
 /// <summary>Wraps one real <see cref="ILinkedAccountOAuth"/>: its (pure) provider, config, authorize URL and scope rule; a canned grant and user; no network.</summary>
