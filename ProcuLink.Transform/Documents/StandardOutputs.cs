@@ -4,6 +4,7 @@ using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Transform.Output;
+using ProcuLink.Transform.Output.Ksef;
 
 namespace ProcuLink.Transform.Documents;
 
@@ -53,6 +54,15 @@ public static class StandardOutputs
         FieldMeanings.SenderContactName, FieldMeanings.SenderContactPhone, FieldMeanings.SenderContactEmail, FieldMeanings.Iban,
     ];
 
+    // KSeF FA(3): both parties' tax numbers (checked as NIP / EU VAT by the writer) and the seller's address are required by the schema.
+    private static readonly IReadOnlyList<string> KsefNeeds =
+    [
+        FieldMeanings.DocumentNumber, FieldMeanings.IssueDate, FieldMeanings.Currency, FieldMeanings.SenderName, FieldMeanings.SenderVatId,
+        FieldMeanings.SenderCountry, FieldMeanings.SenderStreet, FieldMeanings.SenderPostcode, FieldMeanings.SenderCity,
+        FieldMeanings.ReceiverName, FieldMeanings.ReceiverVatId, FieldMeanings.TotalNet, FieldMeanings.TotalTax, FieldMeanings.TotalGross,
+        FieldMeanings.LineDescription, FieldMeanings.LineQuantity, FieldMeanings.LineUnitPrice, FieldMeanings.LineAmount,
+    ];
+
     private const string XRechnungCustomization = "urn:cen.eu:en16931:2017#compliant#urn:xeinkauf.de:kosit:xrechnung_3.0";
 
     public static readonly IReadOnlyList<StandardOutput> All =
@@ -73,6 +83,8 @@ public static class StandardOutputs
         new("factur-x-en16931-credit-note", OutputFormat.Ubl, FlowOutputFormats.Pdf, CiiNeeds, "eu.cen.en16931:cii:1.3.17", true, true, Syntax: InvoiceSyntax.Cii, RuleSet: "EN 16931", Embeds: "en16931-cii-credit-note"),
         new("zugferd-xrechnung", OutputFormat.Ubl, FlowOutputFormats.Pdf, XRechnungNeeds, "de.xrechnung:cii:3.0.2", true, Syntax: InvoiceSyntax.Cii, RuleSet: "XRechnung", Customization: XRechnungCustomization, Embeds: "xrechnung-cii", Profile: FacturXProfile.XRechnung),
         new("zugferd-xrechnung-credit-note", OutputFormat.Ubl, FlowOutputFormats.Pdf, XRechnungNeeds, "de.xrechnung:cii:3.0.2", true, true, Syntax: InvoiceSyntax.Cii, RuleSet: "XRechnung", Customization: XRechnungCustomization, Embeds: "xrechnung-cii-credit-note", Profile: FacturXProfile.XRechnung),
+        // Not a Peppol sidecar standard (no Vesid, not Flagged): it sits behind the KSeF switch, and Fa3InvoiceWriter checks it itself.
+        new("ksef-fa-3", OutputFormat.Xml, FlowOutputFormats.Xml, KsefNeeds, Syntax: InvoiceSyntax.Fa3, RuleSet: "KSeF FA(3)"),
     ];
 
     public static StandardOutput? Find(string? id) => All.FirstOrDefault(s => s.Id == id);
@@ -95,6 +107,7 @@ public static class StandardOutputs
         if (Find(id) is not { } standard) return new(null, "output_invalid", null);
         try
         {
+            if (standard.Syntax == InvoiceSyntax.Fa3) return Fa3(read, fields, tableKey, standard, orgId);
             var invoice = standard.Vesid is null ? default : StandardInvoiceAdapter.ToInvoice(read, fields, tableKey, standard.Needs, orgId, standard.CreditNote);
             var (order, orderMissing) = standard.Vesid is null ? StandardOrderAdapter.ToOrder(read, fields, tableKey, standard.Needs, orgId) : (null, invoice.Missing);
             if (order is null && invoice.Invoice is null)
@@ -135,6 +148,20 @@ public static class StandardOutputs
             return new(null, "output_invalid", null);
         }
     }
+
+    private static DocumentRender Fa3(ReadResult read, FlowFieldList fields, string? tableKey, StandardOutput standard, Guid orgId)
+    {
+        var (inv, lines, parties, missing) = StandardInvoiceAdapter.ToInvoice(read, fields, tableKey, standard.Needs, orgId, creditNote: false);
+        if (inv is null) return new(null, "output_invalid", NeedsSentence(missing));
+        var (doc, refusal) = Fa3InvoiceWriter.Build(inv, lines, parties!, DateTime.UtcNow);
+        if (doc is null) return new(null, "output_invalid", refusal);
+        // UTF8.GetBytes writes no BOM, which KSeF requires.
+        var bytes = System.Text.Encoding.UTF8.GetBytes(doc.Declaration + Environment.NewLine + doc);
+        return new(TransformResult.For(OutputFormat.Xml, new MemoryStream(bytes, writable: false)), null, null);
+    }
+
+    private static string NeedsSentence(IReadOnlyList<string> missing) =>
+        $"This standard needs {(missing.Count == 1 ? missing[0] : $"{string.Join(", ", missing.SkipLast(1))} and {missing[^1]}")}.";
 
     /// <summary>
     /// A credit note printed negative, written positive as EN 16931 credit notes carry it: each total and line amount changes sign
