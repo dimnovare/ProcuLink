@@ -39,12 +39,14 @@ public sealed class FlowDestinationService(
 
     private static readonly string[] Allowed =
         [DeliveryProtocolConstants.Http, DeliveryProtocolConstants.Sftp, DeliveryProtocolConstants.Ftps, DeliveryProtocolConstants.S3, DeliveryProtocolConstants.Email,
-         DeliveryProtocolConstants.GoogleDrive, DeliveryProtocolConstants.GoogleSheets, DeliveryProtocolConstants.MicrosoftOneDrive];
+         DeliveryProtocolConstants.GoogleDrive, DeliveryProtocolConstants.GoogleSheets, DeliveryProtocolConstants.MicrosoftOneDrive, DeliveryProtocolConstants.Ksef];
 
-    public async Task<FlowDestination> SaveAsync(Guid orgId, Guid? id, DestinationRequest req, CancellationToken ct)
+    /// <param name="userId">The person saving: recorded when a KSeF destination is switched to Production.</param>
+    public async Task<FlowDestination> SaveAsync(Guid orgId, Guid? id, DestinationRequest req, CancellationToken ct, string? userId = null)
     {
         var protocol = req.Protocol?.Trim().ToLowerInvariant() ?? "";
         if (!Allowed.Contains(protocol)) throw new DestinationException("unsupported_destination");
+        if (protocol == DeliveryProtocolConstants.Ksef && !availability.KsefOn(orgId)) throw new DestinationException("unsupported_destination");
         var provider = LinkedAccountProviders.ByProtocol.GetValueOrDefault(protocol);
         var isLinked = provider is not null;
         // The flag gates creation (R2), not running: an existing destination keeps delivering once it is off.
@@ -59,6 +61,7 @@ public sealed class FlowDestinationService(
 
         var configJson = req.Config.GetRawText();
         var credentials = !isLinked && req.Credentials is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) } c ? c.GetRawText() : null;
+        if (protocol == DeliveryProtocolConstants.Ksef) configJson = KsefConfig(configJson, existing, credentials, userId);
         try
         {
             DeliveryConfigRules.ValidateConfigJson(configJson);
@@ -99,6 +102,40 @@ public sealed class FlowDestinationService(
 
         await db.SaveChangesAsync(ct);
         return existing;
+    }
+
+    /// <summary>
+    /// A KSeF destination (plan 33): a known environment and a valid NIP, never defaulted. It starts on Test or Demo; Production is
+    /// an explicit edit with the issuer acceptance ticked, and the server records who switched and when. Switching the NIP of a
+    /// Production destination needs the acceptance again. The token is a credential, never config (config goes back to the browser).
+    /// </summary>
+    private static string KsefConfig(string configJson, FlowDestination? existing, string? credentials, string? userId)
+    {
+        var json = (JsonObject)JsonNode.Parse(configJson)!;
+        var environment = Text(json, "environment");
+        if (environment is not ("test" or "demo" or "production"))
+            throw new DestinationException("invalid_destination", "Choose the KSeF environment: Test, Demo or Production.");
+        if (!PolishNip.IsValid(Text(json, "nip"))) throw new DestinationException("invalid_destination", "Enter a valid Polish NIP (10 digits).");
+        json["nip"] = PolishNip.Normalize(Text(json, "nip"));
+        if (existing is null && credentials is null) throw new DestinationException("invalid_destination", "Paste a KSeF token.");
+        var accepted = json["acceptedIssuerTerms"] is JsonValue a && a.TryGetValue<bool>(out var yes) && yes;
+        foreach (var key in new[] { "acceptedIssuerTerms", "checkOnly", "productionConfirmedBy", "productionConfirmedAt" }) json.Remove(key);
+        if (environment != "production") return json.ToJsonString();
+
+        if (existing is null)
+            throw new DestinationException("invalid_destination", "A new KSeF destination starts on Test or Demo. Switch it to Production once you have checked a test invoice.");
+        var before = existing.Protocol == DeliveryProtocolConstants.Ksef ? JsonNode.Parse(existing.ConfigJson) as JsonObject : null;
+        if (before is not null && Text(before, "environment") == "production" && Text(before, "nip") == json["nip"]!.GetValue<string>() && !accepted)
+        {
+            json["productionConfirmedBy"] = before["productionConfirmedBy"]?.DeepClone();
+            json["productionConfirmedAt"] = before["productionConfirmedAt"]?.DeepClone();
+            return json.ToJsonString();
+        }
+        if (!accepted)
+            throw new DestinationException("invalid_destination", "To switch to Production, confirm that your company is the issuer of every invoice sent from here.");
+        json["productionConfirmedBy"] = userId;
+        json["productionConfirmedAt"] = DateTime.UtcNow.ToString("O");
+        return json.ToJsonString();
     }
 
     /// <summary>The account must be this org's Google account, and the picked folder or spreadsheet must be named.</summary>
@@ -218,8 +255,8 @@ public sealed class FlowDestinationService(
             json["bodyTemplate"] = Text(json, "bodyTemplate") ?? "Attached: {fileName}. Sent by ProcuLink.";
             json.Remove("attachmentFileName"); // the delivery's own file name (or the TEST_ name) wins
         }
-        else if (d.Protocol == DeliveryProtocolConstants.GoogleSheets)
-            json["checkOnly"] = test; // a test send never appends rows (R11), whatever the stored config says
+        else if (d.Protocol is DeliveryProtocolConstants.GoogleSheets or DeliveryProtocolConstants.Ksef)
+            json["checkOnly"] = test; // a test send never appends rows (R11) or issues an invoice (plan 33), whatever the stored config says
         else if (test && d.Protocol == DeliveryProtocolConstants.Http)
         {
             var headers = json["headers"] as JsonObject ?? new JsonObject();

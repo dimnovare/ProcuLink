@@ -49,7 +49,7 @@ public sealed class DestinationsController(
         if (Refuse() is { } refused) return refused;
         try
         {
-            var saved = await destinations.SaveAsync(tenant.OrganisationId, null, request, ct);
+            var saved = await destinations.SaveAsync(tenant.OrganisationId, null, request, ct, tenant.ClerkUserId);
             return Created($"/api/destinations/{saved.Id}", ToDto(saved));
         }
         catch (DestinationException ex)
@@ -65,7 +65,7 @@ public sealed class DestinationsController(
         if (Refuse() is { } refused) return refused;
         try
         {
-            var saved = await destinations.SaveAsync(tenant.OrganisationId, id, request, ct);
+            var saved = await destinations.SaveAsync(tenant.OrganisationId, id, request, ct, tenant.ClerkUserId);
             var uses = await destinations.UsesAsync(tenant.OrganisationId, ct);
             var last = await destinations.LastSendsAsync(tenant.OrganisationId, ct);
             return Ok(ToDto(saved, uses[saved.Id], last.GetValueOrDefault(saved.Id)));

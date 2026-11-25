@@ -387,15 +387,18 @@ public sealed class DocumentsController(
         return Ok(await DetailAsync(doc, flow.Name, ct));
     }
 
+    /// <summary>The person's confirmation of a KSeF Production invoice: the <c>confirm</c> hash from the <c>ksef_confirm</c> refusal.</summary>
+    public sealed record SendRequest(string? KsefConfirm);
+
     [HttpPost("{id:guid}/send")]
-    public async Task<IActionResult> Send(Guid id, CancellationToken ct)
+    public async Task<IActionResult> Send(Guid id, [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] SendRequest? body, CancellationToken ct)
     {
         if (Refuse() is { } refused) return refused;
         var doc = await FindAsync(id, ct);
         if (doc is null) return NotFound(NotFoundBody);
         if (doc.IsSample)
             return Conflict(new { error = "sample_document", message = "This is our sample invoice, so it can't be sent. Add one of your own to send it." });
-        var outcome = await sender.SendAsync(doc, SendMode.Person, tenant.ClerkUserId, ct);
+        var outcome = await sender.SendAsync(doc, SendMode.Person, tenant.ClerkUserId, ct, body?.KsefConfirm);
         if (outcome.Ok)
         {
             // A person sent it: its sort is confirmed. Best effort: the send is committed and is never answered as a failure.
@@ -415,6 +418,8 @@ public sealed class DocumentsController(
         {
             "output_invalid" when outcome.Detail is OutputFailure f => UnprocessableEntity(new { error = outcome.Error, output = f.Output, detail = f.Detail }),
             "output_invalid" => UnprocessableEntity(new { error = outcome.Error }),
+            _ when outcome.Detail is KsefConfirmDetail k => Conflict(new { error = outcome.Error, summaries = k.Summaries, confirm = k.Confirm }),
+            _ when outcome.Detail is KsefIssuedDetail i => Conflict(new { error = outcome.Error, ksefNumber = i.KsefNumber }),
             _ => Conflict(new { error = outcome.Error }),
         };
     }
