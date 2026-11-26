@@ -185,6 +185,8 @@ condition can never swallow the first notification of another.
 | `worker_heartbeat_lost` | no Hangfire server has beaten within 60 s (same rule as `/health/ready`) | Railway Worker service — is the process up? | — |
 | `delivery_failure_rate` | ≥ **10** concluded delivery attempts in the last **60 min** and ≥ **50 %** of them failed | Supplier endpoints — rejecting or unreachable | `DeliveryFailureMinAttempts`, `DeliveryFailureWindowMinutes`, `DeliveryFailurePercent` |
 | `ai_token_cap_latched` | ≥ 1 org **in good standing** is at/over its monthly OpenAI token budget | Find why it spent its allowance without reading documents; tell the founder. No per-workspace lever — it stays stopped until the month ends | — |
+| `flow_delivery_dead_letter` | ≥ **1** flow delivery dead-lettered **on our side** (`unreachable`, `internal`, or no recorded kind) in the last **30 min** | See [below](#flow-dead-letters--who-acts) — operator acts | `DeadLetterThreshold`, `PipelineFailureWindowMinutes` |
+| `flow_delivery_refusal_spike` | ≥ **3** customer-side dead letters (`refused`, `setup`) in the same window, across ≥ **2** workspaces, or ≥ **9** (3× the threshold) in one | See [below](#flow-dead-letters--who-acts) — suspect our file writer or a provider | `RefusalSpikeThreshold` |
 | `alert_sweep_degraded` | the sweep could not read one of its own inputs, so the conditions that input feeds were **not evaluated** | See below — treat as MORE urgent than a health alert | — |
 
 Plan 13b (2026-11-13) removed three conditions with the order pipeline: `dead_letter_backlog`,
@@ -510,6 +512,34 @@ supplier — look for a shared cause first.
 3. One supplier → their endpoint or their credentials. The attempt rows carry the response code
    and body verbatim; a 401/403 is a credential rotation, a 5xx is theirs.
 4. Nothing is lost while you triage — failed attempts retry on the existing backoff.
+
+### Flow dead letters — who acts
+
+Every dead-lettered flow delivery records a `failure_kind` when it dead-letters
+(`FlowDeliveryFailureKind.For` and the pre-checks in `DeliverDocumentJob`). The kind decides who is told:
+
+| Kind | Means | Who acts | Pages |
+|---|---|---|---|
+| `refused` | the receiver answered and refused this document (business rejection, duplicate number, recipient not on the network, spam complaint) | customer | only as `flow_delivery_refusal_spike` |
+| `setup` | the customer's destination: credentials refused (401/403), folder/bucket/endpoint not found (404), destination removed, hard bounce. Not email: our own sending account refusing a credential is `internal` | customer | only as `flow_delivery_refusal_spike` |
+| `unreachable` | retryable failures that used every attempt: timeouts, 5xx, connection/DNS, and anything with no response code (SFTP faults included) | operator | `flow_delivery_dead_letter` |
+| `internal` | our side: an exception, a missing artifact, a decrypt failure, a crashed send, a final failure nobody explained, any other final 4xx (405, 413, 415: possibly our request) (KSeF and unconfirmed outcomes land here) | operator | `flow_delivery_dead_letter` |
+| none | rows dead-lettered before the kind was recorded | operator | `flow_delivery_dead_letter` |
+
+An ambiguous case always gets a system kind, so it still pages. Both messages carry the breakdown
+and the latest three rows (workspace slug, protocol, kind, last error; email addresses in the error
+are replaced with `[email]`, since the message reaches Sentry).
+
+- **`flow_delivery_dead_letter`** — ours. Open the named workspace's document; the last error is
+  on it. Unreachable on one destination → their endpoint; spread across destinations → our
+  outbound path (as for `delivery_failure_rate`).
+- **`flow_delivery_refusal_spike`** — several workspaces' sends refused at once, or a run in one.
+  A few refusals in one workspace are theirs; the same across customers, or a run in the one
+  workspace using a standard, points at our file writer or a provider
+  (B2Brouter, KSeF) changing what it accepts. Compare the errors in the message.
+- **A customer-side dead letter is never hidden.** The customer sees "Couldn't send" with the
+  error on the document page, gets the phone alert if they opted in (`PhoneAlertJob`), and the
+  row stays in `flow_deliveries` with its `failure_kind` for an admin to read.
 
 ### `ai_token_cap_latched` — an org's AI budget is exhausted
 

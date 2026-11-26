@@ -1,5 +1,7 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Alerting;
 
@@ -105,6 +107,7 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
             if (await ReadFlowSignalAsync(ct) is { } flow)
             {
                 conditions.Add(EvaluateFlowDeadLetter(flow));
+                conditions.Add(EvaluateFlowRefusalSpike(flow));
                 conditions.Add(EvaluateFlowStuck(flow));
             }
             else
@@ -345,10 +348,39 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
     private (string, bool, string) EvaluateFlowDeadLetter(FlowDeliveryHealthSignal s)
     {
         var threshold = _options.EffectiveDeadLetterThreshold;
-        return (OperationalAlertKeys.FlowDeliveryDeadLetter, s.DeadLettered >= threshold,
-            $"ProcuLink flow deliveries dead-lettered in the last {s.WindowMinutes} min = {s.DeadLettered} (threshold {threshold}). "
-          + "Each is a document output that did not reach its destination; the last error is on the document.");
+        var count = s.DeadLetters.Where(d => !FlowDeliveryFailureKind.IsCustomerSide(d.Kind)).Sum(d => d.Count);
+        return (OperationalAlertKeys.FlowDeliveryDeadLetter, count >= threshold,
+            $"ProcuLink flow deliveries dead-lettered on our side in the last {s.WindowMinutes} min = {count} (threshold {threshold}): "
+          + Breakdown(s, customerSide: false) + ". Each is a document output that did not reach its destination; the last error is on the document.");
     }
+
+    private (string, bool, string) EvaluateFlowRefusalSpike(FlowDeliveryHealthSignal s)
+    {
+        var threshold = _options.EffectiveRefusalSpikeThreshold;
+        var customer = s.DeadLetters.Where(d => FlowDeliveryFailureKind.IsCustomerSide(d.Kind)).ToList();
+        var (count, orgs) = (customer.Sum(d => d.Count), customer.Select(d => d.OrgId).Distinct().Count());
+        // Across workspaces, or a run in one: a file writer of ours can break the only workspace that uses that standard.
+        return (OperationalAlertKeys.FlowDeliveryRefusalSpike, count >= threshold && (orgs >= 2 || count >= 3 * threshold),
+            $"ProcuLink flow deliveries refused or failing on the customer's setup in the last {s.WindowMinutes} min = {count} across {orgs} workspaces "
+          + $"(threshold {threshold} across 2+ workspaces, or {3 * threshold} in one): {Breakdown(s, customerSide: true)}. A few refusals are the workspace's own to fix; "
+          + "the same across workspaces suggests our file writer or a provider is broken.");
+    }
+
+    /// <summary>"1 unreachable, 1 internal (org-slug, sftp, unreachable: Connection timed out…; …)": counts per kind, then the latest few.</summary>
+    private static string Breakdown(FlowDeliveryHealthSignal s, bool customerSide)
+    {
+        var counts = s.DeadLetters.Where(d => FlowDeliveryFailureKind.IsCustomerSide(d.Kind) == customerSide)
+            .GroupBy(d => d.Kind ?? "unknown").Select(g => $"{g.Sum(d => d.Count)} {g.Key}");
+        var rows = s.Latest.Where(r => FlowDeliveryFailureKind.IsCustomerSide(r.Kind) == customerSide).Take(3).Select(r =>
+            $"{r.OrgSlug}, {(r.Protocol.Length == 0 ? "download" : r.Protocol)}, {r.Kind ?? "unknown"}: "
+          + (r.LastError is not { } e ? "no error recorded" : Cut(EmailAddress.Replace(e, "[email]"))));
+        return $"{string.Join(", ", counts)} ({string.Join("; ", rows)})";
+    }
+
+    private static string Cut(string e) => e.Length <= 160 ? e : e[..160] + "…";
+
+    /// <summary>Receivers quote addresses in their errors (bounces, "Invalid 'To' address"); the alert goes to Sentry, so none are kept.</summary>
+    private static readonly Regex EmailAddress = new(@"[^\s<>""'(),;:@]+@[^\s<>""'(),;:@]+", RegexOptions.Compiled);
 
     private static (string, bool, string) EvaluateFlowStuck(FlowDeliveryHealthSignal s) =>
         (OperationalAlertKeys.FlowDeliveryStuck, s.Stuck > 0,

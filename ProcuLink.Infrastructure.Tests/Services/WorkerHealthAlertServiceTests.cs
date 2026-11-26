@@ -2,8 +2,10 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Services;
 using ProcuLink.Core.Services.Alerting;
+using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Infrastructure.Services;
 
 namespace ProcuLink.Infrastructure.Tests.Services;
@@ -152,11 +154,74 @@ public class WorkerHealthAlertServiceTests
 
         var flows = new Mock<IFlowDeliveryHealthProbe>();
         flows.Setup(f => f.GetSignalAsync(It.IsAny<CancellationToken>()))
-             .ReturnsAsync(new FlowDeliveryHealthSignal(DeadLettered: 2, WindowMinutes: 1440, Stuck: 1, StuckAfterMinutes: 30));
+             .ReturnsAsync(FlowSignal(Dead(null, OrgA, 2), Dead(FlowDeliveryFailureKind.Refused, OrgA, 2), Dead(FlowDeliveryFailureKind.Setup, OrgB, 1)) with { Stuck = 1 });
 
         await CreateService(health, sink, probe, flows: flows).RunAsync(default);
 
         sink.Calls.Select(c => c.Key).Should().BeEquivalentTo(OperationalAlertKeys.HealthConditions);
+    }
+
+    // ── Flow dead letters: who acts decides whether it pages ─────────────────────
+
+    [Theory]
+    [InlineData(201, DeliveryOutcome.NotRetryable, true, FlowDeliveryFailureKind.Refused, null)]      // B2Brouter: recipient not registered
+    [InlineData(422, DeliveryOutcome.Dispatched, false, FlowDeliveryFailureKind.Refused, null)]       // endpoint rejected the content, retries spent
+    [InlineData(401, DeliveryOutcome.Dispatched, false, FlowDeliveryFailureKind.Setup, null)]         // the customer's credentials
+    [InlineData(null, DeliveryOutcome.Dispatched, false, FlowDeliveryFailureKind.Unreachable, OperationalAlertKeys.FlowDeliveryDeadLetter)]
+    [InlineData(null, DeliveryOutcome.NotRetryable, false, FlowDeliveryFailureKind.Internal, OperationalAlertKeys.FlowDeliveryDeadLetter)]
+    [InlineData(401, DeliveryOutcome.NotRetryable, false, FlowDeliveryFailureKind.Internal, OperationalAlertKeys.FlowDeliveryDeadLetter, "email")] // our sending account
+    [InlineData(413, DeliveryOutcome.NotRetryable, false, FlowDeliveryFailureKind.Internal, OperationalAlertKeys.FlowDeliveryDeadLetter)]          // may be our request
+    public async Task RunAsync_OneDeadLetter_PagesOnlyWhenItIsOurs(int? code, DeliveryOutcome outcome, bool observable, string kind, string? key, string? protocol = null)
+    {
+        FlowDeliveryFailureKind.For(new DeliveryResult(false, "x", code, Outcome: outcome, SupplierReasonObservable: observable), protocol).Should().Be(kind);
+        var sink = new RecordingSink();
+
+        await CreateService(HealthOk(), sink, flows: FlowsReturning(FlowSignal(Dead(kind, OrgA, 1)))).RunAsync(default);
+
+        sink.Calls.Select(c => c.Key).Should().BeEquivalentTo(key is null ? Array.Empty<string>() : new[] { key });
+    }
+
+    [Fact]
+    public async Task RunAsync_RefusalsPageOnlyAsASpikeAcrossWorkspaces_AndAnUnrecordedKindStillPages()
+    {
+        var oneWorkspace = new RecordingSink();
+        await CreateService(HealthOk(), oneWorkspace, flows: FlowsReturning(
+            FlowSignal(Dead(FlowDeliveryFailureKind.Refused, OrgA, 5), Dead(null, OrgA, 1)))).RunAsync(default);
+
+        oneWorkspace.Calls.Should().ContainSingle().Which.Key.Should().Be(OperationalAlertKeys.FlowDeliveryDeadLetter);
+        oneWorkspace.Calls[0].Message.Should().Contain("= 1 (threshold 1): 1 unknown (acme, sftp, unknown: Connection timed out");
+
+        var twoWorkspaces = new RecordingSink();
+        await CreateService(HealthOk(), twoWorkspaces, flows: FlowsReturning(
+            FlowSignal(Dead(FlowDeliveryFailureKind.Refused, OrgA, 2), Dead(FlowDeliveryFailureKind.Setup, OrgB, 1)))).RunAsync(default);
+
+        twoWorkspaces.Calls.Should().ContainSingle().Which.Key.Should().Be(OperationalAlertKeys.FlowDeliveryRefusalSpike);
+        twoWorkspaces.Calls[0].Message.Should().Contain("= 3 across 2 workspaces").And.Contain("2 refused, 1 setup (acme, b2brouter, refused:");
+
+        // A run in the one workspace using a standard still pages (our writer can break it), and no address reaches the alert.
+        var oneRun = new RecordingSink();
+        await CreateService(HealthOk(), oneRun, flows: FlowsReturning(FlowSignal(Dead(FlowDeliveryFailureKind.Refused, OrgA, 9)) with
+            { Latest = [new("acme", "smtp", FlowDeliveryFailureKind.Refused, "550 5.1.1 <buyer@example.com>: Recipient address rejected")] })).RunAsync(default);
+
+        oneRun.Calls.Should().ContainSingle().Which.Key.Should().Be(OperationalAlertKeys.FlowDeliveryRefusalSpike);
+        oneRun.Calls[0].Message.Should().Contain("<[email]>: Recipient").And.NotContain("@");
+    }
+
+    private static readonly Guid OrgA = Guid.NewGuid(), OrgB = Guid.NewGuid();
+
+    private static FlowDeadLetterCount Dead(string? kind, Guid org, int count) => new(kind, org, count);
+
+    /// <summary>The counts as given, and one latest row per count, newest first, as the probe would name them.</summary>
+    private static FlowDeliveryHealthSignal FlowSignal(params FlowDeadLetterCount[] counts) =>
+        new(counts, counts.Select(c => new FlowDeadLetterRow("acme", FlowDeliveryFailureKind.IsCustomerSide(c.Kind) ? "b2brouter" : "sftp", c.Kind,
+            FlowDeliveryFailureKind.IsCustomerSide(c.Kind) ? "B2Brouter couldn't deliver invoice 7: refused." : "Connection timed out.")).ToList(),
+            WindowMinutes: 30, Stuck: 0, StuckAfterMinutes: 30);
+
+    private static Mock<IFlowDeliveryHealthProbe> FlowsReturning(FlowDeliveryHealthSignal signal)
+    {
+        var flows = new Mock<IFlowDeliveryHealthProbe>();
+        flows.Setup(f => f.GetSignalAsync(It.IsAny<CancellationToken>())).ReturnsAsync(signal);
+        return flows;
     }
 
     // ── Anti-spam ────────────────────────────────────────────────────────────────

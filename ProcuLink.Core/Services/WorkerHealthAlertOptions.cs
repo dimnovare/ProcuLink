@@ -25,6 +25,14 @@ public sealed class WorkerHealthAlertOptions
     public int DeadLetterThreshold { get; set; } = 1;
 
     /// <summary>
+    /// Customer-side flow dead letters (refused by the receiver, or the customer's destination setup) in the dead-letter window
+    /// at/above which the refusal-spike alert fires, and only when they span at least two organisations: one customer's refused
+    /// invoices are theirs to fix, the same across customers suggests our file writer or a provider broke. Default 3. A
+    /// non-positive configured value falls back to the default.
+    /// </summary>
+    public int RefusalSpikeThreshold { get; set; } = 3;
+
+    /// <summary>
     /// Trailing window (minutes, on <c>UpdatedAt</c>) over which dead-lettered flow deliveries are
     /// counted. Default 30, the same as <see cref="MinAlertIntervalMinutes"/>: a dead letter alerts on
     /// the sweep that first sees it and has left the window before the rate limit would repeat it, so
@@ -62,6 +70,9 @@ public sealed class WorkerHealthAlertOptions
 
     /// <summary>Effective dead-letter threshold (never non-positive).</summary>
     public int EffectiveDeadLetterThreshold => DeadLetterThreshold > 0 ? DeadLetterThreshold : 1;
+
+    /// <summary>Effective refusal-spike threshold (never non-positive).</summary>
+    public int EffectiveRefusalSpikeThreshold => RefusalSpikeThreshold > 0 ? RefusalSpikeThreshold : 3;
 
     /// <summary>Effective dead-letter window in minutes (never non-positive).</summary>
     public int EffectivePipelineFailureWindowMinutes =>
