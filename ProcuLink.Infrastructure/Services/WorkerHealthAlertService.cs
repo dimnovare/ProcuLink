@@ -134,7 +134,9 @@ public sealed class WorkerHealthAlertService : IWorkerHealthAlertService
                 continue;
             }
 
-            _logger.LogError("WorkerHealthAlert [{AlertKey}]: {Message}", key, message);
+            // Warning, not Error: the sinks below carry the alert (Sentry included), and an Error
+            // log line is filed by Sentry as a second issue for the same alert.
+            _logger.LogWarning("WorkerHealthAlert [{AlertKey}]: {Message}", key, message);
 
             var delivered = await TryAlertAsync(key, message, ct);
             alertedAny |= delivered;

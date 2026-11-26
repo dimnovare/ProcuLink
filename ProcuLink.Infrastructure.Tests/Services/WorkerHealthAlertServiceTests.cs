@@ -162,6 +162,18 @@ public class WorkerHealthAlertServiceTests
     // ── Anti-spam ────────────────────────────────────────────────────────────────
 
     [Fact]
+    public void Defaults_DeadLetterWindowIsNoLongerThanTheRepeatInterval()
+    {
+        // A dead letter must leave the counting window before the rate limit can repeat its alert,
+        // or one test delivery nobody retried re-alerts (email + Sentry) all day.
+        var options = new WorkerHealthAlertOptions();
+
+        options.PipelineFailureWindow.Should().BeLessThanOrEqualTo(options.MinAlertInterval);
+        options.PipelineFailureWindow.Should().BeGreaterThanOrEqualTo(TimeSpan.FromMinutes(15),
+            "the sweep runs every ~5 min, so a shorter window could miss a dead letter");
+    }
+
+    [Fact]
     public async Task RunAsync_StaysBadWithinWindow_AlertsOnceThenSuppresses()
     {
         var sink = new RecordingSink();

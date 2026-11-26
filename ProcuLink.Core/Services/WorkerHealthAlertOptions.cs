@@ -26,11 +26,12 @@ public sealed class WorkerHealthAlertOptions
 
     /// <summary>
     /// Trailing window (minutes, on <c>UpdatedAt</c>) over which dead-lettered flow deliveries are
-    /// counted. Default 1440 (24 h). Without it a dead letter nobody retries would keep the condition
-    /// bad, and re-alerting, for the life of the workspace. A non-positive configured value falls
-    /// back to the default.
+    /// counted. Default 30, the same as <see cref="MinAlertIntervalMinutes"/>: a dead letter alerts on
+    /// the sweep that first sees it and has left the window before the rate limit would repeat it, so
+    /// each one alerts once. With 24 h, one dead letter nobody retried re-alerted every interval for a
+    /// day. Must stay well above the ~5 min sweep interval. A non-positive value falls back to 30.
     /// </summary>
-    public int PipelineFailureWindowMinutes { get; set; } = 1440;
+    public int PipelineFailureWindowMinutes { get; set; } = 30;
 
     /// <summary>
     /// While a given condition stays bad, re-alert no more often than this many minutes (avoids
@@ -64,7 +65,7 @@ public sealed class WorkerHealthAlertOptions
 
     /// <summary>Effective dead-letter window in minutes (never non-positive).</summary>
     public int EffectivePipelineFailureWindowMinutes =>
-        PipelineFailureWindowMinutes > 0 ? PipelineFailureWindowMinutes : 1440;
+        PipelineFailureWindowMinutes > 0 ? PipelineFailureWindowMinutes : 30;
 
     /// <summary>Effective dead-letter window as a <see cref="TimeSpan"/>.</summary>
     public TimeSpan PipelineFailureWindow => TimeSpan.FromMinutes(EffectivePipelineFailureWindowMinutes);
