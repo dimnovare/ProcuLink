@@ -243,8 +243,9 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
         json.Should().NotContain("test_k").And.Contain("\"hasCredentials\":true").And.Contain("\"sandbox\":true");
 
         (await (await http.PostAsJsonAsync("/api/destinations", Body(null))).Content.ReadAsStringAsync()).Should().Contain("invalid_destination");
-        (await (await http.PostAsJsonAsync("/api/destinations", Body(new { apiKey = "live_k" }))).Content.ReadAsStringAsync())
-            .Should().Contain("sandbox API key"); // sandbox keys only, for now
+        var live = await http.PostAsJsonAsync("/api/destinations", Body(new { apiKey = "live_k" }));
+        live.StatusCode.Should().Be(HttpStatusCode.Created);
+        (await live.Content.ReadAsStringAsync()).Should().Contain("\"sandbox\":false"); // a live key saves, marked live by the server
     }
 
     private const string HeaderConfig = """{"url":"https://supplier.example/in","headers":{"Authorization":"Bearer t0ps3cret"}}""";
