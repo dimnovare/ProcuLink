@@ -58,6 +58,10 @@ public class McpToolsTests(DocumentEngineTestFactory factory) : IClassFixture<Do
         var flowId = await NewFlow(OrgA);
         await using var client = await Connect(factory.ApiKeyClientFor(OrgA));
 
+        // Assistants ask before a tool that isn't marked read-only; the three readers must say so.
+        (await client.ListToolsAsync()).Where(t => t.ProtocolTool.Annotations?.ReadOnlyHint == true).Select(t => t.Name)
+            .Should().BeEquivalentTo("list_flows", "list_documents", "get_document");
+
         var flows = JsonDocument.Parse((await Call(client, "list_flows")).Text).RootElement;
         flows.GetProperty("flows").EnumerateArray().Select(f => f.GetProperty("id").GetGuid()).Should().Contain(flowId);
         flows.GetProperty("inboxId").GetGuid().Should().NotBeEmpty();
