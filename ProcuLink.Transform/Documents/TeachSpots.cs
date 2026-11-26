@@ -57,6 +57,16 @@ public static class TeachSpots
         return new(value, near, new(null, null, $"line:{line}"));
     }
 
+    /// <summary>A pointed value without the punctuation after it: "INV-2250," is INV-2250 and "Kestrel Supplies." is Kestrel Supplies.
+    /// A full stop stays after a number ("12.") and after a short or dotted word ("Ltd.", "S.A.").</summary>
+    public static string? Clean(string? value)
+    {
+        var v = value?.Trim().TrimEnd(',', ';', ':').TrimEnd();
+        if (v is not { Length: > 1 } || v[^1] != '.') return v;
+        var word = v[..^1].Split(' ')[^1];
+        return word.Length <= 3 || word.Contains('.') || word.All(c => char.IsDigit(c) || c == ',') ? v : v[..^1];
+    }
+
     public static TeachSpot? Read(string fileName, byte[] bytes, int? page, Box? box, string? address, string? value)
     {
         var ext = Path.GetExtension(fileName).ToLowerInvariant();

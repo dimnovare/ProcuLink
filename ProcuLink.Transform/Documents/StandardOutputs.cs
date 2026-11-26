@@ -111,12 +111,8 @@ public static class StandardOutputs
         {
             if (standard.Syntax == InvoiceSyntax.Fa3) return Fa3(read, fields, tableKey, standard, orgId);
             var invoice = standard.Vesid is null ? default : StandardInvoiceAdapter.ToInvoice(read, fields, tableKey, standard.Needs, orgId, standard.CreditNote);
-            var (order, orderMissing) = standard.Vesid is null ? StandardOrderAdapter.ToOrder(read, fields, tableKey, standard.Needs, orgId) : (null, invoice.Missing);
-            if (order is null && invoice.Invoice is null)
-            {
-                var items = orderMissing.Count == 1 ? orderMissing[0] : $"{string.Join(", ", orderMissing.SkipLast(1))} and {orderMissing[^1]}";
-                return new(null, "output_invalid", $"This standard needs {items}.");
-            }
+            var (order, orderMissing, meanings) = standard.Vesid is null ? StandardOrderAdapter.ToOrder(read, fields, tableKey, standard.Needs, orgId) : (null, invoice.Missing, invoice.MissingMeanings);
+            if (order is null && invoice.Invoice is null) return Needs(orderMissing, meanings);
             if (invoice.Invoice is { } inv)
             {
                 if (standard.CreditNote && inv.GrandTotal < 0) WritePositive(inv, invoice.Lines);
@@ -153,8 +149,8 @@ public static class StandardOutputs
 
     private static DocumentRender Fa3(ReadResult read, FlowFieldList fields, string? tableKey, StandardOutput standard, Guid orgId)
     {
-        var (inv, lines, parties, missing) = StandardInvoiceAdapter.ToInvoice(read, fields, tableKey, standard.Needs, orgId, creditNote: false);
-        if (inv is null) return new(null, "output_invalid", NeedsSentence(missing));
+        var (inv, lines, parties, missing, meanings) = StandardInvoiceAdapter.ToInvoice(read, fields, tableKey, standard.Needs, orgId, creditNote: false);
+        if (inv is null) return Needs(missing, meanings);
         var (doc, refusal) = Fa3InvoiceWriter.Build(inv, lines, parties!, DateTime.UtcNow);
         if (doc is null) return new(null, "output_invalid", refusal);
         // UTF8.GetBytes writes no BOM, which KSeF requires.
@@ -162,8 +158,10 @@ public static class StandardOutputs
         return new(TransformResult.For(OutputFormat.Xml, new MemoryStream(bytes, writable: false)), null, null);
     }
 
-    private static string NeedsSentence(IReadOnlyList<string> missing) =>
-        $"This standard needs {(missing.Count == 1 ? missing[0] : $"{string.Join(", ", missing.SkipLast(1))} and {missing[^1]}")}.";
+    /// <summary>The needs sentence, and the meanings it names so the app can offer a field for each.</summary>
+    private static DocumentRender Needs(IReadOnlyList<string> missing, IReadOnlyList<string> meanings) =>
+        new(null, "output_invalid", $"This standard needs {(missing.Count == 1 ? missing[0] : $"{string.Join(", ", missing.SkipLast(1))} and {missing[^1]}")}.")
+        { Missing = meanings };
 
     /// <summary>
     /// A credit note printed negative, written positive as EN 16931 credit notes carry it: each total and line amount changes sign

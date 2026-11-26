@@ -2216,6 +2216,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(d => d.BillingUnits).HasColumnName("billing_units");
             b.Property(d => d.Status).HasColumnName("status");
             b.Property(d => d.StatusReason).HasColumnName("status_reason");
+            b.Property(d => d.StatusDetail).HasColumnName("status_detail").HasColumnType("jsonb");
             b.Property(d => d.ReadJson).HasColumnName("read_json").HasColumnType("jsonb").HasDefaultValue("{}");
             b.Property(d => d.ChecksJson).HasColumnName("checks_json").HasColumnType("jsonb").HasDefaultValue("[]");
             b.Property(d => d.Source).HasColumnName("source").HasDefaultValue("upload");

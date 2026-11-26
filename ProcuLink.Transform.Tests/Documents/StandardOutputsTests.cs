@@ -59,6 +59,7 @@ public class StandardOutputsTests
         var render = await Render("x12-850", Read(poNumber: " ", qty1: "1.500", code2: ""));
         (render.Result is null, render.Error, render.Detail).Should()
             .Be((true, "output_invalid", "This standard needs PO number, Qty (line 1) and Item code (line 2)."));
+        render.Missing.Should().Equal(FieldMeanings.DocumentNumber, FieldMeanings.LineQuantity, FieldMeanings.LineItemCode);
         (await Render("cxml-1-2", Read(unit1: ""))).Detail.Should().Be("This standard needs Unit (line 1).");
 
         var unknown = await Render("nope", Read());

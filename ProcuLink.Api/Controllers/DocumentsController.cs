@@ -108,6 +108,8 @@ public sealed class DocumentsController(
             CountsThisMonth = StripeBillingService.CountsAsUsage(doc, await UsageSinceAsync(ct)),
             IsSample = doc.IsSample,
             DuplicateOf = (await DocumentListRows.EarlierNumbersAsync(db, doc.OrgId, [doc], ct)).GetValueOrDefault(doc.Id),
+            HeldOutput = doc is { Status: DocumentStatus.NeedsReview, StatusReason: "output_invalid", StatusDetail: { } held }
+                ? DocumentJson.Deserialize<OutputFailure>(held) : null,
         };
 
     [HttpGet]
@@ -284,7 +286,7 @@ public sealed class DocumentsController(
         }
         var spot = TeachSpots.Read(doc.FileName, bytes, req.Page, req.Box, req.Address, req.Value?.Trim());
         if (spot is null) return BadRequest(new { error = "unknown_spot" });
-        var value = spot.Value?.Trim();
+        var value = TeachSpots.Clean(spot.Value);
         if (string.IsNullOrEmpty(value)) return BadRequest(new { error = "no_text_in_area" });
 
         var key = req.Key!;
@@ -395,7 +397,7 @@ public sealed class DocumentsController(
         if (outcome.Ok) return Ok(outcome.Deliveries.OrderBy(d => d.CreatedAt).Select(ToDeliveryDto));
         return outcome.Error switch
         {
-            "output_invalid" when outcome.Detail is OutputFailure f => UnprocessableEntity(new { error = outcome.Error, output = f.Output, detail = f.Detail }),
+            "output_invalid" when outcome.Detail is OutputFailure f => UnprocessableEntity(new { error = outcome.Error, output = f.Output, detail = f.Detail, missing = f.Missing ?? [] }),
             "output_invalid" => UnprocessableEntity(new { error = outcome.Error }),
             _ when outcome.Detail is KsefConfirmDetail k => Conflict(new { error = outcome.Error, summaries = k.Summaries, confirm = k.Confirm }),
             _ when outcome.Detail is KsefIssuedDetail i => Conflict(new { error = outcome.Error, ksefNumber = i.KsefNumber }),

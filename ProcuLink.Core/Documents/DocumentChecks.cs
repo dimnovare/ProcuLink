@@ -95,7 +95,8 @@ public static class DocumentChecks
         var amounts = table.Rows.Select(r => Cell(r, amountKey)).ToList();
         // Lines priced with tax included (receipts) add up to the gross total instead; either one passes.
         var lines = amounts.All(a => a is not null) ? amounts.Sum(a => R(a!.Value)) : (decimal?)null;
-        if (haveNet && lines is { } sum && Math.Abs(sum - R(net)) > unit && !(haveGross && Math.Abs(sum - R(gross)) <= unit))
+        // A net worked out from the other totals (not on the page) is not the document's own figure to check the lines against.
+        if (haveNet && Find(FieldMeanings.TotalNet)!.NotOnPage is false && lines is { } sum && Math.Abs(sum - R(net)) > unit && !(haveGross && Math.Abs(sum - R(gross)) <= unit))
             fail(ArithmeticMismatch, table.Key, "The lines don't add up to the net total.");
 
         var qtyKey = Col(FieldMeanings.LineQuantity);

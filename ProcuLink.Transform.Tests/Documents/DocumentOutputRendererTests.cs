@@ -52,11 +52,11 @@ public class DocumentOutputRendererTests
         var bad = DocumentOutputRenderer.Render("csv", Csv(new CsvDialect { Encoding = "no-such-encoding" }, Rule("No", "invoice_no")), read, null);
         (bad.Ok, bad.Error).Should().Be((false, "output_invalid"));
 
-        // The XML writer's own sentence (here: an "xmlns" attribute redefining the element's namespace) is not shown.
+        // The XML writer's own sentence (here: an "xmlns" attribute redefining the element's namespace) is not shown: a plain one is.
         var xml = new OutputNodeTemplate { Format = OutputFormat.Xml, Root = OutputNode.Obj("Order",
             OutputNode.Attr("xmlns", new OutputFieldRule { OutputPath = "xmlns", CanonicalField = "invoice_no" })) };
         var xmlBad = DocumentOutputRenderer.Render("xml", xml, read, null);
-        (xmlBad.Ok, xmlBad.Error, xmlBad.Detail).Should().Be((false, "output_invalid", (string?)null));
+        (xmlBad.Ok, xmlBad.Error, xmlBad.Detail).Should().Be((false, "output_invalid", "We couldn't write the XML file from these values."));
     }
 
     [Fact]

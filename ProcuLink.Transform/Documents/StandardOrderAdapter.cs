@@ -13,8 +13,9 @@ public static partial class StandardOrderAdapter
 {
     private const string NoLines = "at least one line";
 
-    /// <summary>The order, or what the read lacks for <paramref name="needs"/> (never both): each item the carrier's label, a line need with its first failing line.</summary>
-    public static (PurchaseOrderEntity? Order, IReadOnlyList<string> Missing) ToOrder(
+    /// <summary>The order, or what the read lacks for <paramref name="needs"/> (never both): each item the carrier's label, a line need with its first failing line,
+    /// and the meanings of those items (none for an empty table).</summary>
+    public static (PurchaseOrderEntity? Order, IReadOnlyList<string> Missing, IReadOnlyList<string> MissingMeanings) ToOrder(
         ReadResult read, FlowFieldList fields, string? tableKey, IReadOnlyList<string> needs, Guid orgId) =>
         Build(read, fields, tableKey, needs, a => new PurchaseOrderEntity
         {
@@ -95,7 +96,7 @@ public static partial class StandardOrderAdapter
     }
 
     /// <summary>The built value, or what the read lacks for <paramref name="needs"/> (never both). Shared by every standard's adapter.</summary>
-    internal static (T? Value, IReadOnlyList<string> Missing) Build<T>(
+    internal static (T? Value, IReadOnlyList<string> Missing, IReadOnlyList<string> MissingMeanings) Build<T>(
         ReadResult read, FlowFieldList fields, string? tableKey, IReadOnlyList<string> needs, Func<Access, T> build, bool creditNote = false) where T : class
     {
         ReadField? Field(string meaning) => read.Fields.FirstOrDefault(f => FieldMeanings.Of(f, fields) == meaning);
@@ -108,26 +109,28 @@ public static partial class StandardOrderAdapter
             Column(meaning) is { } c && row.Cells.TryGetValue(c.Key, out var cell) ? Blank(cell.Value) : null;
 
         var missing = new List<string>();
+        var meanings = new List<string>();
+        void Miss(string item, string? meaning) { missing.Add(item); if (meaning is not null) meanings.Add(meaning); }
         foreach (var need in needs)
         {
             if (!need.StartsWith("line_", StringComparison.Ordinal))
             {
-                if (!Present(need, Text(need), creditNote)) missing.Add(Field(need)?.Label ?? Humanise(need));
+                if (!Present(need, Text(need), creditNote)) Miss(Field(need)?.Label ?? FieldMeanings.Label(need), need);
             }
             else if (rows.Count == 0)
             {
-                if (!missing.Contains(NoLines)) missing.Add(NoLines);
+                if (!missing.Contains(NoLines)) Miss(NoLines, null);
             }
             else
             {
                 var line = Enumerable.Range(1, rows.Count).FirstOrDefault(n => !Present(need, Cell(rows[n - 1], need), creditNote));
-                if (line > 0) missing.Add($"{Column(need)?.Label ?? Humanise(need)} (line {line})");
+                if (line > 0) Miss($"{Column(need)?.Label ?? FieldMeanings.Label(need)} (line {line})", need);
             }
         }
-        if (missing.Count > 0) return (null, missing);
+        if (missing.Count > 0) return (null, missing, meanings);
 
         var numbers = rows.Select(r => FieldValueParser.Number(Cell(r, FieldMeanings.LineNumber))).ToList();
-        return (build(new Access(Text, rows, Cell, numbers)), []);
+        return (build(new Access(Text, rows, Cell, numbers)), [], []);
     }
 
     // Numbers count only with a single reading (an ambiguous "1.500" is missing, never guessed), within the writers' own guards.
@@ -151,6 +154,4 @@ public static partial class StandardOrderAdapter
     private static partial Regex ElectronicAddress();
 
     private static string? Blank(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
-
-    private static string Humanise(string meaning) => meaning == FieldMeanings.Iban ? "IBAN" : char.ToUpperInvariant(meaning[0]) + meaning[1..].Replace('_', ' ');
 }

@@ -21,6 +21,8 @@ public class FlowDocument
 
     public string Status { get; set; } = DocumentStatus.Received;
     public string? StatusReason { get; set; }
+    /// <summary>With an automatic send held as <c>output_invalid</c>: which file couldn't be made and why, as JSON. Written by every hold.</summary>
+    public string? StatusDetail { get; set; }
 
     public string ReadJson { get; set; } = "{}";
     public string ChecksJson { get; set; } = "[]";

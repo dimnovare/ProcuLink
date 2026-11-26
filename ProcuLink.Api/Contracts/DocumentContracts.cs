@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 
@@ -101,6 +102,8 @@ public sealed record DocumentDetailDto : DocumentDto
     public bool IsSample { get; init; }
     /// <summary>For a repeated number (a failed <c>duplicate</c> check): the earlier copy.</summary>
     public DuplicateOfDto? DuplicateOf { get; init; }
+    /// <summary>While an automatic send is held as <c>output_invalid</c>: the file that couldn't be made, and why.</summary>
+    public OutputFailure? HeldOutput { get; init; }
 }
 
 /// <summary>What the file API returns for a document: the read result and the sends made from it.</summary>
