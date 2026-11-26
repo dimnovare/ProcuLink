@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Renci.SshNet;
 using Renci.SshNet.Common;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Security;
@@ -204,7 +205,7 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
                         // supplier's password on an unverified server. A connect that SUCCEEDS
                         // despite our refusal is still a refusal.
                         var connectFailure = TryConnect(client, verifier)
-                            ?? (verifier.Rejection is null ? null : new DeliveryResult(false, verifier.Rejection.Message));
+                            ?? (verifier.Rejection is null ? null : CustomerSetup(verifier.Rejection.Message));
 
                         if (connectFailure is not null)
                         {
@@ -274,6 +275,9 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
         }
     }
 
+    /// <summary>A failure only the customer's server or login can cure (credentials, host key, folder), so it is theirs.</summary>
+    internal static DeliveryResult CustomerSetup(string message) => new(false, message, FailureKind: FlowDeliveryFailureKind.Setup);
+
     /// <summary>
     /// Carries a first-use host-key observation out of the transport and onto the result, so
     /// the caller — which owns the config row and the transaction — can record it.
@@ -304,11 +308,11 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
             // identically to an algorithm mismatch. Filtering on OUR OWN rejection rather than on
             // the exception type means a library upgrade that renames or re-wraps it cannot quietly
             // reinstate the useless message.
-            return new DeliveryResult(false, verifier.Rejection.Message);
+            return CustomerSetup(verifier.Rejection.Message);
         }
         catch (SshAuthenticationException)
         {
-            return new DeliveryResult(false, "SFTP authentication failed — check the username, password, or private key.");
+            return CustomerSetup("SFTP authentication failed — check the username, password, or private key.");
         }
         catch (System.Net.Sockets.SocketException ex)
         {
@@ -380,11 +384,11 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
         }
         catch (SftpPathNotFoundException)
         {
-            return new DeliveryResult(false, $"SFTP remote directory '{GetDirectoryPath(remotePath)}' does not exist. Set makeDirectories=true to auto-create.");
+            return CustomerSetup($"SFTP remote directory '{GetDirectoryPath(remotePath)}' does not exist. Set makeDirectories=true to auto-create.");
         }
         catch (SftpPermissionDeniedException)
         {
-            return new DeliveryResult(false, $"SFTP permission denied writing to '{remotePath}'.");
+            return CustomerSetup($"SFTP permission denied writing to '{remotePath}'.");
         }
         catch (OperationCanceledException)
         {

@@ -516,14 +516,15 @@ supplier — look for a shared cause first.
 ### Flow dead letters — who acts
 
 Every dead-lettered flow delivery records a `failure_kind` when it dead-letters
-(`FlowDeliveryFailureKind.For` and the pre-checks in `DeliverDocumentJob`). The kind decides who is told:
+(`FlowDeliveryFailureKind.For` and the pre-checks in `DeliverDocumentJob`). A transport that knows who acts
+where no response code says it stamps `DeliveryResult.FailureKind`, and that wins. The kind decides who is told:
 
 | Kind | Means | Who acts | Pages |
 |---|---|---|---|
-| `refused` | the receiver answered and refused this document (business rejection, duplicate number, recipient not on the network, spam complaint) | customer | only as `flow_delivery_refusal_spike` |
-| `setup` | the customer's destination: credentials refused (401/403), folder/bucket/endpoint not found (404), destination removed, hard bounce. Not email: our own sending account refusing a credential is `internal` | customer | only as `flow_delivery_refusal_spike` |
-| `unreachable` | retryable failures that used every attempt: timeouts, 5xx, connection/DNS, and anything with no response code (SFTP faults included) | operator | `flow_delivery_dead_letter` |
-| `internal` | our side: an exception, a missing artifact, a decrypt failure, a crashed send, a final failure nobody explained, any other final 4xx (405, 413, 415: possibly our request) (KSeF and unconfirmed outcomes land here) | operator | `flow_delivery_dead_letter` |
+| `refused` | the receiver answered and refused this document (business rejection, duplicate number, recipient not on the network, spam complaint; KSeF: a duplicate invoice, a future issue date) | customer | only as `flow_delivery_refusal_spike` |
+| `setup` | the customer's destination: credentials refused (401/403), folder/bucket/endpoint not found (404), destination removed, hard bounce; SFTP/FTPS login refused, SFTP host key changed, folder missing or not writable; a linked Google/Microsoft account to reconnect; KSeF token, permission or NIP setup. Not email: our own sending account refusing a credential is `internal` | customer | only as `flow_delivery_refusal_spike` |
+| `unreachable` | retryable failures that used every attempt: timeouts, 5xx, connection/DNS, and anything else with no response code | operator | `flow_delivery_dead_letter` |
+| `internal` | our side: an exception, a missing artifact, a decrypt failure, a crashed send, a final failure nobody explained, any other final 4xx (405, 413, 415: possibly our request) (a KSeF rejection, which may be our file, a KSeF sign-in refusal it did not explain, and an unconfirmed KSeF outcome land here; so does a linked account whose tokens we cannot decrypt) | operator | `flow_delivery_dead_letter` |
 | none | rows dead-lettered before the kind was recorded | operator | `flow_delivery_dead_letter` |
 
 An ambiguous case always gets a system kind, so it still pages. Both messages carry the breakdown

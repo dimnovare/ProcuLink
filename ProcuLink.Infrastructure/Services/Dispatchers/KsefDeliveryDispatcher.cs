@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using ProcuLink.Core.Constants;
 using ProcuLink.Core.Documents;
+using Kind = ProcuLink.Core.Documents.FlowDeliveryFailureKind;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Infrastructure.Services.Ksef;
@@ -44,19 +45,19 @@ public sealed class KsefDeliveryDispatcher(KsefClient ksef, ILogger<KsefDelivery
             token = string.IsNullOrEmpty(decryptedCredentials) ? null
                 : JsonNode.Parse(decryptedCredentials)?["token"] is JsonValue t && t.TryGetValue<string>(out var ts) ? ts : null;
         }
-        catch (System.Text.Json.JsonException) { return Final(misconfigured); }
-        if (ksef.BaseUrl(environment) is null || !PolishNip.IsValid(nip)) return Final(misconfigured);
-        if (string.IsNullOrEmpty(token)) return Final(BadToken(nip!));
+        catch (System.Text.Json.JsonException) { return Final(misconfigured, Kind.Setup); }
+        if (ksef.BaseUrl(environment) is null || !PolishNip.IsValid(nip)) return Final(misconfigured, Kind.Setup);
+        if (string.IsNullOrEmpty(token)) return Final(BadToken(nip!), Kind.Setup);
 
         KsefSummary? file = null;
         if (!checkOnly)
         {
             try { file = Fa3Summary.Read(content); }
-            catch (Exception) { return Final("This KSeF destination can only send a KSeF invoice file output. Nothing was sent."); }
+            catch (Exception) { return Final("This KSeF destination can only send a KSeF invoice file output. Nothing was sent.", Kind.Setup); }
             if (file.SellerNip != nip)
-                return Final($"This invoice's seller NIP is {file.SellerNip}, but this KSeF destination is set up for NIP {nip}. Nothing was sent.");
+                return Final($"This invoice's seller NIP is {file.SellerNip}, but this KSeF destination is set up for NIP {nip}. Nothing was sent.", Kind.Setup);
             if (string.CompareOrdinal(file.IssueDate, WarsawToday()) > 0)
-                return Final($"The issue date {file.IssueDate} is in the future. KSeF accepts invoices dated today or earlier. Nothing was sent.");
+                return Final($"The issue date {file.IssueDate} is in the future. KSeF accepts invoices dated today or earlier. Nothing was sent.", Kind.Refused);
         }
 
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -68,15 +69,15 @@ public sealed class KsefDeliveryDispatcher(KsefClient ksef, ILogger<KsefDelivery
         }
         catch (KsefRefusedException r) when (r.SignIn && r.Code == 415)
         {
-            return Final("This KSeF token doesn't have permission to issue invoices. Make a token with the \"issue invoices\" permission (InvoiceWrite).");
+            return Final("This KSeF token doesn't have permission to issue invoices. Make a token with the \"issue invoices\" permission (InvoiceWrite).", Kind.Setup);
         }
         catch (KsefRefusedException r) when (r.SignIn && r.Code is 450 or 425 or 401 or 403)
         {
-            return Final(BadToken(nip!));
+            return Final(BadToken(nip!), Kind.Setup);
         }
         catch (KsefRefusedException r)
         {
-            return Final($"KSeF refused the sign-in: {r.Message}");
+            return Final($"KSeF refused the sign-in: {r.Message}", null);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
@@ -91,16 +92,16 @@ public sealed class KsefDeliveryDispatcher(KsefClient ksef, ILogger<KsefDelivery
             if (r.StatusCode == 200 && r.KsefNumber is { } number)
                 return new DeliveryResult(true, null, 200, RemoteReference: number, RemoteEnvironment: environment, Receipt: r.Upo);
             if (r.StatusCode == 440)
-                return Final($"KSeF already has an invoice with this number from this seller (KSeF number {r.OriginalKsefNumber}). Nothing new was issued.", r.OriginalKsefNumber);
+                return Final($"KSeF already has an invoice with this number from this seller (KSeF number {r.OriginalKsefNumber}). Nothing new was issued.", Kind.Refused, r.OriginalKsefNumber);
             if (r.StatusCode is { } code && code != 200)
-                return Final($"KSeF rejected the invoice: {r.StatusText}");
+                return Final($"KSeF rejected the invoice: {r.StatusText}", null);
             // Submitted, outcome unknown (or a 200 without a number): never sent again.
             return Final($"KSeF received the invoice (reference {r.InvoiceReference ?? r.SessionReference}) but we couldn't confirm the result. " +
-                "Check it in Aplikacja Podatnika KSeF before sending again; sending again may issue it twice.", r.InvoiceReference ?? r.SessionReference);
+                "Check it in Aplikacja Podatnika KSeF before sending again; sending again may issue it twice.", null, r.InvoiceReference ?? r.SessionReference);
         }
         catch (KsefRefusedException r)
         {
-            return Final($"KSeF rejected the invoice: {r.Message}");
+            return Final($"KSeF rejected the invoice: {r.Message}", null);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
@@ -112,9 +113,13 @@ public sealed class KsefDeliveryDispatcher(KsefClient ksef, ILogger<KsefDelivery
     private static string BadToken(string nip) =>
         $"KSeF didn't accept the token. It may have expired or been revoked, or it isn't for NIP {nip}. Make a new token in Aplikacja Podatnika KSeF and save it on this destination.";
 
-    /// <summary>A final failure. <paramref name="reference"/> is what KSeF may already hold, kept on the delivery so the document is never sent again.</summary>
-    private static DeliveryResult Final(string message, string? reference = null) =>
-        new(false, message, Outcome: DeliveryOutcome.NotRetryable, RemoteReference: reference);
+    /// <summary>
+    /// A final failure. <paramref name="kind"/> says who acts: the customer's setup or this invoice, or null (ours, so it pages:
+    /// a rejected invoice, which may be our file; an unexplained sign-in refusal; an unconfirmed outcome). <paramref name="reference"/> is what KSeF may already hold, kept on
+    /// the delivery so the document is never sent again.
+    /// </summary>
+    private static DeliveryResult Final(string message, string? kind, string? reference = null) =>
+        new(false, message, Outcome: DeliveryOutcome.NotRetryable, RemoteReference: reference, FailureKind: kind);
 
     private DeliveryResult Transient(Exception ex)
     {

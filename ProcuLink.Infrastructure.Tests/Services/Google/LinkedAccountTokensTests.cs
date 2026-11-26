@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Infrastructure.Services;
@@ -79,6 +80,7 @@ public class LinkedAccountTokensTests
         result.Token.Should().BeNull();
         result.Failure!.Outcome.Should().Be(DeliveryOutcome.NotRetryable);
         result.Failure.ErrorMessage.Should().Be("Google access was removed. Reconnect the Google account.");
+        result.Failure.FailureKind.Should().Be(FlowDeliveryFailureKind.Setup); // only the customer can reconnect
         db.ChangeTracker.Clear();
         (await db.LinkedAccounts.SingleAsync()).Status.Should().Be("reconnect");
     }

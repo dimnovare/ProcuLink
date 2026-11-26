@@ -24,6 +24,8 @@ public static class FlowDeliveryFailureKind
     /// <summary>The kind of a dispatcher's failed result that dead-lettered a delivery, from the existing classification only.</summary>
     public static string For(DeliveryResult result, string? protocol = null)
     {
+        // The transport named who acts (an SFTP login, a KSeF refusal, a reconnect): no response code says it.
+        if (result.FailureKind is { } named) return named;
         var final = result.Outcome == DeliveryOutcome.NotRetryable;
         var cause = SupplierResponseClassification.Classify(result).Cause;
         // A final answer whose reason the receiver gave (B2Brouter's file and network refusals).

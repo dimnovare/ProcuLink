@@ -171,9 +171,10 @@ public class WorkerHealthAlertServiceTests
     [InlineData(null, DeliveryOutcome.NotRetryable, false, FlowDeliveryFailureKind.Internal, OperationalAlertKeys.FlowDeliveryDeadLetter)]
     [InlineData(401, DeliveryOutcome.NotRetryable, false, FlowDeliveryFailureKind.Internal, OperationalAlertKeys.FlowDeliveryDeadLetter, "email")] // our sending account
     [InlineData(413, DeliveryOutcome.NotRetryable, false, FlowDeliveryFailureKind.Internal, OperationalAlertKeys.FlowDeliveryDeadLetter)]          // may be our request
-    public async Task RunAsync_OneDeadLetter_PagesOnlyWhenItIsOurs(int? code, DeliveryOutcome outcome, bool observable, string kind, string? key, string? protocol = null)
+    [InlineData(null, DeliveryOutcome.Dispatched, false, FlowDeliveryFailureKind.Setup, null, null, FlowDeliveryFailureKind.Setup)]                 // the transport named it: an SFTP login
+    public async Task RunAsync_OneDeadLetter_PagesOnlyWhenItIsOurs(int? code, DeliveryOutcome outcome, bool observable, string kind, string? key, string? protocol = null, string? named = null)
     {
-        FlowDeliveryFailureKind.For(new DeliveryResult(false, "x", code, Outcome: outcome, SupplierReasonObservable: observable), protocol).Should().Be(kind);
+        FlowDeliveryFailureKind.For(new DeliveryResult(false, "x", code, Outcome: outcome, SupplierReasonObservable: observable, FailureKind: named), protocol).Should().Be(kind);
         var sink = new RecordingSink();
 
         await CreateService(HealthOk(), sink, flows: FlowsReturning(FlowSignal(Dead(kind, OrgA, 1)))).RunAsync(default);
