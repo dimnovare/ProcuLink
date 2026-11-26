@@ -64,13 +64,10 @@ public sealed class B2BrouterDeliveryDispatcher(IHttpClientFactory http, ILogger
             try
             {
                 using var response = await client.SendAsync(Request(HttpMethod.Get, accountPath), deadline.Token);
-                return (int)response.StatusCode switch
-                {
-                    >= 200 and < 300 => new DeliveryResult(true, $"B2Brouter accepted the API key for account {account}. No invoice was sent.", (int)response.StatusCode),
-                    401 or 403 => Final("B2Brouter refused the API key. Create a new key in B2Brouter under Developers and save it here.", (int)response.StatusCode),
-                    404 => Final($"B2Brouter has no account {account} for this key. Copy the account ID from B2Brouter's Developers page.", 404),
-                    var code => new DeliveryResult(false, "B2Brouter isn't answering right now.", code),
-                };
+                var code = (int)response.StatusCode;
+                return code is >= 200 and < 300
+                    ? new DeliveryResult(true, $"B2Brouter accepted the API key for account {account}. No invoice was sent.", code)
+                    : KeyOrAccount(code, account) ?? new DeliveryResult(false, "B2Brouter isn't answering right now.", code);
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
@@ -80,7 +77,7 @@ public sealed class B2BrouterDeliveryDispatcher(IHttpClientFactory http, ILogger
 
         var type = contentType.Split(';')[0].Trim().ToLowerInvariant();
         if (!EInvoiceTypes.Contains(type))
-            return Final("This destination takes e-invoice files only: Peppol BIS, EN 16931 CII, XRechnung or Factur-X. Choose an e-invoice file for it.");
+            return Final("This destination takes e-invoice files only: UBL, CII or Factur-X. Choose an e-invoice file for it.");
 
         HttpResponseMessage imported;
         try
@@ -107,7 +104,8 @@ public sealed class B2BrouterDeliveryDispatcher(IHttpClientFactory http, ILogger
             if (code is 409 or 429)
                 return new DeliveryResult(false, "B2Brouter asked us to wait. It will be tried again.", code, Truncate(body),
                     RetryAfter: imported.Headers.RetryAfter?.Delta);
-            if (code is 400 or 401 or 403 or 404 or 406 or 422)
+            if (KeyOrAccount(code, account) is { } refused) return refused;
+            if (code is 400 or 406 or 422)
                 return new DeliveryResult(false, $"B2Brouter refused the file: {ErrorMessage(body) ?? $"HTTP {code}"}", code, Truncate(body),
                     DeliveryOutcome.NotRetryable, SupplierReasonObservable: true);
             var invoice = code is 200 or 201 ? Invoice(body) : null;
@@ -154,6 +152,13 @@ public sealed class B2BrouterDeliveryDispatcher(IHttpClientFactory http, ILogger
         json?[key] is JsonValue v && v.TryGetValue<string>(out var s) && !string.IsNullOrWhiteSpace(s) ? s : null;
 
     private static string Truncate(string body) => body.Length <= 2000 ? body : body[..2000];
+
+    private static DeliveryResult? KeyOrAccount(int code, string account) => code switch
+    {
+        401 or 403 => Final("B2Brouter refused the API key. Create a new key in B2Brouter under Developers and save it here.", code),
+        404 => Final($"B2Brouter has no account {account} for this key. Copy the account ID from B2Brouter's Developers page.", 404),
+        _ => null,
+    };
 
     private static DeliveryResult Final(string message, int? code = null, string? body = null) =>
         new(false, message, code, body is null ? null : Truncate(body), DeliveryOutcome.NotRetryable);
