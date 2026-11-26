@@ -1,3 +1,4 @@
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Services.Delivery;
 
 namespace ProcuLink.Core.Documents;
@@ -21,15 +22,17 @@ public static class FlowDeliveryFailureKind
     public static bool IsCustomerSide(string? kind) => kind is Refused or Setup;
 
     /// <summary>The kind of a dispatcher's failed result that dead-lettered a delivery, from the existing classification only.</summary>
-    public static string For(DeliveryResult result)
+    public static string For(DeliveryResult result, string? protocol = null)
     {
         var final = result.Outcome == DeliveryOutcome.NotRetryable;
         var cause = SupplierResponseClassification.Classify(result).Cause;
         // A final answer whose reason the receiver gave (B2Brouter's file and network refusals).
         if (final && result.SupplierReasonObservable) return Refused;
-        // 401 / 403 / 404, or a final 4xx from the customer's own storage (S3, Drive, Sheets, OneDrive): their setup.
-        if (cause is SupplierFailureCause.AuthRejected or SupplierFailureCause.PermissionDenied or SupplierFailureCause.EndpointNotFound
-            || final && result.ResponseCode is >= 400 and < 500) return Setup;
+        // Email goes out on our own sending account: a refused credential there is ours, and stops every workspace's email.
+        if (protocol == DeliveryProtocolConstants.Email && cause is SupplierFailureCause.AuthRejected or SupplierFailureCause.PermissionDenied)
+            return Internal;
+        // 401 / 403 / 404: the customer's credentials, folder, bucket or endpoint. Any other final 4xx stays ours (it can be our request).
+        if (cause is SupplierFailureCause.AuthRejected or SupplierFailureCause.PermissionDenied or SupplierFailureCause.EndpointNotFound) return Setup;
         if (cause == SupplierFailureCause.BusinessRejection) return Refused;
         return final ? Internal : Unreachable;
     }

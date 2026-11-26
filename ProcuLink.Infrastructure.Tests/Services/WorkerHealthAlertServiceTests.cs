@@ -169,9 +169,11 @@ public class WorkerHealthAlertServiceTests
     [InlineData(401, DeliveryOutcome.Dispatched, false, FlowDeliveryFailureKind.Setup, null)]         // the customer's credentials
     [InlineData(null, DeliveryOutcome.Dispatched, false, FlowDeliveryFailureKind.Unreachable, OperationalAlertKeys.FlowDeliveryDeadLetter)]
     [InlineData(null, DeliveryOutcome.NotRetryable, false, FlowDeliveryFailureKind.Internal, OperationalAlertKeys.FlowDeliveryDeadLetter)]
-    public async Task RunAsync_OneDeadLetter_PagesOnlyWhenItIsOurs(int? code, DeliveryOutcome outcome, bool observable, string kind, string? key)
+    [InlineData(401, DeliveryOutcome.NotRetryable, false, FlowDeliveryFailureKind.Internal, OperationalAlertKeys.FlowDeliveryDeadLetter, "email")] // our sending account
+    [InlineData(413, DeliveryOutcome.NotRetryable, false, FlowDeliveryFailureKind.Internal, OperationalAlertKeys.FlowDeliveryDeadLetter)]          // may be our request
+    public async Task RunAsync_OneDeadLetter_PagesOnlyWhenItIsOurs(int? code, DeliveryOutcome outcome, bool observable, string kind, string? key, string? protocol = null)
     {
-        FlowDeliveryFailureKind.For(new DeliveryResult(false, "x", code, Outcome: outcome, SupplierReasonObservable: observable)).Should().Be(kind);
+        FlowDeliveryFailureKind.For(new DeliveryResult(false, "x", code, Outcome: outcome, SupplierReasonObservable: observable), protocol).Should().Be(kind);
         var sink = new RecordingSink();
 
         await CreateService(HealthOk(), sink, flows: FlowsReturning(FlowSignal(Dead(kind, OrgA, 1)))).RunAsync(default);
@@ -195,6 +197,14 @@ public class WorkerHealthAlertServiceTests
 
         twoWorkspaces.Calls.Should().ContainSingle().Which.Key.Should().Be(OperationalAlertKeys.FlowDeliveryRefusalSpike);
         twoWorkspaces.Calls[0].Message.Should().Contain("= 3 across 2 workspaces").And.Contain("2 refused, 1 setup (acme, b2brouter, refused:");
+
+        // A run in the one workspace using a standard still pages (our writer can break it), and no address reaches the alert.
+        var oneRun = new RecordingSink();
+        await CreateService(HealthOk(), oneRun, flows: FlowsReturning(FlowSignal(Dead(FlowDeliveryFailureKind.Refused, OrgA, 9)) with
+            { Latest = [new("acme", "smtp", FlowDeliveryFailureKind.Refused, "550 5.1.1 <buyer@example.com>: Recipient address rejected")] })).RunAsync(default);
+
+        oneRun.Calls.Should().ContainSingle().Which.Key.Should().Be(OperationalAlertKeys.FlowDeliveryRefusalSpike);
+        oneRun.Calls[0].Message.Should().Contain("<[email]>: Recipient").And.NotContain("@");
     }
 
     private static readonly Guid OrgA = Guid.NewGuid(), OrgB = Guid.NewGuid();

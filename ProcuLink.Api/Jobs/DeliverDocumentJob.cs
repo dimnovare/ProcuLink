@@ -122,7 +122,7 @@ public class DeliverDocumentJob(
             delivery.LastError = result.ErrorMessage;
             delivery.RemoteReference = result.RemoteReference ?? delivery.RemoteReference;   // what KSeF may already hold
             if (result.Outcome == DeliveryOutcome.NotRetryable || delivery.Attempts >= reliability.MaxAttempts)
-                (delivery.Status, delivery.FailureKind) = (FlowDeliveryStatus.DeadLetter, kind ?? FlowDeliveryFailureKind.For(result));
+                (delivery.Status, delivery.FailureKind) = (FlowDeliveryStatus.DeadLetter, kind ?? FlowDeliveryFailureKind.For(result, delivery.Protocol));
             else
             {
                 retryIn = reliability.NextRetryDelay(delivery.Attempts, result.RetryAfter, Random.Shared.NextDouble());
