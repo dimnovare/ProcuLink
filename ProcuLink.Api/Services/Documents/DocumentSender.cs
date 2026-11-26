@@ -16,7 +16,7 @@ namespace ProcuLink.Api.Services.Documents;
 public enum SendMode { Person, Automatic, Assistant }
 
 /// <summary>Which output could not be rendered, and why: <paramref name="Missing"/> is the meanings a standard lacks (FieldMeanings keys).</summary>
-public sealed record OutputFailure(string Output, string? Detail, IReadOnlyList<string>? Missing = null);
+public sealed record OutputFailure(string Output, string? Detail, IReadOnlyList<string>? Missing = null, Guid? OutputId = null);
 
 /// <summary>A KSeF Production send waits for a person: what the files say, and the hash to confirm them by.</summary>
 public sealed record KsefConfirmDetail(IReadOnlyList<KsefSummary> Summaries, string Confirm);
@@ -126,7 +126,7 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
                     o.LayoutJson is null ? null : DocumentJson.Deserialize<OutputLayout>(o.LayoutJson), o.Logo, config.Fields.Tables);
             if (!render.Ok)
             {
-                var failure = new OutputFailure(o.Name, render.Detail, render.Missing);
+                var failure = new OutputFailure(o.Name, render.Detail, render.Missing, o.Id);
                 if (mode == SendMode.Automatic) await HoldAsync(doc, render.Error!, ct, failure);
                 return Refuse(render.Error!, failure);
             }

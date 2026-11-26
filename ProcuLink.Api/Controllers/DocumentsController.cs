@@ -397,7 +397,7 @@ public sealed class DocumentsController(
         if (outcome.Ok) return Ok(outcome.Deliveries.OrderBy(d => d.CreatedAt).Select(ToDeliveryDto));
         return outcome.Error switch
         {
-            "output_invalid" when outcome.Detail is OutputFailure f => UnprocessableEntity(new { error = outcome.Error, output = f.Output, detail = f.Detail, missing = f.Missing ?? [] }),
+            "output_invalid" when outcome.Detail is OutputFailure f => UnprocessableEntity(new { error = outcome.Error, output = f.Output, detail = f.Detail, missing = f.Missing ?? [], outputId = f.OutputId }),
             "output_invalid" => UnprocessableEntity(new { error = outcome.Error }),
             _ when outcome.Detail is KsefConfirmDetail k => Conflict(new { error = outcome.Error, summaries = k.Summaries, confirm = k.Confirm }),
             _ when outcome.Detail is KsefIssuedDetail i => Conflict(new { error = outcome.Error, ksefNumber = i.KsefNumber }),
