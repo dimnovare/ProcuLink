@@ -9,6 +9,7 @@ using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Jobs;
 using ProcuLink.Api.Services;
 using ProcuLink.Api.Services.Documents;
+using ProcuLink.Core.Constants;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services;
@@ -406,10 +407,11 @@ public sealed class DocumentsController(
     internal static object ToDeliveryDto(FlowDelivery d) =>
         new { d.Id, d.OutputName, d.Protocol, d.Status, d.Attempts, d.LastError, d.FileName, d.DeliveredAt, remoteReference = Issued(d), hasReceipt = d.ReceiptKey != null, remoteMayHold = RemoteMayHold(d) };
 
-    private static bool RemoteMayHold(FlowDelivery d) => DeliverDocumentJob.RemoteMayHold(d.Protocol, d.Status, d.RemoteReference);
+    private static bool RemoteMayHold(FlowDelivery d) => DeliverDocumentJob.RemoteMayHold(d.Protocol, d.Status, d.RemoteReference, d.ResponseCode);
 
-    /// <summary>The receiving system's number, only once delivered: an unconfirmed KSeF reference is not a KSeF number (its message names it).</summary>
-    private static string? Issued(FlowDelivery d) => d.Status == FlowDeliveryStatus.Delivered ? d.RemoteReference : null;
+    /// <summary>The receiving system's number, only once delivered: an unconfirmed KSeF reference is not a KSeF number (its message names it). A B2Brouter
+    /// reference is always one (it is kept only once an import returned it), so a failed invoice can be found there too.</summary>
+    private static string? Issued(FlowDelivery d) => d.Status == FlowDeliveryStatus.Delivered || d.Protocol == DeliveryProtocolConstants.B2Brouter ? d.RemoteReference : null;
 
     /// <summary>As above, plus where it went: the destination's name, null when stored for download or the destination is gone.</summary>
     internal static object ToDeliveryDto(FlowDelivery d, string? destination) =>

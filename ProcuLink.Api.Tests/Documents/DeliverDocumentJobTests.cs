@@ -356,4 +356,12 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
         delivery.LastError.Should().Be("This may already have been sent. Check with the recipient before sending again.");
         (await h.DocStatusAsync()).Should().Be(DocumentStatus.SendFailed);
     }
+
+    [Theory]
+    [InlineData("b2brouter", null, 422, true)]   // the file is wrong (a seller not on the account, a number taken): no destination to fix
+    [InlineData("b2brouter", "7", null, true)]   // B2Brouter holds the invoice
+    [InlineData("b2brouter", null, 401, false)]  // the key is wrong: fix the destination
+    [InlineData("http", null, 422, false)]
+    public void Fix_the_destination_is_not_advised_when_the_file_or_the_network_is_the_problem(string protocol, string? reference, int? code, bool holds) =>
+        DeliverDocumentJob.RemoteMayHold(protocol, FlowDeliveryStatus.DeadLetter, reference, code).Should().Be(holds);
 }

@@ -150,11 +150,13 @@ public class DeliverDocumentJob(
                 .SetProperty(d => d.UpdatedAt, now), ct);
 
     /// <summary>
-    /// A KSeF or B2Brouter dead letter that kept a reference: the network holds the invoice (a duplicate, or one it refused) or may (an unconfirmed outcome). Fixing the
-    /// destination is the wrong advice for it, so it names no destination to fix.
+    /// A KSeF or B2Brouter dead letter that kept a reference: the network holds the invoice (a duplicate, or one it refused) or may (an unconfirmed outcome). Or a
+    /// B2Brouter file refusal (400/406/422: a seller not on the account, a number already taken): the file is wrong, not the destination. Fixing the destination is
+    /// the wrong advice for either, so it names no destination to fix.
     /// </summary>
-    public static bool RemoteMayHold(string protocol, string status, string? remoteReference) =>
-        protocol is DeliveryProtocolConstants.Ksef or DeliveryProtocolConstants.B2Brouter && status == FlowDeliveryStatus.DeadLetter && remoteReference != null;
+    public static bool RemoteMayHold(string protocol, string status, string? remoteReference, int? responseCode) =>
+        status == FlowDeliveryStatus.DeadLetter && (protocol is DeliveryProtocolConstants.Ksef or DeliveryProtocolConstants.B2Brouter && remoteReference != null
+            || protocol == DeliveryProtocolConstants.B2Brouter && responseCode is 400 or 406 or 422);
 
     public static void Enqueue(IBackgroundJobClient jobs, Guid deliveryId, Guid organisationId) =>
         jobs.Enqueue<DeliverDocumentJob>(j => j.ExecuteAsync(deliveryId, organisationId, CancellationToken.None));
@@ -178,7 +180,7 @@ public class DeliverDocumentJob(
         if (finished is null ? doc.Status == DocumentStatus.SendFailed : finished.Status is FlowDeliveryStatus.Delivered or FlowDeliveryStatus.DeadLetter)
             DocumentAudit.Add(db, doc, delivered ? "document.delivered" : "document.delivery_failed",
                 new { output = finished?.OutputName, protocol = finished?.Protocol, responseCode = finished?.ResponseCode, error = finished is null ? SendStoppedError : finished.LastError,
-                    attempts = finished?.Attempts, destinationId = finished is not null && RemoteMayHold(finished.Protocol, finished.Status, finished.RemoteReference) ? null : finished?.DestinationId, file = finished?.FileName, destination = destinationName, version = doc.FlowVersion }, null);
+                    attempts = finished?.Attempts, destinationId = finished is not null && RemoteMayHold(finished.Protocol, finished.Status, finished.RemoteReference, finished.ResponseCode) ? null : finished?.DestinationId, file = finished?.FileName, destination = destinationName, version = doc.FlowVersion }, null);
         return before;
     }
 
