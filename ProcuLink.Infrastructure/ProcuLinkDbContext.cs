@@ -2332,6 +2332,7 @@ public class ProcuLinkDbContext : DbContext, IDataProtectionKeyContext
             b.Property(d => d.FileName).HasColumnName("file_name");
             b.Property(d => d.LastError).HasColumnName("last_error");
             b.Property(d => d.ResponseCode).HasColumnName("response_code");
+            b.Property(d => d.FailureKind).HasColumnName("failure_kind");
             b.Property(d => d.ClaimedAt).HasColumnName("claimed_at").HasColumnType("timestamptz");
             b.Property(d => d.NextAttemptAt).HasColumnName("next_attempt_at").HasColumnType("timestamptz");
             b.Property(d => d.DeliveredAt).HasColumnName("delivered_at").HasColumnType("timestamptz");

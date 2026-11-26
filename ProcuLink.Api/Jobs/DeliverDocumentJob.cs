@@ -56,13 +56,13 @@ public class DeliverDocumentJob(
         var flowName = await db.Flows.Where(f => f.Id == doc.FlowId && f.OrgId == organisationId).Select(f => f.Name).FirstAsync(ct);
         var config = destination is null ? null : FlowDestinationService.ToDeliveryConfig(destination, flowName, test: false);
 
-        string? deadLetter = null;
+        string? deadLetter = null, kind = null;
         var credentials = "";
-        if (destination is null) deadLetter = "The destination was removed.";
+        if (destination is null) (deadLetter, kind) = ("The destination was removed.", FlowDeliveryFailureKind.Setup);
         else if (dispatcher is null) deadLetter = "No dispatcher for this destination.";
         else if (destination.Protocol == DeliveryProtocolConstants.Ksef && FlowDestinationService.KsefEnvironment(destination) != delivery.RemoteEnvironment)
             // Queued for one KSeF environment (and confirmed for Production only there): never sent to another.
-            deadLetter = "This KSeF destination was switched to another environment after this invoice was queued. Nothing was sent. Send the document again to check and confirm it.";
+            (deadLetter, kind) = ("This KSeF destination was switched to another environment after this invoice was queued. Nothing was sent. Send the document again to check and confirm it.", FlowDeliveryFailureKind.Setup);
         else if (reclaimed && (dispatcher.ResendSafety == ResendSafety.Unsafe || DeliveryRepair.CannotRepairItsOwnFile(config!)))
             deadLetter = destination.Protocol == DeliveryProtocolConstants.Ksef
                 ? "KSeF may have received the invoice, but we couldn't confirm the result. Check it in Aplikacja Podatnika KSeF before sending again; sending again may issue it twice."
@@ -73,7 +73,7 @@ public class DeliverDocumentJob(
 
         DeliveryResult result;
         if (deadLetter is not null)
-            result = new DeliveryResult(false, deadLetter, Outcome: DeliveryOutcome.NotRetryable);
+            (result, kind) = (new DeliveryResult(false, deadLetter, Outcome: DeliveryOutcome.NotRetryable), kind ?? FlowDeliveryFailureKind.Internal);
         else
             try
             {
@@ -87,7 +87,7 @@ public class DeliverDocumentJob(
             {
                 // Dispatchers return failures rather than throw; a storage or SDK fault (even a timeout) is treated the same way.
                 logger.LogError(ex, "DeliverDocumentJob could not dispatch delivery {DeliveryId}", deliveryId);
-                result = new DeliveryResult(false, "The output could not be sent.");
+                (result, kind) = (new DeliveryResult(false, "The output could not be sent."), FlowDeliveryFailureKind.Internal);
             }
 
         if (destination is not null) FlowDestinationService.RecordLearnedHostKey(destination, result);
@@ -122,7 +122,7 @@ public class DeliverDocumentJob(
             delivery.LastError = result.ErrorMessage;
             delivery.RemoteReference = result.RemoteReference ?? delivery.RemoteReference;   // what KSeF may already hold
             if (result.Outcome == DeliveryOutcome.NotRetryable || delivery.Attempts >= reliability.MaxAttempts)
-                delivery.Status = FlowDeliveryStatus.DeadLetter;
+                (delivery.Status, delivery.FailureKind) = (FlowDeliveryStatus.DeadLetter, kind ?? FlowDeliveryFailureKind.For(result));
             else
             {
                 retryIn = reliability.NextRetryDelay(delivery.Attempts, result.RetryAfter, Random.Shared.NextDouble());

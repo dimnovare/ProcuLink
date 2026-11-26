@@ -20,8 +20,17 @@ public static class OperationalAlertKeys
     /// <summary>One or more good-standing orgs have latched their monthly AI token cap.</summary>
     public const string AiTokenCapLatched = "ai_token_cap_latched";
 
-    /// <summary>Flow deliveries dead-lettered inside the trailing window crossed the dead-letter threshold.</summary>
+    /// <summary>
+    /// Flow deliveries dead-lettered on OUR side (unreachable after every retry, internal, or no recorded kind) inside the
+    /// trailing window crossed the dead-letter threshold.
+    /// </summary>
     public const string FlowDeliveryDeadLetter = "flow_delivery_dead_letter";
+
+    /// <summary>
+    /// Customer-side flow dead letters (refused, setup) crossed the spike threshold across two or more organisations, which
+    /// suggests our file writer or a provider is broken. One customer's refusals never page: they see them on the document.
+    /// </summary>
+    public const string FlowDeliveryRefusalSpike = "flow_delivery_refusal_spike";
 
     /// <summary>One or more flow deliveries have sat queued, sending or awaiting a retry past the stuck age.</summary>
     public const string FlowDeliveryStuck = "flow_delivery_stuck";
@@ -54,6 +63,7 @@ public static class OperationalAlertKeys
         DeliveryFailureRate,
         AiTokenCapLatched,
         FlowDeliveryDeadLetter,
+        FlowDeliveryRefusalSpike,
         FlowDeliveryStuck,
     };
 

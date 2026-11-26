@@ -160,7 +160,7 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
 
         h.Dispatcher.Calls.Should().BeEmpty();
         var d = await h.DeliveryAsync();
-        (d.Status, d.LastError).Should().Be((FlowDeliveryStatus.DeadLetter,
+        (d.Status, d.FailureKind, d.LastError).Should().Be((FlowDeliveryStatus.DeadLetter, FlowDeliveryFailureKind.Setup,
             "This KSeF destination was switched to another environment after this invoice was queued. Nothing was sent. Send the document again to check and confirm it."));
     }
 
@@ -174,7 +174,8 @@ public sealed class DeliverDocumentJobTests(PostgresContainerFixture postgres)
         await h.RunAsync();
 
         var d = await h.DeliveryAsync();
-        (d.Status, d.RemoteReference, d.RemoteEnvironment).Should().Be((FlowDeliveryStatus.DeadLetter, "INV-1", "production"));
+        // An unconfirmed outcome is ambiguous, so it is ours (it pages), never the customer's.
+        (d.Status, d.FailureKind, d.RemoteReference, d.RemoteEnvironment).Should().Be((FlowDeliveryStatus.DeadLetter, FlowDeliveryFailureKind.Internal, "INV-1", "production"));
     }
 
     [DockerRequiredFact]

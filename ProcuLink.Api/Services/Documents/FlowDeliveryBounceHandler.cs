@@ -36,7 +36,8 @@ public sealed class FlowDeliveryBounceHandler(ProcuLinkDbContext db, IBackground
 
         var doc = await db.FlowDocuments.FirstAsync(d => d.Id == found.DocumentId && d.OrgId == found.OrgId, ct);
         delivery.Status = FlowDeliveryStatus.DeadLetter;
-        delivery.LastError = notification.Kind == DeliveryBounceKind.SpamComplaint ? SpamComplaintError : HardBounceError;
+        (delivery.LastError, delivery.FailureKind) = notification.Kind == DeliveryBounceKind.SpamComplaint
+            ? (SpamComplaintError, FlowDeliveryFailureKind.Refused) : (HardBounceError, FlowDeliveryFailureKind.Setup);
         delivery.UpdatedAt = now;
         var destinationName = delivery.DestinationId is { } destinationId
             ? await db.Set<FlowDestination>().Where(d => d.Id == destinationId && d.OrgId == found.OrgId).Select(d => d.Name).FirstOrDefaultAsync(ct)

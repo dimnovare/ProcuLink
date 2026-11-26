@@ -879,6 +879,10 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("document_id");
 
+                    b.Property<string>("FailureKind")
+                        .HasColumnType("text")
+                        .HasColumnName("failure_kind");
+
                     b.Property<string>("FileName")
                         .IsRequired()
                         .HasColumnType("text")

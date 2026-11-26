@@ -22,6 +22,8 @@ public class FlowDelivery
     public string FileName { get; set; } = "";
     public string? LastError { get; set; }
     public int? ResponseCode { get; set; }
+    /// <summary>Why it last dead-lettered (<see cref="FlowDeliveryFailureKind"/>), meaningful only while Status is dead_letter; null on rows dead-lettered before it was recorded.</summary>
+    public string? FailureKind { get; set; }
     public DateTime? ClaimedAt { get; set; }
     public DateTime? NextAttemptAt { get; set; }
     public DateTime? DeliveredAt { get; set; }
