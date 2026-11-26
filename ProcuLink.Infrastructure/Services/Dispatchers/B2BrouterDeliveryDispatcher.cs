@@ -21,7 +21,6 @@ public sealed class B2BrouterDeliveryDispatcher(IHttpClientFactory http, ILogger
     public const string ApiVersion = "2026-06-26";
     private const string Unconfirmed = "B2Brouter didn't confirm it received the file. Check your B2Brouter account before sending again, so the invoice isn't sent twice.";
     private static readonly HashSet<string> Failed = ["error", "refused", "invalid"];
-    private static readonly HashSet<string> Pending = ["new", "sending"];
     private static readonly HashSet<string> EInvoiceTypes = ["application/xml", "text/xml", "application/pdf"];
 
     /// <summary>The pause between status reads after an import; tests set it to zero.</summary>
@@ -113,8 +112,9 @@ public sealed class B2BrouterDeliveryDispatcher(IHttpClientFactory http, ILogger
 
             var number = Text(invoice, "number") ?? id;
             var (latest, last) = (invoice, body);
-            // Settle: a sandbox refusal arrives "within seconds". A failed read leaves the import standing as sent.
-            for (var i = 0; i < 3 && Pending.Contains(Text(latest, "state") ?? ""); i++)
+            // Settle: "sent" and "registered" are not final, a refusal follows ~2.5 s after import, so read the whole window and stop early only on a
+            // failure. The verdict is the last state read; a failed read leaves the import standing as sent.
+            for (var i = 0; i < 3 && !Failed.Contains(Text(latest, "state") ?? ""); i++)
             {
                 try
                 {
@@ -127,7 +127,7 @@ public sealed class B2BrouterDeliveryDispatcher(IHttpClientFactory http, ILogger
             }
             var state = Text(latest, "state") ?? "";
             if (Failed.Contains(state))
-                return new DeliveryResult(false, $"B2Brouter couldn't deliver invoice {number}: {Text(latest, "error_code") ?? state}.", code, Truncate(last),
+                return new DeliveryResult(false, $"B2Brouter couldn't deliver invoice {number}: {Reason(latest) ?? Text(latest, "error_code") ?? state}.", code, Truncate(last),
                     DeliveryOutcome.NotRetryable, SupplierReasonObservable: true, RemoteReference: id);
             return new DeliveryResult(true, null, code, $"b2brouter invoice {id}: {state}", RemoteReference: id);
         }
@@ -147,6 +147,10 @@ public sealed class B2BrouterDeliveryDispatcher(IHttpClientFactory http, ILogger
     {
         try { return Text((JsonNode.Parse(body) as JsonObject)?["error"] as JsonObject, "message"); } catch (Exception) { return null; }
     }
+
+    /// <summary>B2Brouter's reason for a failed invoice: its <c>errors[].error</c> entries, joined.</summary>
+    private static string? Reason(JsonObject? invoice) =>
+        invoice?["errors"] is JsonArray errors && string.Join("; ", errors.Select(e => Text(e as JsonObject, "error")?.TrimEnd('.')).OfType<string>()) is { Length: > 0 } r ? r : null;
 
     private static string? Text(JsonObject? json, string key) =>
         json?[key] is JsonValue v && v.TryGetValue<string>(out var s) && !string.IsNullOrWhiteSpace(s) ? s : null;

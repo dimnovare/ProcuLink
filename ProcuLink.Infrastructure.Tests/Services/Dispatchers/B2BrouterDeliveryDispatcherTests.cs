@@ -41,6 +41,7 @@ public class B2BrouterDeliveryDispatcherTests
     [Theory]
     [InlineData("sent")]
     [InlineData("error")]
+    [InlineData("refused")]
     [InlineData("422")]
     [InlineData("429")]
     [InlineData("503")]
@@ -51,6 +52,8 @@ public class B2BrouterDeliveryDispatcherTests
         {
             "sent" => new FakeB2Brouter(Answer(201, Imported), Answer(200, """{"invoice":{"id":7,"state":"sent"}}""")),
             "error" => new FakeB2Brouter(Answer(201, Imported), Answer(200, """{"invoice":{"id":7,"state":"error","error_code":"PEPPOL_NO_RECEIVER"}}""")),
+            "refused" => new FakeB2Brouter(Answer(201, Imported), Answer(200, """{"invoice":{"id":7,"state":"sent"}}"""), Answer(200, """{"invoice":{"id":7,"state":"registered"}}"""),
+                Answer(200, """{"invoice":{"id":7,"state":"refused","errors":[{"error":"Recipient is not registered."},{"error":"Second reason"}]}}""")),
             "422" => new FakeB2Brouter(Answer(422, """{"error":{"code":"parameter_invalid","message":"Buyer endpoint is missing"}}""")),
             "429" => new FakeB2Brouter(Answer(429, "", retryAfter: 5)),
             _ => new FakeB2Brouter(Answer(503)),
@@ -71,6 +74,10 @@ public class B2BrouterDeliveryDispatcherTests
             case "error":
                 (result.Success, result.Outcome, result.RemoteReference).Should().Be((false, DeliveryOutcome.NotRetryable, "7"));
                 result.ErrorMessage.Should().Be("B2Brouter couldn't deliver invoice INV-1: PEPPOL_NO_RECEIVER.");
+                break;
+            case "refused": // sent and registered are not final: the window is read to its end
+                (result.Success, result.Outcome, result.RemoteReference, fake.Requests.Count).Should().Be((false, DeliveryOutcome.NotRetryable, "7", 4));
+                result.ErrorMessage.Should().Be("B2Brouter couldn't deliver invoice INV-1: Recipient is not registered; Second reason.");
                 break;
             case "422":
                 (result.Outcome, result.ResponseCode).Should().Be((DeliveryOutcome.NotRetryable, 422));
