@@ -127,7 +127,8 @@ public sealed class B2BrouterDeliveryDispatcher(IHttpClientFactory http, ILogger
             }
             var state = Text(latest, "state") ?? "";
             if (Failed.Contains(state))
-                return new DeliveryResult(false, $"B2Brouter couldn't deliver invoice {number}: {Reason(latest) ?? Text(latest, "error_code") ?? state}.", code, Truncate(last),
+                return new DeliveryResult(false, $"B2Brouter couldn't deliver invoice {number}: {Reason(latest) ?? Text(latest, "error_code")
+                    ?? (state == "refused" ? "it was refused without a reason" : $"it ended in state '{state}' without a reason")}.", code, Truncate(last),
                     DeliveryOutcome.NotRetryable, SupplierReasonObservable: true, RemoteReference: id);
             return new DeliveryResult(true, null, code, $"b2brouter invoice {id}: {state}", RemoteReference: id);
         }

@@ -53,7 +53,7 @@ public sealed class DocumentSenderClaimPostgresTests(PostgresContainerFixture po
         }
 
         var billing = new Mock<IBillingService>();
-        billing.Setup(b => b.CanProcessOrdersAsync(org, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        billing.Setup(b => b.CanSendDocumentsAsync(org, It.IsAny<CancellationToken>())).ReturnsAsync(true);
         var storage = new Mock<IFileStorageService>();
         var analytics = new FakeAnalyticsService();
 
@@ -118,7 +118,7 @@ public sealed class DocumentSenderClaimPostgresTests(PostgresContainerFixture po
         }
 
         var billing = new Mock<IBillingService>();
-        billing.Setup(b => b.CanProcessOrdersAsync(org, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        billing.Setup(b => b.CanSendDocumentsAsync(org, It.IsAny<CancellationToken>())).ReturnsAsync(true);
         // ISA13 for X12, UNB's last element for EDIFACT.
         var controls = new List<string>();
         var storage = new Mock<IFileStorageService>();

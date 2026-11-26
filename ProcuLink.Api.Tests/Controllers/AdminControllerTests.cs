@@ -443,6 +443,25 @@ public class AdminControllerTests
     }
 
     [Fact]
+    public async Task SetOrganisationLimits_ExtendingAnExpiredPilot_ReactivatesItAtOnce()
+    {
+        var db = MakeDb();
+        var org = Org("Gamma", PlanConstants.Pilot, AccountStatusConstants.TrialExpired);
+        org.TrialStartedAt = DateTime.UtcNow.AddDays(-40);
+        db.Organisations.Add(org);
+        await db.SaveChangesAsync();
+
+        var result = await Build(db).SetOrganisationLimits(
+            org.Id, new SetOrgLimitsRequest(ExtendTrialDays: 10), CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<OrgLimitsResponse>().Subject
+            .AccountStatus.Should().Be(AccountStatusConstants.Trialing, "the response shows the status the arbiter just decided");
+        (await db.Organisations.AsNoTracking().FirstAsync(o => o.Id == org.Id)).AccountStatus
+            .Should().Be(AccountStatusConstants.Trialing, "the admin list reads it without waiting for the org's own status read");
+    }
+
+    [Fact]
     public async Task SetOrganisationLimits_ClearFlag_RemovesOverride()
     {
         var db = MakeDb();

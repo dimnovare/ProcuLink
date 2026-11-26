@@ -515,6 +515,9 @@ public sealed class AdminController : ControllerBase
             org.TrialEndsAtOverride = DateTime.SpecifyKind(endsAt, DateTimeKind.Utc);
 
         await _db.SaveChangesAsync(ct);
+        // The trial arbiter decides trial_expired ⇄ trialing from the new limits now, not on the org's next status read.
+        // Same scoped context: it updates this tracked org, so the response below carries the real status.
+        await _billing.MarkPilotExpiredIfNeededAsync(org.Id, ct);
 
         var plan = PlanConstants.IsKnownPlan(org.Plan) ? org.Plan : PlanConstants.Pilot;
         var effectiveOrderLimit = PlanConstants.GetEffectiveOrderLimit(plan, org.OrderLimitOverride);
