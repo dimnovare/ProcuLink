@@ -94,14 +94,14 @@ public sealed class KsefDeliveryDispatcher(KsefClient ksef, ILogger<KsefDelivery
             if (r.StatusCode == 440)
                 return Final($"KSeF already has an invoice with this number from this seller (KSeF number {r.OriginalKsefNumber}). Nothing new was issued.", Kind.Refused, r.OriginalKsefNumber);
             if (r.StatusCode is { } code && code != 200)
-                return Final($"KSeF rejected the invoice: {r.StatusText}", Kind.Refused);
+                return Final($"KSeF rejected the invoice: {r.StatusText}", null);
             // Submitted, outcome unknown (or a 200 without a number): never sent again.
             return Final($"KSeF received the invoice (reference {r.InvoiceReference ?? r.SessionReference}) but we couldn't confirm the result. " +
                 "Check it in Aplikacja Podatnika KSeF before sending again; sending again may issue it twice.", null, r.InvoiceReference ?? r.SessionReference);
         }
         catch (KsefRefusedException r)
         {
-            return Final($"KSeF rejected the invoice: {r.Message}", Kind.Refused);
+            return Final($"KSeF rejected the invoice: {r.Message}", null);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
@@ -115,7 +115,7 @@ public sealed class KsefDeliveryDispatcher(KsefClient ksef, ILogger<KsefDelivery
 
     /// <summary>
     /// A final failure. <paramref name="kind"/> says who acts: the customer's setup or this invoice, or null (ours, so it pages:
-    /// an unexplained sign-in refusal, an unconfirmed outcome). <paramref name="reference"/> is what KSeF may already hold, kept on
+    /// a rejected invoice, which may be our file; an unexplained sign-in refusal; an unconfirmed outcome). <paramref name="reference"/> is what KSeF may already hold, kept on
     /// the delivery so the document is never sent again.
     /// </summary>
     private static DeliveryResult Final(string message, string? kind, string? reference = null) =>

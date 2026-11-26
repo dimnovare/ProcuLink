@@ -275,14 +275,14 @@ public sealed class SftpDeliveryDispatcher : IDeliveryDispatcher
         }
     }
 
+    /// <summary>A failure only the customer's server or login can cure (credentials, host key, folder), so it is theirs.</summary>
+    internal static DeliveryResult CustomerSetup(string message) => new(false, message, FailureKind: FlowDeliveryFailureKind.Setup);
+
     /// <summary>
     /// Carries a first-use host-key observation out of the transport and onto the result, so
     /// the caller — which owns the config row and the transaction — can record it.
     /// Null verifier (the test session seam) and nothing-new-to-learn both leave the result alone.
     /// </summary>
-    /// <summary>A failure only the customer's server or login can cure (credentials, host key, folder), so it is theirs.</summary>
-    internal static DeliveryResult CustomerSetup(string message) => new(false, message, FailureKind: FlowDeliveryFailureKind.Setup);
-
     private static DeliveryResult Stamp(DeliveryResult result, SshHostKeyVerifier? verifier) =>
         verifier?.LearnedFingerprint is { } fingerprint
             ? result with { LearnedHostKeyFingerprint = fingerprint }

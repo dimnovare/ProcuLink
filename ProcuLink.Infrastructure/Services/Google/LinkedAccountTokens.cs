@@ -39,18 +39,20 @@ public sealed class LinkedAccountTokens(
         var account = await db.LinkedAccounts.FirstOrDefaultAsync(
             a => a.OrgId == orgId && a.Id == accountId && a.Provider == provider, ct);
         var client = oauth.FirstOrDefault(o => o.Provider == provider);
-        if (account is null || client is null || account.Status != LinkedAccountStatus.Active)
+        if (client is null) return Failed(ReconnectMessage(provider), DeliveryOutcome.NotRetryable); // our missing OAuth client: it pages
+        if (account is null || account.Status != LinkedAccountStatus.Active)
             return Reconnect(provider);
 
         OAuthRefresh refresh;
         string stored = "";
+        var unbindable = false;
         try { refresh = await client.RefreshAsync(stored = ReadRefreshToken(encryption, account), ct); }
         catch (HttpRequestException ex)
         {
             logger.LogWarning("{Provider} token refresh failed for linked account {AccountId} (HTTP {Status}).", provider, accountId, (int?)ex.StatusCode);
             return Failed(UnavailableMessage(provider), DeliveryOutcome.Dispatched, (int?)ex.StatusCode);
         }
-        catch (CredentialUnbindableException) { refresh = new OAuthRefresh(null, Revoked: true); } // only a reconnect re-seals it
+        catch (CredentialUnbindableException) { (refresh, unbindable) = (new OAuthRefresh(null, Revoked: true), true); } // only a reconnect re-seals it
         if (refresh.AccessToken is { } token)
         {
             // Microsoft rotates the refresh token on every refresh (R7); losing it would let the account die silently in 90 days.
@@ -67,7 +69,10 @@ public sealed class LinkedAccountTokens(
         account.Status = LinkedAccountStatus.Reconnect;
         account.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
-        return Reconnect(provider);
+        // Tokens we cannot decrypt are our key or binding: it pages, though only a reconnect heals the account.
+        if (!unbindable) return Reconnect(provider);
+        logger.LogError("{Provider} tokens of linked account {AccountId} could not be decrypted.", provider, accountId);
+        return Failed(ReconnectMessage(provider), DeliveryOutcome.NotRetryable);
     }
 
     // Only the customer can reconnect, so a delivery that dead-letters on it is theirs.
