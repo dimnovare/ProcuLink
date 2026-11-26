@@ -45,7 +45,7 @@ public sealed class DocumentTools(
         McpSetup.SignedInWithoutWorkspace(User) ? McpResults.Refuse("choose_workspace")
         : !gate.IsEnabled(Org) ? McpResults.Refuse("document_engine_not_enabled") : null;
 
-    [McpServerTool(Name = "list_flows", Title = "List flows", OpenWorld = false)]
+    [McpServerTool(Name = "list_flows", Title = "List flows", ReadOnly = true, OpenWorld = false)]
     [Description("Lists this workspace's flows: each one is a kind of document and what ProcuLink makes and sends from it. Also returns the inbox id, where documents go when you don't choose a flow.")]
     public async Task<CallToolResult> ListFlows(CancellationToken ct)
     {
