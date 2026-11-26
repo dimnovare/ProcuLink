@@ -19,10 +19,12 @@ public class MeaningBindingTests
     }
 
     [Fact]
-    public void Every_meaning_has_a_definition()
+    public void Every_meaning_has_a_definition_and_a_label()
     {
         FieldMeanings.All.Should().HaveCount(44);
         FieldMeanings.Definitions.Keys.Should().BeEquivalentTo(FieldMeanings.All);
+        FieldMeanings.Labels.Keys.Should().BeEquivalentTo(FieldMeanings.All);
+        (FieldMeanings.Label(FieldMeanings.ReceiverVatId), FieldMeanings.Label("buyer_vat_id_2")).Should().Be(("Receiver VAT ID", "Buyer VAT ID 2"));
         FieldMeanings.Definitions.Values.Should().OnlyContain(d => d.Length > 1 && d.EndsWith('.'));
         FieldMeanings.Aliases[FieldMeanings.ReceiverCountry].Should().NotContain("shiptocountry");
     }

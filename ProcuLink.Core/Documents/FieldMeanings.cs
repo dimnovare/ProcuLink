@@ -61,6 +61,60 @@ public static class FieldMeanings
         LineDescription, LineQuantity, LineUnit, LineUnitPrice, LineAmount, LineTaxRate, LineItemCode, LineBuyerItemCode, LineNumber,
     ];
 
+    /// <summary>What the app calls each meaning: the frontend's FIELD_MEANINGS labels (src/test/backendMirror.test.ts keeps the two equal).</summary>
+    public static readonly IReadOnlyDictionary<string, string> Labels = new Dictionary<string, string>
+    {
+        [DocumentNumber] = "Document number",
+        [IssueDate] = "Issue date",
+        [DueDate] = "Due date",
+        [SenderName] = "Sender name",
+        [SenderVatId] = "Sender VAT ID",
+        [ReceiverName] = "Receiver name",
+        [Currency] = "Currency",
+        [TotalNet] = "Net total",
+        [TotalTax] = "Tax total",
+        [TotalGross] = "Gross total",
+        [Iban] = "IBAN",
+        [PaymentReference] = "Payment reference",
+        [ReceiverVatId] = "Receiver VAT ID",
+        [BuyerReference] = "Buyer reference",
+        [OrderReference] = "Order reference",
+        [DeliveryDate] = "Delivery date",
+        [SenderCountry] = "Sender country",
+        [ReceiverCountry] = "Receiver country",
+        [SenderEndpointId] = "Sender Peppol ID",
+        [ReceiverEndpointId] = "Receiver Peppol ID",
+        [SenderStreet] = "Sender street",
+        [SenderCity] = "Sender city",
+        [SenderPostcode] = "Sender postcode",
+        [ReceiverStreet] = "Receiver street",
+        [ReceiverCity] = "Receiver city",
+        [ReceiverPostcode] = "Receiver postcode",
+        [SenderContactName] = "Sender contact name",
+        [SenderContactPhone] = "Sender contact phone",
+        [SenderContactEmail] = "Sender contact email",
+        [DeliveryName] = "Delivery name",
+        [DeliveryStreet] = "Delivery street",
+        [DeliveryCity] = "Delivery city",
+        [DeliveryPostcode] = "Delivery postcode",
+        [DeliveryCountry] = "Delivery country",
+        [PaymentTerms] = "Payment terms",
+        [LineDescription] = "Line description",
+        [LineQuantity] = "Line quantity",
+        [LineUnit] = "Line unit",
+        [LineUnitPrice] = "Line unit price",
+        [LineAmount] = "Line amount",
+        [LineTaxRate] = "Line tax rate",
+        [LineItemCode] = "Line item code",
+        [LineBuyerItemCode] = "Line buyer item code",
+        [LineNumber] = "Line number",
+    };
+
+    /// <summary>A meaning's label; any other key reads as its words, with VAT, ID and IBAN upper-case ("vat_id" is "VAT ID").</summary>
+    public static string Label(string key) => Labels.TryGetValue(key, out var label) ? label
+        : string.Join(' ', key.Split('_', StringSplitOptions.RemoveEmptyEntries).Select((w, i) =>
+            w is "vat" or "id" or "iban" ? w.ToUpperInvariant() : i == 0 ? char.ToUpperInvariant(w[0]) + w[1..] : w));
+
     /// <summary>Plain names (lower-case letters and digits only) that a column or output leaf is commonly called, per meaning. Data for auto-binding.</summary>
     public static readonly IReadOnlyDictionary<string, string[]> Aliases = new Dictionary<string, string[]>
     {

@@ -221,7 +221,7 @@ public sealed class OpenAiDocumentReader : IDocumentReader
             // ("Total due" twice) hides which is which: name it from its key instead.
             var label = (!string.IsNullOrWhiteSpace(f.Value) && Same(f.Label, f.Value))
                         || (meaning == FieldMeanings.Currency && dto.Fields!.Count(o => Same(o.Label, f.Label)) > 1)
-                ? char.ToUpperInvariant(key[0]) + key[1..].Replace('_', ' ')
+                ? FieldMeanings.Label(key)
                 : f.Label;
             return new ReadField(key, label, f.Value, Type(f.Type), meaning, Clamp(f.Confidence),
                 Location: null, NotOnPage: false, Listed: fieldKeys?.Contains(key) ?? true, Edited: false);

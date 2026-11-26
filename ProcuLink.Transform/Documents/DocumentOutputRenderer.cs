@@ -11,6 +11,8 @@ namespace ProcuLink.Transform.Documents;
 public sealed record DocumentRender(TransformResult? Result, string? Error, string? Detail, IReadOnlyList<LookupMiss>? Misses = null)
 {
     public bool Ok => Error is null;
+    /// <summary>On a standard's needs refusal: the meanings it lacks (<see cref="FieldMeanings"/> keys).</summary>
+    public IReadOnlyList<string> Missing { get; init; } = [];
 }
 
 public static class DocumentOutputRenderer
@@ -52,8 +54,8 @@ public static class DocumentOutputRenderer
         }
         catch (Exception ex) when (ex is XmlException or DocumentLayoutException or DocumentComposeException)
         {
-            // The XML writer's and QuestPDF's messages are not approved copy, so no detail.
-            return new(null, "output_invalid", null);
+            // The XML writer's and QuestPDF's messages are not approved copy: a plain sentence instead.
+            return new(null, "output_invalid", $"We couldn't write the {format.ToUpperInvariant()} file from these values.");
         }
     }
 

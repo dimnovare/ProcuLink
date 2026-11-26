@@ -10,6 +10,16 @@ public sealed class TeachSpotsTests
 {
     private static PageWord W(string t, double x, double y, double w = 0.08) => new(t, 1, new Box(x, y, w, 0.02));
 
+    [Theory]
+    [InlineData("INV-2250,", "INV-2250")]
+    [InlineData(" Kestrel Supplies. ", "Kestrel Supplies")]
+    [InlineData("Total:", "Total")]
+    [InlineData("Kestrel Supplies Ltd.", "Kestrel Supplies Ltd.")]
+    [InlineData("Fikcyjny Odbiorca S.A.;", "Fikcyjny Odbiorca S.A.")]
+    [InlineData("12.", "12.")]
+    public void A_pointed_value_loses_the_punctuation_after_it(string pointed, string saved) =>
+        TeachSpots.Clean(pointed).Should().Be(saved);
+
     [Fact]
     public void An_overlong_line_number_is_an_unknown_address()
     {

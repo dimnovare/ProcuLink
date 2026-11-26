@@ -190,6 +190,8 @@ public sealed class DocumentChecksTests
         Arith(new ReadResult("I", [net], [Lines(("1", "50", "50"), ("1", "50.01", "50.01"))])).Should().BeEmpty();
         Arith(new ReadResult("I", [net], [Lines(("1", "50", "50"), ("1", "49", "49"))])).Should().ContainSingle()
             .Which.Message.Should().Be("The lines don't add up to the net total.");
+        // A net worked out rather than printed is not checked against the lines.
+        Arith(new ReadResult("I", [net with { NotOnPage = true }], [Lines(("1", "50", "50"), ("1", "49", "49"))])).Should().BeEmpty();
         // A receipt prices its lines with tax included: they add up to the gross total, not the net one.
         var totals = new[] { M("net", "10.00", FieldMeanings.TotalNet), M("tax", "2.40", FieldMeanings.TotalTax), M("g", "12.40", FieldMeanings.TotalGross) };
         Arith(new ReadResult("I", totals, [Lines(("2", "6.20", "12.40"))])).Should().BeEmpty();

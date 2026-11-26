@@ -163,6 +163,26 @@ public class KsefSendTests(DocumentEngineTestFactory factory) : IClassFixture<Do
     }
 
     [Fact]
+    public async Task A_held_send_names_the_file_and_what_it_lacks()
+    {
+        var (docId, outputId, _) = await Seed("test");
+        using (var scope = factory.Services.CreateScope())
+        {
+            var doc = await Db(scope).FlowDocuments.SingleAsync(d => d.Id == docId);
+            var read = Read();
+            doc.ReadJson = DocumentJson.Serialize(new ReadResult(read.KindLabel, [.. read.Fields.Where(f => f.Meaning != FieldMeanings.ReceiverVatId)], read.Tables));
+            await Db(scope).SaveChangesAsync();
+            (await scope.ServiceProvider.GetRequiredService<DocumentSender>().SendAsync(doc, SendMode.Automatic, null, CancellationToken.None)).Error
+                .Should().Be("output_invalid");
+        }
+
+        var held = (await factory.ClientFor(Org).GetFromJsonAsync<JsonElement>($"/api/documents/{docId}")).GetProperty("heldOutput");
+        (held.GetProperty("output").GetString(), held.GetProperty("detail").GetString(), held.GetProperty("missing")[0].GetString())
+            .Should().Be(("KSeF invoice file", $"This standard needs {FieldMeanings.Labels[FieldMeanings.ReceiverVatId]}.", FieldMeanings.ReceiverVatId));
+        held.GetProperty("outputId").GetGuid().Should().Be(outputId);
+    }
+
+    [Fact]
     public async Task A_production_reference_survives_a_test_send_and_still_blocks_production()
     {
         var (docId, outputId, destinationId) = await Seed("test");

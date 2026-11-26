@@ -1119,6 +1119,10 @@ namespace ProcuLink.Infrastructure.Migrations
                         .HasColumnType("text")
                         .HasColumnName("status");
 
+                    b.Property<string>("StatusDetail")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("status_detail");
+
                     b.Property<string>("StatusReason")
                         .HasColumnType("text")
                         .HasColumnName("status_reason");

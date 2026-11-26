@@ -11,7 +11,7 @@ public class StandardOrderAdapterTests
     [Fact]
     public void A_purchase_order_read_fills_every_column_the_writers_read()
     {
-        var (order, missing) = StandardOrderAdapter.ToOrder(StrictOrderFixture.Read(), FlowFieldList.Empty, "lines",
+        var (order, missing, _) = StandardOrderAdapter.ToOrder(StrictOrderFixture.Read(), FlowFieldList.Empty, "lines",
             StandardOutputs.Find("ubl-2-1-order")!.Needs, Guid.Empty);
 
         missing.Should().BeEmpty();
@@ -30,7 +30,7 @@ public class StandardOrderAdapterTests
     [Fact]
     public void Every_read_order_value_reaches_the_order()
     {
-        var (order, _) = StandardOrderAdapter.ToOrder(StrictOrderFixture.WithEveryValue(), FlowFieldList.Empty, "lines", [], Guid.Empty);
+        var (order, _, _) = StandardOrderAdapter.ToOrder(StrictOrderFixture.WithEveryValue(), FlowFieldList.Empty, "lines", [], Guid.Empty);
 
         (order!.BuyerOrderRef, order.PaymentTerms).Should().Be(("FRAME-2026-01", "30 days net"));
         order.Lines.Select(l => (l.BuyerItemCode, l.LineAmount, l.TaxRate))

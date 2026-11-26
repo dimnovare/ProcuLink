@@ -15,8 +15,8 @@ namespace ProcuLink.Api.Services.Documents;
 /// <summary><c>Assistant</c>: asked for through the MCP endpoint. Like <c>Person</c>, it never holds the document.</summary>
 public enum SendMode { Person, Automatic, Assistant }
 
-/// <summary>Which output could not be rendered, and why.</summary>
-public sealed record OutputFailure(string Output, string? Detail);
+/// <summary>Which output could not be rendered, and why: <paramref name="Missing"/> is the meanings a standard lacks (FieldMeanings keys).</summary>
+public sealed record OutputFailure(string Output, string? Detail, IReadOnlyList<string>? Missing = null, Guid? OutputId = null);
 
 /// <summary>A KSeF Production send waits for a person: what the files say, and the hash to confirm them by.</summary>
 public sealed record KsefConfirmDetail(IReadOnlyList<KsefSummary> Summaries, string Confirm);
@@ -39,10 +39,11 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
 
     private const string NoOutputMatches = "no_output_matches";
 
-    private async Task HoldAsync(FlowDocument doc, string reason, CancellationToken ct)
+    private async Task HoldAsync(FlowDocument doc, string reason, CancellationToken ct, OutputFailure? failure = null)
     {
         doc.Status = DocumentStatus.NeedsReview;
         doc.StatusReason = reason;
+        doc.StatusDetail = failure is null ? null : DocumentJson.Serialize(failure);
         doc.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
     }
@@ -118,15 +119,16 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
             var known = StandardOutputs.Find(o.Standard);
             var render = o.Standard is not null
                 ? known is not null && !gate.StandardOn(doc.OrgId, known)
-                    ? new DocumentRender(null, "output_invalid", null)
+                    ? new DocumentRender(null, "output_invalid", $"{(known.Syntax == InvoiceSyntax.Fa3 ? "KSeF" : "E-invoice")} files were switched off for this workspace.")
                     : await StandardOutputs.RenderAsync(o, read, config.Fields, doc.OrgId, ct,
                         known?.NeedsControlNumber == true ? await InterchangeNumbers.NextAsync(db, ct) : null)
                 : DocumentOutputRenderer.Render(o.Format, template, read, o.TableKey, lookups,
                     o.LayoutJson is null ? null : DocumentJson.Deserialize<OutputLayout>(o.LayoutJson), o.Logo, config.Fields.Tables);
             if (!render.Ok)
             {
-                if (mode == SendMode.Automatic) await HoldAsync(doc, render.Error!, ct);
-                return Refuse(render.Error!, new OutputFailure(o.Name, render.Detail));
+                var failure = new OutputFailure(o.Name, render.Detail, render.Missing, o.Id);
+                if (mode == SendMode.Automatic) await HoldAsync(doc, render.Error!, ct, failure);
+                return Refuse(render.Error!, failure);
             }
             using var buffer = new MemoryStream();
             await render.Result!.Content.CopyToAsync(buffer, ct);
