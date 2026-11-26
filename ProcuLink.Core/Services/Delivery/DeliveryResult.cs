@@ -119,6 +119,11 @@ public enum DeliveryOutcome
 /// what it observed and <c>DeliveryService</c> — which owns the config row and the transaction —
 /// decides what to persist, in the same <c>SaveChangesAsync</c> as the delivery attempt.</para>
 /// </param>
+/// <param name="FailureKind">
+/// Who has to act on this failure, when the transport knows and no response code can say it: a
+/// <c>FlowDeliveryFailureKind</c> value (an SFTP login or host key, a KSeF refusal, a linked account to
+/// reconnect). Null leaves the kind to the response code.
+/// </param>
 public record DeliveryResult(
     bool Success,
     string? ErrorMessage,
@@ -130,4 +135,5 @@ public record DeliveryResult(
     string? LearnedHostKeyFingerprint = null,
     string? RemoteReference = null,
     string? RemoteEnvironment = null,
-    byte[]? Receipt = null);
+    byte[]? Receipt = null,
+    string? FailureKind = null);

@@ -7,6 +7,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using ProcuLink.Core.Constants;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Infrastructure.Services.Dispatchers;
@@ -119,7 +120,7 @@ public class KsefDeliveryDispatcherTests
         var ksef = new FakeKsef(invoiceStatus: 150, invoiceAnswer: answer);
         var result = await Send(ksef, """{"environment":"test","nip":"1111111111"}""");
 
-        (result.Outcome, result.RemoteReference).Should().Be((DeliveryOutcome.NotRetryable, reference));
+        (result.Outcome, result.RemoteReference, result.FailureKind).Should().Be((DeliveryOutcome.NotRetryable, reference, (string?)null)); // ours: it pages
         result.ErrorMessage.Should().Contain(reference).And.Contain("sending again may issue it twice")
             .And.NotContain(Token).And.NotContain(AccessToken);
         ksef.Requests.Count(r => r.Method == HttpMethod.Post && r.Path.EndsWith("/invoices")).Should().Be(1);
@@ -140,11 +141,13 @@ public class KsefDeliveryDispatcherTests
                 (result.Outcome, result.ErrorMessage).Should().Be((DeliveryOutcome.NotRetryable,
                     "This KSeF destination isn't set up correctly (environment or NIP). Edit it and save again. Nothing was sent."));
                 ksef.Requests.Should().BeEmpty();
+                result.FailureKind.Should().Be(FlowDeliveryFailureKind.Setup);
                 break;
             case "440":
                 result.Outcome.Should().Be(DeliveryOutcome.NotRetryable);
                 result.ErrorMessage.Should().Contain("KSeF number 1111111111-20261120-000000000000-01");
                 result.RemoteReference.Should().Be("1111111111-20261120-000000000000-01");
+                result.FailureKind.Should().Be(FlowDeliveryFailureKind.Refused);
                 break;
             default:
                 (result.Success, result.RemoteReference, result.RemoteEnvironment).Should().Be((true, "1111111111-20261125-ABCDEF123456-7A", "test"));

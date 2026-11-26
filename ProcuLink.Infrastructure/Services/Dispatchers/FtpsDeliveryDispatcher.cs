@@ -205,7 +205,7 @@ public sealed class FtpsDeliveryDispatcher : IDeliveryDispatcher
         }
         catch (FtpAuthenticationException)
         {
-            return new DeliveryResult(false, "FTPS authentication failed — check the username and password.");
+            return SftpDeliveryDispatcher.CustomerSetup("FTPS authentication failed — check the username and password.");
         }
         catch (FtpSecurityNotAvailableException)
         {

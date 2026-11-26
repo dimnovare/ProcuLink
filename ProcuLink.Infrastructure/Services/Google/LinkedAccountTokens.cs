@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
 using ProcuLink.Core.Services.Delivery;
 using ProcuLink.Core.Services.Google;
@@ -39,7 +40,7 @@ public sealed class LinkedAccountTokens(
             a => a.OrgId == orgId && a.Id == accountId && a.Provider == provider, ct);
         var client = oauth.FirstOrDefault(o => o.Provider == provider);
         if (account is null || client is null || account.Status != LinkedAccountStatus.Active)
-            return Failed(ReconnectMessage(provider), DeliveryOutcome.NotRetryable);
+            return Reconnect(provider);
 
         OAuthRefresh refresh;
         string stored = "";
@@ -66,8 +67,12 @@ public sealed class LinkedAccountTokens(
         account.Status = LinkedAccountStatus.Reconnect;
         account.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
-        return Failed(ReconnectMessage(provider), DeliveryOutcome.NotRetryable);
+        return Reconnect(provider);
     }
+
+    // Only the customer can reconnect, so a delivery that dead-letters on it is theirs.
+    private static LinkedAccessToken Reconnect(string provider) =>
+        new(null, new DeliveryResult(false, ReconnectMessage(provider), Outcome: DeliveryOutcome.NotRetryable, FailureKind: FlowDeliveryFailureKind.Setup));
 
     private static LinkedAccessToken Failed(string message, DeliveryOutcome outcome, int? code = null) =>
         new(null, new DeliveryResult(false, message, code, Outcome: outcome));
