@@ -145,8 +145,9 @@ public sealed class StripeBillingService : IBillingService
         var trialEndsAt = GetTrialEndsAt(org);
         // Pilot hard cap respects the effective order limit (so an admin can grant a beefier Pilot).
         var pilotOrderCap = PlanConstants.GetEffectiveOrderLimit(PlanConstants.Pilot, org.OrderLimitOverride);
+        var trialWindowOpen = DateTime.UtcNow <= trialEndsAt;
         var isTrialExpired = plan == PlanConstants.Pilot &&
-            (DateTime.UtcNow > trialEndsAt || ordersUsed >= pilotOrderCap);
+            (!trialWindowOpen || ordersUsed >= pilotOrderCap);
         var isOrderLimitReached = ordersUsed >= orderLimit;
         var isSupplierLimitReached = suppliersUsed >= supplierLimit;
         var statusAllowsProcessing = ProcessingAllowedStatuses.Contains(org.AccountStatus);
@@ -162,6 +163,13 @@ public sealed class StripeBillingService : IBillingService
             : plan == PlanConstants.Pilot
                 ? statusAllowsProcessing && !isTrialExpired && !isOrderLimitReached
                 : statusAllowsProcessing; // active paid plan: never blocked by volume
+
+        // Sending, re-sending and making files for documents ALREADY counted. A trial's document cap
+        // refuses only NEW intake: while its window is open, a Pilot whose only expiry is the spent
+        // count (MarkPilotExpiredIfNeededAsync flips it to trial_expired then) still acts on what it has.
+        var canSendDocuments = plan == PlanConstants.Pilot
+            ? trialWindowOpen && (statusAllowsProcessing || org.AccountStatus == AccountStatusConstants.TrialExpired)
+            : canProcessOrders;
 
         // Adding a supplier is a SETUP action (not a live order), so the supplier
         // cap may still gate it — but it must never block PROCESSING orders for
@@ -220,7 +228,8 @@ public sealed class StripeBillingService : IBillingService
             NearLimit: nearLimit,
             AtLimit: atLimit,
             SsoAvailable: ssoAvailable,
-            BillingInterval: billingInterval);
+            BillingInterval: billingInterval,
+            CanSendDocuments: canSendDocuments);
     }
 
     // Config keys whose values are the YEARLY Stripe price ids. A persisted
@@ -249,6 +258,9 @@ public sealed class StripeBillingService : IBillingService
 
     public async Task<bool> CanProcessOrdersAsync(Guid orgId, CancellationToken ct = default) =>
         (await GetStatusAsync(orgId, ct)).CanProcessOrders;
+
+    public async Task<bool> CanSendDocumentsAsync(Guid orgId, CancellationToken ct = default) =>
+        (await GetStatusAsync(orgId, ct)).CanSendDocuments;
 
     public async Task<bool> CanAddSupplierAsync(Guid orgId, CancellationToken ct = default) =>
         (await GetStatusAsync(orgId, ct)).CanAddSupplier;

@@ -56,4 +56,9 @@ public sealed record BillingStatus(
     // informational for the frontend billing UI; the ORDER QUOTA stays a
     // calendar-month allowance regardless of this value. Defaults to null so
     // existing positional construction sites stay correct.
-    string? BillingInterval = null);
+    string? BillingInterval = null,
+    // ── Whether documents ALREADY counted may be sent, re-sent or have their files made ──
+    // CanProcessOrders is the NEW-intake gate. They differ only for a Pilot that has spent its
+    // document count while its trial window is still open: it takes in nothing new but still sends
+    // what it has. Defaults to false (refuse) so a positional construction site never grants it.
+    bool CanSendDocuments = false);

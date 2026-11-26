@@ -30,6 +30,9 @@ public static class PermissiveBilling
         billing.Setup(b => b.CanProcessOrdersAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
+        billing.Setup(b => b.CanSendDocumentsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
         billing.Setup(b => b.CanAddSupplierAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 

@@ -4,6 +4,7 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
@@ -162,8 +163,10 @@ public class KsefSendTests(DocumentEngineTestFactory factory) : IClassFixture<Do
             (await Db(scope).AuditEvents.CountAsync(a => a.EntityId == docId && a.Action == "document.ksef_issue_confirmed")).Should().Be(1);
     }
 
-    [Fact]
-    public async Task A_held_send_names_the_file_and_what_it_lacks()
+    [Theory]
+    [InlineData(SendMode.Automatic)]
+    [InlineData(SendMode.Person)] // "Make the file" pressed by hand: the refusal is kept the same way
+    public async Task A_held_send_names_the_file_and_what_it_lacks(SendMode mode)
     {
         var (docId, outputId, _) = await Seed("test");
         using (var scope = factory.Services.CreateScope())
@@ -172,7 +175,7 @@ public class KsefSendTests(DocumentEngineTestFactory factory) : IClassFixture<Do
             var read = Read();
             doc.ReadJson = DocumentJson.Serialize(new ReadResult(read.KindLabel, [.. read.Fields.Where(f => f.Meaning != FieldMeanings.ReceiverVatId)], read.Tables));
             await Db(scope).SaveChangesAsync();
-            (await scope.ServiceProvider.GetRequiredService<DocumentSender>().SendAsync(doc, SendMode.Automatic, null, CancellationToken.None)).Error
+            (await scope.ServiceProvider.GetRequiredService<DocumentSender>().SendAsync(doc, mode, null, CancellationToken.None)).Error
                 .Should().Be("output_invalid");
         }
 
@@ -180,6 +183,24 @@ public class KsefSendTests(DocumentEngineTestFactory factory) : IClassFixture<Do
         (held.GetProperty("output").GetString(), held.GetProperty("detail").GetString(), held.GetProperty("missing")[0].GetString())
             .Should().Be(("KSeF invoice file", $"This standard needs {FieldMeanings.Labels[FieldMeanings.ReceiverVatId]}.", FieldMeanings.ReceiverVatId));
         held.GetProperty("outputId").GetGuid().Should().Be(outputId);
+
+        // An edit drops the kept refusal: the next send checks again.
+        var client = factory.ClientFor(Org);
+        (await client.PatchAsJsonAsync($"/api/documents/{docId}/values",
+            new EditValuesRequest([new FieldEdit(FieldKey.Normalise("Invoice number"), "FV/2026/11/0002")], null, null, null))).EnsureSuccessStatusCode();
+        var edited = await client.GetFromJsonAsync<JsonElement>($"/api/documents/{docId}");
+        (edited.TryGetProperty("heldOutput", out var h) ? h.ValueKind : JsonValueKind.Null).Should().Be(JsonValueKind.Null);
+
+        // Fixed and made: the kept refusal goes with the hold.
+        using (var scope = factory.Services.CreateScope())
+        {
+            var doc = await Db(scope).FlowDocuments.SingleAsync(d => d.Id == docId);
+            doc.ReadJson = DocumentJson.Serialize(Read());
+            await Db(scope).SaveChangesAsync();
+        }
+        (await Send(docId)).StatusCode.Should().Be(HttpStatusCode.OK);
+        using (var scope = factory.Services.CreateScope())
+            (await Db(scope).FlowDocuments.AsNoTracking().SingleAsync(d => d.Id == docId)).StatusDetail.Should().BeNull();
     }
 
     [Fact]

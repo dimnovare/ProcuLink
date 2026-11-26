@@ -12,7 +12,7 @@ using ProcuLink.Transform.Output.Ksef;
 
 namespace ProcuLink.Api.Services.Documents;
 
-/// <summary><c>Assistant</c>: asked for through the MCP endpoint. Like <c>Person</c>, it never holds the document.</summary>
+/// <summary><c>Assistant</c>: asked for through the MCP endpoint. Like <c>Person</c>, it never holds the document for a check.</summary>
 public enum SendMode { Person, Automatic, Assistant }
 
 /// <summary>Which output could not be rendered, and why: <paramref name="Missing"/> is the meanings a standard lacks (FieldMeanings keys).</summary>
@@ -92,7 +92,8 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
     {
         var (observed, observedAt) = (doc.Status, Micros(doc.UpdatedAt));
         if (!DocumentStatus.IsEditable(observed, doc.StatusReason)) return Refuse("not_ready");
-        if (!await billing.CanProcessOrdersAsync(doc.OrgId, ct)) return Refuse("processing_paused");
+        // Already counted: a trial's spent document cap does not stop it, only the trial's end or a paused account.
+        if (!await billing.CanSendDocumentsAsync(doc.OrgId, ct)) return Refuse("processing_paused");
 
         var flow = await db.Flows.FirstAsync(f => f.OrgId == doc.OrgId && f.Id == doc.FlowId, ct);
         var config = await FlowConfigLoader.CurrentAsync(db, flow, ct);
@@ -127,7 +128,8 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
             if (!render.Ok)
             {
                 var failure = new OutputFailure(o.Name, render.Detail, render.Missing, o.Id);
-                if (mode == SendMode.Automatic) await HoldAsync(doc, render.Error!, ct, failure);
+                // Kept on the document, by hand too, so its header names the file after a reload. A partly sent document stays send_failed.
+                if (mode == SendMode.Automatic || observed != DocumentStatus.SendFailed) await HoldAsync(doc, render.Error!, ct, failure);
                 return Refuse(render.Error!, failure);
             }
             using var buffer = new MemoryStream();
@@ -238,7 +240,7 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
         }
 
         doc.Status = FlowDeliveryStatus.DocumentStatusFor(existing.Where(d => FlowDeliveryStatus.CountsTowardDocument(d.OutputId, d.Status)).Select(d => d.Status));
-        doc.StatusReason = null;
+        (doc.StatusReason, doc.StatusDetail) = (null, null);
         doc.FlowVersion = version;
         doc.UpdatedAt = now;
         DocumentAudit.Add(db, doc, "document.sent",

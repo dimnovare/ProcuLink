@@ -9,6 +9,9 @@ public interface IBillingService
 
     Task<bool> CanProcessOrdersAsync(Guid orgId, CancellationToken ct = default);
 
+    /// <summary>Whether documents already counted may be sent, re-sent or have their files made (<see cref="BillingStatus.CanSendDocuments"/>).</summary>
+    Task<bool> CanSendDocumentsAsync(Guid orgId, CancellationToken ct = default);
+
     Task<bool> CanAddSupplierAsync(Guid orgId, CancellationToken ct = default);
 
     /// <summary>

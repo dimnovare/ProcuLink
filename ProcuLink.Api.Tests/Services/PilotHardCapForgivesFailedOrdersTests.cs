@@ -219,6 +219,30 @@ public class PilotHardCapForgivesFailedOrdersTests
             .Should().Be(AccountStatusConstants.TrialExpired);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PilotHardCap_SpentCount_RefusesNewIntake_ButStillSendsWhileTheWindowIsOpen(bool windowEnded)
+    {
+        // The trial's 20th document is read and counted; sending it (and re-sending the other 19) stays
+        // allowed until the trial's DATE ends. Only new intake is refused by the spent count.
+        var db = MakeDb();
+        var org = Org(PlanConstants.Pilot, AccountStatusConstants.Trialing);
+        if (windowEnded) org.TrialStartedAt = DateTime.UtcNow - PlanConstants.PilotDuration - TimeSpan.FromDays(1);
+        db.Organisations.Add(org);
+        SeedOrders(db, org.Id, SeedSupplier(db, org.Id), PlanConstants.PilotOrderLimit, OrderStatusConstants.Delivered,
+            org.TrialStartedAt.AddHours(1));
+        await db.SaveChangesAsync();
+        var billing = MakeService(db);
+
+        var status = await billing.GetStatusAsync(org.Id);
+
+        (status.CanProcessOrders, status.IsTrialExpired).Should().Be((false, true), "the spent count still refuses new intake");
+        (await billing.CheckOrderLimitAsync(org.Id)).RefusalCode.Should().Be("pilot_expired");
+        status.CanSendDocuments.Should().Be(!windowEnded, "counted documents may be sent until the trial's end date, never after");
+        (await billing.CanSendDocumentsAsync(org.Id)).Should().Be(!windowEnded);
+    }
+
     [Fact]
     public async Task PilotHardCap_ForgivenessFlowsThroughExpiry_ReactivatingAnOrgTippedOverByFailures()
     {
