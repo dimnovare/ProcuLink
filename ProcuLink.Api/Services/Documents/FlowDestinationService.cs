@@ -143,8 +143,9 @@ public sealed class FlowDestinationService(
     }
 
     /// <summary>
-    /// A B2Brouter destination (plan 35): an account ID and an API key (a credential, never config). Sandbox keys only for now
-    /// (they start with <c>test_</c>); <c>sandbox</c> is the server's, never the browser's.
+    /// A B2Brouter destination (plan 35): an account ID and an API key (a credential, never config). Sandbox and live keys both
+    /// save; <c>sandbox</c> is the server's, never the browser's: <c>true</c> when a saved key starts with <c>test_</c>,
+    /// kept as stored when the key is not re-sent.
     /// </summary>
     private static string B2BrouterConfig(string configJson, FlowDestination? existing, string? credentials)
     {
@@ -155,11 +156,9 @@ public sealed class FlowDestinationService(
         try { if (credentials is not null) key = Text(JsonNode.Parse(credentials) as JsonObject ?? [], "apiKey"); } catch (System.Text.Json.JsonException) { }
         if (key is null && (credentials is not null || existing?.Protocol != DeliveryProtocolConstants.B2Brouter))
             throw new DestinationException("invalid_destination", "Enter your B2Brouter API key.");
-        if (key is not null && !key.StartsWith("test_", StringComparison.Ordinal))
-            throw new DestinationException("invalid_destination", "For now ProcuLink takes only a B2Brouter sandbox API key (it starts with test_).");
         foreach (var k in new[] { "checkOnly", "sandbox" }) json.Remove(k);
         json["account"] = account;
-        json["sandbox"] = true;
+        json["sandbox"] = key is not null ? key.StartsWith("test_", StringComparison.Ordinal) : JsonNode.Parse(existing!.ConfigJson)?["sandbox"]?.DeepClone();
         return json.ToJsonString();
     }
 
