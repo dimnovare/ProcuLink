@@ -48,6 +48,9 @@ public static class DeliveryProtocolConstants
     /// <summary>Poland's KSeF: issues a KSeF FA(3) file with the customer's own token (plan 33). Never URL-based: its hosts are fixed per environment.</summary>
     public const string Ksef = "ksef";
 
+    /// <summary>E-invoice network through the customer's own B2Brouter account (plan 35). Flow destinations only. Never URL-based: the host is fixed.</summary>
+    public const string B2Brouter = "b2brouter";
+
     public static readonly string[] All =
     [
         Http,
@@ -63,7 +66,8 @@ public static class DeliveryProtocolConstants
         GoogleDrive,
         GoogleSheets,
         MicrosoftOneDrive,
-        Ksef
+        Ksef,
+        B2Brouter
     ];
 
     /// <summary>

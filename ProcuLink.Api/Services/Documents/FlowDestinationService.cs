@@ -39,7 +39,8 @@ public sealed class FlowDestinationService(
 
     private static readonly string[] Allowed =
         [DeliveryProtocolConstants.Http, DeliveryProtocolConstants.Sftp, DeliveryProtocolConstants.Ftps, DeliveryProtocolConstants.S3, DeliveryProtocolConstants.Email,
-         DeliveryProtocolConstants.GoogleDrive, DeliveryProtocolConstants.GoogleSheets, DeliveryProtocolConstants.MicrosoftOneDrive, DeliveryProtocolConstants.Ksef];
+         DeliveryProtocolConstants.GoogleDrive, DeliveryProtocolConstants.GoogleSheets, DeliveryProtocolConstants.MicrosoftOneDrive, DeliveryProtocolConstants.Ksef,
+         DeliveryProtocolConstants.B2Brouter];
 
     /// <param name="userId">The person saving: recorded when a KSeF destination is switched to Production.</param>
     public async Task<FlowDestination> SaveAsync(Guid orgId, Guid? id, DestinationRequest req, CancellationToken ct, string? userId = null)
@@ -47,6 +48,7 @@ public sealed class FlowDestinationService(
         var protocol = req.Protocol?.Trim().ToLowerInvariant() ?? "";
         if (!Allowed.Contains(protocol)) throw new DestinationException("unsupported_destination");
         if (protocol == DeliveryProtocolConstants.Ksef && !availability.KsefOn(orgId)) throw new DestinationException("unsupported_destination");
+        if (protocol == DeliveryProtocolConstants.B2Brouter && !availability.PeppolOn(orgId)) throw new DestinationException("unsupported_destination");
         var provider = LinkedAccountProviders.ByProtocol.GetValueOrDefault(protocol);
         var isLinked = provider is not null;
         // The flag gates creation (R2), not running: an existing destination keeps delivering once it is off.
@@ -62,6 +64,7 @@ public sealed class FlowDestinationService(
         var configJson = req.Config.GetRawText();
         var credentials = !isLinked && req.Credentials is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) } c ? c.GetRawText() : null;
         if (protocol == DeliveryProtocolConstants.Ksef) configJson = KsefConfig(configJson, existing, credentials, userId);
+        if (protocol == DeliveryProtocolConstants.B2Brouter) configJson = B2BrouterConfig(configJson, existing, credentials);
         try
         {
             DeliveryConfigRules.ValidateConfigJson(configJson);
@@ -136,6 +139,27 @@ public sealed class FlowDestinationService(
             throw new DestinationException("invalid_destination", "To switch to Production, confirm that your company is the issuer of every invoice sent from here.");
         json["productionConfirmedBy"] = userId;
         json["productionConfirmedAt"] = DateTime.UtcNow.ToString("O");
+        return json.ToJsonString();
+    }
+
+    /// <summary>
+    /// A B2Brouter destination (plan 35): an account ID and an API key (a credential, never config). Sandbox keys only for now
+    /// (they start with <c>test_</c>); <c>sandbox</c> is the server's, never the browser's.
+    /// </summary>
+    private static string B2BrouterConfig(string configJson, FlowDestination? existing, string? credentials)
+    {
+        var json = (JsonObject)JsonNode.Parse(configJson)!;
+        var account = Text(json, "account")?.Trim();
+        if (account is null || account.Length > 64) throw new DestinationException("invalid_destination", "Enter your B2Brouter account ID.");
+        string? key = null;
+        try { if (credentials is not null) key = Text(JsonNode.Parse(credentials) as JsonObject ?? [], "apiKey"); } catch (System.Text.Json.JsonException) { }
+        if (key is null && (credentials is not null || existing?.Protocol != DeliveryProtocolConstants.B2Brouter))
+            throw new DestinationException("invalid_destination", "Enter your B2Brouter API key.");
+        if (key is not null && !key.StartsWith("test_", StringComparison.Ordinal))
+            throw new DestinationException("invalid_destination", "For now ProcuLink takes only a B2Brouter sandbox API key (it starts with test_).");
+        foreach (var k in new[] { "checkOnly", "sandbox" }) json.Remove(k);
+        json["account"] = account;
+        json["sandbox"] = true;
         return json.ToJsonString();
     }
 
@@ -263,8 +287,8 @@ public sealed class FlowDestinationService(
             json["bodyTemplate"] = Text(json, "bodyTemplate") ?? "Attached: {fileName}. Sent by ProcuLink.";
             json.Remove("attachmentFileName"); // the delivery's own file name (or the TEST_ name) wins
         }
-        else if (d.Protocol is DeliveryProtocolConstants.GoogleSheets or DeliveryProtocolConstants.Ksef)
-            json["checkOnly"] = test; // a test send never appends rows (R11) or issues an invoice (plan 33), whatever the stored config says
+        else if (d.Protocol is DeliveryProtocolConstants.GoogleSheets or DeliveryProtocolConstants.Ksef or DeliveryProtocolConstants.B2Brouter)
+            json["checkOnly"] = test; // a test send never appends rows (R11) or issues an invoice (plans 33, 35), whatever the stored config says
         else if (test && d.Protocol == DeliveryProtocolConstants.Http)
         {
             var headers = json["headers"] as JsonObject ?? new JsonObject();
