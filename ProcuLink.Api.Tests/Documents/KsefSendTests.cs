@@ -4,6 +4,7 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
@@ -182,6 +183,13 @@ public class KsefSendTests(DocumentEngineTestFactory factory) : IClassFixture<Do
         (held.GetProperty("output").GetString(), held.GetProperty("detail").GetString(), held.GetProperty("missing")[0].GetString())
             .Should().Be(("KSeF invoice file", $"This standard needs {FieldMeanings.Labels[FieldMeanings.ReceiverVatId]}.", FieldMeanings.ReceiverVatId));
         held.GetProperty("outputId").GetGuid().Should().Be(outputId);
+
+        // An edit drops the kept refusal: the next send checks again.
+        var client = factory.ClientFor(Org);
+        (await client.PatchAsJsonAsync($"/api/documents/{docId}/values",
+            new EditValuesRequest([new FieldEdit(FieldKey.Normalise("Invoice number"), "FV/2026/11/0002")], null, null, null))).EnsureSuccessStatusCode();
+        var edited = await client.GetFromJsonAsync<JsonElement>($"/api/documents/{docId}");
+        (edited.TryGetProperty("heldOutput", out var h) ? h.ValueKind : JsonValueKind.Null).Should().Be(JsonValueKind.Null);
 
         // Fixed and made: the kept refusal goes with the hold.
         using (var scope = factory.Services.CreateScope())
