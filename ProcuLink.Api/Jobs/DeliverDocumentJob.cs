@@ -53,8 +53,12 @@ public class DeliverDocumentJob(
         var dispatcher = destination is null
             ? null
             : dispatchers.FirstOrDefault(x => string.Equals(x.Protocol, destination.Protocol, StringComparison.OrdinalIgnoreCase));
-        var flowName = await db.Flows.Where(f => f.Id == doc.FlowId && f.OrgId == organisationId).Select(f => f.Name).FirstAsync(ct);
-        var config = destination is null ? null : FlowDestinationService.ToDeliveryConfig(destination, flowName, test: false);
+        var flow = await db.Flows.Where(f => f.Id == doc.FlowId && f.OrgId == organisationId).Select(f => new { f.Name, f.FieldsJson }).FirstAsync(ct);
+        // Only an email composes words around the file: its default message is in the document's language.
+        var language = destination?.Protocol == DeliveryProtocolConstants.Email
+            ? Transform.Documents.DocumentLanguage.Of(DocumentJson.Deserialize<ReadResult>(doc.ReadJson), DocumentJson.Deserialize<FlowFieldList>(flow.FieldsJson))
+            : null;
+        var config = destination is null ? null : FlowDestinationService.ToDeliveryConfig(destination, flow.Name, test: false, language);
 
         string? deadLetter = null, kind = null;
         var credentials = "";

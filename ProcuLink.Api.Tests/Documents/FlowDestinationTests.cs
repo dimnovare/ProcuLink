@@ -62,6 +62,11 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
         var blank = ToDeliveryConfig(d, "Flow", test: false);
         Subject(blank).Should().Be("Flow — {fileName}");
         Body(blank).Should().Be("Attached: {fileName}. Sent by ProcuLink.");
+
+        // The default message is in the document's language, unless the destination chose one.
+        Body(ToDeliveryConfig(d, "Flow", test: false, documentLanguage: "de")).Should().Be("Im Anhang: {fileName}. Gesendet über ProcuLink.");
+        d.ConfigJson = """{"toAddresses":["a@example.com"],"language":"fr"}""";
+        Body(ToDeliveryConfig(d, "Flow", test: false, documentLanguage: "de")).Should().Be("Pièce jointe : {fileName}. Envoyé par ProcuLink.");
     }
 
     /// <summary>Engine on for OrgA, native connectors off, Google configured.</summary>

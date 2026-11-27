@@ -13,6 +13,7 @@ using ProcuLink.Infrastructure;
 using ProcuLink.Infrastructure.Services;
 using ProcuLink.Api.Services.Google;
 using ProcuLink.Infrastructure.Services.Security;
+using ProcuLink.Transform.Documents;
 
 namespace ProcuLink.Api.Services.Documents;
 
@@ -276,14 +277,17 @@ public sealed class FlowDestinationService(
         catch (System.Text.Json.JsonException) { return null; }
     }
 
-    public static SupplierDeliveryConfig ToDeliveryConfig(FlowDestination d, string flowName, bool test)
+    /// <param name="documentLanguage">The document's language (<see cref="DocumentLanguage.Of"/>): an email's default message is in it,
+    /// unless the destination names a <c>language</c>. Null (a test send): the destination's language, else English.</param>
+    public static SupplierDeliveryConfig ToDeliveryConfig(FlowDestination d, string flowName, bool test, string? documentLanguage = null)
     {
         var json = JsonNode.Parse(d.ConfigJson) as JsonObject ?? new JsonObject();
         if (d.Protocol == DeliveryProtocolConstants.Email)
         {
             // The user's subject and message win; a blank or absent one falls back to a neutral default.
+            var language = DocumentLanguage.Known(Text(json, "language")) ?? documentLanguage ?? DocumentLanguage.English;
             json["subjectTemplate"] = (test ? "[TEST] " : "") + (Text(json, "subjectTemplate") ?? $"{flowName} — {{fileName}}");
-            json["bodyTemplate"] = Text(json, "bodyTemplate") ?? "Attached: {fileName}. Sent by ProcuLink.";
+            json["bodyTemplate"] = Text(json, "bodyTemplate") ?? DocumentLanguage.Text(language, "Attached: {fileName}. Sent by ProcuLink.");
             json.Remove("attachmentFileName"); // the delivery's own file name (or the TEST_ name) wins
         }
         else if (d.Protocol is DeliveryProtocolConstants.GoogleSheets or DeliveryProtocolConstants.Ksef or DeliveryProtocolConstants.B2Brouter)
