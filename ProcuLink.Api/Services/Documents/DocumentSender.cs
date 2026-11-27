@@ -100,7 +100,8 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
         var outputs = config.Outputs.ToList();
         if (outputs.Count == 0) return Refuse("no_outputs");
 
-        // Render everything first. Each file is made on its own: one that can't be made is kept on the document and the others go.
+        // Render everything first. A file this document can never make (it needs a meaning the flow doesn't read, added in We read)
+        // is kept on the document and the others go; any other failure means nothing is stored or sent, so it can be fixed here.
         var read = DocumentJson.Deserialize<ReadResult>(doc.ReadJson);
         var header = DocumentRows.Build(read, null).Header;
         outputs = outputs.Where(o => SendWhenOps.Matches(o.SendWhenJson is null ? null : DocumentJson.Deserialize<SendWhen>(o.SendWhenJson), header)).ToList();
@@ -114,6 +115,13 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
         var lookups = await DocumentLookups.LoadAsync(db, doc.OrgId, templates, ct);
         var rendered = new List<Rendered>();
         (string Error, OutputFailure Failure)? unmade = null;
+        var reads = config.Fields.Fields.Select(f => f.Meaning).Concat(config.Fields.Tables.SelectMany(t => t.Columns).Select(c => c.Meaning)).OfType<string>().ToHashSet();
+        // Kept on the document, by hand too, so its header names the file after a reload. A partly sent document stays send_failed.
+        async Task<SendOutcome> HeldAsync(string error, OutputFailure failure)
+        {
+            if (mode == SendMode.Automatic || observed != DocumentStatus.SendFailed) await HoldAsync(doc, error, ct, failure);
+            return Refuse(error, failure);
+        }
         foreach (var (o, template) in outputs.Zip(templates))
         {
             // A standard whose switch (Peppol, KSeF) has since gone off is refused like an unknown one, never rendered.
@@ -128,7 +136,9 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
                     o.LayoutJson is null ? null : DocumentJson.Deserialize<OutputLayout>(o.LayoutJson), o.Logo, config.Fields.Tables);
             if (!render.Ok)
             {
-                unmade ??= (render.Error!, new OutputFailure(o.Name, render.Detail, render.Missing, o.Id));
+                var failure = new OutputFailure(o.Name, render.Detail, render.Missing, o.Id);
+                if (render.Missing is not { Count: > 0 } missing || missing.All(reads.Contains)) return await HeldAsync(render.Error!, failure);
+                unmade ??= (render.Error!, failure);
                 continue;
             }
             using var buffer = new MemoryStream();
@@ -136,13 +146,8 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
             rendered.Add(new(o, buffer.ToArray(), render.Result.ContentType, render.Result.FileExtension));
         }
 
-        // Nothing could be made: nothing is stored or sent. Kept on the document, by hand too, so its header names the file
-        // after a reload. A partly sent document stays send_failed.
-        if (rendered.Count == 0 && unmade is var (error, failure))
-        {
-            if (mode == SendMode.Automatic || observed != DocumentStatus.SendFailed) await HoldAsync(doc, error, ct, failure);
-            return Refuse(error, failure);
-        }
+        // Nothing could be made: nothing is stored or sent.
+        if (rendered.Count == 0 && unmade is var (error, unmadeFailure)) return await HeldAsync(error, unmadeFailure);
 
         var issue = await KsefProductionAsync(doc, rendered, ct);
         // KSeF Production: never twice, and never without a person who saw exactly this file. An automatic send is held for one.
