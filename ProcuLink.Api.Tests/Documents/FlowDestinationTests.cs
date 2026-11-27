@@ -354,13 +354,17 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
         var http = factory.ClientFor(DocumentEngineTestFactory.OrgA);
         var rows = (await http.GetFromJsonAsync<JsonElement>("/api/destinations")).EnumerateArray().ToList();
         JsonElement Row(FlowDestination d) => rows.Single(r => r.GetProperty("id").GetGuid() == d.Id);
-        (string, bool, DateTime) Last(FlowDestination d) => (Row(d).GetProperty("lastSend").GetProperty("kind").GetString()!,
-            Row(d).GetProperty("lastSend").GetProperty("ok").GetBoolean(), Row(d).GetProperty("lastSend").GetProperty("at").GetDateTime());
+        (string, bool, DateTime)? Fact(FlowDestination d, string key) => Row(d).GetProperty(key) is { ValueKind: JsonValueKind.Object } f
+            ? (f.GetProperty("kind").GetString()!, f.GetProperty("ok").GetBoolean(), f.GetProperty("at").GetDateTime()) : null;
+        (string, bool, DateTime)? Last(FlowDestination d) => Fact(d, "lastSend");
 
         rows.Should().NotContain(r => r.GetProperty("id").GetGuid() == theirs.Id);
-        Last(tested).Should().Be(("test", true, t.AddMinutes(2)));                       // the newer test
+        Last(tested).Should().BeNull();                                                   // a test is not a send
+        Fact(tested, "lastTest").Should().Be(("test", true, t.AddMinutes(2)));            // the newer test
         Last(failed).Should().Be(("document", false, t.AddMinutes(4)));                  // the newest finished send; the retrying one is not finished
-        Last(retested).Should().Be(("test", false, t.AddMinutes(6)));                    // a later failed test beats an older delivery
+        Last(retested).Should().Be(("document", true, t.AddMinutes(3)));                 // a later test never hides the last real send
+        Fact(retested, "lastTest").Should().Be(("test", false, t.AddMinutes(6)));         // it is said apart
+        Fact(failed, "lastTest").Should().Be(("test", true, t.AddMinutes(1)));            // an older passed test never hides a failed send either
         Row(idle).GetProperty("lastSend").ValueKind.Should().Be(JsonValueKind.Null);
         Row(idle).GetProperty("usedBy").GetArrayLength().Should().Be(0);
         var use = Row(failed).GetProperty("usedBy").EnumerateArray().Single();

@@ -50,10 +50,10 @@ public sealed class DestinationListPostgresTests(PostgresContainerFixture postgr
 
         var rows = (await http.GetFromJsonAsync<JsonElement>("/api/destinations")).EnumerateArray().ToList();
         JsonElement Row(FlowDestination d) => rows.Single(r => r.GetProperty("id").GetGuid() == d.Id);
-        (string?, bool, int) Facts(FlowDestination d) => (Row(d).GetProperty("lastSend").GetProperty("kind").GetString(),
-            Row(d).GetProperty("lastSend").GetProperty("ok").GetBoolean(), Row(d).GetProperty("usedBy").GetArrayLength());
+        (string?, bool, int) Facts(FlowDestination d, string key) => (Row(d).GetProperty(key).GetProperty("kind").GetString(),
+            Row(d).GetProperty(key).GetProperty("ok").GetBoolean(), Row(d).GetProperty("usedBy").GetArrayLength());
 
-        Assert.Equal(("document", false, 1), Facts(used));
-        Assert.Equal(("test", true, 0), Facts(tested));
+        Assert.Equal(("document", false, 1), Facts(used, "lastSend"));
+        Assert.Equal(("test", true, 0), Facts(tested, "lastTest"));
     }
 }
