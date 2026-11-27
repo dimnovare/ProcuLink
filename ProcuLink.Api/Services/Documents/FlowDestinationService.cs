@@ -324,7 +324,7 @@ public sealed class FlowDestinationService(
             : encryption.Decrypt(d.EncryptedCredentials, new CredentialScope(d.OrgId, Purpose, d.Id));
 
     /// <summary>Null when the destination is not this org's. The send is real; only its content is marked as a test (a given <paramref name="payload"/> goes as <c>TEST_</c> + its file name).</summary>
-    public async Task<DeliveryResult?> TestAsync(Guid orgId, Guid id, CancellationToken ct, TestPayload? payload = null)
+    public async Task<DeliveryResult?> TestAsync(Guid orgId, Guid id, CancellationToken ct, TestPayload? payload = null, string? by = null)
     {
         var d = await db.Set<FlowDestination>().FirstOrDefaultAsync(x => x.OrgId == orgId && x.Id == id, ct);
         if (d is null) return null;
@@ -358,7 +358,7 @@ public sealed class FlowDestinationService(
             CreatedAt = DateTime.UtcNow,
             // The reason and the destination are kept so History can say which test failed and why, as the test itself did.
             Payload = JsonSerializer.SerializeToDocument(new { success = result.Success, responseCode = result.ResponseCode, error = result.Success ? null : result.ErrorMessage,
-                destinationId = d.Id, destination = d.Name, protocol = d.Protocol }),
+                destinationId = d.Id, destination = d.Name, protocol = d.Protocol, by }),
         });
         await db.SaveChangesAsync(ct);
         return result;
