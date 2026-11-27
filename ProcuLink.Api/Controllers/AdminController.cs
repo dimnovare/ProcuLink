@@ -203,7 +203,7 @@ public sealed class AdminController : ControllerBase
     // ── GET /api/admin/organisations ──────────────────────────────────────
     [HttpGet("organisations")]
     [ProducesResponseType(typeof(IReadOnlyList<AdminOrganisationDto>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> GetOrganisations(CancellationToken ct)
+    public async Task<IActionResult> GetOrganisations(CancellationToken ct, [FromServices] IHttpClientFactory? http = null)
     {
         var since30d = DateTime.UtcNow.AddDays(-30);
 
@@ -273,9 +273,15 @@ public sealed class AdminController : ControllerBase
             .Select(o => new
             {
                 o.Id, o.Name, o.Slug, o.Plan, o.AccountStatus,
-                o.StripeCustomerId, o.StripeSubscriptionId, o.CreatedAt,
+                o.StripeCustomerId, o.StripeSubscriptionId, o.CreatedAt, o.ClerkOrgId,
             })
             .ToListAsync(ct);
+
+        // The stored name is never synced from Clerk (it is the slug at sign-up, or "Personal workspace" on an
+        // adopted legacy tenant), so show the name the workspace switcher shows; the stored one when Clerk cannot say.
+        var clerkNames = http is not null && _config["Clerk:SecretKey"] is { Length: > 0 } key
+            ? await ClerkOrgNames.FetchAsync(http.CreateClient("clerk"), key, _logger, ct)
+            : [];
 
         var result = orgs.Select(o =>
         {
@@ -292,7 +298,7 @@ public sealed class AdminController : ControllerBase
 
             return new AdminOrganisationDto(
                 Id:                   o.Id,
-                Name:                 o.Name,
+                Name:                 clerkNames.GetValueOrDefault(o.ClerkOrgId) ?? o.Name,
                 Slug:                 o.Slug,
                 Plan:                 o.Plan,
                 AccountStatus:        o.AccountStatus,
