@@ -86,8 +86,10 @@ public sealed class SettingsController : ControllerBase
     /// The mailbox a flow's address is shown as: the same configuration the router parses recipients
     /// with, so what is displayed and what actually resolves cannot drift apart.
     /// </summary>
+    /// <remarks><c>inboundDomain</c> may list several domains, comma-separated; the first is shown.</remarks>
     internal static string ComposeAddress(string token, string? inboundDomain, string? hostSuffix) =>
-        !string.IsNullOrWhiteSpace(inboundDomain)
-            ? $"{token}@{inboundDomain}"
+        inboundDomain?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault() is { } primary
+            ? $"{token}@{primary}"
             : $"orders@{token}{(string.IsNullOrWhiteSpace(hostSuffix) ? ".proculink.eu" : hostSuffix)}";
 }

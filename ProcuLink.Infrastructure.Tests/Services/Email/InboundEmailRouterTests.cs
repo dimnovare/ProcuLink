@@ -70,6 +70,26 @@ public class InboundEmailRouterTests
         result.OrgId.Should().Be(orgId);
     }
 
+    // The 2026-11 move to a neutral domain: the new domain resolves, and every address already
+    // handed out on orders.proculink.eu keeps resolving even when the config names only the new one.
+    [Theory]
+    [InlineData("in.proculink.eu", "in.proculink.eu")]
+    [InlineData("in.proculink.eu", "orders.proculink.eu")]
+    [InlineData("in.proculink.eu, orders.proculink.eu", "orders.proculink.eu")]
+    public async Task LocalPartAddressing_RoutesNewAndLegacyDomains(string configured, string host)
+    {
+        await using var db = CreateDb();
+        var orgId = await SeedOrgAsync(db, AccountStatusConstants.Active);
+        await SeedSupplierAsync(db, orgId);
+        var router = MakeRouter(db, slug: Slug, orgId: orgId, inboundDomain: configured);
+
+        var result = await router.RouteAsync(new InboundEmailPayload(
+            FromEmail: "buyer@example.com", ToEmail: $"{Slug}@{host}", Subject: "Document",
+            Attachments: new[] { new InboundAttachment("po.csv", "text/csv", new byte[] { 1, 2, 3 }) }), default);
+
+        result.OrgId.Should().Be(orgId, $"{host} must resolve to the same organisation");
+    }
+
     [Fact]
     public async Task LocalPartAddressing_StripsPlusTag()
     {

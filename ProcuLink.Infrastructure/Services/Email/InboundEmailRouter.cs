@@ -22,7 +22,7 @@ namespace ProcuLink.Infrastructure.Services.Email;
 /// per-organisation CREDENTIAL, and the organisation follows from the credential presented
 /// rather than from anything the sender chose — see <c>InboundAddressService</c>. Two recipient
 /// schemes are supported: the preferred <c>{token}@{InboundDomain}</c> (local-part; set
-/// <c>Inbound:Postmark:InboundDomain</c>) and the legacy <c>orders@{token}.proculink.eu</c>
+/// <c>Inbound:Postmark:InboundDomain</c>, a comma-separated list whose first entry is displayed) and the legacy <c>orders@{token}.proculink.eu</c>
 /// (subdomain). Only a flow's own address is acted on; an organisation-level address no longer
 /// receives anything and is answered Transient, so the provider keeps the mail re-fireable.
 /// </remarks>
@@ -261,9 +261,7 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
         // domain → Postmark, and avoids a wildcard MX on the marketing apex
         // (*.proculink.eu would otherwise swallow all subdomain mail). Preferred
         // scheme; enabled when Inbound:Postmark:InboundDomain is configured.
-        var inboundDomain = GetInboundDomain();
-        if (!string.IsNullOrWhiteSpace(inboundDomain) &&
-            host.Equals(inboundDomain, StringComparison.OrdinalIgnoreCase))
+        if (GetInboundDomains().Contains(host, StringComparer.OrdinalIgnoreCase))
         {
             return NormaliseAddressToken(local);
         }
@@ -312,11 +310,23 @@ public sealed class InboundEmailRouter : IInboundEmailRouter
     }
 
     /// <summary>
-    /// The single fixed inbound domain for local-part addressing
-    /// (<c>{slug}@{InboundDomain}</c>). Empty disables Scheme A and falls back to
-    /// the subdomain scheme. Config key <c>Inbound:Postmark:InboundDomain</c>.
+    /// The domain every address was issued on before the 2026-11 move to a neutral one. Senders
+    /// already use it, so it keeps resolving whenever local-part addressing is on, whatever the
+    /// configured list says.
     /// </summary>
-    private string GetInboundDomain() => _config["Inbound:Postmark:InboundDomain"] ?? string.Empty;
+    internal const string LegacyInboundDomain = "orders.proculink.eu";
+
+    /// <summary>
+    /// The domains accepted for local-part addressing (<c>{token}@{domain}</c>). Config key
+    /// <c>Inbound:Postmark:InboundDomain</c>, comma-separated; the FIRST entry is the one addresses
+    /// are displayed with. Empty disables Scheme A and falls back to the subdomain scheme.
+    /// </summary>
+    private string[] GetInboundDomains()
+    {
+        var configured = (_config["Inbound:Postmark:InboundDomain"] ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return configured.Length == 0 ? configured : [.. configured, LegacyInboundDomain];
+    }
 
     // NOTE: there is deliberately no ResolveOrgIdFromSlugAsync here any more, and no
     // Inbound:Postmark:TenantMapping:{slug} configuration fallback.
