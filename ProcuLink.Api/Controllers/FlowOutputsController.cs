@@ -364,7 +364,7 @@ public sealed class FlowOutputsController(ProcuLinkDbContext db, ICurrentTenantS
         using var content = new MemoryStream();
         await render.Result!.Content.CopyToAsync(content, ct);
         var payload = new TestPayload(content.ToArray(), FileNameSanitiser.Sanitise(Path.GetFileNameWithoutExtension(doc.FileName)) + render.Result.FileExtension, render.Result.ContentType);
-        var result = await destinations.TestAsync(orgId, request.DestinationId, ct, payload);
+        var result = await destinations.TestAsync(orgId, request.DestinationId, ct, payload, tenant.ClerkUserId);
         return result is null
             ? NotFound(new { error = "destination_not_found" })
             : Ok(new { success = result.Success, message = result.ErrorMessage, responseCode = result.ResponseCode });

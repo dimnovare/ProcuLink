@@ -202,20 +202,21 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
     }
 
     [Fact]
-    public async Task A_failed_test_keeps_its_reason_and_destination_in_history()
+    public async Task A_failed_test_keeps_its_reason_destination_and_tester_in_history()
     {
         await using var db = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
         var d = new FlowDestination { Id = Guid.NewGuid(), OrgId = OrgA, Name = "Warehouse", Protocol = "http", ConfigJson = """{"url":"https://example.test/in"}""" };
         db.Set<FlowDestination>().Add(d);
         await db.SaveChangesAsync();
 
-        var result = await new FlowDestinationService(db, null!, [], Availability(), null!).TestAsync(OrgA, d.Id, default);
+        var result = await new FlowDestinationService(db, null!, [], Availability(), null!).TestAsync(OrgA, d.Id, default, by: "user_tester");
 
         var payload = db.AuditEvents.Single(e => e.Action == "destination.tested").Payload!.RootElement;
         payload.GetProperty("success").GetBoolean().Should().BeFalse();
         payload.GetProperty("error").GetString().Should().Be(result!.ErrorMessage).And.NotBeNullOrEmpty();
         payload.GetProperty("destinationId").GetGuid().Should().Be(d.Id);
         payload.GetProperty("destination").GetString().Should().Be("Warehouse");
+        DocumentAudit.By(db.AuditEvents.Single().Payload).Should().Be("user_tester");
     }
 
     [Fact]

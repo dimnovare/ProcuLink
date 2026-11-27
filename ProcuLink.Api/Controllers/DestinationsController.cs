@@ -101,7 +101,7 @@ public sealed class DestinationsController(
     public async Task<IActionResult> Test(Guid id, CancellationToken ct)
     {
         if (Refuse() is { } refused) return refused;
-        var result = await destinations.TestAsync(tenant.OrganisationId, id, ct);
+        var result = await destinations.TestAsync(tenant.OrganisationId, id, ct, by: tenant.ClerkUserId);
         return result is null
             ? NotFoundBody()
             : Ok(new { success = result.Success, message = result.ErrorMessage, responseCode = result.ResponseCode });
