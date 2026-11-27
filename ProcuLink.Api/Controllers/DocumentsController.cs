@@ -108,7 +108,7 @@ public sealed class DocumentsController(
             CountsThisMonth = StripeBillingService.CountsAsUsage(doc, await UsageSinceAsync(ct)),
             IsSample = doc.IsSample,
             DuplicateOf = (await DocumentListRows.EarlierNumbersAsync(db, doc.OrgId, [doc], ct)).GetValueOrDefault(doc.Id),
-            HeldOutput = doc is { Status: DocumentStatus.NeedsReview, StatusReason: "output_invalid", StatusDetail: { } held }
+            HeldOutput = doc is { StatusReason: "output_invalid", StatusDetail: { } held }
                 ? DocumentJson.Deserialize<OutputFailure>(held) : null,
         };
 
