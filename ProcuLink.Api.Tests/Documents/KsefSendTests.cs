@@ -8,6 +8,8 @@ using ProcuLink.Api.Contracts;
 using ProcuLink.Api.Services.Documents;
 using ProcuLink.Core.Documents;
 using ProcuLink.Core.Entities;
+using ProcuLink.Core.Services;
+using ProcuLink.Core.Services.Mapping;
 using ProcuLink.Infrastructure;
 using Xunit;
 
@@ -201,6 +203,48 @@ public class KsefSendTests(DocumentEngineTestFactory factory) : IClassFixture<Do
         (await Send(docId)).StatusCode.Should().Be(HttpStatusCode.OK);
         using (var scope = factory.Services.CreateScope())
             (await Db(scope).FlowDocuments.AsNoTracking().SingleAsync(d => d.Id == docId)).StatusDetail.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(false)]   // the flow doesn't read the buyer's NIP: only We read can fix it, so the others go
+    [InlineData(true)]    // the flow reads it and this document lacks it: typed in here, so nothing goes until then
+    public async Task A_file_that_cant_be_made_never_stops_the_others_and_is_never_made_itself(bool flowReadsIt)
+    {
+        var (docId, _, _) = await Seed("test");
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = Db(scope);
+            var doc = await db.FlowDocuments.SingleAsync(d => d.Id == docId);
+            var read = Read();
+            if (flowReadsIt) (await db.Flows.SingleAsync(f => f.Id == doc.FlowId)).FieldsJson = DocumentJson.Serialize(ReadMerge.KeysOf(read));
+            doc.ReadJson = DocumentJson.Serialize(new ReadResult(read.KindLabel, [.. read.Fields.Where(f => f.Meaning != FieldMeanings.ReceiverVatId)], read.Tables));
+            db.Set<FlowOutput>().Add(new FlowOutput
+            {
+                Id = Guid.NewGuid(), OrgId = Org, FlowId = doc.FlowId, Name = "Accounting CSV", Format = FlowOutputFormats.Csv, CreatedAt = DateTime.UtcNow,
+                TemplateJson = DocumentJson.Serialize(new OutputNodeTemplate
+                {
+                    Format = OutputFormat.Csv,
+                    Root = OutputNode.Obj("root", OutputNode.FieldOf("No", new OutputFieldRule { OutputPath = "No", CanonicalField = FieldKey.Normalise("Invoice number") })),
+                }),
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var sent = await Send(docId);
+        var detail = await factory.ClientFor(Org).GetFromJsonAsync<JsonElement>($"/api/documents/{docId}");
+        detail.GetProperty("heldOutput").GetProperty("missing")[0].GetString().Should().Be(FieldMeanings.ReceiverVatId);
+        if (flowReadsIt)
+        {
+            sent.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+            (await Deliveries(docId)).Should().BeEmpty();
+            detail.GetProperty("summary").GetProperty("status").GetString().Should().Be(DocumentStatus.NeedsReview);
+            return;
+        }
+        sent.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // The CSV is made; the KSeF file, which lacks the buyer's NIP, is not made and not sent, and stays named on the document.
+        (await Deliveries(docId)).Should().ContainSingle().Which.Should().Match<FlowDelivery>(d => d.OutputName == "Accounting CSV" && d.Status == FlowDeliveryStatus.Stored);
+        detail.GetProperty("summary").GetProperty("status").GetString().Should().Be(DocumentStatus.Sent);
     }
 
     [Fact]
