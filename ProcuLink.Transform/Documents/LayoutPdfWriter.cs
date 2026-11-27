@@ -40,7 +40,8 @@ public static class LayoutPdfWriter
         return null;
     }
 
-    public static byte[] Write(DocumentLayout layout, OutputLayout? settings, byte[]? logo)
+    /// <param name="lang">The footer's language (<see cref="DocumentLanguage"/>); the fields and columns are the read's own labels.</param>
+    public static byte[] Write(DocumentLayout layout, OutputLayout? settings, byte[]? logo, string lang = DocumentLanguage.English)
     {
         // An undecodable logo is skipped rather than failing the whole output.
         if (logo is not null && !IsUsableLogo(logo)) logo = null;
@@ -81,7 +82,7 @@ public static class LayoutPdfWriter
             p.Footer().Column(f =>
             {
                 if (!string.IsNullOrWhiteSpace(settings?.Footer)) f.Item().AlignCenter().Text(settings.Footer);
-                f.Item().AlignCenter().Text(t => { t.Span("Page "); t.CurrentPageNumber(); t.Span(" of "); t.TotalPages(); });
+                f.Item().AlignCenter().Text(t => Output.DocumentPdfOutput.PageOf(t, lang));
             });
         })).GeneratePdf();
     }

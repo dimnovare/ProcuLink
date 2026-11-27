@@ -44,6 +44,25 @@ public class FacturXPdfWriterTests
     }
 
     [Theory]
+    [InlineData("DE", "Rechnung", "Rechnungsnummer: INV-9", "Rechnungsdatum: 06.11.2026", "Gesamtbetrag: 1.234,56 EUR", "Einzelpreis", "Seite 1 von 1")]
+    [InlineData("FR", "Facture", "Numéro de facture: INV-9", "Date de facture: 06/11/2026", "Total TTC: 1 234,56 EUR", "Prix unitaire", "Page 1 sur 1")]
+    [InlineData("US", "Invoice", "Invoice number: INV-9", "Issue date: 2026-11-06", "Total: 1234.56 EUR", "Unit price", "Page 1 of 1")]
+    public void The_page_is_in_the_sellers_language(string country, params string[] expected)
+    {
+        var (inv, lines) = Invoice("INV-9");
+        (inv.IssueDate, inv.GrandTotal) = (new DateOnly(2026, 11, 6), 1234.56m);
+        var parties = new PeppolPartyOptions { SellerName = "Seller Co", SellerCountry = country, BuyerName = "Buyer Co", BuyerCountry = country };
+
+        using var document = PdfDocument.Open(DocumentPdfOutput.WriteInvoice(inv, lines, parties, creditNote: false));
+        // Compared without spaces: how the extractor spaces words is its own.
+        static string Squeeze(string t) => string.Concat(t.Where(c => !char.IsWhiteSpace(c)));
+        var text = Squeeze(string.Concat(document.GetPages().Select(p => p.Text)));
+        foreach (var e in expected) Assert.Contains(Squeeze(e), text, StringComparison.Ordinal);
+        // French, Polish and Estonian group thousands with a no-break space.
+        Assert.Equal("1\u00A0234,56", DocumentLanguage.Money("fr", 1234.56m));
+    }
+
+    [Theory]
     [InlineData(FacturXProfile.En16931, false, "EN 16931", "factur-x.xml", "Invoice")]
     [InlineData(FacturXProfile.En16931, true, "EN 16931", "factur-x.xml", "Credit note")]
     [InlineData(FacturXProfile.XRechnung, false, "XRECHNUNG", "xrechnung.xml", "Invoice")]

@@ -42,7 +42,7 @@ public static class DocumentOutputRenderer
             var (bytes, contentType, extension) = format switch
             {
                 FlowOutputFormats.Text => (LayoutTextWriter.Write(DocumentLayout.From(template, grid, rows.Lines.Count > 0), layout), "text/plain", ".txt"),
-                FlowOutputFormats.Pdf => (LayoutPdfWriter.Write(DocumentLayout.From(template, grid, rows.Lines.Count > 0), layout, logo), "application/pdf", ".pdf"),
+                FlowOutputFormats.Pdf => (LayoutPdfWriter.Write(DocumentLayout.From(template, grid, rows.Lines.Count > 0), layout, logo, DocumentLanguage.Of(read)), "application/pdf", ".pdf"),
                 FlowOutputFormats.Fixed => (FixedWidthWriter.Write(template, grid), "text/plain", ".txt"),
                 _ => (XlsxGridWriter.Write(grid), XlsxContentType, ".xlsx"),
             };
