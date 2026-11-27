@@ -269,6 +269,31 @@ public class AdminControllerTests
         beta.LastOrderActivity.Should().BeNull();
     }
 
+    private sealed class ClerkOrgs(string json) : HttpMessageHandler, IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(this, false) { BaseAddress = new Uri("https://api.clerk.com/v1/") };
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json") });
+    }
+
+    [Fact]
+    public async Task GetOrganisations_ShowsTheClerkName_AndTheStoredOneWhereClerkHasNone()
+    {
+        var db = MakeDb();
+        var renamed = Org("Personal workspace", PlanConstants.Pilot, AccountStatusConstants.Trialing);
+        var unknown = Org("beta", PlanConstants.Pilot, AccountStatusConstants.Trialing);
+        db.Organisations.AddRange(renamed, unknown);
+        await db.SaveChangesAsync();
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Clerk:SecretKey"] = "sk_test_fake" }).Build();
+        var ctrl = new AdminController(db, new StripeBillingService(db, config, NullLogger<StripeBillingService>.Instance, new FakeAnalyticsService()),
+            config, NullLogger<AdminController>.Instance, new NoopErasureService());
+
+        var result = await ctrl.GetOrganisations(CancellationToken.None, new ClerkOrgs($"{{\"data\":[{{\"id\":\"{renamed.ClerkOrgId}\",\"name\":\"Example Trading\"}}],\"total_count\":1}}"));
+
+        var names = result.Should().BeOfType<OkObjectResult>().Subject.Value.Should().BeAssignableTo<IEnumerable<AdminOrganisationDto>>().Subject.Select(o => o.Name);
+        names.Should().BeEquivalentTo("Example Trading", "beta");
+    }
+
     [Fact]
     public async Task GetOrganisations_ReportsThisMonthsReadsAndWhatTheyCost()
     {
