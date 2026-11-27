@@ -355,7 +355,9 @@ public sealed class FlowDestinationService(
         {
             Id = Guid.NewGuid(), OrgId = orgId, EntityType = "FlowDestination", EntityId = d.Id, Action = "destination.tested",
             CreatedAt = DateTime.UtcNow,
-            Payload = JsonSerializer.SerializeToDocument(new { success = result.Success, responseCode = result.ResponseCode }),
+            // The reason and the destination are kept so History can say which test failed and why, as the test itself did.
+            Payload = JsonSerializer.SerializeToDocument(new { success = result.Success, responseCode = result.ResponseCode, error = result.Success ? null : result.ErrorMessage,
+                destinationId = d.Id, destination = d.Name, protocol = d.Protocol }),
         });
         await db.SaveChangesAsync(ct);
         return result;

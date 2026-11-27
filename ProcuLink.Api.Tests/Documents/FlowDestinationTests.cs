@@ -202,6 +202,23 @@ public class FlowDestinationTests(DocumentEngineTestFactory factory) : IClassFix
     }
 
     [Fact]
+    public async Task A_failed_test_keeps_its_reason_and_destination_in_history()
+    {
+        await using var db = new ProcuLinkDbContext(new DbContextOptionsBuilder<ProcuLinkDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        var d = new FlowDestination { Id = Guid.NewGuid(), OrgId = OrgA, Name = "Warehouse", Protocol = "http", ConfigJson = """{"url":"https://example.test/in"}""" };
+        db.Set<FlowDestination>().Add(d);
+        await db.SaveChangesAsync();
+
+        var result = await new FlowDestinationService(db, null!, [], Availability(), null!).TestAsync(OrgA, d.Id, default);
+
+        var payload = db.AuditEvents.Single(e => e.Action == "destination.tested").Payload!.RootElement;
+        payload.GetProperty("success").GetBoolean().Should().BeFalse();
+        payload.GetProperty("error").GetString().Should().Be(result!.ErrorMessage).And.NotBeNullOrEmpty();
+        payload.GetProperty("destinationId").GetGuid().Should().Be(d.Id);
+        payload.GetProperty("destination").GetString().Should().Be("Warehouse");
+    }
+
+    [Fact]
     public async Task Credentials_are_bound_to_their_destination_and_never_returned()
     {
         var http = factory.ClientFor(DocumentEngineTestFactory.OrgA);
