@@ -22,13 +22,13 @@ public sealed class DestinationsController(
     private static IActionResult NotFoundBody() => new NotFoundObjectResult(new { error = "destination_not_found" });
 
     /// <summary>A create answers with no uses and no last send (it has none), so every answer has one shape.</summary>
-    private static object ToDto(FlowDestination d, IEnumerable<DestinationUse>? usedBy = null, DestinationLastSend? lastSend = null) =>
+    private static object ToDto(FlowDestination d, IEnumerable<DestinationUse>? usedBy = null, (DestinationLastSend? Sent, DestinationLastSend? Tested) last = default) =>
         new
         {
             id = d.Id, name = d.Name, protocol = d.Protocol,
             config = JsonDocument.Parse(d.ConfigJson).RootElement.Clone(),
             hasCredentials = !string.IsNullOrEmpty(d.EncryptedCredentials), createdAt = d.CreatedAt,
-            usedBy = usedBy ?? [], lastSend,
+            usedBy = usedBy ?? [], lastSend = last.Sent, lastTest = last.Tested,
         };
 
     [HttpGet]

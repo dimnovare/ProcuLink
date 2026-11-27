@@ -244,8 +244,9 @@ public sealed class FlowDestinationService(
         return uses.ToLookup(u => u.Destination, u => new DestinationUse(u.FlowId, names.GetValueOrDefault(u.FlowId, ""), u.Id, u.Name));
     }
 
-    /// <summary>For each destination: the newer of its newest finished delivery (delivered, or stopped for good) and its newest test.</summary>
-    public async Task<IReadOnlyDictionary<Guid, DestinationLastSend>> LastSendsAsync(Guid orgId, CancellationToken ct)
+    /// <summary>For each destination: its newest finished delivery (delivered, or stopped for good) and, apart, its newest test.
+    /// Kept apart so a test never hides how the last real send went.</summary>
+    public async Task<IReadOnlyDictionary<Guid, (DestinationLastSend? Sent, DestinationLastSend? Tested)>> LastSendsAsync(Guid orgId, CancellationToken ct)
     {
         var rows = await db.Set<FlowDestination>().AsNoTracking().Where(d => d.OrgId == orgId).Select(d => new
         {
@@ -258,14 +259,14 @@ public sealed class FlowDestinationService(
                 .OrderByDescending(e => e.CreatedAt).ThenByDescending(e => e.Id).Select(e => new { At = e.CreatedAt, e.Payload }).FirstOrDefault(),
         }).ToListAsync(ct);
 
-        var last = new Dictionary<Guid, DestinationLastSend>();
+        var last = new Dictionary<Guid, (DestinationLastSend?, DestinationLastSend?)>();
         foreach (var r in rows)
         {
             var sent = r.Sent is { } s ? new DestinationLastSend("document", s.At, s.Ok) : null;
             var tested = r.Tested is { } t
                 ? new DestinationLastSend("test", t.At, t.Payload?.RootElement is { ValueKind: JsonValueKind.Object } p && p.TryGetProperty("success", out var ok) && ok.ValueKind == JsonValueKind.True)
                 : null;
-            if ((tested is null || sent?.At >= tested.At ? sent : tested) is { } newer) last[r.Id] = newer;
+            last[r.Id] = (sent, tested);
         }
         return last;
     }

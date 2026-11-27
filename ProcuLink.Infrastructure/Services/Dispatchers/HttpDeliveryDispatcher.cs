@@ -105,7 +105,10 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
                 _logger.LogWarning(
                     "HTTP delivery blocked by SSRF guard for URL '{Url}': {Reason}",
                     httpCfg.Url, guardResult.Reason);
-                return new DeliveryResult(false, $"Delivery blocked: {guardResult.Reason}");
+                // A name that does not exist is said plainly; the technical reason stays in the log above.
+                return new DeliveryResult(false, guardResult.Unresolved
+                    ? "We couldn't find that address. Check the web address."
+                    : $"Delivery blocked: {guardResult.Reason}");
             }
 
             var creds = string.IsNullOrEmpty(decryptedCredentials)

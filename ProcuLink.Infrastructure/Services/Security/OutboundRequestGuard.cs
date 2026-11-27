@@ -81,17 +81,17 @@ public sealed class OutboundRequestGuard
             _logger.LogWarning(
                 "SSRF guard: DNS resolution failed for host '{Host}' in URL '{Url}': {Message}",
                 host, url, ex.Message);
-            return GuardResult.Block($"DNS resolution failed for host '{host}': {ex.Message}");
+            return GuardResult.NotFound($"DNS resolution failed for host '{host}': {ex.Message}");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(
                 "SSRF guard: unexpected error resolving host '{Host}': {Message}", host, ex.Message);
-            return GuardResult.Block($"Could not resolve host '{host}'.");
+            return GuardResult.NotFound($"Could not resolve host '{host}'.");
         }
 
         if (addresses.Length == 0)
-            return GuardResult.Block($"Host '{host}' resolved to no addresses.");
+            return GuardResult.NotFound($"Host '{host}' resolved to no addresses.");
 
         foreach (var ip in addresses)
         {
@@ -418,8 +418,10 @@ public sealed class OutboundRequestGuard
 }
 
 /// <summary>Result returned by <see cref="OutboundRequestGuard.ValidateAsync"/>.</summary>
-public readonly record struct GuardResult(bool Allowed, string? Reason)
+/// <param name="Unresolved">The host name was not found (DNS), as opposed to found and refused.</param>
+public readonly record struct GuardResult(bool Allowed, string? Reason, bool Unresolved = false)
 {
     public static GuardResult Allow() => new(true, null);
     public static GuardResult Block(string reason) => new(false, reason);
+    public static GuardResult NotFound(string reason) => new(false, reason, true);
 }
