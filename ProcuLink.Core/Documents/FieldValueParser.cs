@@ -21,10 +21,11 @@ public static class FieldValueParser
         "d.M.yy", "d/M/yy", "d-M-yyyy", "d-M-yy", "yyyy/M/d", "d. MMMM yyyy",
     ];
 
-    private static string? NumberBody(string? s)
+    // A space or an apostrophe ("1'234.50") only groups thousands.
+    internal static string? NumberBody(string? s)
     {
         if (string.IsNullOrWhiteSpace(s)) return null;
-        var m = NumberShape.Match(s.Trim().Replace(' ', ' ').Replace(" ", ""));
+        var m = NumberShape.Match(s.Trim().Replace(' ', ' ').Replace(" ", "").Replace("'", "").Replace("’", ""));
         return m.Success ? m.Groups[1].Value : null;
     }
 
@@ -64,6 +65,16 @@ public static class FieldValueParser
             CultureInfo.InvariantCulture, out value);
     }
 
+    /// <summary>The decimal mark a number proves: both marks ("1.234,50"), a repeated one ("1.234.567") or a mark not before exactly three digits ("0,04"); null for "1.500" or "20".</summary>
+    public static char? DecimalMarkOf(string? s)
+    {
+        if (NumberBody(s) is not { } b) return null;
+        var last = Math.Max(b.LastIndexOf(','), b.LastIndexOf('.'));
+        if (last < 0) return null;
+        var other = b[last] == ',' ? '.' : ',';
+        return b.Contains(other) ? b[last] : b.Count(c => c == b[last]) > 1 ? other : b.Length - last - 1 == 3 ? null : b[last];
+    }
+
     public static bool TryDate(string? s, out DateOnly value) =>
         DateOnly.TryParseExact(TrailingTime.Replace(s?.Trim() ?? "", "").TrimEnd(), DateFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out value);
 
@@ -71,7 +82,7 @@ public static class FieldValueParser
     private static readonly Regex DayMonthShape = new(@"^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$", RegexOptions.Compiled);
     // Digits, at most one decimal mark, and thousands groups of exactly three behind a mark that differs from it: "18.11.2026" and "0012" are not amounts.
     private static readonly Regex PlainNumberShape =
-        new(@"^-?(?!0\d)(?:\d{1,3}(?<g>[.,  ])\d{3}(?:\k<g>\d{3})*|\d+)(?:(?!\k<g>)[.,]\d+)?$", RegexOptions.Compiled);
+        new(@"^-?(?!0\d)(?:\d{1,3}(?<g>[.,  '’])\d{3}(?:\k<g>\d{3})*|\d+)(?:(?!\k<g>)[.,]\d+)?$", RegexOptions.Compiled);
 
     /// <summary>The date as yyyy-MM-dd, or null when the value is not wholly a date, carries a time, or could be read two ways.</summary>
     public static string? IsoDate(string? s)

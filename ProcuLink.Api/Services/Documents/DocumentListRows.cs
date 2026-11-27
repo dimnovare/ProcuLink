@@ -19,14 +19,16 @@ public static class DocumentListRows
         return statuses.Contains(DocumentStatus.NeedsReview) || statuses.Contains(DocumentStatus.Ready) ? docs.Where(d => !d.IsSample) : docs;
     }
 
-    /// <summary>Sent documents whose last output landed in [from, to). Both null: no filter.</summary>
+    /// <summary>Finished documents (the Finished tab's: sent, or done by a download) that finished in [from, to). Both null: no filter.</summary>
     public static IQueryable<FlowDocument> SentBetween(ProcuLinkDbContext db, Guid orgId, IQueryable<FlowDocument> docs, DateTime? from, DateTime? to)
     {
         if (from is null && to is null) return docs;
         docs = docs.Where(d => d.Status == DocumentStatus.Sent);
-        // The last output landed: the newest DeliveredAt among this document's own deliveries.
-        if (from is { } a) docs = docs.Where(d => db.Set<FlowDelivery>().Where(x => x.OrgId == orgId && x.DocumentId == d.Id).Max(x => x.DeliveredAt) >= a);
-        if (to is { } b) docs = docs.Where(d => db.Set<FlowDelivery>().Where(x => x.OrgId == orgId && x.DocumentId == d.Id).Max(x => x.DeliveredAt) < b);
+        // Sent: the newest DeliveredAt among its own deliveries. A download makes none: the claim to sent, downloaded stamped UpdatedAt.
+        if (from is { } a) docs = docs.Where(d => (d.StatusReason == DocumentSort.Downloaded ? d.UpdatedAt
+            : db.Set<FlowDelivery>().Where(x => x.OrgId == orgId && x.DocumentId == d.Id).Max(x => x.DeliveredAt)) >= a);
+        if (to is { } b) docs = docs.Where(d => (d.StatusReason == DocumentSort.Downloaded ? d.UpdatedAt
+            : db.Set<FlowDelivery>().Where(x => x.OrgId == orgId && x.DocumentId == d.Id).Max(x => x.DeliveredAt)) < b);
         return docs;
     }
 

@@ -298,13 +298,14 @@ public class ReadDocumentJob(
             && (embedded is null || EmbeddedInvoice.PrintedAsIs(meaning));
 
         var merged = ReadMerge.Merge(results, expected);
-        var read = new ReadResult(merged.KindLabel,
+        // One number style per document: "1.500" reads as its other numbers do, or is marked to check.
+        var read = ReadNumbers.Settle(new ReadResult(merged.KindLabel,
             merged.Fields.Select(f => f with { NotOnPage = Miss(f.Value, f.Location, f.Meaning) }).ToList(),
             merged.Tables.Select(t => t with
             {
                 Rows = t.Rows.Select(row => new ReadRow(row.Cells.ToDictionary(c => c.Key, c => c.Value with { NotOnPage = Miss(c.Value.Value, c.Value.Location, t.Columns.FirstOrDefault(x => x.Key == c.Key)?.Meaning) }))).ToList(),
             }).ToList(),
-            truncated || merged.Truncated);
+            truncated || merged.Truncated));
 
         // Another run may have finished this document meanwhile, or it was sorted into another flow: then this run writes nothing.
         var current = await db.FlowDocuments.AsNoTracking().Where(d => d.Id == doc.Id && d.OrgId == doc.OrgId).Select(d => new { d.Status, d.FlowId }).FirstAsync(ct);
