@@ -127,6 +127,39 @@ public class DocumentOutputRendererTests
         Text(DocumentOutputRenderer.Render("csv", doubled, english, null)).Should().StartWith("Total;Tax\n285.00;114").And.NotContain("11400");
     }
 
+    private static ReadResult Lines(params (string Qty, string Price)[] rows) => new("Order",
+        [Field("dokument", "TEST-CSV-77"), Field("kuupaev", "06.11.2026", "date")],
+        [new ReadTable("lines", "Lines",
+            [new ReadColumn("kood", "Kood", "text", null), new ReadColumn("kirjeldus", "Kirjeldus", "text", null),
+             new ReadColumn("kogus", "Kogus", "number", null), new ReadColumn("hind", "Hind", "money", null)],
+            rows.Select((r, i) => new ReadRow(new Dictionary<string, ReadCell>
+            {
+                ["kood"] = Cell($"LK-{11 + i}"), ["kirjeldus"] = Cell(i == 0 ? "Mutter M6" : "Seib, lai"), ["kogus"] = Cell(r.Qty), ["hind"] = Cell(r.Price),
+            })).ToList(), true)]);
+
+    [Fact]
+    public void A_european_csv_reads_every_number_its_own_way_and_writes_them_one_way()
+    {
+        // The synthetic file: "0,04" and "1.234,50" prove the decimal comma, so the quantity 1.500 is fifteen hundred.
+        var read = ReadNumbers.Settle(Lines(("1.500", "0,04"), ("20", "1.234,50")));
+        var cells = read.Tables[0].Rows.Select(r => (r.Cells["kogus"].Value, r.Cells["hind"].Value, r.Cells["kogus"].Confidence)).ToList();
+        cells.Should().Equal(("1500", "0,04", 1d), ("20", "1.234,50", 1d));
+
+        var t = Csv(new CsvDialect { Delimiter = ";", LineEnding = "\n" }, Rule("Dokument", "dokument"), Rule("Kuupäev", "kuupaev"),
+            OutputNode.Arr("Lines", OutputNode.Obj("Line", Rule("Kood", "kood"), Rule("Kirjeldus", "kirjeldus"), Rule("Kogus", "kogus"), Rule("Hind", "hind"))));
+        Text(DocumentOutputRenderer.Render("csv", t, read, "lines")).Should().Be(
+            "Dokument;Kuupäev;Kood;Kirjeldus;Kogus;Hind\n" +
+            "TEST-CSV-77;2026-11-06;LK-11;Mutter M6;1500;\"0,04\"\n" +
+            "TEST-CSV-77;2026-11-06;LK-12;\"Seib, lai\";20;\"1234,50\"\n");
+
+        // A US file the other way round; a decimal comma that is the number's own mark keeps it.
+        ReadNumbers.Settle(Lines(("1,500", "12.50"))).Tables[0].Rows[0].Cells["kogus"].Value.Should().Be("1500");
+        ReadNumbers.Settle(Lines(("1,500", "0,04"))).Tables[0].Rows[0].Cells["kogus"].Value.Should().Be("1,5");
+        // Nothing settles it: the value stays as printed and is shown as one to check.
+        var open = ReadNumbers.Settle(Lines(("1.500", "20"))).Tables[0].Rows[0].Cells["kogus"];
+        (open.Value, open.Confidence).Should().Be(("1.500", ReadNumbers.UnsureConfidence));
+    }
+
     [Fact]
     public void A_text_value_that_is_wholly_a_date_goes_out_as_a_date()
     {
