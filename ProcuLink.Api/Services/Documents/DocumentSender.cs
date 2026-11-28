@@ -256,8 +256,10 @@ public sealed class DocumentSender(ProcuLinkDbContext db, IBillingService billin
         (doc.StatusReason, doc.StatusDetail) = unmade is null ? (null, null) : ("output_invalid", DocumentJson.Serialize(unmade));
         doc.FlowVersion = version;
         doc.UpdatedAt = now;
+        // queued: how many files go to a destination. 0 means every file was made to download, so History says so, not "Sending".
         DocumentAudit.Add(db, doc, "document.sent",
-            new { mode = mode.ToString().ToLowerInvariant(), outputs = sent.Select(d => d.OutputName).ToList(), version }, userId);
+            new { mode = mode.ToString().ToLowerInvariant(), outputs = sent.Select(d => d.OutputName).ToList(), version,
+                queued = sent.Count(d => d.Status == FlowDeliveryStatus.Queued) }, userId);
         await db.SaveChangesAsync(ct);
 
         return (new SendOutcome(null, null, existing), sent.Where(d => d.Status == FlowDeliveryStatus.Queued).ToList());

@@ -178,6 +178,7 @@ public class FlowVersionTests(DocumentEngineTestFactory factory) : IClassFixture
         content.Should().Contain("\"A\"");
         doc.FlowVersion.Should().BeNull();
         audit.Should().Contain("\"version\":null");
+        audit.Should().Contain("\"queued\":0"); // its one output has no destination: a file to download, nothing sent
     }
 
     [Fact]
