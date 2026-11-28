@@ -107,7 +107,7 @@ public class HttpDeliveryDispatcher : IDeliveryDispatcher
                     httpCfg.Url, guardResult.Reason);
                 // A name that does not exist is said plainly; the technical reason stays in the log above.
                 return new DeliveryResult(false, guardResult.Unresolved
-                    ? "We couldn't find that address. Check the web address."
+                    ? "We couldn't find that web address."
                     : $"Delivery blocked: {guardResult.Reason}");
             }
 
