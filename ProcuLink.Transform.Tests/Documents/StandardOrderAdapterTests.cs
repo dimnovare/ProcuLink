@@ -38,4 +38,34 @@ public class StandardOrderAdapterTests
         OrderHeaderReader.BuyerParty(order)!.EdiCode.Should().Be("0191:12345678");
         OrderHeaderReader.SupplierParty(order)!.EdiCode.Should().Be("0088:0000000000000");
     }
+
+    [Theory]
+    [InlineData("DE 123 456 789", "DE")]
+    [InlineData("EL123456789", "GR")]
+    [InlineData("GR123456789", "GR")]
+    [InlineData("XI123456789", "GB")]
+    [InlineData("PL5260250274", "PL")]
+    [InlineData("5260250274", null)]
+    [InlineData("NO999999999MVA", null)]
+    [InlineData("DE1", null)]
+    public void An_eu_vat_prefix_gives_the_country(string vat, string? country) =>
+        FieldValueParser.CountryFromVat(vat).Should().Be(country);
+
+    [Fact]
+    public void A_missing_country_comes_from_the_same_partys_vat_and_a_read_country_wins()
+    {
+        var noCountry = StrictOrderFixture.With(StrictOrderFixture.With(
+            StrictOrderFixture.Read(FieldMeanings.SenderCountry, FieldMeanings.ReceiverCountry), FieldMeanings.SenderVatId, "EL123456789"),
+            FieldMeanings.ReceiverVatId, "NO999999999MVA");
+        var (derived, missing, _) = StandardOrderAdapter.ToOrder(noCountry, FlowFieldList.Empty, "lines",
+            [FieldMeanings.SenderCountry], Guid.Empty);
+        missing.Should().BeEmpty();
+        (derived!.BillToCountry, OrderHeaderReader.SupplierParty(derived)!.Country).Should().Be(("GR", null));
+
+        // A flow whose list lacks the country fields still takes the read country, over the VAT's.
+        var listed = new FlowFieldList([new FlowField("buyer_vat", "Buyer VAT", "text", FieldMeanings.SenderVatId, false)]);
+        var (read, _, _) = StandardOrderAdapter.ToOrder(
+            StrictOrderFixture.With(FieldMeanings.SenderCountry, "Austria"), listed, "lines", [], Guid.Empty);
+        read!.BillToCountry.Should().Be("Austria");
+    }
 }

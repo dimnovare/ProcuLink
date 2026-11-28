@@ -100,7 +100,17 @@ public static partial class StandardOrderAdapter
         ReadResult read, FlowFieldList fields, string? tableKey, IReadOnlyList<string> needs, Func<Access, T> build, bool creditNote = false) where T : class
     {
         ReadField? Field(string meaning) => read.Fields.FirstOrDefault(f => FieldMeanings.Of(f, fields) == meaning);
-        string? Text(string meaning) => Blank(Field(meaning)?.Value);
+        string? Text(string meaning) => Blank(Field(meaning)?.Value) ?? meaning switch
+        {
+            FieldMeanings.SenderCountry => Country(meaning, FieldMeanings.SenderVatId),
+            FieldMeanings.ReceiverCountry => Country(meaning, FieldMeanings.ReceiverVatId),
+            _ => null,
+        };
+        // A country the AI read counts even when the flow's list lacks its field (never a listed field's); with none printed, the
+        // same party's EU VAT prefix. A country read always wins.
+        string? Country(string meaning, string vat) =>
+            Blank(read.Fields.FirstOrDefault(f => f.Meaning == meaning && fields.Fields.All(x => x.Key != f.Key))?.Value)
+            ?? FieldValueParser.CountryFromVat(Text(vat));
         var table = tableKey is null ? null : read.Tables.FirstOrDefault(t => t.Key == tableKey);
         var rows = table?.Rows ?? [];
         var columns = (table?.Columns ?? []).ToLookup(c => FieldMeanings.Of(table!, c, fields));
