@@ -42,6 +42,15 @@ public static class ReadMerge
             parts.Any(p => p.Truncated));
     }
 
+    /// <summary>A key on the flow's list reads under the flow's name for it, accents included, so a rename reaches every document read after it.</summary>
+    public static ReadResult Named(ReadResult read, FlowFieldList? expected) => expected is null ? read : new(read.KindLabel,
+        read.Fields.Select(f => expected.Fields.FirstOrDefault(x => x.Key == f.Key) is { } x ? f with { Label = x.Label } : f).ToList(),
+        read.Tables.Select(t => expected.Tables.FirstOrDefault(x => x.Key == t.Key) is not { } x ? t : t with
+        {
+            Label = x.Label,
+            Columns = t.Columns.Select(c => x.Columns.FirstOrDefault(y => y.Key == c.Key) is { } y ? c with { Label = y.Label } : c).ToList(),
+        }).ToList(), read.Truncated);
+
     public static FlowFieldList KeysOf(ReadResult read) => new(
         read.Fields.Select(f => new FlowField(f.Key, f.Label, f.Type, f.Meaning, Required: false)).ToList(),
         read.Tables.Select(t => new FlowTable(t.Key, t.Label,

@@ -297,7 +297,7 @@ public class ReadDocumentJob(
         bool Miss(string? value, SourceLocation? loc, string? meaning) => anyLocated && !string.IsNullOrWhiteSpace(value) && loc is null
             && (embedded is null || EmbeddedInvoice.PrintedAsIs(meaning));
 
-        var merged = ReadMerge.Merge(results, expected);
+        var merged = ReadMerge.Named(ReadMerge.Merge(results, expected), expected);
         // One number style per document: "1.500" reads as its other numbers do, or is marked to check.
         var read = ReadNumbers.Settle(new ReadResult(merged.KindLabel,
             merged.Fields.Select(f => f with { NotOnPage = Miss(f.Value, f.Location, f.Meaning) }).ToList(),

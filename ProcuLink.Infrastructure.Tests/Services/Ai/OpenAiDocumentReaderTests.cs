@@ -91,6 +91,18 @@ public class OpenAiDocumentReaderTests
     }
 
     [Fact]
+    public void A_printed_name_keeps_its_accents_and_a_value_used_as_its_name_takes_the_flows_name()
+    {
+        var dto = new OpenAiDocumentReader.ReadDto(null,
+            [new("sposob_platnosci", "Sposób płatności", "Przelew", "text", null, 1), new("forma_platnosci", "Przelew", "przelew", "text", null, 1)], []);
+        var flow = new FlowFieldList([new FlowField("forma_platnosci", "Forma płatności", FieldTypes.Text, null, false)]);
+
+        // The live "Sposob platnosci" came from the second branch: the AI named the value after itself, and the key's words replaced it.
+        OpenAiDocumentReader.Map(dto, null).Fields.Select(f => f.Label).Should().Equal("Sposób płatności", "Forma platnosci");
+        OpenAiDocumentReader.Map(dto, flow).Fields.Select(f => f.Label).Should().Equal("Sposób płatności", "Forma płatności");
+    }
+
+    [Fact]
     public void A_currency_named_after_the_amount_beside_it_is_named_from_its_key()
     {
         var shared = new OpenAiDocumentReader.ReadDto(null,
