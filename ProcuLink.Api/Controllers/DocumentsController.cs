@@ -303,7 +303,7 @@ public sealed class DocumentsController(
         flow.HintsJson = DocumentJson.Serialize(FieldHints.Upsert(DocumentJson.Deserialize<List<FieldHint>>(flow.HintsJson), hint));
         flow.UpdatedAt = DateTime.UtcNow;
         // Saved by the edit below, with the value it sets.
-        DocumentAudit.Add(db, doc, "document.value_taught", new { key, sender = sender?.Label }, tenant.ClerkUserId);
+        DocumentAudit.Add(db, doc, "document.value_taught", new { key, label = flowFields.Fields.First(f => f.Key == key).Label, sender = sender?.Label }, tenant.ClerkUserId);
         return await ApplyEditsAsync(doc, flow, flowFields, new EditValuesRequest([new FieldEdit(key, value)], null, null, null),
             new Dictionary<string, SourceLocation> { [key] = loc }, ct);
     }
@@ -321,7 +321,7 @@ public sealed class DocumentsController(
         foreach (var ft in flowFields.Tables.Where(ft => tables.All(t => t.Key != ft.Key)))
             tables.Add(new ReadTable(ft.Key, ft.Label, ft.Columns.Select(c => new ReadColumn(c.Key, c.Label, c.Type, c.Meaning)).ToList(), [], true));
         var rows = tables.ToDictionary(t => t.Key, t => t.Rows.ToList());
-        var changes = new List<(string Target, string? Old, string? New)>();
+        var changes = new List<(string Target, string? Old, string? New, string? Label)>();
         IActionResult Unknown(string target) => BadRequest(new { error = "unknown_target", target });
 
         // Working copies only: a 400 below returns before anything is written.
@@ -341,7 +341,7 @@ public sealed class DocumentsController(
                 Location = locations?.GetValueOrDefault(e.Key) ?? fields[i].Location,
             };
             // Confirming a value as it is still changes its confidence and Edited flag, so it still leaves a history row.
-            if (edited != fields[i]) changes.Add(($"field:{e.Key}", fields[i].Value, e.Value));
+            if (edited != fields[i]) changes.Add(($"field:{e.Key}", fields[i].Value, e.Value, fields[i].Label));
             fields[i] = edited;
         }
 
@@ -349,10 +349,10 @@ public sealed class DocumentsController(
         {
             var target = $"cell:{e.Table}[{e.Row}].{e.Column}";
             if (!rows.TryGetValue(e.Table, out var list) || e.Row < 0 || e.Row >= list.Count
-                || tables.First(t => t.Key == e.Table).Columns.All(c => c.Key != e.Column)) return Unknown(target);
+                || tables.First(t => t.Key == e.Table).Columns.FirstOrDefault(c => c.Key == e.Column) is not { } column) return Unknown(target);
             var old = list[e.Row].Cells.GetValueOrDefault(e.Column);
             var cell = new ReadCell(e.Value, 1.0, old?.Location, false, true);
-            if (cell != old) changes.Add((target, old?.Value, e.Value));
+            if (cell != old) changes.Add((target, old?.Value, e.Value, column.Label));
             list[e.Row] = new ReadRow(new Dictionary<string, ReadCell>(list[e.Row].Cells) { [e.Column] = cell });
         }
 
@@ -360,14 +360,14 @@ public sealed class DocumentsController(
         {
             if (!rows.TryGetValue(t, out var list)) return Unknown($"row:{t}");
             list.Add(new ReadRow(tables.First(x => x.Key == t).Columns.ToDictionary(c => c.Key, _ => new ReadCell(null, 1.0, null, false, true))));
-            changes.Add(($"row:{t}[{list.Count - 1}]", null, "row"));
+            changes.Add(($"row:{t}[{list.Count - 1}]", null, "row", null));
         }
 
         foreach (var r in removes.Distinct().OrderByDescending(r => r.Row))
         {
             if (!rows.TryGetValue(r.Table, out var list) || r.Row < 0 || r.Row >= list.Count) return Unknown($"row:{r.Table}[{r.Row}]");
             list.RemoveAt(r.Row);
-            changes.Add(($"row:{r.Table}[{r.Row}]", "row", null));
+            changes.Add(($"row:{r.Table}[{r.Row}]", "row", null, null));
         }
 
         var result = new ReadResult(read.KindLabel, fields, tables.Select(t => t with { Rows = rows[t.Key] }).ToList(), read.Truncated);
@@ -378,7 +378,7 @@ public sealed class DocumentsController(
         if (doc.StatusReason is "no_output_matches" or "output_invalid") (doc.StatusReason, doc.StatusDetail) = (null, null);
         // The undelivered outputs still need sending; an edit does not make the document unsent-ready again.
         if (wasSendFailed) doc.Status = DocumentStatus.SendFailed;
-        foreach (var c in changes) DocumentAudit.Add(db, doc, "document.value_edited", new { target = c.Target, old = c.Old, @new = c.New }, tenant.ClerkUserId);
+        foreach (var c in changes) DocumentAudit.Add(db, doc, "document.value_edited", new { target = c.Target, old = c.Old, @new = c.New, label = c.Label }, tenant.ClerkUserId);
         // Removed while being edited: the update matches no row, and the document is gone.
         try { await db.SaveChangesAsync(ct); }
         catch (DbUpdateConcurrencyException) { return NotFound(NotFoundBody); }

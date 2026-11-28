@@ -216,12 +216,13 @@ public sealed class OpenAiDocumentReader : IDocumentReader
         var fields = (dto.Fields ?? []).Where(f => !string.IsNullOrWhiteSpace(f.Value) || fieldKeys?.Contains(FieldKey.Normalise(f.Key)) == true).Select(f =>
         {
             var key = FieldKey.Unique(seenFields, f.Key);
-            var meaning = Pinned(expected?.Fields.FirstOrDefault(x => x.Key == key)?.Meaning, f.Meaning);
+            var listed = expected?.Fields.FirstOrDefault(x => x.Key == key);
+            var meaning = Pinned(listed?.Meaning, f.Meaning);
             // A value used as its own name ("Turku" named "Turku") says nothing, and a currency named after the amount beside it
-            // ("Total due" twice) hides which is which: name it from its key instead.
+            // ("Total due" twice) hides which is which: name it as the flow does, else from its key.
             var label = (!string.IsNullOrWhiteSpace(f.Value) && Same(f.Label, f.Value))
                         || (meaning == FieldMeanings.Currency && dto.Fields!.Count(o => Same(o.Label, f.Label)) > 1)
-                ? FieldMeanings.Label(key)
+                ? listed?.Label ?? FieldMeanings.Label(key)
                 : f.Label;
             return new ReadField(key, label, f.Value, Type(f.Type), meaning, Clamp(f.Confidence),
                 Location: null, NotOnPage: false, Listed: fieldKeys?.Contains(key) ?? true, Edited: false);

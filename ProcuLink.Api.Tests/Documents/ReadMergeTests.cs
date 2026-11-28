@@ -14,6 +14,20 @@ public sealed class ReadMergeTests
         new(key, key, columns.Select(c => new ReadColumn(c, c, FieldTypes.Text, null)).ToList(), skus.Select(Row).ToList(), false);
 
     [Fact]
+    public void A_listed_key_reads_under_the_flows_name()
+    {
+        var read = new ReadResult("Invoice", [F("sposob_platnosci", "Przelew"), F("other", "x")], [Table("lines", ["sku"], "A")]);
+        var expected = new FlowFieldList([new FlowField("sposob_platnosci", "Sposób płatności", FieldTypes.Text, null, false)],
+            [new FlowTable("lines", "Pozycje", [new FlowField("sku", "Kod towaru", FieldTypes.Text, null, false)])]);
+
+        var named = ReadMerge.Named(read, expected);
+
+        named.Fields.Select(f => f.Label).Should().Equal("Sposób płatności", "other");
+        (named.Tables[0].Label, named.Tables[0].Columns[0].Label).Should().Be(("Pozycje", "Kod towaru"));
+        ReadMerge.Named(read, null).Should().BeSameAs(read);
+    }
+
+    [Fact]
     public void One_part_comes_back_as_it_is()
     {
         var only = new ReadResult("Invoice", [F("a", "1")]);
