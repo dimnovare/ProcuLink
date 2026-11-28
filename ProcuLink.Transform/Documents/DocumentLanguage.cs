@@ -29,9 +29,13 @@ public static class DocumentLanguage
         _ => English,
     };
 
-    /// <summary>The read's language: its sender's country, by meaning (the flow's meanings once it lists fields).</summary>
-    public static string Of(ReadResult read, FlowFieldList? fields = null) =>
-        FromCountry(read.Fields.FirstOrDefault(f => FieldMeanings.Of(f, fields ?? new()) == FieldMeanings.SenderCountry)?.Value);
+    /// <summary>The read's language: its sender's country, by meaning (the flow's meanings once it lists fields), else its EU VAT prefix.</summary>
+    public static string Of(ReadResult read, FlowFieldList? fields = null)
+    {
+        string? Value(string meaning) =>
+            read.Fields.FirstOrDefault(f => FieldMeanings.Of(f, fields ?? new()) == meaning && !string.IsNullOrWhiteSpace(f.Value))?.Value;
+        return FromCountry(Value(FieldMeanings.SenderCountry) ?? FieldValueParser.CountryFromVat(Value(FieldMeanings.SenderVatId)));
+    }
 
     /// <summary>The English text in <paramref name="language"/>; the English itself when there is no translation.</summary>
     public static string Text(string language, string english) =>

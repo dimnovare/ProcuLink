@@ -61,7 +61,10 @@ public class StrictOrderCxmlTests
 
         var country = (await ShipTo(FieldMeanings.DeliveryCountry)).Element("PostalAddress")!.Element("Country")!;
         ((string)country.Attribute("isoCountryCode")!, country.Value).Should().Be(("DE", "Germany"));
-        (await ShipTo(FieldMeanings.DeliveryCountry, FieldMeanings.SenderCountry)).Element("PostalAddress").Should().BeNull();
+        // With no country printed the buyer's comes from its VAT prefix; with neither there is none.
+        (await ShipTo(FieldMeanings.DeliveryCountry, FieldMeanings.SenderCountry)).Element("PostalAddress")!.Element("Country")!
+            .Attribute("isoCountryCode")!.Value.Should().Be("DE");
+        (await ShipTo(FieldMeanings.DeliveryCountry, FieldMeanings.SenderCountry, FieldMeanings.SenderVatId)).Element("PostalAddress").Should().BeNull();
     }
 
     [Fact]

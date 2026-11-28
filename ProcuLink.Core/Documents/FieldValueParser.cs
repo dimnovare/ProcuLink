@@ -120,6 +120,16 @@ public static class FieldValueParser
     public static bool IsVatId(string? s) =>
         s is not null && (VatShape.IsMatch(s.Replace(" ", "").ToUpperInvariant()) || PolishNip.IsValid(s));
 
+    // The EU VAT prefixes (VIES): Greece is EL, Northern Ireland XI.
+    private static readonly HashSet<string> EuVatPrefixes =
+        ["AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "EL", "ES", "FI", "FR", "HR", "HU", "IE", "IT", "LT", "LU", "LV", "MT", "NL", "PL", "PT", "RO", "SE", "SI", "SK", "XI"];
+
+    /// <summary>The ISO country of an EU VAT id's prefix (EL and GR → GR, XI → GB); null for a bare Polish NIP, a non-EU or a malformed number.</summary>
+    public static string? CountryFromVat(string? vat) =>
+        vat is not null && SenderIdentity.NormaliseVat(vat) is var v && VatShape.IsMatch(v) && EuVatPrefixes.Contains(v[..2] == "GR" ? "EL" : v[..2])
+            ? v[..2] switch { "EL" => "GR", "XI" => "GB", var p => p }
+            : null;
+
     public static bool IsCurrency(string? s) =>
         s is { Length: 3 } && s.All(char.IsAsciiLetter);
 

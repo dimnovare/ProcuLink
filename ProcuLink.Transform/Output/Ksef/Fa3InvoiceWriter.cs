@@ -19,10 +19,6 @@ public static class Fa3InvoiceWriter
     // FA(3) XSD annotations: 23/22 % → P_13_1/P_14_1, 8/7 % → _2, 5 % → _3. Only 23, 8 and 5 are written in version 1.
     private static readonly Dictionary<decimal, string> Bucket = new() { [23m] = "1", [8m] = "2", [5m] = "3" };
 
-    // TKodyKrajowUE in the FA(3) XSD (Greece is EL), without PL: a PL number is a NIP.
-    private static readonly HashSet<string> EuCodes =
-        ["AT", "BE", "BG", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "EL", "HR", "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PT", "RO", "SK", "SI", "ES", "SE", "XI"];
-
     /// <summary>Split payment (MPP, P_18A) may be mandatory from this gross total; we cannot know the goods, so version 1 refuses it.</summary>
     public const decimal SplitPaymentThreshold = 15000.00m;
 
@@ -113,12 +109,12 @@ public static class Fa3InvoiceWriter
     }
 
     // Podmiot2's id: a checksum-valid NIP, or an EU VAT number (country code other than PL + the rest as written). Anything else is refused.
-    // Greece's VAT prefix is EL; a number written with its ISO code GR is the same prefix.
+    // KodUE is TKodyKrajowUE (Greece EL, Northern Ireland XI), never PL: a PL number is a NIP.
     private static object[]? BuyerId(string? raw)
     {
         if (PolishNip.IsValid(raw)) return [E("NIP", PolishNip.Normalize(raw))];
         var v = raw?.Trim().Replace(" ", "");
-        var prefix = v is { Length: > 2 } ? v[..2].ToUpperInvariant() switch { "GR" => "EL", var p => p } : null;
-        return prefix is not null && EuCodes.Contains(prefix) ? [E("KodUE", prefix), E("NrVatUE", v![2..])] : null;
+        var prefix = FieldValueParser.CountryFromVat(v) switch { "GR" => "EL", "GB" => "XI", "PL" => null, var c => c };
+        return prefix is not null ? [E("KodUE", prefix), E("NrVatUE", v![2..])] : null;
     }
 }
